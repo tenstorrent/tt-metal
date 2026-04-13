@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@ using namespace tt::tt_metal::quasar::tensix;
 
 #include <cstdint>
 
-#include <tt_stl/assert.hpp>
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_tensix_asserts.hpp"
 #include "dev_mem_map.h"

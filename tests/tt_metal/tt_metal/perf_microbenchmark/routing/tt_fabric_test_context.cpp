@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
 #include "impl/context/metal_context.hpp"
@@ -78,12 +79,15 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
 }
 
 void TestContext::wait_for_programs_with_progress() {
+    last_test_hung_ = false;
+
     if (!progress_config_.enabled) {
         fixture_->wait_for_programs();
         return;
     }
 
     // Create progress monitor (but don't start polling thread yet)
+    progress_config_.show_workers = show_workers_;
     TestProgressMonitor monitor(this, progress_config_);
 
     // Poll and check for completion in this thread
@@ -92,11 +96,16 @@ void TestContext::wait_for_programs_with_progress() {
         "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
         progress_config_.poll_interval_seconds,
         progress_config_.hung_threshold_seconds);
+    bool completed = monitor.poll_until_complete();
 
-    monitor.poll_until_complete();
+    if (!completed) {
+        last_test_hung_ = true;
+        has_test_failures_ = true;
+        log_error(tt::LogTest, "Skipping remaining steps for this test due to hang.");
+        return;
+    }
+
     log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
-
-    // Now call wait_for_programs() to ensure proper cleanup
     fixture_->wait_for_programs();
 }
 
@@ -188,6 +197,7 @@ void TestContext::generate_latency_summary() {
 std::vector<std::string> TestContext::get_all_failed_tests() const {
     std::vector<std::string> combined;
     combined.insert(combined.end(), all_failed_bandwidth_tests_.begin(), all_failed_bandwidth_tests_.end());
+    combined.insert(combined.end(), hung_tests_.begin(), hung_tests_.end());
     if (latency_test_manager_) {
         const auto failed = latency_test_manager_->get_failed_tests();
         combined.insert(combined.end(), failed.begin(), failed.end());
@@ -323,6 +333,39 @@ void TestContext::compile_programs() {
         } else {
             // Normal mode: create standard kernels for all devices
             test_device.create_kernels();
+        }
+    }
+
+    if (show_workers_) {
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        for (const auto& [coord, test_device] : test_devices_) {
+            const auto& node_id = test_device.get_node_id();
+            const auto& senders = test_device.get_senders();
+            const auto& receivers = test_device.get_receivers();
+            if (senders.empty() && receivers.empty()) {
+                continue;
+            }
+
+            std::string eth_info;
+            for (const auto& [core, sender] : senders) {
+                for (const auto& [cfg, key] : sender.get_configs()) {
+                    auto eth_chans =
+                        control_plane.get_active_fabric_eth_channels_in_direction(node_id, key.direction);
+                    auto ch = key.link_idx < eth_chans.size() ? std::to_string(eth_chans.at(key.link_idx)) : "?";
+                    if (!eth_info.empty()) {
+                        eth_info += ", ";
+                    }
+                    eth_info += std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) + "]=ch" + ch;
+                }
+            }
+
+            log_info(
+                tt::LogTest,
+                "Device {}: {} sender(s), {} receiver(s){}",
+                tt::tt_fabric::fabric_tests::format_device_label(node_id),
+                senders.size(),
+                receivers.size(),
+                eth_info.empty() ? "" : "; sender eth channels: " + eth_info);
         }
     }
 
@@ -554,6 +597,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .atomic_inc_address = dest.atomic_inc_address,
                 .link_id = sender.link_id,
                 .noc_id = sender.noc_id,
+                .vc_id = sender.vc_id.value_or(tt::tt_fabric::fabric_tests::default_worker_vc_id),
                 .sender_credit_info = pattern.sender_credit_info,
                 .credit_return_batch_size = pattern.credit_return_batch_size,
             };
@@ -615,7 +659,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .dst_noc_encoding = dst_noc_encoding,
         .payload_buffer_size = payload_buffer_size,
         .link_id = traffic_config.link_id,
-        .noc_id = traffic_config.noc_id};
+        .noc_id = traffic_config.noc_id,
+        .vc_id = traffic_config.vc_id};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,7 +108,7 @@ def test_qwen_mlp_inference_prefill(seq_len, batch_size, mesh_device, reset_seed
             layout=ttnn.TILE_LAYOUT,
         )
         logger.info("Run Qwen_MLP")
-        tt_output = tt_model.forward_prefill(tt_input, mode)
+        tt_output = tt_model.forward_prefill(tt_input, batch_size)
 
         tt_output_torch = ttnn.to_torch(
             tt_output,

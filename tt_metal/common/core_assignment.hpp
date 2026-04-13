@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <stdint.h>
 #include <umd/device/types/arch.hpp>  // tt::ARCH

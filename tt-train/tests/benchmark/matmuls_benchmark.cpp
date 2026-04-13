@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <benchmark/benchmark.h>
@@ -266,7 +266,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
 
     std::vector<BenchmarkResult> results;
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         results.clear();
 
         // Create inputs once per shape so each grid config sees identical tensors

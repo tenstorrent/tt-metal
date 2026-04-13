@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,7 @@ struct ReduceParams {
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    bool negate{false};
 };
 
 }  // namespace ttnn::prim

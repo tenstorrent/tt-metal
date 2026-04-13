@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -137,7 +136,7 @@ Program create_program(IDevice* /*device*/, const ProgramAttributes& program_att
         core,
         DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
-    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles)};
+    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles), /*use_dfbs=*/false};
 
     CreateKernel(
         program,

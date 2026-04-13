@@ -1,6 +1,9 @@
 Lab 2: Multi Core Matrix Multiplication
 #######################################
 
+.. contents:: Table of Contents
+   :depth: 2
+
 Introduction
 ************
 

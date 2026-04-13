@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,9 @@
 #include <memory>
 
 namespace tt::tt_metal {
+
+class IDevice;
+class Program;
 
 namespace distributed {
 class MeshDevice;
@@ -21,11 +24,22 @@ namespace experimental {
 // removed once we implement a proper weight loading solution for Low Latency Decode.
 // As such its exposed as experimental.
 
+// Note: Slow Dispatch is a "Back-Door" way of running programs on compute cores.
+// This is productized for extremely application specific use cases.
+
 class DispatchContext {
 public:
     static DispatchContext& get();
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
+    void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+    void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+
+    // Reset DispatchContext state to allow reinitialization
+    void reset() {
+        num_fd_inits_ = 0;
+        fast_dispatch_enabled_ = false;
+    }
 
 private:
     DispatchContext() = default;
@@ -41,6 +55,10 @@ private:
     uint32_t num_fd_inits_ = 0;
     static std::unique_ptr<DispatchContext, Deleter> dispatch_context_ptr_;
 };
+
+// Dispatches a pre-compiled program to a device. Requires prior LaunchProgram call on another device
+// to compile and finalize the program. Uses thread-local launch messages for safe concurrent dispatch.
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 
 }  // namespace experimental
 

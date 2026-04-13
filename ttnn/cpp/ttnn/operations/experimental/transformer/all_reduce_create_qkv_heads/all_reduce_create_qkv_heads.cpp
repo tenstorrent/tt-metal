@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads.hpp"
 
 #include "device/all_reduce_create_qkv_heads_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> all_reduce_create_qkv_heads(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const ttnn::Tensor& batch_offset,
@@ -69,4 +69,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
     return {output_tensors.all_reduce, output_tensors.q, output_tensors.k, output_tensors.v};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::transformer
+}  // namespace ttnn::experimental

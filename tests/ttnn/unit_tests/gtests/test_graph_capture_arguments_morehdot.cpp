@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nlohmann/json.hpp>
@@ -10,7 +10,6 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
@@ -39,21 +38,25 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
-    // High-level C++ functions (like ttnn::moreh_dot) are not traced.
-    // Only device operations and low-level operations are captured.
-
     // operations[0]: MorehDotOperation (device operation)
     const auto& operation0 = operations[0];
     EXPECT_EQ(operation0.operation_name, "MorehDotOperation");
     EXPECT_EQ(operation0.arguments.size(), 2);
-    EXPECT_EQ(
-        operation0.arguments[0],
-        "[ unsupported type , "
-        "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]");
-    EXPECT_EQ(
-        operation0.arguments[1],
-        "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, "
-        "std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]");
+
+    // arguments[0]: operation_attributes_t with dtype, memory config, compute kernel config
+    EXPECT_TRUE(operation0.arguments[0].find("DataType::BFLOAT16") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("MemoryConfig(") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("TensorMemoryLayout::INTERLEAVED") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("BufferType::L1") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("ComputeKernelConfig(") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[0].find("HiFi4") != std::string::npos);
+
+    // arguments[1]: vector of input tensors with full tensor info (two 1x1x1x32 tensors)
+    EXPECT_TRUE(operation0.arguments[1].find("Tensor(") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("Shape([1, 1, 1, 32])") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("DataType::BFLOAT16") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("TilePageConfig") != std::string::npos);
+    EXPECT_TRUE(operation0.arguments[1].find("DeviceStorage()") != std::string::npos);
 
     // operations[1]: tt::tt_metal::create_device_tensor (output tensor creation)
     const auto& operation1 = operations[1];

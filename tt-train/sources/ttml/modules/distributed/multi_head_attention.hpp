@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <cstdint>
 
@@ -23,7 +25,8 @@ private:
 public:
     explicit DistributedMultiHeadAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 };
 
 }  // namespace ttml::modules::distributed

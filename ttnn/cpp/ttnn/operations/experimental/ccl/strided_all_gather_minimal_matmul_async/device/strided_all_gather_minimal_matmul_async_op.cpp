@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         attributes.strided_all_gather_async_struct.dim == 3,
-        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operaitons.");
+        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operations.");
     TT_FATAL(
         tensor_args.input_tensor.padded_shape()[0] == 1 && tensor_args.input_tensor.padded_shape()[1] == 1,
         "StridedAllGatherMinimalMatmulAsync requires input tensor to have batch size of 1.");
@@ -63,7 +63,6 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.strided_all_gather_async_struct.output_mem_config,
         attributes.strided_all_gather_async_struct.topology,
         attributes.strided_all_gather_async_struct.cluster_axis,
-        attributes.strided_all_gather_async_struct.tiles_per_chunk,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
         attributes.strided_all_gather_async_struct.mm_cores_y,
@@ -121,7 +120,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
             topology,
             multi_device_global_semaphore,
             cluster_axis,
-            /*tiles_per_chunk=*/std::nullopt,
             num_workers_per_link,
             num_buffers_per_channel,
             config->compute_with_storage_grid_size.y,

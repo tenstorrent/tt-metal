@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // DRAM Streaming Matmul unified kernel
@@ -111,8 +111,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),  // cb_in1_wait_tiles (same as num_tiles)
         get_named_compile_time_arg_val("dram_mm_cb_scalar"),
         get_named_compile_time_arg_val("dram_mm_mul_fp32_dest_acc_en")>;
-    // Full init, CBs don't matter
-    compute_kernel_hw_startup(0, 0, 0);
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

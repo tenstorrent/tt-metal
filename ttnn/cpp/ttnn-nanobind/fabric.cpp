@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,6 +56,9 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
         .value("FABRIC_1D_NEIGHBOR_EXCHANGE", tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE)
         .value("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D)
+        .value("FABRIC_2D_TORUS_XY", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
+        .value("FABRIC_2D_TORUS_X", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X)
+        .value("FABRIC_2D_TORUS_Y", tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y)
         .value(
             "CUSTOM", tt::tt_fabric::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
@@ -125,6 +128,13 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
         nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
         nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
+
+    mod.def(
+        "get_fabric_config",
+        &tt::tt_fabric::GetFabricConfig,
+        R"(
+            Returns the currently active global fabric configuration.
+        )");
 
     mod.def(
         "setup_fabric_connection",

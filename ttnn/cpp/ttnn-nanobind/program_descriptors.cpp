@@ -1,12 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "program_descriptors.hpp"
 
+#include "ttnn/types.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -28,7 +33,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
-NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
+NB_MAKE_OPAQUE(std::vector<tt::tt_metal::UnpackToDestMode>);
 NB_MAKE_OPAQUE(std::vector<uint32_t>);
 
 namespace ttnn::program_descriptors {
@@ -271,9 +276,20 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     tile: Tile object to create descriptor from
             )pbdoc")
+        .def(
+            nb::init<const tt::tt_metal::TileDescriptor&>(),
+            nb::arg("other"),
+            R"pbdoc(
+                Copy constructor for TileDescriptor.
+
+                Args:
+                    other: TileDescriptor to copy from
+            )pbdoc")
         .def_rw("height", &tt::tt_metal::TileDescriptor::height, "Height of the tile in elements")
         .def_rw("width", &tt::tt_metal::TileDescriptor::width, "Width of the tile in elements")
-        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed");
+        .def_rw("transpose", &tt::tt_metal::TileDescriptor::transpose, "Whether the tile is transposed")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     // Bind CBDescriptor and related types
     nb::class_<tt::tt_metal::CBFormatDescriptor>(mod, "CBFormatDescriptor", R"pbdoc(
@@ -331,6 +347,17 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBFormatDescriptor::buffer_index,
             "Index of the buffer within the command buffer")
         .def_rw("data_format", &tt::tt_metal::CBFormatDescriptor::data_format, "Format of the data in the buffer")
+        .def_prop_ro(
+            "data_format_as_uint8",
+            [](const tt::tt_metal::CBFormatDescriptor& self) -> uint8_t {
+                // Return the raw tt::DataFormat enum value as uint8.
+                // The tt::DataFormat enum is not bound in nanobind, so the
+                // existing .data_format getter throws TypeError in Python.
+                // dataformat_to_datatype_converter() only handles 8 of ~20
+                // variants, so we expose the raw value for reliable comparison.
+                return static_cast<uint8_t>(self.data_format);
+            },
+            "Raw tt::DataFormat enum value as uint8 (reliable getter for all formats)")
         .def_rw("page_size", &tt::tt_metal::CBFormatDescriptor::page_size, "Size of a page in bytes")
         .def_rw("tile", &tt::tt_metal::CBFormatDescriptor::tile, "Optional tile descriptor for custom tile dimensions");
 
@@ -366,9 +393,91 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::format_descriptors,
             "Collection of format descriptors for different sections of the buffer")
         .def_rw(
+            "remote_format_descriptors",
+            &tt::tt_metal::CBDescriptor::remote_format_descriptors,
+            "Remote format descriptors for GlobalCircularBuffer CBs")
+        .def_rw(
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
-            "Byte offset from buffer base address for CB placement (default 0)");
+            "Byte offset from buffer base address for CB placement (default 0)")
+        .def(
+            "has_buffer",
+            [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
+            R"pbdoc(
+                Check if this CB has a pinned L1 buffer.
+
+                When True, the CB is bound to a specific L1 address (e.g., a sharded tensor's memory).
+                Writes to this CB go directly to that tensor's L1 space.
+
+                Returns:
+                    True if a buffer pointer is set, False otherwise.
+            )pbdoc")
+        .def(
+            "has_global_circular_buffer",
+            [](const tt::tt_metal::CBDescriptor& self) { return self.global_circular_buffer != nullptr; },
+            R"pbdoc(
+                Check if this CB uses a GlobalCircularBuffer.
+
+                Returns:
+                    True if a global circular buffer pointer is set, False otherwise.
+            )pbdoc")
+        .def(
+            "set_global_circular_buffer",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::experimental::GlobalCircularBuffer& gcb) {
+                self.global_circular_buffer = &gcb;
+            },
+            nb::keep_alive<1, 2>(),
+            nb::arg("global_circular_buffer"),
+            R"pbdoc(
+                Set the GlobalCircularBuffer for this CB descriptor.
+
+                The CB will use the GlobalCircularBuffer's address space for
+                cross-core data transfer. The GlobalCircularBuffer must outlive
+                this CBDescriptor.
+
+                Args:
+                    global_circular_buffer: The GlobalCircularBuffer to associate with this CB.
+            )pbdoc")
+        .def(
+            "set_global_circular_buffer_from_cb",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
+                self.global_circular_buffer = other.global_circular_buffer;
+            },
+            nb::keep_alive<1, 2>(),
+            nb::arg("other"),
+            R"pbdoc(
+                Copy GlobalCircularBuffer pointer from another CBDescriptor.
+
+                Args:
+                    other: The CBDescriptor to copy the GlobalCircularBuffer from.
+            )pbdoc")
+        .def(
+            "set_buffer_from_cb",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
+                self.buffer = other.buffer;
+            },
+            nb::arg("other"),
+            R"pbdoc(
+                Copy buffer pointer from another CBDescriptor.
+
+                Used by the build cache to update sharded CB buffer pointers
+                on cache hit without rebuilding the entire descriptor.
+            )pbdoc")
+        .def(
+            "buffer_address",
+            [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
+                if (self.buffer != nullptr) {
+                    return self.buffer->address();
+                }
+                return std::nullopt;
+            },
+            R"pbdoc(
+                Get the L1 address of the pinned buffer, or None if no buffer exists.
+
+                Returns the base L1 address where this CB's data resides. For sharded
+                tensors, this address is the same on all cores (each core has different
+                data at the same L1 address).
+            )pbdoc");
 
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
@@ -378,6 +487,7 @@ void py_module_types(nb::module_& mod) {
         nb::arg("tensor"),
         nb::arg("address_offset") = 0,
         nb::arg("total_size") = 0,
+        nb::arg("core_ranges") = nb::none(),
         R"pbdoc(
             Create a CBDescriptor from a sharded tensor.
 
@@ -389,6 +499,7 @@ void py_module_types(nb::module_& mod) {
                 tensor: A sharded tensor to derive CB configuration from
                 address_offset: Byte offset from buffer base address for CB placement (default 0)
                 total_size: Total CB size in bytes (default 0 = use tensor's full bank size)
+                core_ranges: Optional CoreRangeSet override (default None = use tensor's shard grid)
 
             Returns:
                 CBDescriptor with all fields (total_size, core_ranges, format_descriptors, buffer)
@@ -408,6 +519,24 @@ void py_module_types(nb::module_& mod) {
 
             Note:
                 The tensor must be sharded (have a shard specification), otherwise this will raise an error.
+        )pbdoc");
+
+    // Helper function for getting the L1 byte address of a CB descriptor
+    mod.def(
+        "get_cb_address",
+        &tt::tt_metal::get_cb_address,
+        nb::arg("descriptor"),
+        R"pbdoc(
+            Get the L1 byte address of a CB descriptor.
+
+            Returns buffer base address + address_offset when a buffer is present,
+            or just address_offset when no buffer is set (manually placed CB).
+
+            Args:
+                descriptor: A CBDescriptor to get the address from
+
+            Returns:
+                The L1 byte address of the circular buffer
         )pbdoc");
 
     // Bind KernelDescriptor related types
@@ -454,12 +583,12 @@ void py_module_types(nb::module_& mod) {
         .def_rw("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
         .def_rw("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
 
-    export_enum<UnpackToDestMode>(mod, "UnpackToDestMode");
+    export_enum<tt::tt_metal::UnpackToDestMode>(mod, "UnpackToDestMode");
 
     // nanobind bind_vector docs:
     // the item accessor __getitem__ copies the accessed element by default.
     // Consequently, writes to elements may not propagate in the expected way.
-    nb::bind_vector<std::vector<UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
+    nb::bind_vector<std::vector<tt::tt_metal::UnpackToDestMode>>(mod, "VectorUnpackToDestMode");
 
     nb::class_<tt::tt_metal::ComputeConfigDescriptor>(mod, "ComputeConfigDescriptor", R"pbdoc(
         Configuration descriptor for compute operations.
@@ -473,7 +602,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::ComputeConfigDescriptor* t,
-               MathFidelity math_fidelity,
+               tt::tt_metal::MathFidelity math_fidelity,
                bool math_approx_mode,
                bool fp32_dest_acc_en,
                bool dst_full_sync_en,
@@ -485,7 +614,7 @@ void py_module_types(nb::module_& mod) {
                     .bfp8_pack_precise = bfp8_pack_precise,
                     .math_approx_mode = math_approx_mode};
             },
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::HiFi4),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::HiFi4),
             nb::arg("math_approx_mode") = false,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("dst_full_sync_en") = false,
@@ -641,7 +770,98 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
-        .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
+        .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel")
+        .def(
+            "clear_runtime_args",
+            [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },
+            "Clear all per-core runtime arguments")
+        .def(
+            "append_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's runtime args from itself");
+                }
+                // Find max args length across all cores in other
+                size_t max_args = 0;
+                for (const auto& [coord, args] : other.runtime_args) {
+                    max_args = std::max(max_args, args.size());
+                }
+                if (max_args == 0) {
+                    return;
+                }
+
+                // Build coord -> index lookup for other
+                std::unordered_map<CoreCoord, size_t> lookup;
+                lookup.reserve(other.runtime_args.size());
+                for (size_t i = 0; i < other.runtime_args.size(); i++) {
+                    lookup.emplace(other.runtime_args[i].first, i);
+                }
+
+                if (self.runtime_args.empty()) {
+                    // Initialize core list from self.core_ranges
+                    for (const auto& cr : self.core_ranges.ranges()) {
+                        for (size_t y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                            for (size_t x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                                CoreCoord coord(x, y);
+                                auto it = lookup.find(coord);
+                                if (it != lookup.end()) {
+                                    auto args = other.runtime_args[it->second].second;
+                                    args.resize(max_args, 0);
+                                    self.runtime_args.push_back({coord, std::move(args)});
+                                } else {
+                                    self.runtime_args.push_back(
+                                        {coord, tt::tt_metal::KernelDescriptor::CoreRuntimeArgs(max_args, 0)});
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (auto& [coord, args] : self.runtime_args) {
+                        auto it = lookup.find(coord);
+                        if (it != lookup.end()) {
+                            const auto& other_args = other.runtime_args[it->second].second;
+                            args.insert(args.end(), other_args.begin(), other_args.end());
+                            size_t pad = max_args - other_args.size();
+                            if (pad > 0) {
+                                args.resize(args.size() + pad, 0);
+                            }
+                        } else {
+                            args.resize(args.size() + max_args, 0);
+                        }
+                    }
+                }
+            },
+            nb::arg("other"),
+            R"pbdoc(
+                Append another kernel's per-core runtime args with uniform padding.
+
+                For each core in self, finds the matching core in other and extends
+                self's args with other's args (padded to max_args for uniform offsets).
+                If self.runtime_args is empty, initializes the core list from self.core_ranges.
+            )pbdoc")
+        .def(
+            "extend_runtime_args_uniform",
+            [](tt::tt_metal::KernelDescriptor& self, const std::vector<uint32_t>& values) {
+                if (values.empty()) {
+                    return;
+                }
+                for (auto& [coord, args] : self.runtime_args) {
+                    args.insert(args.end(), values.begin(), values.end());
+                }
+            },
+            nb::arg("values"),
+            "Extend all cores' runtime args with the same values")
+        .def(
+            "append_common_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's common_runtime_args from itself");
+                }
+                self.common_runtime_args.insert(
+                    self.common_runtime_args.end(), other.common_runtime_args.begin(), other.common_runtime_args.end());
+            },
+            nb::arg("other"),
+            "Append another kernel's common_runtime_args to this kernel's");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
@@ -693,7 +913,11 @@ void py_module_types(nb::module_& mod) {
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "custom_program_hash",
+            &tt::tt_metal::ProgramDescriptor::custom_program_hash,
+            "Optional memoized program hash (skips full descriptor walk when set)");
 
     mod.def(
         "merge_program_descriptors",

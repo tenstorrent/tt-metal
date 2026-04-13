@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -6,14 +6,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 
 
 @pytest.mark.parametrize(
@@ -32,9 +33,9 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_links", [1, 2])
+@pytest.mark.parametrize("use_socket", [True, False])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -57,9 +58,10 @@ def test_broadcast_rms_fused(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
+    num_links,
+    use_socket,
+    device_params,
 ):
     num_devices = mesh_rows * mesh_cols
 
@@ -70,11 +72,23 @@ def test_broadcast_rms_fused(
     # Create submesh used by the test
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
+    if use_socket:
+        if not is_slow_dispatch():
+            pytest.skip("Skipping test in fast dispatch mode")
+
+        ttnn.enable_asynchronous_slow_dispatch(submesh)
+
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()
 
+    bcast_core = ttnn.CoreCoord(0, 0)
+    pipeline_core = ttnn.CoreCoord(0, 1)
+    intermed_core_0 = ttnn.CoreCoord(0, 2)
+    intermed_core_1 = ttnn.CoreCoord(0, 3)
+    d2h_upstream_core = ttnn.CoreCoord(0, 4)
+
     # Set up sharded memory config (single core shard like test_ccl_broadcast.py)
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(bcast_core, bcast_core)})
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -87,37 +101,23 @@ def test_broadcast_rms_fused(
     sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere (one slice per row)
-    device_tensors = []
-    intermediate_tensors = []
-    for row in range(mesh_rows):
-        if row == sender_row:
-            device_tensors.append(sender_tensor)
-        else:
-            device_tensors.append(torch.zeros_like(sender_tensor))
-        intermediate_tensors.append(torch.zeros_like(sender_tensor))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+        input_tensor_torch=sender_tensor,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
+    semaphores = bcast_inputs.semaphores
 
     # Create gamma tensor - replicate same gamma across the mesh
     torch_gamma = torch.randn(tuple(output_shape), dtype=torch.bfloat16)
@@ -142,14 +142,67 @@ def test_broadcast_rms_fused(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Semaphores
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    host_io = None
+    recv_socket = None
+    h2d_socket = None
+    if use_socket:
+        element_size = dtype_size(input_dtype)
+        socket_page_size = output_shape[0] * output_shape[1] * element_size
+        token_page_size = 64
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
+        sender_device_idx = sender_row * mesh_cols + sender_col
+        sender_input = ttnn.get_device_tensors(input_tensor_mesh)[sender_device_idx]
+
+        sender_device_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+        pipeline_mesh_core = ttnn.MeshCoreCoord(sender_device_coord, pipeline_core)
+        intermed_mesh_core_0 = ttnn.MeshCoreCoord(sender_device_coord, intermed_core_0)
+        intermed_mesh_core_1 = ttnn.MeshCoreCoord(sender_device_coord, intermed_core_1)
+        bcast_mesh_core = ttnn.MeshCoreCoord(sender_device_coord, bcast_core)
+        d2h_upstream_mesh_core = ttnn.MeshCoreCoord(sender_device_coord, d2h_upstream_core)
+
+        sender_tensor_4d = sender_tensor.reshape(1, 1, 1, output_shape[1])
+        sender_device = sender_input.device()
+        embedding_tensor_device = ttnn.from_torch(
+            sender_tensor_4d,
+            dtype=input_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=sender_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        h2d_socket = ttnn.H2DSocket(
+            submesh, pipeline_mesh_core, ttnn.BufferType.L1, token_page_size * 2, ttnn.H2DMode.HOST_PUSH
+        )
+        d2h_socket = ttnn.D2HSocket(submesh, pipeline_mesh_core, socket_page_size)
+
+        host_io = HostInterface(
+            h2d_socket,
+            d2h_socket,
+            token_page_size,
+            socket_page_size,
+            core_to_core_socket_buffer_size=socket_page_size,
+            h2d_downstream_core=intermed_mesh_core_0,
+            d2h_upstream_core=d2h_upstream_mesh_core,
+            embedding_tensor=embedding_tensor_device,
+            loopback_mode=False,
+            embedding_cb_index=4,
+        )
+
+        socket_interface_1 = SocketInterface(
+            socket_page_size,
+            socket_page_size,
+            socket_page_size,
+            intermed_mesh_core_0,
+            intermed_mesh_core_1,
+            upstream_socket=host_io.get_downstream_socket(),
+            downstream_core_coord=bcast_mesh_core,
+            sender_mesh=MeshWrapper(submesh),
+            receiver_mesh=MeshWrapper(submesh),
+        )
+
+        recv_socket = socket_interface_1.get_downstream_socket()
+        host_io.run()
+        socket_interface_1.run()
 
     torch_expected = BroadcastRMSNorm.golden(sender_tensor, torch_gamma)
 
@@ -162,11 +215,21 @@ def test_broadcast_rms_fused(
         sender_coord,
         output_tensor,
         semaphores,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
+        num_links=num_links,
+        socket=recv_socket if use_socket else None,
+        fabric_config=device_params["fabric_config"],
     )
 
-    ttnn.synchronize_device(submesh)
+    if use_socket:
+        token_size_datums = token_page_size // 4
+        torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
+        torch_token[0, 0] = 0
+        token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        h2d_socket.write_tensor(token_tensor)
+        host_io.terminate(False)
+        socket_interface_1.terminate(True)
+    else:
+        ttnn.synchronize_device(submesh)
 
     # Verify output - every device slice should equal the expected RMSNorm of the sender data
     output_tensor_torch = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))

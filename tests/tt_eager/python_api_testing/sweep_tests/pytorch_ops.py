@@ -1,9 +1,10 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 import torch
-from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
+from tt_lib.utils import _nearest_32 as nearest_32, untilize as untilize_util
+import tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops as ttnn_pytorch_ops
 
 
 ################################################
@@ -643,8 +644,7 @@ def tanhshrink(x, *args, **kwargs):
     return torch.nn.functional.tanhshrink(x)
 
 
-def signbit(x, *args, **kwargs):
-    return torch.signbit(x)
+signbit = ttnn_pytorch_ops.signbit
 
 
 def floor(x, *args, **kwargs):
@@ -1279,28 +1279,13 @@ def split_last_dim_two_chunks_tiled(x, *args, **kwargs):
     return [output0, output1]
 
 
-def tilize(x, *args, **kwargs):
-    return tilize_util(x)
+tilize = ttnn_pytorch_ops.tilize
+tilize_with_zero_padding = ttnn_pytorch_ops.tilize_with_zero_padding
+tilize_with_val_padding = ttnn_pytorch_ops.tilize_with_val_padding
 
 
 def untilize(x, *args, **kwargs):
     return untilize_util(x)
-
-
-def tilize_with_zero_padding(x, *args, **kwargs):
-    return tilize_util(
-        torch.nn.functional.pad(x, (0, nearest_32(x.shape[-1]) - x.shape[-1], 0, nearest_32(x.shape[-2]) - x.shape[-2]))
-    )
-
-
-def tilize_with_val_padding(x, output_tensor_shape, pad_value, *args, **kwargs):
-    pad = torch.nn.functional.pad(
-        x,
-        tuple(j for i in reversed(range(len(x.shape))) for j in (0, output_tensor_shape[i] - x.shape[i])),
-        value=pad_value,
-    )
-    tilized = tilize_util(pad)
-    return tilized
 
 
 def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
@@ -1439,88 +1424,9 @@ def eltwise_identity(x, *args, **kwargs):
 
 
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
-    if tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.bfloat16).to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.bfloat16).to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
-        return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x, min=0, max=65535)
-    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x, min=0, max=65535)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.bfloat16).to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.bfloat16).to(torch.int32)
-    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.bfloat16).to(torch.float32)
-    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
-    else:
-        return x
+    return ttnn_pytorch_ops.eltwise_typecast(
+        x, *args, tt_input_dtype=tt_input_dtype[0], tt_output_dtype=tt_output_dtype[0], **kwargs
+    )
 
 
 def eltwise_rdiv(x, *args, **kwargs):

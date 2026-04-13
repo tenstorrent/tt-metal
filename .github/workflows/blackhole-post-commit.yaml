@@ -27,6 +27,67 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD unit tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-tt-cnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-CNN unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
+      # Pre-built artifacts (optional - if provided, skips build-artifact job)
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built dev Docker image tag (skips build if provided)"
+      build-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built build artifact name (skips build if provided)"
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built wheel artifact name (skips build if provided)"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
+      schedule-runs-all-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "When true (default), a scheduled run uses the Blackhole schedule suite (not gated on run-* alone). When false, only run-* inputs enable jobs—set false when calling from another workflow."
   workflow_dispatch:
     inputs:
       runner-label:
@@ -62,6 +123,46 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD unit tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-tt-cnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-CNN unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -140,6 +241,7 @@ jobs:
           echo "civ2_viommu_matrix: $civ2_viommu_matrix"
 
   build-artifact:
+    if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -151,8 +253,58 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
+
+  resolve-artifacts:
+    runs-on: ubuntu-latest
+    needs: [build-artifact]
+    if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
+    outputs:
+      dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
+      build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
+      schedule-runs-all-tests-effective: ${{ steps.resolve.outputs.schedule-runs-all-tests-effective }}
+    steps:
+      - id: resolve
+        run: |
+          # Validate pre-built artifact inputs - all three must be provided together
+          if [[ -n "${{ inputs.dev-docker-image }}" || -n "${{ inputs.build-artifact-name }}" || -n "${{ inputs.wheel-artifact-name }}" ]]; then
+            if [[ -z "${{ inputs.dev-docker-image }}" || -z "${{ inputs.build-artifact-name }}" || -z "${{ inputs.wheel-artifact-name }}" ]]; then
+              echo "Error: When using pre-built artifacts, all three inputs must be provided:"
+              echo "  - dev-docker-image: '${{ inputs.dev-docker-image }}'"
+              echo "  - build-artifact-name: '${{ inputs.build-artifact-name }}'"
+              echo "  - wheel-artifact-name: '${{ inputs.wheel-artifact-name }}'"
+              exit 1
+            fi
+          fi
+
+          # Use provided artifacts if available, otherwise use built artifacts
+          if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
+            echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Effective schedule suite flag: true unless input is defined and explicitly false (unset/null is not "off").
+          echo "=== schedule-runs-all-tests (resolve-artifacts) ==="
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "inputs.schedule-runs-all-tests (toJSON): ${{ toJSON(inputs.schedule-runs-all-tests) }}"
+          explicit_false="${{ inputs.schedule-runs-all-tests == false && toJSON(inputs.schedule-runs-all-tests) != 'null' }}"
+          echo "explicit false (defined && == false): $explicit_false"
+          if [[ "$explicit_false" == "true" ]]; then
+            echo "schedule-runs-all-tests-effective=false" >> "$GITHUB_OUTPUT"
+            echo "schedule-runs-all-tests-effective: false"
+          else
+            echo "schedule-runs-all-tests-effective=true" >> "$GITHUB_OUTPUT"
+            echo "schedule-runs-all-tests-effective: true"
+          fi
+
   run-profiler-regression:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -163,12 +315,14 @@ jobs:
       arch: "blackhole"
       runner-label: ${{ matrix.test-group }}
       post_commit_only: true
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -178,11 +332,13 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   models-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
@@ -193,11 +349,13 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       timeout: 20
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
@@ -205,14 +363,15 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      timeout: ${{ (inputs.enable-watcher && 120) || 40 }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -222,69 +381,16 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-
-  metalium-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  ttnn-smoke-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-      product: tt-nn
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  metalium-basic-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-metalium
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-  ttnn-basic-tests:
-    needs: [build-artifact, generate-matrix]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
-    uses: ./.github/workflows/basic.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-nn
-      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
-    needs: [build-artifact, generate-matrix]
+    needs: [resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
@@ -294,14 +400,16 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ !contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') }}
-    needs: [build-artifact, generate-matrix]
+    # Don't run on daily P100-only schedule
+    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
@@ -311,7 +419,8 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

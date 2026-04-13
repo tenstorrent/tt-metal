@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/trace.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::graph {
 
@@ -118,7 +119,7 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device, Qu
  * @brief Extracts a trace of the graph operations and returns the trace execution runtime.
  *
  * This function runs trace capture by invoking the provided operation with the given arguments,
- * then excutes the trace and returns the runtime of the trace in nanoseconds.
+ * then executes the trace and returns the runtime of the trace in nanoseconds.
  *
  * @tparam Op The type of the operation or a callable op chain that will be invoked to capture the trace operations.
  * @tparam Args The types of the arguments that will be passed to the operation or op chain.

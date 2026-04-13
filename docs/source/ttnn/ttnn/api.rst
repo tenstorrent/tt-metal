@@ -47,6 +47,7 @@ Core
    ttnn.from_device
    ttnn.from_torch
    ttnn.get_device_tensors
+   ttnn.get_optimal_worker_cores_for_sharded_tensor
    ttnn.load_tensor
    ttnn.reallocate
    ttnn.split_work_to_cores
@@ -232,6 +233,7 @@ Pointwise Unary
    ttnn.trunc
    ttnn.unary_chain
    ttnn.var_hw
+   ttnn.xielu
 
 Pointwise Binary
 ================

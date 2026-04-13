@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,13 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_config.h"
+
+// ShardedAddrGen is declared under a global experimental namespace. So when you try to use experimental::ShardedAddrGen
+// within the tt::tt_fabric namespace it will end up clashing with tt::tt_fabric::experimental namespace
+// (which gets brought in in a header somewhere). So my best solution (and AI's) so far is to bring it in at global
+// scope with the using which I made really stupid and obvious as to not cause any new name collisions.
+template <typename ShardingInfoType>
+using _ttnn_operations_experimental_ShardedAddrGen = experimental::ShardedAddrGen<ShardingInfoType>;
 
 namespace tt::tt_fabric {
 
@@ -33,7 +40,7 @@ uint32_t get_page_size(const InterleavedAddrGenFast<DRAM>& s) {
 }
 
 template <typename ShardingInfoType>
-uint32_t get_page_size(const experimental::ShardedAddrGen<ShardingInfoType>& d) {
+uint32_t get_page_size(const _ttnn_operations_experimental_ShardedAddrGen<ShardingInfoType>& d) {
     return d.CONSTANT_ARGS.page_size_jump;
 }
 

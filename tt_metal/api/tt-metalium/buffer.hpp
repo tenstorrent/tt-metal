@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <nlohmann/json_fwd.hpp>
-#include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -22,7 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -30,9 +28,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
+// UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::stl::json {
 template <typename T>
@@ -45,6 +42,19 @@ class Allocator;
 class AllocatorImpl;
 class IDevice;
 
+// Forward declarations for friended free functions in the experimental namespace.
+// These are used to access experimental config params, which are not part of the official public API.
+class Buffer;
+class BufferShardingArgs;
+namespace experimental::per_core_allocation {
+bool is_per_core_allocation(const Buffer& buffer);
+DeviceAddr get_per_core_address(const Buffer& buffer, CoreCoord core);
+const std::unordered_map<CoreCoord, DeviceAddr>& get_per_core_addresses(const Buffer& buffer);
+void copy_per_core_addresses(Buffer& dst, const Buffer& src);
+BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable);
+bool is_per_core_allocation(const BufferShardingArgs& args);
+}  // namespace experimental::per_core_allocation
+
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
@@ -52,7 +62,7 @@ struct ShardSpec {
     /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
 
-    /* The sequence order of the grid cores that the shards are layed out onto. */
+    /* The sequence order of the grid cores that the shards are laid out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
     ShardSpec(
@@ -156,10 +166,18 @@ public:
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
+    // per_core_allocation is experimental functionality
+    // access is through experimental::per_core_allocation free functions
+    friend BufferShardingArgs& experimental::per_core_allocation::set_per_core_allocation(BufferShardingArgs&, bool);
+    friend bool experimental::per_core_allocation::is_per_core_allocation(const BufferShardingArgs&);
+
 private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
     std::optional<ShardSpecBuffer> shard_spec_;
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
+    // per_core_allocation is experimental functionality
+    // access is through experimental::per_core_allocation free functions
+    bool per_core_allocation_ = false;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -288,7 +306,15 @@ private:
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     void deallocate_impl();
+    friend class AllocatorImpl;
     friend void DeallocateBuffer(Buffer& buffer);
+    friend bool experimental::per_core_allocation::is_per_core_allocation(const Buffer&);
+    friend DeviceAddr experimental::per_core_allocation::get_per_core_address(const Buffer&, CoreCoord);
+    friend const std::unordered_map<CoreCoord, DeviceAddr>& experimental::per_core_allocation::get_per_core_addresses(
+        const Buffer&);
+    friend void experimental::per_core_allocation::copy_per_core_addresses(Buffer&, const Buffer&);
+
+    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
 
     DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
@@ -313,6 +339,10 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+
+    // Per-core allocation state
+    bool per_core_allocation_ = false;
+    std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses_;
 
     // The root buffer is the buffer that owns the underlying device memory.
     // The root buffer is populated only when the buffer was created with a view method.

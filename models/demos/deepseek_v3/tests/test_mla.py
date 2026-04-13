@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,11 +14,9 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -70,15 +68,11 @@ def generate_reference_io(
     """
     if module_path is None:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+        state_dict = reference_model.state_dict()
     else:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
-        reference_model.load_state_dict(dequantized_state_dict)
+        reference_model.load_state_dict(state_dict)
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None
@@ -193,14 +187,24 @@ def run_test_forward_pass_mla2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    perf_mode=False,
+    num_iters=20,
 ):
+    configured_row_width = batch_size_per_row
+
     # Check params
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
-        batch_size = batch_size_per_row
+        # These module tests exercise the row-batched prefill kernels directly. The
+        # outer generator still prefills one prompt at a time, but the MLA prefill
+        # path itself materializes and updates one full configured row of KV/cache
+        # state for the selected user row.
+        assert (
+            configured_row_width == USERS_PER_ROW
+        ), f"Prefill coverage exercises a full row-wide layout of {USERS_PER_ROW} users"
+        reference_batch_size = configured_row_width
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
-        batch_size = batch_size_per_row * mesh_device.shape[0]
+        reference_batch_size = configured_row_width * mesh_device.shape[0]
 
     # Get reference IO
     logger.info("Setting up reference IO")
@@ -210,7 +214,7 @@ def run_test_forward_pass_mla2d(
         hf_config_short,
         layer_idx,
         seq_len,
-        batch_size,
+        reference_batch_size,
         mode,
         state_dict,
         decode_position_ids,
@@ -218,8 +222,8 @@ def run_test_forward_pass_mla2d(
 
     # Set up page config
     logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    user_id = None if mode == "decode" else torch.randint(0, configured_row_width * mesh_device.shape[0], ()).item()
+    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, configured_row_width, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
@@ -232,19 +236,24 @@ def run_test_forward_pass_mla2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_mla",
+        real_weights=module_path is not None,
+        layer_id=module_path,
     )
-    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device, configured_row_width)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
+    input_memory_config = run_config["input_memory_config"]
+
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -262,55 +271,83 @@ def run_test_forward_pass_mla2d(
     tt_page_table = MLA2D.create_page_table(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
-    tt_rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+    tt_rope_tensors = get_rope_tensors(hf_config_short, configured_row_width, seq_len, position_ids, mesh_device)
 
     # Forward pass
     logger.info("Running TTNN forward pass")
-
-    if mode == "prefill":
-        tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+    if perf_mode:
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+            tt_output.deallocate()
+        else:
+            for _ in range(num_iters):
+                tt_output = MLA2D.forward_decode(
+                    tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
+                )
+                tt_output.deallocate()
     else:
-        tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        if mode == "prefill":
+            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+        else:
+            tt_output = MLA2D.forward_decode(tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table)
+        # Convert to interleaved to match model behavior and avoid implicit conversion in to_torch
+        tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    ).reshape(
-        -1, seq_len, hf_config_short.hidden_size
-    )  # Concatenate all batches together
+        if mode == "prefill":
+            # Row-batched MLA prefill now returns the full selected row so downstream residual adds operate on
+            # the correct per-user outputs instead of a broadcasted single-user result.
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            ).reshape(-1, seq_len, hf_config_short.hidden_size)
+        else:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+            ).reshape(
+                -1, seq_len, hf_config_short.hidden_size
+            )  # Concatenate all batches together
 
-    # Check PCC
-    tt_cache = torch_cache_from_paged(
-        get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
-        torch_page_table,
-        mesh_device.get_num_devices(),
-    )
-    if mode == "prefill":
-        assert (
-            check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
-            and check_cache_matches(
-                tt_cache[user_id : user_id + 1, :, :seq_len],
-                output_cache,
+        # Check PCC
+        tt_cache = torch_cache_from_paged(
+            get_cache_on_host(run_config["mla1d"]["kvpe_cache"], mesh_device),
+            torch_page_table,
+            mesh_device.get_num_devices(),
+        )
+        if mode == "prefill":
+            row_start = (user_id // configured_row_width) * configured_row_width
+            row_end = row_start + configured_row_width
+            assert (
+                check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                and check_cache_matches(
+                    tt_cache[row_start:row_end, :, :seq_len],
+                    output_cache,
+                    hf_config_short.kv_lora_rank,
+                    pcc_required=PCC_REQUIRED_KVPE,
+                )
+                and check_cache_unchanged(
+                    tt_cache, (slice(row_start, row_end), slice(None), slice(None, seq_len), slice(None))
+                )
+            ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside the selected row"
+        else:
+            assert check_output_matches(
+                tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
+            ) and check_cache_matches(
+                tt_cache[torch.arange(reference_batch_size), :, position_ids, :].unsqueeze(2),
+                output_cache[:, :, -1:, :],
                 hf_config_short.kv_lora_rank,
                 pcc_required=PCC_REQUIRED_KVPE,
-            )
-            and check_cache_unchanged(
-                tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
-            )
-        ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
-    else:
-        assert check_output_matches(
-            tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
-        ) and check_cache_matches(
-            tt_cache[torch.arange(batch_size), :, position_ids, :].unsqueeze(2),
-            output_cache[:, :, -1:, :],
-            hf_config_short.kv_lora_rank,
-            pcc_required=PCC_REQUIRED_KVPE,
-        ), f"MLA output for decode {batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            ), f"MLA output for decode {reference_batch_size=} {position_ids=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
 
+
+_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)
+ROW_BATCHED_PREFILL_SEQ_LEN = (
+    (_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+) * ttnn.TILE_SIZE
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     USERS_PER_ROW,
-    DEFAULT_PREFILL_SEQ_LEN,  # default prefill sequence length to test
+    ROW_BATCHED_PREFILL_SEQ_LEN,  # keep total prefill token budget scaled while respecting tile-aligned prefill kernels
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
@@ -319,10 +356,17 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "perf_mode",
+    [
+        True,
+        False,
+    ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
@@ -350,6 +394,7 @@ def test_forward_pass(
     ccl,
     model_path,
     module_path,
+    perf_mode,
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
@@ -376,6 +421,46 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+        perf_mode,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": get_fabric_config(),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    model_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    # Keep this case out of the shared matrix so batch-8 decode coverage stays targeted.
+    run_test_forward_pass_mla2d(
+        layer_idx=0,
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        model_path=model_path,
+        module_path="model.layers.0.self_attn",
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
+        perf_mode=False,
     )
 
 

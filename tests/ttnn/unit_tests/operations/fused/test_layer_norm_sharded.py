@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -52,27 +52,6 @@ def test_layer_norm_sharded_single_stage(
 def test_layer_norm_sharded_two_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, use_welford, two_stage, tensor_type, dtype
 ):
-    if is_watcher_enabled() and two_stage and use_welford:
-        if (
-            h == 128
-            and w == 256
-            and num_cores_h == 4
-            and num_cores_w == 2
-            and block_ht == 4
-            and block_wt == 1
-            and subblock_wt == 1
-        ):
-            pytest.skip("Skipping the test with watcher enabled due to failure, see github issue #37171")
-        if (
-            h == 256
-            and w == 512
-            and num_cores_h == 2
-            and num_cores_w == 4
-            and block_ht == 8
-            and block_wt == 2
-            and subblock_wt == 1
-        ):
-            pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     layernorm_test_main(
         device,
         h,
@@ -94,8 +73,6 @@ def test_layer_norm_sharded_two_stage(
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor_type, dtype):
-    if is_watcher_enabled() and two_stage and use_welford:
-        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -123,11 +100,6 @@ def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage, tensor_type, dtype):
-    if is_watcher_enabled() and (
-        (two_stage and use_welford)
-        or (dtype == torch.bfloat16 and tensor_type == "random_normal" and not two_stage and not use_welford)
-    ):
-        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -156,8 +128,6 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, two_stage, tensor_type, dtype):
-    if is_watcher_enabled() and not two_stage:
-        pytest.skip("Skipping the test with watcher enabled due to failure, see github issue #37171")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
     weight = generate_input_tensor(1, w, "random", dtype)
@@ -187,8 +157,6 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
-    if is_watcher_enabled() and two_stage and use_welford:
-        pytest.skip("Skipping the test with watcher enabled due to hang, see github issue #37172")
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
     residual = generate_input_tensor(h, w, "random_normal", dtype)
@@ -349,7 +317,14 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
     golden = ttnn.get_golden_function(ttnn.layer_norm)
     golden_output = golden(torch_input_tensor, weight=torch_weight[0], bias=torch_bias[0]).to(dtype)
 
-    assert_with_pcc(golden_output, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.9998,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.015,
+    )
 
 
 @pytest.mark.parametrize("grid_offset", [(1, 1), (2, 0), (0, 2)])
@@ -417,7 +392,24 @@ def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford
         bias=tt_bias,
     )
 
-    assert_with_pcc(ref_output, output, 0.9998)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("grid_offset", [(2, 0), (1, 1)])
@@ -470,4 +462,21 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         subblock_w=1,
     )
 
-    assert_with_pcc(ref_output, output, 0.9998)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

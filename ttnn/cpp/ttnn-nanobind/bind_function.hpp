@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <array>
 #include <cstddef>
 #include <string>
-#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -16,8 +15,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
-
-#include <tt_stl/assert.hpp>
+#include <nanobind/stl/tuple.h>
+// Added for the nanobind includes and types -- see the comments in the decorators.hpp
+#include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn {
 
@@ -82,7 +82,7 @@ struct unique_string {
 };
 
 // Helper struct template - each unique operation name creates a unique type
-template <unique_string Name>
+template <unique_string Name, unique_string Namespace = unique_string{"ttnn."}>
 struct unique_wrapper_base {
     std::string name_;
     std::string py_name_;
@@ -112,7 +112,7 @@ template <unique_string FuncName, unique_string Namespace = unique_string{"ttnn.
 void bind_function(nb::module_& mod, const char* doc, Overloads&&... overloads) {
     // Create a unique wrapper type using the operation name
     // Each operation name creates a distinct type, ensuring uniqueness across TUs
-    using wrapper_t = unique_wrapper_base<FuncName>;
+    using wrapper_t = unique_wrapper_base<FuncName, Namespace>;
 
     std::string class_name = std::string(FuncName) + "_t";
     std::string python_fully_qualified_name = std::string(Namespace) + std::string(FuncName);
@@ -130,9 +130,10 @@ void bind_function(nb::module_& mod, const char* doc, Overloads&&... overloads) 
     (detail::add_call_overload<wrapper_t>(cls, std::forward<Overloads>(overloads)), ...);
 
     // Create instance and bind to module
-    // Each unique type (per operation name) has its own static instance
-    static wrapper_t instance{std::string(FuncName), python_fully_qualified_name};
-    mod.attr(FuncName) = &instance;
+    // Heap-allocate with take_ownership so nanobind manages the lifetime and
+    // deletes the object when Python's reference count reaches zero at shutdown.
+    auto* instance = new wrapper_t{std::string(FuncName), python_fully_qualified_name};
+    mod.attr(FuncName) = nb::cast(instance, nb::rv_policy::take_ownership);
 }
 
 }  // namespace ttnn

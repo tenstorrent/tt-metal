@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,18 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/pack_untilize.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
@@ -27,13 +32,11 @@
 
 namespace ckernel {
 
-constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
-
-template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
+template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
-    MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY>(
+    MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
         icb0, icb0, false)));
 }
 
@@ -54,9 +57,9 @@ ALWI void sdpa_bcast_col_reuse_tiles(
         dst_tile_index)));
 }
 
-template <uint32_t num_tiles>
+template <uint32_t num_tiles, bool dense = false>
 ALWI void sdpa_mul_bcast_col_reuse_tiles_init(uint32_t icb0) {
-    sdpa_bcast_col_reuse_tiles_init<ELWMUL, num_tiles>(icb0);
+    sdpa_bcast_col_reuse_tiles_init<ELWMUL, num_tiles, dense>(icb0);
 }
 
 template <uint32_t num_tiles>
@@ -181,11 +184,10 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
-            sub_top_4, scale_bf16);
-    sfpi::vFloat exp_bottom_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_top_4 = sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+        sub_top_4, scale_bf16);
+    sfpi::vFloat exp_bottom_4 =
+        sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -240,6 +242,7 @@ template <
 void compute_sdpa_chunk(
     uint32_t cb_q,
     uint32_t cb_k,
+    uint32_t cb_mask,
     uint32_t cb_out,
     uint32_t mm1_dst_offset,
     uint32_t mm2_dst_offset,
@@ -247,14 +250,17 @@ void compute_sdpa_chunk(
     uint32_t sum_dst_offset,
     uint32_t corr_exp_dst_offset,
     bool first_chunk,
-    bool last_chunk) {
+    bool last_chunk,
+    bool mask_chunk) {
+    static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size);
+    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+
     // Reduce Max (SFPU)
     PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
         mm1_dst_offset, max_dst_offset, !first_chunk)));
@@ -387,11 +393,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
@@ -445,7 +451,8 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     int vector_mode = (int)VectorMode::C,
-    bool pop_ms = false>
+    bool pop_ms = false,
+    bool dense = false>
 ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
     copy_tile_to_dst_init_short(cb_worker_ms);
     cb_wait_front(cb_worker_ms, 1);
@@ -466,7 +473,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
     MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
     // Initialize SRCB reuse for L tile broadcast multiply
     // TODO: Optimize init sequence with copy_tile
-    sdpa_mul_bcast_col_reuse_tiles_init<block_size>(cb_l_for_init);
+    sdpa_mul_bcast_col_reuse_tiles_init<block_size, dense>(cb_l_for_init);
     sdpa_bcast_col_reuse_preamble<normalize>();
 
     // Not final reduction: pack out stats and release regs
@@ -492,8 +499,9 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
  * @param tile_index Starting tile index within the CB (for current block)
  * @param acquire_regs Whether to acquire tile_regs (false if regs already held from MS phase)
  */
-template <uint32_t block_size, bool manage_cbs = false>
-ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, uint32_t tile_index, bool acquire_regs) {
+template <uint32_t block_size, uint32_t num_blocks, bool untilize = false, bool dense = false, bool manage_cbs = false>
+ALWI void sdpa_tail_l_block(
+    uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, uint32_t tile_index, uint32_t block_index, bool acquire_regs) {
     if (acquire_regs) {
         tile_regs_acquire();
     }
@@ -505,13 +513,22 @@ ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, u
     if constexpr (manage_cbs) {
         cb_pop_front(cb_l2, block_size);
         cb_pop_front(cb_l1, block_size);
-        cb_reserve_back(cb_l_out, block_size);
+        if constexpr (!untilize) {
+            cb_reserve_back(cb_l_out, block_size);
+        }
     }
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile_block(0, cb_l_out, block_size);
+    if constexpr (untilize) {
+        pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
+            cb_l_out, 1, block_index, 8, dense ? 2 : 4);
+    } else {
+        pack_tile_block(0, cb_l_out, block_size);
+    }
     if constexpr (manage_cbs) {
-        cb_push_back(cb_l_out, block_size);
+        if constexpr (!untilize) {
+            cb_push_back(cb_l_out, block_size);
+        }
     }
     tile_regs_release();
 }
@@ -563,7 +580,9 @@ template <
     uint32_t block_size,
     uint32_t num_blocks,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C>
+    int vector_mode = (int)VectorMode::C,
+    bool dense = false,
+    bool untilize = false>
 ALWI void sdpa_tail(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -572,16 +591,38 @@ ALWI void sdpa_tail(
     uint32_t cb_l2,
     uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true>(
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true, dense>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
+    // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
+    if constexpr (dense && !untilize) {
+        // Reduce packing stride from tile to tile to 32 rows instead of 64
+        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
+            (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
+    }
+
     // Phase 2: Process all L blocks
+    // Untilize requires operating on all blocks at once
+    if constexpr (untilize) {
+        custom_pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(
+            cb_l_out, 8, dense ? 2 : 4);
+        cb_reserve_back(cb_l_out, block_size * num_blocks);
+    }
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size, true>(cb_l1, cb_l2, cb_l_out, 0, false);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
     }
     for (uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size, true>(cb_l1, cb_l2, cb_l_out, 0, true);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, i, true);
+    }
+    if constexpr (untilize) {
+        cb_push_back(cb_l_out, block_size * num_blocks);
+        pack_untilize_uninit(cb_l_out);
+    }
+
+    if constexpr (dense && !untilize) {
+        // Restore packing stride from tile to tile to 64 rows
+        PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 
     // Phase 3: Finalize (postamble + pop MS)

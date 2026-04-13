@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>  // needed for DeviceComputerKernelConfig
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -47,9 +47,9 @@ void py_module_types(nb::module_& mod) {
     // for backward compatibility)
     nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
         .def(
-            nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
+            nb::init<tt::tt_metal::MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
@@ -70,7 +70,7 @@ void py_module(nb::module_& mod) {
         nb::arg("arch"),
         nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
-        nb::arg("math_fidelity") = nb::cast(MathFidelity::LoFi),
+        nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::LoFi),
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,
@@ -162,9 +162,8 @@ void py_module(nb::module_& mod) {
                 ttnn.Tensor: the reallocated tensor.
         )doc");
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_memory_config">(
         mod,
-        ttnn::to_memory_config,
         R"doc(
         Converts a tensor to the desired memory configuration. Used for converting tensors to sharded tensors, interleaved tensors, or converting between DRAM and L1 memory.
 
@@ -177,15 +176,14 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the converted tensor.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("tensor"),
-            nb::arg("memory_config"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        &ttnn::to_memory_config,
+        nb::arg("tensor"),
+        nb::arg("memory_config"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_dtype">(
         mod,
-        ttnn::to_dtype,
         R"doc(
         Converts a host tensor to the desired dtype.
 
@@ -213,7 +211,9 @@ void py_module(nb::module_& mod) {
             Limitations:
                 -  tensor must be on the host.
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("dtype")});
+        &ttnn::to_dtype,
+        nb::arg("tensor"),
+        nb::arg("dtype"));
 
     mod.def(
            "allocate_tensor_on_device",
@@ -272,7 +272,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, const std::optional<QueueId>& cq_id) {
-            tt::tt_metal::tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
+            copy_to_device(host_tensor, device_tensor, cq_id);
         },
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),
@@ -312,7 +312,7 @@ void py_module(nb::module_& mod) {
            ttnn::Tensor& host_tensor,
            bool blocking = true,
            std::optional<ttnn::QueueId> cq_id = std::nullopt) {
-            tt::tt_metal::tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+            copy_to_host(device_tensor, host_tensor, blocking, cq_id);
         },
         nb::arg("device_tensor"),
         nb::arg("host_tensor"),
@@ -348,9 +348,8 @@ void py_module(nb::module_& mod) {
                 -  Host and Device tensors must be the same shape, have the same datatype, and have the same data layout (ROW_MAJOR or TILE).
         )doc");
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_layout">(
         mod,
-        ttnn::to_layout,
         R"doc(
         Organizes the `ttnn.Tensor` tensor into either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
 
@@ -364,24 +363,19 @@ void py_module(nb::module_& mod) {
             layout (ttnn.Layout): the desired layout, either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
             dtype (ttnn.DataType, optional): the optional output data type.
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
+            pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const std::decay_t<decltype(ttnn::to_layout)> self,
-               const ttnn::Tensor& tensor,
-               const ttnn::Layout layout,
-               const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, sub_core_grids);
-            },
-            nb::arg("tensor"),
-            nb::arg("layout"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+        &ttnn::to_layout,
+        nb::arg("tensor"),
+        nb::arg("layout"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("pad_value") = 0.0f);
 
     mod.def(
         "num_cores_to_corerangeset",

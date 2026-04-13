@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ import random
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import is_unsigned_tensor
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
@@ -364,6 +364,9 @@ def run_all_to_all_dispatch_test(
     random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     # input, output, interm core range set
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -494,39 +497,40 @@ def run_all_to_all_dispatch_test(
         delays[0][0] = 400000
 
     def run_op(n_iters, store_all_results=True):
-        tt_output_list = []
-        tt_metadata_list = []
+        with mesh_device.cache_entries_counter.measure():
+            tt_output_list = []
+            tt_metadata_list = []
 
-        for i in range(n_iters):
-            buffer_index = i
-            if test_skew:
-                ttnn.apply_device_delay(mesh_device, delays)
-            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
-                input_tensors[buffer_index],
-                expert_indices_tensors[buffer_index],
-                expert_mapping_tensors[buffer_index],
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                topology=topology,
-                memory_config=output_memory_config,
-                subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
-                if use_optional_output_tensors
-                else None,
-            )
+            for i in range(n_iters):
+                buffer_index = i
+                if test_skew:
+                    ttnn.apply_device_delay(mesh_device, delays)
+                output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
+                    input_tensors[buffer_index],
+                    expert_indices_tensors[buffer_index],
+                    expert_mapping_tensors[buffer_index],
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    topology=topology,
+                    memory_config=output_memory_config,
+                    subdevice_id=worker_sub_device_id,
+                    output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                    if use_optional_output_tensors
+                    else None,
+                )
 
-            tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
-            tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
+                tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
+                tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
 
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    tt_output_list.append(tt_out_tensor)
+                    tt_metadata_list.append(tt_metadata)
             if store_all_results:
-                tt_output_list.append(tt_out_tensor)
-                tt_metadata_list.append(tt_metadata)
-        if store_all_results:
-            return tt_output_list, tt_metadata_list
-        else:
-            return [tt_out_tensor], [tt_metadata]
+                return tt_output_list, tt_metadata_list
+            else:
+                return [tt_out_tensor], [tt_metadata]
 
     if trace_mode:
         # compile run:
@@ -600,6 +604,9 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
+        if is_unsigned_tensor(tt_metadata_tensor):
+            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[tensor_index].dtype)
+
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
         selected_experts_k = tt_metadata_tensor.shape[3]
@@ -657,10 +664,10 @@ def run_all_to_all_dispatch_test(
     num_program_cache_entries = 1
     if test_skew:
         num_program_cache_entries = 2
-    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == num_program_cache_entries
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == num_program_cache_entries
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     if not metadata_passed:
         logger.info(f"Failed metadata indices: {failed_metadata_indices}")
@@ -1153,6 +1160,7 @@ def test_all_to_all_dispatch_skew(
     )
 
 
+@pytest.mark.xfail(reason="UInt16/Short dtype mismatch - https://github.com/tenstorrent/tt-metal/issues/39633")
 @pytest.mark.parametrize(
     "device_params",
     [

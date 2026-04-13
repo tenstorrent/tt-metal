@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::prim {
 
@@ -18,6 +19,7 @@ struct PadParams {
     float pad_value{};
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
+    std::optional<CoreRangeSet> sub_core_grids;
 };
 
 struct PadInputs {

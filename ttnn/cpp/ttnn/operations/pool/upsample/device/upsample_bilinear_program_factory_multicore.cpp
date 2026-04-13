@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,9 +65,9 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     const uint32_t output_stick_nbytes = output_shape[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    const std::tuple<MathFidelity, bool, bool, bool, bool> compute_config_tuple =
+    const std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> compute_config_tuple =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
-    const MathFidelity math_fidelity = std::get<0>(compute_config_tuple);
+    const tt::tt_metal::MathFidelity math_fidelity = std::get<0>(compute_config_tuple);
     const bool math_approx_mode = std::get<1>(compute_config_tuple);
     const bool fp32_dest_acc_en = std::get<2>(compute_config_tuple);
 

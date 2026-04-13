@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,9 +7,9 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
 
-#include "tt_metal/experimental/udm/mesh_kernel.hpp"
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
-#include "tt_metal/experimental/udm/mesh_circular_buffer.hpp"
+#include <tt-metalium/experimental/udm/mesh_kernel.hpp>
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
+#include <tt-metalium/experimental/udm/mesh_circular_buffer.hpp>
 
 namespace tt::tt_metal::experimental::udm_tests {
 namespace {

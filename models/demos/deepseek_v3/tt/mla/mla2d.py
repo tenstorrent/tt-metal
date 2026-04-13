@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -58,21 +57,24 @@ class MLA2D(MLA1D):
         torch_metaweight: torch.Tensor,
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
+        memory_config: ttnn.MemoryConfig,
+        padding_needed: tuple[int, int, int] = (0, 0, 0),
     ) -> SavedWeight:
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
             assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
             torch_metaweight = slices[0]
             dims = (None, dims[1])
-        return super()._convert_weight(path, torch_metaweight, dims, mesh_device)
+        return super()._convert_weight(path, torch_metaweight, dims, mesh_device, memory_config, padding_needed)
 
     @classmethod
     def prefill_model_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        super_cfg = super().prefill_model_config(hf_config, mesh_device)
+        super_cfg = super().prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
         input_memory_config = super_cfg.pop("input_memory_config")
         return {
             "mla1d": super_cfg,
@@ -94,28 +96,14 @@ class MLA2D(MLA1D):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        super_cfg = super().decode_model_config(hf_config, mesh_device)
+        super_cfg = super().decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
         input_memory_config = super_cfg.pop("input_memory_config")
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
         }
-
-    @classmethod
-    def create_page_table(
-        cls,
-        paged_config: PagedAttentionConfig,
-        mesh_device: ttnn.MeshDevice,
-        page_table: torch.Tensor | None = None,
-        batch_size_per_row: int = USERS_PER_ROW,
-    ) -> ttnn.Tensor:
-        return super().create_page_table(
-            paged_config=paged_config,
-            mesh_device=mesh_device,
-            page_table=page_table,
-            batch_size=batch_size_per_row * mesh_device.shape[0],
-        )
 
     @classmethod
     def create_state(
@@ -197,10 +185,11 @@ class MLA2D(MLA1D):
         ccl = cfg["ccl"]
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
         x_out = super().forward_prefill(
             x_next,
-            batch_idx=batch_idx % USERS_PER_ROW,
-            row_idx=batch_idx // USERS_PER_ROW,
+            batch_idx=batch_idx % batch_size_per_row,
+            row_idx=batch_idx // batch_size_per_row,
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,

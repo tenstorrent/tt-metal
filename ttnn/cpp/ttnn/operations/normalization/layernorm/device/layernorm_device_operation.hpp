@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,13 +8,12 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "layernorm_device_operation_types.hpp"
 #include "layernorm_op_multi_core.hpp"
 #include "layernorm_op_multi_core_sharded.hpp"
 #include "layernorm_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim {
 
@@ -51,6 +50,7 @@ Tensor layer_norm(
     LayerNormType norm_type = LayerNormType::LAYERNORM,
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
     const std::optional<const Tensor>& stats = std::nullopt,
-    const std::optional<const Tensor>& recip_tensor = std::nullopt);
+    const std::optional<const Tensor>& recip_tensor = std::nullopt,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt);
 
 }  // namespace ttnn::prim

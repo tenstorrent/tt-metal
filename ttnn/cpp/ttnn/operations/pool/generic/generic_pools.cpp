@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@
 
 namespace ttnn::operations::pool {
 
-// Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
+// Generic invoke function for both max and avg pool operations. Most of the arguments are shared except for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
 
@@ -181,6 +181,24 @@ static std::vector<Tensor> pool2d_L1(
         .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();
+    TT_FATAL(
+        output_shape[1] > 0 && output_shape[2] > 0,
+        "Pool2D: Computed output dimensions must be positive, got {}x{} "
+        "(input={}x{}, kernel={}x{}, stride={}x{}, dilation={}x{}, padding=[{},{},{},{}])",
+        output_shape[1],
+        output_shape[2],
+        input_h,
+        input_w,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation_h,
+        dilation_w,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3]);
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
@@ -226,14 +244,9 @@ static std::vector<Tensor> pool2d_L1(
 
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
-
-        Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
-
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
-        } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
@@ -742,8 +755,7 @@ static std::vector<Tensor> pool2d_DRAM(
             ttnn::Shape{batch_size, output_height, output_width, channels},
             dram_slice_config_,
             output_layout,
-            input_tensor.device(),
-            false /*conv_bypass*/);
+            input_tensor.device());
     }
 
     // Validate that kernel size can fit in the slices
@@ -874,7 +886,7 @@ static std::vector<Tensor> pool2d_DRAM(
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
 
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config, false /*conv_bypass*/);
+        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
 
     return {dram_output_tensor};
 }

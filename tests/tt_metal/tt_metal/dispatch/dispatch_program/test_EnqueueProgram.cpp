@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,12 +29,11 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -140,6 +139,7 @@ KernelHandle create_kernel(
                     .processor = static_cast<DataMovementProcessor>(processor_id),
                     .compile_args = compile_args,
                 });
+        case HalProgrammableCoreType::DRAM:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type"); break;
     }
     TT_THROW("Unreachable");
@@ -867,6 +867,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorI
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
+        case HalProgrammableCoreType::DRAM:
         case HalProgrammableCoreType::COUNT: TT_THROW("bad core type");
     }
     return {unique_args_addr, common_args_addr};

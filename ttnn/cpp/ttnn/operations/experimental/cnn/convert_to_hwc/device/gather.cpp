@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
  */
 
 #include "gather.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <cstring>

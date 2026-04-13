@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
@@ -88,15 +87,9 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    umd::ClusterDescriptor* get_cluster_desc() const {
-        TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
-        return this->cluster_desc_;
-    }
+    umd::ClusterDescriptor* get_cluster_desc() const;
 
-    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
-        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
-        return driver_;
-    }
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);
@@ -355,6 +348,7 @@ public:
 
     bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
@@ -431,6 +425,7 @@ private:
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_hw_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> frequent_retrain_cores_;

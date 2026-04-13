@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_fw.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_fw_device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::metal {
 

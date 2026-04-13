@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_cnn OBJECT)
 add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
-target_precompile_headers(ttnn_op_experimental_cnn REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
 set_target_properties(

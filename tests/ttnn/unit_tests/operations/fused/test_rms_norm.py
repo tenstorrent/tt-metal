@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,9 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+import os
 
 pytestmark = pytest.mark.use_module_device
 
@@ -30,13 +32,26 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.035,
+        atol=0.043,
+        frobenius_threshold=0.008,
+        ulp_threshold=9,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
-@pytest.mark.parametrize("w", [32])
-def test_rms_norm_row_major(device, batch_size, h, w):
+@pytest.mark.parametrize("w", [32, 4096])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
+@pytest.mark.parametrize("math_approx_mode", [True, False])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
+@pytest.mark.parametrize("packer_l1_acc", [True, False])
+def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
@@ -45,12 +60,45 @@ def test_rms_norm_row_major(device, batch_size, h, w):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+
+    # For ROW_MAJOR layout, weight's last padded dim needs to equal tile width,
+    # additionally, weight's volume needs to be equal to the last padded dim of the input.
+    tile_width = 32
+    assert w % tile_width == 0
+    torch_weight_reshaped = torch_weight.reshape(w // tile_width, tile_width)
+    weight = ttnn.from_torch(torch_weight_reshaped, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight, compute_kernel_config=compute_config)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    # Higher frobenius_threshold for ttsim due to issue #41530
+    if os.environ.get("TT_METAL_SIMULATOR"):
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.091,
+            atol=0.129,
+            frobenius_threshold=0.09,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.091,
+            atol=0.129,
+            frobenius_threshold=0.052,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -73,4 +121,20 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    if dtype == torch.bfloat16:
+        rtol = 0.055
+        atol = 0.069
+        frobenius_threshold = 0.012
+    else:
+        rtol = 0.052
+        atol = 0.064
+        frobenius_threshold = 0.012
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

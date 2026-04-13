@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"

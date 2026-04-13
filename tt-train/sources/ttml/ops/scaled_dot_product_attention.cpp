@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -113,7 +113,6 @@ void validate_qkv_shapes(
             value->get_value().logical_shape()));
     }
 
-    uint32_t group_num = query_heads;  // (G) number of KV groups, H for MHA mode
     if (query_heads != key_heads || query_heads != value_heads) {
         // grouped query mode
         if (value_heads != key_heads) {
@@ -124,7 +123,7 @@ void validate_qkv_shapes(
                 key_heads,
                 value_heads));
         }
-        group_num = value_heads;
+        const uint32_t group_num = value_heads;  // (G) number of KV groups
         if (query_heads % group_num != 0) {
             throw std::invalid_argument(fmt::format(
                 "In grouped query mode, the number of query heads must be divisible by the number of key/value groups. "
@@ -137,7 +136,7 @@ void validate_qkv_shapes(
 
 }  // namespace
 
-autograd::TensorPtr scaled_dot_product_attention(
+autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
@@ -156,7 +155,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     // σQ @ K
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
-    if (mask.has_value()) {
+    if (mask.has_value() && mask.value()) {
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::add(
@@ -235,13 +234,12 @@ autograd::TensorPtr scaled_dot_product_attention(
             value->add_grad(dL_dV);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }
 
-autograd::TensorPtr scaled_dot_product_attention_fused(
+autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
@@ -249,11 +247,10 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
     float dropout_probability) {
     validate_qkv_shapes(query, key, value);
 
-    // Get mask tensor if provided
     // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
     std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
-    if (mask.has_value()) {
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
+    if (mask.has_value() && mask.value()) {
         mask_tensor = mask.value()->get_value();
         mask_type = ttml::metal::AttentionMaskType::Arbitrary;
     }
@@ -298,8 +295,7 @@ autograd::TensorPtr scaled_dot_product_attention_fused(
             value->add_grad(dL_dV);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }
@@ -365,8 +361,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
             value->add_grad(grad_v);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }

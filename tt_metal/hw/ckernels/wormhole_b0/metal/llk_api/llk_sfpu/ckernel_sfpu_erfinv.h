@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_sqrt_custom.h"
 
 #include "sfpi.h"
 
@@ -14,30 +15,11 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
-    sfpi::vFloat val = in;
-    sfpi::vFloat out;
-    v_if(val != 0.0f) {
-        // Magic number 0x5f37 is used as an approximation constant in the fast inverse square root algorithm.
-        // See: https://en.wikipedia.org/wiki/Fast_inverse_square_root
-        sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::s2vFloat16b(0x5f37)));
-        sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
-        sfpi::vFloat neg_half_val = val * -0.5f;
-        approx = ((approx * approx) * neg_half_val + 1.5f) * approx;
-        approx = ((approx * approx) * neg_half_val + 1.5f) * approx;
-        out = approx * val;
-    }
-    v_else { out = val; }
-    v_endif;
-    return out;
-}
-
-template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
     // erfinv(x) = sqrt( - 2/(pi*a) - log(1 - x^2)/2 + sqrt( ( 2/(pi*a) + log(1 - x^2)) ^2 - 1/a log(1 - x^2)) )
-    // Where a is a polynomial coefficient used in the approximation of the error function (and re-used in inverse error
+    // Where a is a polynomial coefficient used in the approximation of the error function (and reused in inverse error
     // function)
 
     // Compute log(1 - x^2)
@@ -58,11 +40,11 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
     sfpi::vFloat calculated_value = (temp * temp) - (log_value * OneDivA);
-    sfpi::vFloat intermediate_result = calculate_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false>(calculated_value);
     calculated_value = temp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = calculate_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat result = sfpu_sqrt_custom<false>(calculated_value);
 
     return result;
 }

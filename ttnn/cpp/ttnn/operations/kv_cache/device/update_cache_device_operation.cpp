@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,29 +57,13 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape()[1],
         cache_tensor.padded_shape()[1]);
     TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Cache tensor memory layout must be INTERLEAVED but got {}",
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED,
+        "Cache tensor memory layout must be INTERLEAVED or ND_SHARDED but got {}",
         cache_tensor.memory_config().memory_layout());
     if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
-
-        // TODO: For interleaved, assume each core handles 1 tile of seq_len if kv_heads > 1
-        // For 56 cores and 2 heads, this effectively caps max seq len at 56 / 2 * 32 = 896
-        // Can generalize interleaved to infer and check arbitrary number of tiles along seq_len per core; or, add more
-        // robust logic in reader/writer loops to handle generic blocking of work For sharded, we infer number of tiles
-        // each core handles from shard so no issues there
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
-            input_tensor.padded_shape()[1] > 1) {
-            const uint32_t num_blocks_of_work =
-                input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
-            const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-            TT_FATAL(
-                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y),
-                "Number of work blocks ({}) must be <= total grid size ({})",
-                num_blocks_of_work,
-                compute_with_storage_grid_size.x * compute_with_storage_grid_size.y);
-        }
 
         if (input_tensor.is_sharded()) {
             TT_FATAL(

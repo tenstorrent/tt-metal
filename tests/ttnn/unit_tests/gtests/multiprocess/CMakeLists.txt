@@ -20,6 +20,7 @@ function(setup_multiprocess_unit_test target_name test_source)
             TTNN::CPP
     )
     target_include_directories(${target_name} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+    tt_reuse_precompile_headers(${target_name} TTNN::PCH)
 endfunction()
 
 setup_multiprocess_unit_test(unit_tests_dual_rank_2x4 test_host_all_gather.cpp)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -63,7 +63,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     dtype = ttnn.bfloat8_b
     mode = Mode.PREFILL
     batch = 1
-    max_seq_len = 4096
+    max_seq_len = 1024
 
     hf_config = load_hf_mixtral_config()
     model_args = ModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)

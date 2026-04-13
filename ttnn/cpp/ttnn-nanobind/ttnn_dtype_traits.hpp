@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -155,6 +155,16 @@ struct py_to_<DtypeID::INT16> {
 template <>
 struct py_to_<DtypeID::UINT8> {
     constexpr static auto ttnn_DataType = DataType::UINT8;
+};
+
+template <>
+struct py_to_<DtypeID::UINT32> {
+    constexpr static auto ttnn_DataType = DataType::UINT32;
+};
+
+template <>
+struct py_to_<DtypeID::UINT16> {
+    constexpr static auto ttnn_DataType = DataType::UINT16;
 };
 
 template <DataType dt>

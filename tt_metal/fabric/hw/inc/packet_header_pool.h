@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,12 @@ public:
     // {route_id: [header_ptr, num_headers]}
     static std::pair<volatile tt_l1_ptr PACKET_HEADER_TYPE*, uint8_t> header_table[HEADER_GROUP_SIZE_PER_RISC];
 
+    // Reset pool to initial state — allows re-allocation across loop iterations
+    FORCE_INLINE static void reset() {
+        current_offset_ = risc_pool_start;
+        route_id_ = 0;
+    }
+
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header(uint8_t num_headers = 1) {
         ASSERT(current_offset_ + HEADER_SIZE * num_headers <= risc_pool_end);
         if (current_offset_ + HEADER_SIZE * num_headers > risc_pool_end) {
@@ -47,6 +53,17 @@ public:
                    << "Action: Entering infinite loop to prevent undefined behavior"
                    << "Solution: Increase MEM_PACKET_HEADER_POOL_SIZE or reduce header usage"
                    << "=================================================\n";
+            DEVICE_PRINT(
+                "=== PACKET HEADER POOL EXHAUSTION ERROR ===\n"
+                "CRITICAL: Insufficient space in packet header pool for RISC {}\n"
+                "  - Headers Allocated: {}\n"
+                "  - Max Headers Capacity per RISC: {}\n"
+                "Action: Entering infinite loop to prevent undefined behavior\n"
+                "Solution: Increase MEM_PACKET_HEADER_POOL_SIZE or reduce header usage\n"
+                "=================================================\n",
+                (uint32_t)proc_type,
+                ((current_offset_ - risc_pool_start) / HEADER_SIZE),
+                (POOL_SIZE_PER_RISC / HEADER_SIZE));
             while (1) {
             }  // hang intentionally
         }
@@ -68,6 +85,17 @@ public:
                    << "Action: Entering infinite loop to prevent undefined behavior"
                    << "Solution: Increase HEADER_GROUP_SIZE_PER_RISC or reduce header usage"
                    << "=================================================\n";
+            DEVICE_PRINT(
+                "=== ROUTE ID EXHAUSTION ERROR ===\n"
+                "CRITICAL: Insufficient route IDs for RISC {}\n"
+                "  - Route IDs Allocated: {}\n"
+                "  - Max Route IDs Capacity per RISC: {}\n"
+                "Action: Entering infinite loop to prevent undefined behavior\n"
+                "Solution: Increase HEADER_GROUP_SIZE_PER_RISC or reduce header usage\n"
+                "=================================================\n",
+                (uint32_t)proc_type,
+                (uint32_t)route_id_,
+                (uint32_t)HEADER_GROUP_SIZE_PER_RISC);
             while (1) {
             }  // hang intentionally
         }
@@ -86,6 +114,18 @@ public:
                    << "Action: Entering infinite loop to prevent undefined behavior"
                    << "Solution: Ensure route_id is valid before calling for_each_header"
                    << "=================================================\n";
+            DEVICE_PRINT(
+                "=== ROUTE ID NOT FOUND ERROR ===\n"
+                "CRITICAL: Route ID {} not found in header table for RISC {}\n"
+                "  - Route IDs Allocated: {}\n"
+                "  - Max Route IDs Capacity per RISC: {}\n"
+                "Action: Entering infinite loop to prevent undefined behavior\n"
+                "Solution: Ensure route_id is valid before calling for_each_header\n"
+                "=================================================\n",
+                (uint32_t)route_id,
+                (uint32_t)proc_type,
+                (uint32_t)route_id_,
+                (uint32_t)HEADER_GROUP_SIZE_PER_RISC);
             while (1) {
             }  // hang intentionally
         }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -292,7 +292,7 @@ class Attention(Module):
 
         [b, h, w, c] = list(x.shape)
 
-        # No need to transpose like reference. x is alredy channel last
+        # No need to transpose like reference. x is already channel last
         x = self.group_norm(x)
         x = self.gather_if_sharded(x)
 

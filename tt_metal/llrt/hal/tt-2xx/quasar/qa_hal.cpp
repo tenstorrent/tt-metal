@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,9 +13,13 @@
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
+#include "overlay/meta/registers/overlay_reg_defines_core.h"
+#include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
 namespace {
 
@@ -50,11 +54,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
-constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
-    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+
+constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
+    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+                                 : 0;
+}
+
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return get_dram_backed_command_queues_base(dram_profiler_size) +
+           get_dram_backed_command_queues_size(enable_dram_backed_cq);
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
 static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
@@ -65,6 +79,7 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
+    using HalJitBuildQueryBase::HalJitBuildQueryBase;
     std::string linker_flags(const Params& params) const override {
         std::string flags;
         if (params.processor_class == HalProcessorClassType::DM) {
@@ -74,19 +89,21 @@ public:
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);  // this is for legacy kernels
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_DM_KERNEL_BASE);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format(
-                    "-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE + (params.processor_id * MEM_DM_LOCAL_SIZE));
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE * NUM_DM_CORES);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -229,9 +246,9 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
+        includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
+        includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -294,9 +311,8 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : "_lgc");  // hard code legacy kernels for now
+                            "runtime/hw/toolchain/quasar/{}_dm.ld",
+                            params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -341,7 +357,7 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -365,10 +381,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_size(enable_dram_backed_cq);
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_base(dram_profiler_size);
+        get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_size(dram_profiler_size);
+        get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -459,6 +479,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -469,6 +490,24 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = true;
+    this->supports_implicit_dfb_sync_ = true;
+    this->num_tile_counters_ = NOC_NUM_TILE_COUNTERS;
+
+    this->neo_tile_counters_base_addr_ = NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_REG_MAP_BASE_ADDR;
+    this->neo_tile_counters_stride_ = NEO_TILE_COUNTERS_STRIDE;
+    this->neo_tile_counters_size_ = NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__REG_FILE_SIZE;
+    this->neo_tile_counters_tiles_available_offset_ =
+        NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__TILES_AVAILABLE_REG_OFFSET;
+    this->neo_tile_counters_buffer_capacity_offset_ =
+        NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__BUFFER_CAPACITY_REG_OFFSET;
+
+    this->has_remapper_ = true;
+    this->remapper_global_control_addr_ = REMAP_GLOBAL_CONTROL_REG_ADDR32;
+    this->remapper_client_l_config_base_addr_ = REMAP_CLIENT_L_CONFIG_REG_BASE_ADDR32;
+    this->remapper_client_r_config_base_addr_ = REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32;
+    this->remapper_pair_stride_ = REMAP_REG_PAIR_STRIDE;
+    this->remapper_num_pairs_ = REMAP_NUM_PAIRS;
 
     this->eps_ = EPS_QA;
     this->nan_ = NAN_QA;
@@ -478,7 +517,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
 
     this->noc_y_id_translate_table_ = {};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>(*this);
 }
 
 }  // namespace tt::tt_metal

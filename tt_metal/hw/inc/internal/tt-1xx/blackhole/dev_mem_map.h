@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,9 +56,9 @@
 // No BASE FW
 #define MEM_SUBORDINATE_AERISC_LOCAL_BASE MEM_LOCAL_BASE
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
@@ -98,7 +98,7 @@
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-// time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
+// time. If one port on the recipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.
@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12896
+#define MEM_MAILBOX_SIZE 12912
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -317,6 +317,30 @@
 
 #define IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
 #define SUBORDINATE_IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
+
+/////////////
+// DRAM (DRISC) memory map
+// DRISC has 128KB L1 at private address 0x0 (NOC address 0x2000000000)
+// Private data memory is 8KB at 0xFFB00000
+
+#define MEM_DRISC_LOCAL_SIZE MEM_BRISC_LOCAL_SIZE  // 8KB private data at MEM_LOCAL_BASE (0xFFB00000)
+#define MEM_DRISC_RESERVED_SIZE 64                 // Reserved at address 0 for corruption detection
+#define MEM_DRISC_MAILBOX_BASE MEM_DRISC_RESERVED_SIZE
+#define MEM_DRISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
+#define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
+#define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
+#define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
+#define MEM_DRISC_FIRMWARE_BASE MEM_DRISC_L1_INLINE_END
+#define MEM_DRISC_FIRMWARE_SIZE (24 * 1024)
+#define MEM_DRISC_MAP_END (MEM_DRISC_FIRMWARE_BASE + MEM_DRISC_FIRMWARE_SIZE)
+#define MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_DRISC_MAP_END
+#define MEM_DRISC_BANK_TO_NOC_SCRATCH (MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DRISC_LOCAL_SIZE)
+#define MEM_DRISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+#define MEM_DRISC_STACK_MIN_SIZE 256
+#define MEM_DRISC_L1_SIZE (128 * 1024)
+#define MEM_DRISC_KERNEL_CONFIG_BASE (MEM_DRISC_BANK_TO_NOC_SCRATCH + MEM_DRISC_BANK_TO_NOC_SIZE)
+#define MEM_DRISC_KERNEL_CONFIG_SIZE (10 * 1024)
+#define DRISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
 
 /////////////
 // Active ERISC memory map

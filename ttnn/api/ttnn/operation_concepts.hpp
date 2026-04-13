@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-#include <tt_stl/reflection.hpp>
+#include <cstdint>
 
 #include "ttnn/distributed/types.hpp"
 
@@ -121,7 +121,7 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         const typename device_operation_t::tensor_args_t& tensor_args) {
         {
             device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-        } -> std::convertible_to<tt::stl::hash::hash_t>;
+        } -> std::convertible_to<std::uint64_t>;
     };
 
 template <typename device_operation_t>

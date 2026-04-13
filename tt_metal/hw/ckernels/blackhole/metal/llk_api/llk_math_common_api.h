@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(
         unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
+
+inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_math_set_fp32_dest_acc_(enable); }
 
 inline void llk_math_reconfig_remap(const bool remap_enable) { _llk_math_reconfig_remap_(remap_enable); }
 

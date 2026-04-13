@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_progress_monitor.hpp"
 
 #include <iomanip>
@@ -12,17 +13,22 @@
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
-    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {}
+    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {
+    for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
+        if (!test_device.get_senders().empty()) {
+            total_active_devices_++;
+        }
+    }
+}
 
 TestProgressMonitor::~TestProgressMonitor() = default;
 
-void TestProgressMonitor::poll_until_complete() {
+bool TestProgressMonitor::poll_until_complete() {
     start_time_ = std::chrono::steady_clock::now();
     last_poll_time_ = start_time_;
 
@@ -33,26 +39,49 @@ void TestProgressMonitor::poll_until_complete() {
         auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_poll_time_);
 
         auto progress = poll_devices();
-        check_for_hung_devices(progress);
-        display_progress(progress, elapsed);
+
+        bool all_hung = check_for_hung_devices(progress);
 
         programs_complete = true;
         for (const auto& [device_id, prog] : progress) {
-            if (prog.current_packets < prog.total_packets) {
+            if (prog.num_senders == 0) {
+                continue;
+            }
+            if (prog.current_packets >= prog.total_packets && prog.total_packets > 0) {
+                if (!completed_devices_.contains(device_id)) {
+                    completed_devices_.insert(device_id);
+                    if (config_.show_workers) {
+                        std::cout << std::endl;
+                        log_info(
+                            tt::LogTest,
+                            "Device {} completed ({} packets) [{}/{} done]",
+                            format_device_label(device_id),
+                            format_count(prog.total_packets),
+                            completed_devices_.size(),
+                            total_active_devices_);
+                    }
+                }
+            } else {
                 programs_complete = false;
-                break;
             }
         }
 
+        display_progress(progress, elapsed);
         last_poll_time_ = now;
+
+        if (all_hung && !programs_complete) {
+            std::cout << std::endl;
+            generate_hung_report(progress);
+            return false;
+        }
 
         if (!programs_complete) {
             std::this_thread::sleep_for(std::chrono::seconds(config_.poll_interval_seconds));
         }
     }
 
-    // Always print newline after final progress update
     std::cout << std::endl;
+    return true;
 }
 
 std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMonitor::poll_devices() {
@@ -130,26 +159,31 @@ bool TestProgressMonitor::is_device_hung(tt::tt_fabric::FabricNodeId device_id, 
     return elapsed >= hung_threshold_;
 }
 
-void TestProgressMonitor::check_for_hung_devices(
+bool TestProgressMonitor::check_for_hung_devices(
     const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress) {
+    uint32_t incomplete_count = 0;
+    uint32_t hung_count = 0;
+
     for (const auto& [device_id, prog] : progress) {
-        // Skip devices that have already completed
-        if (prog.current_packets >= prog.total_packets) {
+        const bool device_complete = prog.total_packets > 0 && prog.current_packets >= prog.total_packets;
+        if (prog.num_senders == 0 || device_complete) {
             continue;
         }
 
+        incomplete_count++;
+
         if (is_device_hung(device_id, prog.current_packets)) {
+            hung_count++;
             auto& state = device_states_[device_id];
 
-            // Only warn once per device
             if (!state.warned) {
                 auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::steady_clock::now() - state.last_progress_time);
 
                 log_warning(
                     tt::LogTest,
-                    "⚠️  Device {} may be HUNG: no progress for {} seconds (packets: {}/{})",
-                    device_id,
+                    "Device {} may be HUNG: no progress for {} seconds (packets: {}/{})",
+                    format_device_label(device_id),
                     elapsed.count(),
                     prog.current_packets,
                     prog.total_packets);
@@ -158,6 +192,48 @@ void TestProgressMonitor::check_for_hung_devices(
             }
         }
     }
+
+    return incomplete_count > 0 && hung_count == incomplete_count;
+}
+
+void TestProgressMonitor::generate_hung_report(
+    const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress) {
+    const auto total_elapsed =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time_);
+
+    log_error(tt::LogTest, "============ FABRIC TEST HUNG - ABORTING ============");
+    log_error(tt::LogTest, "Test ran for {} seconds before all remaining devices stalled.", total_elapsed.count());
+
+    for (const auto& [device_id, prog] : progress) {
+        if (prog.num_senders == 0) {
+            continue;
+        }
+
+        const bool is_complete = prog.current_packets >= prog.total_packets && prog.total_packets > 0;
+        const bool is_hung = device_states_.contains(device_id) && device_states_.at(device_id).warned;
+
+        const char* status = "IN PROGRESS";
+        if (is_complete) {
+            status = "COMPLETED";
+        } else if (is_hung) {
+            status = "HUNG";
+        }
+        const double pct =
+            prog.total_packets > 0 ? 100.0 * static_cast<double>(prog.current_packets) / prog.total_packets : 0.0;
+
+        log_error(
+            tt::LogTest,
+            "  {} | {} | {}/{} packets ({:.1f}%) | {} sender(s)",
+            format_device_label(device_id),
+            status,
+            format_count(prog.current_packets),
+            format_count(prog.total_packets),
+            pct,
+            prog.num_senders);
+    }
+
+    log_error(tt::LogTest, "Devices completed: {}/{}", completed_devices_.size(), total_active_devices_);
+    log_error(tt::LogTest, "=====================================================");
 }
 
 void TestProgressMonitor::display_progress(
@@ -190,6 +266,10 @@ void TestProgressMonitor::display_progress(
     // Always update last_total_packets for next iteration
     if (total_current > 0) {
         last_total_packets_ = total_current;
+    }
+
+    if (total_active_devices_ > 0) {
+        ss << " | Devices: " << completed_devices_.size() << "/" << total_active_devices_ << " done";
     }
 
     // Pad with spaces to clear any leftover text from previous longer updates

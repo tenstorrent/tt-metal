@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -99,6 +98,9 @@ void run_eltwise_binary_test(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
+    if (multibank) {
+        writer_compile_time_args.emplace_back(ouput_cb_index);
+    }
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         program,
@@ -155,14 +157,14 @@ void run_eltwise_binary_test(
 
 }  // namespace
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryAdd) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryAdd) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinarySub) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinarySub) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryMul) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryMul) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
 }

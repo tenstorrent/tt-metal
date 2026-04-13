@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal {
 
@@ -53,7 +54,7 @@ consteval DataType convert_to_data_type() {
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
     } else {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
+        static_assert(sizeof(T) == 0, "Unsupported DataType!");
     }
 }
 
@@ -82,3 +83,8 @@ using PadValue = std::variant<uint32_t, float>;
 std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::DataType> : fmt::formatter<string_view> {
+    auto format(tt::tt_metal::DataType dt, format_context& ctx) const -> format_context::iterator;
+};

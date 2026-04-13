@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ from tt_lib.utils import (
     is_close,
 )
 from models.common.utility_functions import is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -101,8 +102,14 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
-        passing = is_close(tt_got_back, ref_rmsnorm)
-        assert passing
+        assert_numeric_metrics(
+            ref_rmsnorm,
+            tt_got_back,
+            pcc_threshold=0.999,
+            rtol=0.039,
+            atol=0.045,
+            frobenius_threshold=0.008,
+        )
 
 
 @pytest.mark.parametrize(
@@ -128,7 +135,7 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 )
 @pytest.mark.parametrize(
     "test_id",
-    (0, 1, pytest.param(2, marks=pytest.mark.xfail(reason="GH Issue #22069"))),
+    (0, 1, 2),
     ids=["RMSN", "RMSN_G", "RMSN_GB"],
 )
 def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
@@ -156,4 +163,64 @@ def test_llama_4D_rms_norm(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    is_close(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.095,
+        atol=0.138,
+        frobenius_threshold=0.048,
+    )
+
+
+@pytest.mark.parametrize("batch_size, w", [(1, 5120)])
+def test_large_tensor_rms_norm(device, batch_size, w):
+    torch.manual_seed(0)
+
+    epsilon = 9.99999997e-7
+
+    torch_input_tensor = torch.rand((batch_size, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rms_norm)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight, epsilon=epsilon)
+
+    # Multiple iterations to test with program cache
+    for _ in range(3):
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        weight = ttnn.from_torch(
+            torch_weight,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        output_tensor = ttnn.rms_norm(
+            input_tensor,
+            weight=weight,
+            epsilon=epsilon,
+            compute_kernel_config=compute_config,
+        )
+        output_tensor = ttnn.from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.009,
+            atol=0.009,
+            frobenius_threshold=0.004,
+        )

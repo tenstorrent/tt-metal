@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include <tt-logger/tt-logger.hpp>
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 

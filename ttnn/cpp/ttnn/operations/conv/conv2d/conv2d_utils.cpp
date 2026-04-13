@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -554,7 +554,7 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
     bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
     return init_device_compute_kernel_config(
-        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
+        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
@@ -1323,8 +1323,8 @@ Tensor fold_input_tensor_if_required(
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config) {
-    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
-    // also need to be folded.
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would still be true as
+    // weights also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_tensor.memory_config(),
         input_tensor.layout(),
@@ -1439,7 +1439,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
 }
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::reflection::operator<<(os, config);
     return os;
 }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,16 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    ReaderRmRowBColABcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmScalarOpNg,
+    WriterRmNoBcastNg,
     ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
     ComputeRowColBcastNg,
 };
 
@@ -69,6 +78,7 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        ATAN2,
         LT,
         GT,
         GE,
@@ -92,7 +102,7 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 

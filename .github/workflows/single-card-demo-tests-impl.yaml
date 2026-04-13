@@ -103,6 +103,9 @@ jobs:
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
             { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
             # { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
+            { name: "phi3", runner-label: "N150", performance: false, cmd: run_phi3_func, owner_id: U094PKWHNJ0},  # Petar Milojevic
+            { name: "phi3", runner-label: "N300", performance: false, cmd: run_phi3_func, owner_id: U094PKWHNJ0},  # Petar Milojevic
+            { name: "bge_m3", runner-label: "N150", performance: false, cmd: run_bge_m3_demo, owner_id: U082LLYBLSW,civ2-compatible: true}, # Gio Tobar
           ]]
     steps:
       - name: Compute tests
@@ -267,11 +270,6 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -293,7 +291,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download all Tracy profiler reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: tracy_ops_*
           path: all_tracy_reports
@@ -307,7 +305,7 @@ jobs:
           output-path: aggregated_ops
 
       - name: Upload aggregated operations report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: aggregated-device-operations
           path: aggregated_ops/

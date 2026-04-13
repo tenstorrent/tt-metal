@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,10 +35,10 @@
 
 #include "ttnn/operations/core/core.hpp"  // for ttnn::to_memory_config
 
-#include "tt_metal/experimental/udm/mesh_kernel.hpp"
-#include "tt_metal/experimental/udm/mesh_utils.hpp"
-#include "tt_metal/experimental/udm/mesh_circular_buffer.hpp"
-#include "tt_metal/experimental/udm/mesh_semaphore.hpp"
+#include <tt-metalium/experimental/udm/mesh_kernel.hpp>
+#include <tt-metalium/experimental/udm/mesh_utils.hpp>
+#include <tt-metalium/experimental/udm/mesh_circular_buffer.hpp>
+#include <tt-metalium/experimental/udm/mesh_semaphore.hpp>
 #include "tt_metal/api/tt-metalium/bfloat16.hpp"
 
 namespace tt::tt_metal::experimental::udm_tests {

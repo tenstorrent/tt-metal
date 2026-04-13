@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -129,15 +128,20 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             } else {
                 out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
+        } else {
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
         }
-        TT_FATAL(
-            args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
-                args.block_config.out_subblock_h_ntiles == 1,
-            "Error");
     }
 }
 
-tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
@@ -157,7 +161,7 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
     };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

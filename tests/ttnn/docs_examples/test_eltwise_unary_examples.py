@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -772,7 +772,7 @@ def test_tanhshrink(device):
     )
 
     # Apply tanh shrink function
-    output = ttnn.tanhshrink(tensor, fast_and_approximate_mode=False)
+    output = ttnn.tanhshrink(tensor)
     logger.info(f"Tanh shrink: {output}")
 
 
@@ -801,7 +801,7 @@ def test_sigmoid(device):
     )
 
     # Apply sigmoid activation function with vector mode
-    output = ttnn.sigmoid(tensor, vector_mode=4, fast_and_approximate_mode=True)
+    output = ttnn.sigmoid(tensor, vector_mode=4, mode=ttnn.SigmoidMode.FastApproximate)
     logger.info(f"Sigmoid: {output}")
 
 

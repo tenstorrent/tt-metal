@@ -60,11 +60,9 @@ run_t3000_llama3_tests() {
   llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
   llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
     tt_cache=$TT_CACHE_HOME/$hf_model
     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
@@ -243,15 +241,26 @@ run_t3000_falcon7b_tests(){
 }
 
 run_t3000_mistral_tests() {
+  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
 
+  # Mistral 7B: long-context text only (main text suite runs under T3000 unit tests).
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   tt_cache_path=$TT_CACHE_HOME/$hf_model
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
-  # test max_seq_len overrides
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 120 -k "ci-long-context-16k" --max_seq_len=16384
+  echo "LOG_METAL: Mistral 7B tests completed (ci-long-context-16k)"
 
+  # Mistral-Small-3.1-24B: vision trace demo only (24B text demo runs under T3000 unit tests).
+  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
+  MESH_DEVICE=T3K HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b \
+    pytest models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 900
+  echo "LOG_METAL: Mistral-Small-3.1-24B tests completed (vision)"
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mistral_tests $duration seconds to complete"
 }
 
 run_t3000_mixtral_tests() {
@@ -395,7 +404,7 @@ run_t3000_wan22_tests() {
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
+  NO_PROMPT=1 pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

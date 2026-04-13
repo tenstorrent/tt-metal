@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "moreh_helper_functions.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <numeric>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -129,10 +131,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     const std::vector<ComputeKernelArg>& args,
     const std::map<std::string, std::string>& defines,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    const std::vector<UnpackToDestMode>& unpack_to_dest_mode) {
+    const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -148,10 +150,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode) {
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(

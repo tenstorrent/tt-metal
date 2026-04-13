@@ -1,14 +1,11 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
 import shutil
 import subprocess
-from time import sleep
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-
-LEGACY_WORMHOLE_ARGS = ["-wr", "all"]
 
 
 class ResetUtil:
@@ -20,7 +17,6 @@ class ResetUtil:
 
         self.arch = arch
         self.command, self.args = self._find_command()
-        self.reset()
 
     def _find_command(self):
         custom_command = os.getenv("TT_SMI_RESET_COMMAND")

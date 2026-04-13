@@ -1,12 +1,10 @@
-# SPDX-FileCopyrightText: © 2023-24 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023-24 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
-
-from models.common.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -39,7 +37,6 @@ def test_sum_for_dim_hw(device, shape_dim):
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape",
     (

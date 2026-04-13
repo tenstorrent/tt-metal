@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor
+from ..utils.tensor import bf16_tensor, local_device_to_torch
 
 
 class CCLManager:
@@ -38,6 +38,7 @@ class CCLManager:
         # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
         self.rs_ping_pong_idx = [0, 0]
+        self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
@@ -60,6 +61,12 @@ class CCLManager:
         # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
         rs_n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
         self.rs_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
+        }
+
+        # 3 * 2 for ping pong semaphores for fused reduce scatter
+        self.rs_ping_pong_semaphores_fused = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
         }
@@ -126,6 +133,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -169,6 +177,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -190,6 +199,21 @@ class CCLManager:
         n_sems = 3
         self.rs_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.rs_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_rs_ping_pong_semaphore_fused(self, mesh_axis):
+        """
+        Get semaphores for reduce scatter ping pong operations.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of 3 semaphores for the current ping pong cycle
+        """
+        cur_idx = self.rs_ping_pong_idx_fused[mesh_axis]
+        n_sems = 3
+        self.rs_ping_pong_idx_fused[mesh_axis] = (cur_idx + 1) % 2
+        return self.rs_ping_pong_semaphores_fused[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_ag_ping_pong_semaphore(self, mesh_axis):
         """
@@ -232,6 +256,113 @@ class CCLManager:
         n_sems = 1
         self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.barrier_semaphores[mesh_axis][cur_idx]
+
+    def get_np_ping_pong_buffer(self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16):
+        """
+        Get or create ping pong buffers for neighbor pad operations.
+        Caches buffers based on output shape and dtype.
+
+        Args:
+            input_shape: Input tensor shape
+            dims: List of dimensions being padded
+            pad_left: List of left padding amounts per dim
+            pad_right: List of right padding amounts per dim
+            dtype: Tensor dtype
+
+        Returns:
+            Current ping pong buffer (alternates between two buffers)
+        """
+        output_shape = list(input_shape)
+        for i, dim in enumerate(dims):
+            output_shape[dim] += pad_left[i] + pad_right[i]
+
+        cache_key = ("np", tuple(output_shape), dtype)
+
+        if cache_key not in self._ping_pong_buffer_cache:
+            ttnn.synchronize_device(self.mesh_device)
+            buffers = []
+            for _ in range(2):
+                output_buffer = ttnn.from_torch(
+                    torch.zeros(output_shape),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
+                buffers.append(output_buffer)
+
+            self._ping_pong_buffer_cache[cache_key] = buffers
+            self._ping_pong_buffer_indices[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
+
+        current_idx = self._ping_pong_buffer_indices[cache_key]
+        self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
+
+        return self._ping_pong_buffer_cache[cache_key][current_idx]
+
+    def neighbor_pad_persistent_buffer(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        padding_mode: str,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+    ) -> ttnn.Tensor:
+        """
+        Helper function to neighbor-pad a tensor with a persistent output buffer.
+        """
+        return self.neighbor_pad(
+            tensor,
+            dims=dims,
+            pad_left=pad_left,
+            pad_right=pad_right,
+            padding_mode=padding_mode,
+            axes=axes,
+            neighbor_sems=neighbor_sems,
+            num_links=num_links,
+            use_persistent_buffer=True,
+        )
+
+    def neighbor_pad(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        padding_mode: str,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        use_persistent_buffer: bool = False,
+    ) -> ttnn.Tensor:
+        barrier_sem = self.get_barrier_semaphore(axes[0])
+
+        persistent_buf = None
+        if use_persistent_buffer:
+            persistent_buf = self.get_np_ping_pong_buffer(
+                tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype()
+            )
+
+        return ttnn.experimental.neighbor_pad_async(
+            tensor,
+            dims,
+            pad_left,
+            pad_right,
+            padding_mode,
+            axes,
+            neighbor_sems,
+            [barrier_sem],
+            num_links=num_links,
+            topology=self.topology,
+            persistent_output_buffer=persistent_buf,
+        )
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
@@ -373,3 +504,27 @@ class CCLManager:
             "num_workers_per_link": 2,
             "num_buffers_per_channel": 2,
         }
+
+    # TODO: Merge with utils.tensor.to_torch
+    def device_to_host(
+        self, tensor: ttnn.Tensor, mesh_dims: list[int], use_persistent_buffer: bool = True
+    ) -> torch.Tensor:
+        """Move a ttnn device tensor to a torch host tensor.
+        Args:
+            tensor: The ttnn tensor to move to host
+            mesh_dims: The dimension to gather per mesh axis. use None to skip gathering for that mesh axis. e.g [None,2] will gather along the second dimension for the mesh axis 1.
+            use_persistent_buffer: Whether to use a persistent buffer for the all gather operation.
+        Returns:
+            The torch host tensor
+        """
+        device_tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)  # Workaround for bug in Row Major layout
+        for mesh_axis, mesh_dim in enumerate(mesh_dims):
+            if mesh_dim is not None:
+                device_tensor = self.all_gather(
+                    device_tensor,
+                    dim=mesh_dim,
+                    mesh_axis=mesh_axis,
+                    use_hyperparams=True,
+                    use_persistent_buffer=use_persistent_buffer,
+                )
+        return local_device_to_torch(device_tensor)

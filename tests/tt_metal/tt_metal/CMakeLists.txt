@@ -12,6 +12,8 @@ include(sources.cmake)
 
 add_executable(unit_tests_legacy)
 target_sources(unit_tests_legacy PRIVATE ${UNIT_TESTS_LEGACY_SRC})
+TT_ENABLE_UNITY_BUILD(unit_tests_legacy)
+target_precompile_headers(unit_tests_legacy REUSE_FROM metal_common_pch)
 target_link_libraries(unit_tests_legacy PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_legacy
@@ -32,6 +34,7 @@ list(APPEND METAL_TEST_TARGETS unit_tests_legacy)
 
 # Standalone test_clean_init executable (not a gtest - requires custom main with skip-teardown handling)
 add_executable(test_clean_init test_clean_init.cpp)
+target_precompile_headers(test_clean_init REUSE_FROM metal_common_pch)
 target_link_libraries(test_clean_init PUBLIC Metalium::Metal)
 target_include_directories(
     test_clean_init
@@ -53,6 +56,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/context)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hal_codegen)
@@ -76,6 +80,7 @@ add_custom_target(
         unit_tests_debug_tools
         unit_tests_inspector
         unit_tests_device
+        unit_tests_context
         unit_tests_dispatch
         unit_tests_eth
         unit_tests_integration

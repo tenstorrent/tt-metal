@@ -3,6 +3,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 add_library(test_common_utils STATIC)
 target_sources(test_common_utils PUBLIC common_test_utils.cpp)
 target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
 
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
@@ -17,6 +18,7 @@ function(setup_ttnn_test_target target_name)
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    tt_reuse_precompile_headers(${target_name} TTNN::PCH)
 endfunction()
 
 # unit_tests_ttnn
@@ -36,6 +38,7 @@ target_link_libraries(
         test_common_utils
         TTNN::CPP
 )
+tt_reuse_precompile_headers(unit_tests_ttnn_smoke TTNN::PCH)
 
 add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
@@ -48,6 +51,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
+tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::PCH)
 
 add_executable(unit_tests_ttnn)
 target_link_libraries(
@@ -69,6 +73,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::PCH)
 
 add_executable(unit_tests_ttnn_ccl)
 target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
@@ -90,6 +95,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::PCH)
 
 add_executable(unit_tests_ttnn_ccl_ops)
 target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)

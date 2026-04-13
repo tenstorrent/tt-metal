@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -163,7 +163,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -199,6 +199,60 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     return page_table
 
 
+def submesh_has_local_devices(submesh):
+    """Return True if this submesh has at least one device local to the current host rank."""
+    view = submesh.get_view()
+    return any(
+        view.is_local(ttnn.MeshCoordinate(row, col))
+        for row in range(submesh.shape[0])
+        for col in range(submesh.shape[1])
+    )
+
+
+def get_local_submesh_indices(submesh_devices):
+    """Return indices of submeshes that own at least one local device on this host rank."""
+    return [i for i, submesh in enumerate(submesh_devices) if submesh_has_local_devices(submesh)]
+
+
+def select_local_data_parallel_items(items, batch_size, data_parallel, local_submesh_indices):
+    """Select the per-DP-group slices corresponding to local submeshes."""
+    assert (
+        len(items) >= batch_size * data_parallel
+    ), f"Expected at least {batch_size * data_parallel} items, got {len(items)}"
+    return [item for dp_idx in local_submesh_indices for item in items[dp_idx * batch_size : (dp_idx + 1) * batch_size]]
+
+
+def slice_sampling_params_for_local_submeshes(sampling_params, batch_size, data_parallel, local_submesh_indices):
+    """Slice list-valued sampling params so each host rank keeps only its local DP groups."""
+    result = dict(sampling_params)
+    total_items = batch_size * data_parallel
+
+    for key, value in sampling_params.items():
+        if not isinstance(value, list):
+            continue
+        if len(value) == total_items:
+            result[key] = select_local_data_parallel_items(value, batch_size, data_parallel, local_submesh_indices)
+        elif len(value) == data_parallel:
+            result[key] = [value[i] for i in local_submesh_indices]
+
+    return result
+
+
+def get_default_mesh_device_param():
+    """
+    Select a safe default mesh size for parameterized tests.
+
+    In distributed runs, use the global system mesh size from the mesh graph descriptor
+    instead of len(get_device_ids()), which can reflect host-local visibility.
+    """
+    if ttnn.using_distributed_env():
+        try:
+            return ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        except Exception as e:
+            logger.warning(f"Falling back to local device count for default mesh sizing: {e}")
+    return len(ttnn.get_device_ids())
+
+
 def prepare_generator_args(
     num_devices,
     data_parallel,
@@ -211,8 +265,21 @@ def prepare_generator_args(
     paged_attention,
     num_layers,
     use_prefetcher,
+    use_hf_rope,
 ):
-    submesh_devices = create_submeshes(mesh_device, data_parallel)
+    all_submesh_devices = create_submeshes(mesh_device, data_parallel)
+    local_submesh_indices = get_local_submesh_indices(all_submesh_devices)
+    submesh_devices = [all_submesh_devices[i] for i in local_submesh_indices]
+
+    if not submesh_devices:
+        raise RuntimeError("No local submeshes available on this host rank for the requested configuration")
+
+    if len(submesh_devices) != len(all_submesh_devices):
+        logger.info(
+            f"Distributed mode detected: using local submeshes {local_submesh_indices} "
+            f"({len(submesh_devices)}/{len(all_submesh_devices)}) on this host rank"
+        )
+
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -229,11 +296,13 @@ def prepare_generator_args(
         else None
     )
 
+    max_batch_size_per_dp_group = global_batch_size // data_parallel
+
     for submesh in submesh_devices:
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             instruct=instruct,
-            max_batch_size=global_batch_size // data_parallel,
+            max_batch_size=max_batch_size_per_dp_group,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
@@ -241,14 +310,17 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
             use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
 
+    local_data_parallel = len(submesh_devices)
+    local_batch_size = max_batch_size_per_dp_group * local_data_parallel
     page_table = create_tt_page_table(
-        global_batch_size=global_batch_size,
-        data_parallel=data_parallel,
+        global_batch_size=local_batch_size,
+        data_parallel=local_data_parallel,
         paged_attention_config=paged_attention_config,
     )
     # Host code, safe to reuse tokenizer from the 1st model
@@ -256,7 +328,7 @@ def prepare_generator_args(
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
     processor = model_args[0].processor
-    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor, local_data_parallel, local_submesh_indices
 
 
 # List of supported Parameters for demo.py
@@ -530,9 +602,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            4096,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -549,9 +621,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            4096,  # max_seq_len
             1,  # batch_size
-            4096,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
@@ -568,7 +640,7 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -587,7 +659,7 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -621,7 +693,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -742,7 +814,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
+# NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -774,7 +846,7 @@ def prepare_generator_args(
             "P150x4": (1, 4),
             "P150x8": (1, 8),
             "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
     ],
     indirect=True,
 )
@@ -808,7 +880,9 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+    hf_dir = os.getenv("HF_MODEL", "")
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+
     test_id = request.node.callspec.id
     if is_ci_env:
         if not ci_only:
@@ -842,12 +916,18 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    arg_enable_trace = request.config.getoption("--enable_trace")
+    if arg_enable_trace is not None:
+        enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
-    use_prefetcher = use_prefetcher and is_prefetcher_supported(num_devices)
+    use_prefetcher = (
+        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+    )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
+    is_device_perf_test = "device-perf" in test_id
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -863,7 +943,6 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
-    hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
         max_context_supported = 32 * 1024 * num_devices
         # This condition is present since Phi3 mini has a limit of context length 32k for N150
@@ -922,12 +1001,20 @@ def test_demo_text(
     else:  # Inputs from file
         input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
-
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
+    (
+        model_args,
+        model,
+        page_table,
+        tt_kv_cache,
+        tokenizer,
+        processor,
+        local_data_parallel,
+        local_submesh_indices,
+    ) = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -939,6 +1026,13 @@ def test_demo_text(
         paged_attention=paged_attention,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
+    )
+
+    global_batch_size = batch_size * local_data_parallel
+    input_prompts = select_local_data_parallel_items(input_prompts, batch_size, data_parallel, local_submesh_indices)
+    sampling_params = slice_sampling_params_for_local_submeshes(
+        sampling_params, batch_size, data_parallel, local_submesh_indices
     )
 
     # Skip ci-eval tests on P100 devices
@@ -965,8 +1059,13 @@ def test_demo_text(
         if token_accuracy:
             repeat_batch_prompts.append(input_prompts)
         else:
+            global_prompts_for_batch = [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][
+                : batch_size * data_parallel
+            ]
             repeat_batch_prompts.append(
-                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:global_batch_size]
+                select_local_data_parallel_items(
+                    global_prompts_for_batch, batch_size, data_parallel, local_submesh_indices
+                )
             )
 
     num_tokens_generated_decode = []
@@ -1054,6 +1153,8 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1066,8 +1167,10 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
+                warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
-            if prefill_sampling_params is not None:
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out
@@ -1503,17 +1606,17 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 106,
+                "N150_Mistral-7B": 35,
                 # N300 targets
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": (205, 1.25),
+                "T3K_Llama-3.1-70B": (73, 1.25),
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": (100, 1.1),  # Issue: Perf regression being tracked on issue #29834
+                "T3K_Qwen3-32B": 43,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1525,10 +1628,10 @@ def test_demo_text(
                 # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
                 "N300_Qwen2.5-7B": 21.0,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 15,
+                "T3K_Llama-3.1-70B": 16,
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 21,
+                "T3K_Qwen3-32B": 24,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

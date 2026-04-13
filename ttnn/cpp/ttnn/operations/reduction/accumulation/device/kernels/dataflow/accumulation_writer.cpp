@@ -1,15 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
-    uint32_t output_base_addr = get_arg_val<uint32_t>(0);
-
     constexpr auto output_addrg_args = TensorAccessorArgs<0>();
+
+    uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
@@ -21,22 +24,24 @@ void kernel_main() {
 
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
-    const uint32_t ublock_size_bytes = get_tile_size(cb_out);
-
+    const uint32_t ublock_size_bytes = get_tile_size(CB_OUT);
     const uint32_t output_tile_bytes = ublock_size_bytes;
 
     const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr, output_tile_bytes);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out_obj(CB_OUT);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {
             const uint32_t tile_j = flip ? (tiles_per_row - j - 1) : j;
             const uint32_t write_tile_id =
                 get_tile_id(low_rank_offset, high_rank_offset, tile_j, tiles_per_row, input_tile_offset);
-            cb_wait_front(cb_out, ONE_TILE);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            noc_async_write_tile(write_tile_id, output_addrg, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, ONE_TILE);
+            cb_out_obj.wait_front(ONE_TILE);
+            noc.async_write(
+                cb_out_obj, output_addrg, output_tile_bytes, {.offset_bytes = 0}, {.page_id = write_tile_id});
+            noc.async_write_barrier();
+            cb_out_obj.pop_front(ONE_TILE);
         }
         ++high_rank_offset;
         if (high_rank_offset >= input_tile_offset) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ using namespace tt::tt_metal::distributed;
 // 3. Allocating MeshBuffers in the distributed memory space exposed by the Virtual Mesh, to shard data across physical
 // devices
 // 4. Constructing programs targeting different SubDevices
-// 5. Constructing homogenous (same program dispatched to all physical devices) and heterogenous (different programs
+// 5. Constructing homogeneous (same program dispatched to all physical devices) and heterogeneous (different programs
 // dispatched
 //    to physical different devices) MeshWorkloads from programs
 // 6. Capturing the execution of MeshWorkloads inside a MeshTrace that gets loaded onto the Virtual Mesh
@@ -84,7 +84,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_compile_time_args;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,

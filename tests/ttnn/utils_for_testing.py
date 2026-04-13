@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,8 @@ import numpy as np
 # Dictionaries for converting dtypes
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,13 +29,16 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
 }
+
+TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
+NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
@@ -47,6 +50,39 @@ def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorc
     # messages.append(str(actual_pytorch_result))
     messages = [str(m) for m in messages]
     return "\n".join(messages)
+
+
+def _post_to_torch_conversion(tensor):
+    # Originally, `to_torch` function converted unsigned TTNN tensors to the signed variants directly.
+    # This was changed to convert to unsigned types instead to address issue with the value truncation
+    # https://github.com/tenstorrent/tt-metal/issues/31150
+
+    # Torch does not support max/abs operation on the unsigned tensors, failing with "RuntimeError: "add_stub" not implemented for 'UInt32'"
+    # so ttnn tensor must have a post-conversion correction to avoid this error.
+    if tensor.dtype == torch.uint16:
+        return tensor.to(torch.int32)
+
+    elif tensor.dtype == torch.uint32:
+        return tensor.to(torch.int64)
+
+    else:
+        return tensor
+
+
+def _normalize_tensor(tensor):
+    if isinstance(tensor, ttnn.Tensor):
+        tensor = ttnn.to_torch(tensor)
+
+    tensor = _post_to_torch_conversion(tensor)
+
+    return tensor
+
+
+# since torch.norm(error, p="fro"), rejects non-float input
+def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
+    if t.dtype in (torch.float32, torch.bfloat16):
+        return t
+    return t.to(torch.float32)
 
 
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
@@ -71,6 +107,10 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     Raises:
         AssertionError: If the tensor shapes don't match or if the PCC is below the specified threshold
     """
+
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -108,10 +148,9 @@ def assert_allclose(
          AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
                          the aforementioned formula.
     """
-    if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
-    if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
+
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
 
     assert list(expected_result.shape) == list(
         actual_result.shape
@@ -233,6 +272,9 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     Raises:
         AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
     """
+    expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+    actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
@@ -263,6 +305,9 @@ def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    expected_pytorch_result = _to_float_for_norm(expected_pytorch_result)
+    actual_pytorch_result = _to_float_for_norm(actual_pytorch_result)
 
     error = expected_pytorch_result - actual_pytorch_result
     frob_error = torch.norm(error, p="fro")
@@ -400,6 +445,21 @@ def maybe_trace(op_func, enable_trace, device):
     return output
 
 
+def is_unsigned_tensor(py_tensor):
+    return py_tensor.dtype in TORCH_INTEGER_DTYPES
+
+
+def align_tensor_dtype(roundtrip_tensor, dtype):
+    if isinstance(roundtrip_tensor, torch.Tensor):
+        return roundtrip_tensor.to(dtype)
+
+    elif isinstance(roundtrip_tensor, np.ndarray):
+        return roundtrip_tensor.astype(dtype)
+
+    else:
+        raise ValueError(f"Expected torch.Tensor or np.ndarray, got {type(roundtrip_tensor)}")
+
+
 def generate_all_bfloat16_bitpatterns(dtype=torch.bfloat16):
     """
     Generate all possible bfloat16 bit patterns as a test tensor.
@@ -469,3 +529,69 @@ def flush_subnormal_values_to_zero(tensor):
     mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
+
+
+def assert_numeric_metrics(
+    expected_result,
+    actual_result,
+    rtol=1e-05,
+    atol=1e-08,
+    frobenius_threshold=0.01,
+    pcc_threshold=0.999,
+    ulp_threshold=10,
+    check_allclose=True,
+    check_frobenius=True,
+    check_pcc=True,
+    check_ulp=False,
+):
+    """
+    Run one or more numeric similarity checks between a golden tensor and an actual tensor.
+
+    Intended for TTNN tests that compare PyTorch reference output against device or CPU
+    round-trip results. Individual checks can be disabled when a metric does not apply
+    (for example, skip Frobenius for degenerate or non-finite cases).
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): Reference (golden) tensor.
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): Tensor under test; cast to ``expected_result.dtype`` if dtypes differ.
+        rtol (float, optional): Relative tolerance for ``assert_allclose``. Defaults to 1e-05.
+        atol (float, optional): Absolute tolerance for ``assert_allclose``. Defaults to 1e-08.
+        frobenius_threshold (float, optional): Maximum allowed relative Frobenius error for
+            ``assert_relative_frobenius``. Defaults to 0.01.
+        pcc_threshold (float, optional): Minimum Pearson correlation for ``comp_pcc``. Defaults to 0.999.
+        ulp_threshold (float, optional): Maximum ULP distance for ``assert_with_ulp``. Defaults to 10.
+        check_allclose (bool, optional): If True, run element-wise allclose. Defaults to True.
+        check_frobenius (bool, optional): If True, run relative Frobenius check. Defaults to True.
+        check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
+        check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        AssertionError: If any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
+
+    Notes:
+        - PCC is skipped when ``torch.numel(expected_result) == 1`` because correlation is undefined for a scalar.
+        - Allclose and Frobenius use helpers that normalize ``ttnn.Tensor`` inputs to PyTorch tensors.
+    """
+    # Align dtypes first so all downstream numeric checks compare values in the same precision.
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.type(expected_result.dtype)
+
+    # Element-wise tolerance check (absolute + relative).
+    if check_allclose:
+        assert_allclose(expected_result, actual_result, rtol=rtol, atol=atol)
+
+    # Global error-magnitude check using relative Frobenius norm.
+    if check_frobenius:
+        assert_relative_frobenius(expected_result, actual_result, threshold=frobenius_threshold)
+
+    # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
+    if check_pcc and torch.numel(expected_result) != 1:
+        passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
+        assert passing_pcc, pcc_message
+
+    # ULP-based comparison is stricter for floating-point representation differences.
+    if check_ulp:
+        assert_with_ulp(expected_result, actual_result, ulp_threshold=ulp_threshold, allow_nonfinite=False)

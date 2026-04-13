@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -15,7 +15,7 @@ namespace deepseek_b1_ops {
 // Mcast utility functions (inlined from mcast_utils.hpp)
 // ============================================================================
 
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_NCRISC)
 
 constexpr bool mcast_is_shared_write_cmd_buf = write_cmd_buf == write_reg_cmd_buf;
 
@@ -164,7 +164,7 @@ FORCE_INLINE void init_persistent_mcast_sender(uint64_t mcast_flag_noc_addr, uin
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid>
-FORCE_INLINE void teardown_persistent_mcast_sender() {
+FORCE_INLINE void teardown_persistent_mcast_sender(uint32_t data_sender_semaphore_addr) {
     mcast_send_set_state<
         mcast_num_cores,
         loopback,
@@ -181,11 +181,11 @@ FORCE_INLINE void teardown_persistent_mcast_sender() {
         is_part_of_receiver_grid,
         false,
         false,
-        false,
-        false,
-        write_reg_cmd_buf>(0, 0, 0);
+        true,
+        mcast_is_shared_write_cmd_buf,
+        write_reg_cmd_buf>(data_sender_semaphore_addr, data_sender_semaphore_addr, 4);
     noc_async_write_barrier();
-    riscv_wait(1000);  // This is just to guarantee safety due to posted mcast hw bug
+    riscv_wait(10000);  // This is just to guarantee safety due to posted mcast hw bug
 }
 
 #endif  // defined(COMPILE_FOR_BRISC)
@@ -242,8 +242,8 @@ struct Mcast {
         uint32_t dest_noc_start_y;
         uint32_t dest_noc_end_x;
         uint32_t dest_noc_end_y;
-        uint32_t data_sender_semaphore_id;
-        uint32_t data_receiver_semaphore_id;
+        uint32_t data_sender_semaphore_addr;
+        uint32_t data_receiver_semaphore_addr;
         uint32_t data_size_bytes;
         uint32_t src_cb;
         uint32_t src_num_pages;
@@ -253,7 +253,7 @@ struct Mcast {
 
     // Receiver args (NCRISC): all runtime parameters
     struct ReceiverArgs {
-        uint32_t data_receiver_semaphore_id;
+        uint32_t data_receiver_semaphore_addr;
         uint32_t dst_cb;
         uint32_t dst_num_pages;
     };
@@ -276,7 +276,7 @@ struct Mcast {
     //   Op op;
     //   op.init(args);      // Initialize persistent mcast sender (call once)
     //   op(args);           // Send data (can be called multiple times)
-    //   op.teardown();      // Teardown persistent mcast sender (call once)
+    //   op.teardown(args);  // Teardown persistent mcast sender (call once)
     //
     // Or use the legacy all-in-one call:
     //   op.init_send_teardown(args);  // Does init + send + teardown
@@ -299,10 +299,9 @@ struct Mcast {
                     args.dest_noc_start_y,
                     args.dest_noc_end_x,
                     args.dest_noc_end_y,
-                    (uint64_t)(get_semaphore(args.data_receiver_semaphore_id)));
-                uint32_t data_sender_semaphore_addr = get_semaphore(args.data_sender_semaphore_id);
+                    (uint64_t)(args.data_receiver_semaphore_addr));
                 volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)data_sender_semaphore_addr;
+                    (volatile tt_l1_ptr uint32_t*)args.data_sender_semaphore_addr;
                 if constexpr (init_noc) {
                     noc_semaphore_set(data_sender_semaphore_addr_ptr, INVALID);
                     // Initialize persistent mcast sender
@@ -311,7 +310,8 @@ struct Mcast {
                         CTArgsT::loopback,
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
-                        posted>(mcast_flag_noc_addr, data_sender_semaphore_addr);
+                        posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
+                    noc_async_posted_writes_flushed();
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
             }
@@ -330,14 +330,14 @@ struct Mcast {
         // Must be called after all operator() calls on sender core
         // No-op for NCRISC/TRISC
         // ====================================================================
-        void teardown() {
+        void teardown([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Teardown persistent mcast sender
                 teardown_persistent_mcast_sender<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
-                    CTArgsT::is_part_of_receiver_grid>();
+                    CTArgsT::is_part_of_receiver_grid>(args.data_sender_semaphore_addr);
             }
 #endif
         }
@@ -346,9 +346,6 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                uint32_t data_sender_semaphore_addr = get_semaphore(args.data_sender_semaphore_id);
-                uint32_t data_receiver_semaphore_addr = get_semaphore(args.data_receiver_semaphore_id);
-
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
@@ -370,7 +367,9 @@ struct Mcast {
                     posted,
                     true,
                     mcast_is_shared_write_cmd_buf,
-                    write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 4);
+                    write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
+
+                noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
@@ -383,7 +382,7 @@ struct Mcast {
             // ================================================================
             if constexpr (IsReceiverCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
+                    (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
                 // Reserve space in destination CB before mcast writes to it
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
@@ -393,7 +392,7 @@ struct Mcast {
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)(get_semaphore(args.data_receiver_semaphore_id));
+                    (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             }

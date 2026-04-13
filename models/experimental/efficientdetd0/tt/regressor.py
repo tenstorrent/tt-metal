@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ class TtRegressor:
         for feat, conv_list, header in zip(inputs, self.conv_list, self.header_list):
             for conv in conv_list:
                 feat = conv(feat)
-                feat = feat * ttnn.sigmoid_accurate(feat)
+                feat = feat * ttnn.sigmoid(feat)
             feat = header(feat)
             feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
             feat = ttnn.reshape(feat, (feat.shape[0], -1, 4))

@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -82,13 +83,14 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
+    test_context.set_show_workers(cmdline_parser.show_workers());
+
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {
         ProgressMonitorConfig progress_config;
         progress_config.enabled = true;
         progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
         progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
-
         test_context.enable_progress_monitoring(progress_config);
     }
 
@@ -111,6 +113,8 @@ int main(int argc, char** argv) {
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
+
+    raw_test_configs = tt::tt_fabric::fabric_tests::expand_channel_trimming(std::move(raw_test_configs));
 
     if (raw_test_configs.empty()) {
         log_fatal(tt::LogTest, "No test configurations loaded or generated. Exiting.");
@@ -171,13 +175,18 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
+        if (test_config.fabric_setup.use_vc2) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {} and fabric_tensix_config: {}",
             topology,
             fabric_tensix_config);
 
-        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        bool open_devices_success = test_context.open_devices(
+            test_config.fabric_setup, test_config.channel_trimming_mode);
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
@@ -257,6 +266,17 @@ int main(int argc, char** argv) {
 
                 log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs_with_progress();
+
+                if (test_context.did_last_test_hang()) {
+                    log_error(
+                        tt::LogTest,
+                        "Test {} HUNG - aborting test suite. System may be in a bad state.",
+                        built_test.parametrized_name);
+                    test_context.record_hung_test(built_test.parametrized_name);
+                    test_context.reset_devices();
+                    break;
+                }
+
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
@@ -287,6 +307,12 @@ int main(int argc, char** argv) {
                 fixture->barrier();
                 test_context.reset_devices();
             }
+            if (test_context.did_last_test_hang()) {
+                break;
+            }
+        }
+        if (test_context.did_last_test_hang()) {
+            break;
         }
     }
 

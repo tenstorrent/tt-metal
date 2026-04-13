@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <yaml-cpp/yaml.h>
+
+#include <optional>
 
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
@@ -55,7 +57,7 @@ public:
     virtual ~Transformer() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
 [[nodiscard]] TransformerConfig read_config(const YAML::Node& config);

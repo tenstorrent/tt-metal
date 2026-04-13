@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,7 +58,7 @@ void kernel_main() {
 
             tile_regs_wait();
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                // Pack tiles onto eachother in the intermediate_cb
+                // Pack tiles onto each other in the intermediate_cb
                 pack_tile<true>(i /*index into DST*/, intermediate_cb, 0 /*index into intermediate CB*/);
 
                 if (col_tile == 0 && i == 0) {

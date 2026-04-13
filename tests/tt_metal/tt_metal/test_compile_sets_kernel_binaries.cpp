@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,8 +17,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-logger/tt-logger.hpp>
-
 #include "jit_build/build.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"

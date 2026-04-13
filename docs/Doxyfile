@@ -942,7 +942,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i1.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/reverseops.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/logical_not_noti.h \
+                         tt_metal/hw/inc/api/compute/eltwise_unary/logical_not.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rounding.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/activations.h \

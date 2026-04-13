@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
+
+import ttnn
 
 from ..layers.module import Module
 
@@ -55,7 +57,7 @@ def load_model(
 
     Attempts to load from cache first. If the cache does not exist, loads from PyTorch state dict
     (if provided) and optionally creates the cache. Raises `MissingCacheError` if neither is
-    available.
+    available. Finally, any module that needs to be offloaded is taken care of.
 
     Args:
         `tt_model`: TT model instance to load weights into.
@@ -74,6 +76,9 @@ def load_model(
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    if tt_model.is_loaded():
+        return
+
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,
@@ -92,11 +97,13 @@ def load_model(
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
         tt_model.load_torch_state_dict(get_torch_state_dict())
+        ttnn.distributed_context_barrier()
         return
 
     if Path(cache_dir).is_dir():
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
+        ttnn.distributed_context_barrier()
         return
 
     if get_torch_state_dict is None:
@@ -106,6 +113,10 @@ def load_model(
     # Create host tensors when creating the cache to circumvent the issue that replicated device
     # tensors lead to redundant copies when saved to disk.
     tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
+
+    # If distributed, ensure that all processes have completed the check whether cache_dir exists,
+    # before any rank might proceed to create that dir to save.
+    ttnn.distributed_context_barrier()
 
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")

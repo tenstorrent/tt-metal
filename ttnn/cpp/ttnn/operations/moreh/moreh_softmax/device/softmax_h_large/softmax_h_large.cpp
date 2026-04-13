@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -69,7 +69,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
             {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

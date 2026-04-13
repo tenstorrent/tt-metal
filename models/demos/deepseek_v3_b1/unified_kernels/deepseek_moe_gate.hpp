@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -9,8 +9,12 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
+#ifndef REDUCE_OP
 #define REDUCE_OP PoolType::SUM
+#endif
+#ifndef REDUCE_DIM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
+#endif
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"

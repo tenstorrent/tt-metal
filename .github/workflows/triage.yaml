@@ -31,6 +31,10 @@ on:
         description: 'Enable LLK asserts'
         default: false
         type: boolean
+      run-hang-report-test:
+        description: 'Run hang report generation test (intentionally hangs a card)'
+        default: false
+        type: boolean
 
 jobs:
   triage-tests:
@@ -40,6 +44,7 @@ jobs:
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
@@ -51,7 +56,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: >-
-      ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
+      ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -73,12 +78,11 @@ jobs:
         run: |
             mkdir -p generated/test_reports
             uv pip install -r tools/triage/requirements.txt
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U066XH7HD6W # Vuk Jovanovic
+            IGNORE_ARGS=""
+            if [[ "${{ inputs.run-hang-report-test }}" != "true" ]]; then
+              IGNORE_ARGS="--ignore=./tools/tests/triage/test_hang_report.py"
+            fi
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
