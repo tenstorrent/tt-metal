@@ -25,7 +25,7 @@ class WanAttention(Module):
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
+        (True, 8, 4): (288, 512),
         (True, 32, 4): (224, 512),
     }
     default_sdpa_chunk_size = (256, 256)
