@@ -14,7 +14,7 @@ jobs:
       create-issues: true
       assign-owners: false
       slack-notify: false
-      issue-repo: ebanerjee/issue_dump
+      issue-repo: ebanerjeeTT/issue_dump
       target-repo: tenstorrent/tt-metal
       max-issues: "10"
       slack-channel-id: C0APK6215B5
