@@ -4,12 +4,14 @@
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
+import atexit
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -482,11 +484,37 @@ def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
     return False
 
 
+def _safe_rankfile_path(rankfile_path: str) -> str:
+    """Return a path suitable for ``--map-by rankfile:file=<path>``.
+
+    PRRTE 5.0.x has a bug where hyphens inside the ``file=`` qualifier value
+    are misinterpreted by the qualifier parser, causing *any* path containing
+    a ``-`` (e.g. ``/data/user/tt-metal/rankfile``) to be rejected as an
+    "unrecognized qualifier".  When the resolved path contains a hyphen we
+    create a temporary symlink under a guaranteed hyphen-free directory and
+    return that instead.
+    """
+    if "-" not in rankfile_path:
+        return rankfile_path
+
+    tmpdir = tempfile.mkdtemp(prefix="ttrun_rf_")
+    symlink = os.path.join(tmpdir, "rankfile")
+    os.symlink(rankfile_path, symlink)
+    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+    logger.debug(
+        f"{TT_RUN_PREFIX} Rankfile path contains hyphens; created symlink "
+        f"{symlink} -> {rankfile_path} (PRRTE qualifier-parser workaround)"
+    )
+    return symlink
+
+
 def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
     """Normalize rankfile MPI args and infer --host list when rankfile is provided.
 
     OpenMPI deprecates --rankfile in favor of --map-by rankfile:file=<path>.
     This keeps backwards compatibility while avoiding deprecation warnings.
+    Paths containing hyphens are symlinked to a safe location to work around
+    a PRRTE 5.0.x qualifier-parser bug.
     """
     if not mpi_args:
         return []
@@ -507,7 +535,8 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            safe_path = _safe_rankfile_path(detected_rankfile_path)
+            normalized_args.extend(["--map-by", f"rankfile:file={safe_path}"])
             rewrote_rankfile_args = True
             i += 2
             continue
@@ -515,14 +544,15 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
             detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            safe_path = _safe_rankfile_path(detected_rankfile_path)
+            normalized_args.extend(["--map-by", f"rankfile:file={safe_path}"])
             rewrote_rankfile_args = True
             i += 1
             continue
 
         if arg == "--map-by":
-            normalized_args.append(arg)
             if i + 1 >= len(mpi_args):
+                normalized_args.append(arg)
                 i += 1
                 continue
 
@@ -530,10 +560,11 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
             if rankfile_path:
                 resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
                 detected_rankfile_path = resolved_rankfile_path
+                safe_path = _safe_rankfile_path(resolved_rankfile_path)
+                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={safe_path}", 1)
 
-            normalized_args.append(policy)
+            normalized_args.extend(["--map-by", policy])
             i += 2
             continue
 
@@ -542,11 +573,11 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
             if rankfile_path:
                 resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                arg = f"--map-by={policy}"
                 detected_rankfile_path = resolved_rankfile_path
+                safe_path = _safe_rankfile_path(resolved_rankfile_path)
+                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={safe_path}", 1)
 
-            normalized_args.append(arg)
+            normalized_args.append(f"--map-by={policy}")
             i += 1
             continue
 
@@ -554,10 +585,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         i += 1
 
     if rewrote_rankfile_args and detected_rankfile_path:
-        logger.debug(
-            f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to "
-            f"--map-by rankfile:file={detected_rankfile_path}"
-        )
+        logger.debug(f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to " f"--map-by rankfile:file=...")
 
     if detected_rankfile_path and not has_host_selection_args(normalized_args):
         rankfile_hosts = extract_rankfile_hosts(detected_rankfile_path)
