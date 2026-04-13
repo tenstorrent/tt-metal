@@ -36,7 +36,7 @@ jobs:
       labels: exabox-multihost
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: MGD
         id: mgd
@@ -92,7 +92,7 @@ jobs:
       PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Parse docker image
         id: parse-image
@@ -160,7 +160,7 @@ jobs:
       TT_METAL_CACHE: /home/user/.cache
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Parse docker image
         id: parse-image
@@ -256,7 +256,7 @@ jobs:
       labels: exabox-multihost
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Delete environment
         uses: ./.github/actions/ttop-delete-environment
