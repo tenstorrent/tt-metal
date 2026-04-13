@@ -57,7 +57,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_value = get_arg_val<uint32_t>(1);
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, unpadded_X_size};
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,

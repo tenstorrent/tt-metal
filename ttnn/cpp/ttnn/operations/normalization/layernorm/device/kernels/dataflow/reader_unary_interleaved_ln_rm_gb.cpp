@@ -53,19 +53,19 @@ void kernel_main() {
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
-    const auto src_a = TensorAccessor(src0_args, src_addr);
+    const auto src_a = decltype(TensorAccessor(src0_args, src_addr)){src0_args, src_addr, src0_tile_bytes};
 
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
+    const auto addrg = decltype(TensorAccessor(gamma_args, gamma_addr)){gamma_args, gamma_addr, stick_size};
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr);
+    const auto addrb = decltype(TensorAccessor(beta_args, beta_addr)){beta_args, beta_addr, stick_size};
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr);
+    const auto src_b = decltype(TensorAccessor(src1_args, b_addr)){src1_args, b_addr, src1_tile_bytes};
 #endif
 
     // Generate constant tiles for layernorm compute

@@ -28,12 +28,12 @@ void kernel_main() {
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
 
-    const auto s0 = TensorAccessor(cache_args, cache_addr);
+    const auto s0 = decltype(TensorAccessor(cache_args, cache_addr)){cache_args, cache_addr, cache_tile_bytes};
 #ifdef INPUT_SHARDED
     cb_reserve_back(input_cb_id, Wt * num_batched_heads);
     cb_push_back(input_cb_id, Wt * num_batched_heads);
 #else
-    const auto s1 = TensorAccessor(input_args, input_addr);
+    const auto s1 = decltype(TensorAccessor(input_args, input_addr)){input_args, input_addr, input_tile_bytes};
     uint32_t input_id = input_start_id;
 #endif
 

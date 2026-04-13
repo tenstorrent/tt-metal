@@ -33,8 +33,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(out0_tensor_args, out0_tensor_addr);
-    const auto s1 = TensorAccessor(out1_tensor_args, out1_tensor_addr);
+    const auto s0 = decltype(TensorAccessor(out0_tensor_args, out0_tensor_addr)){out0_tensor_args, out0_tensor_addr, single_tile_size_bytes};
+    const auto s1 = decltype(TensorAccessor(out1_tensor_args, out1_tensor_addr)){out1_tensor_args, out1_tensor_addr, single_tile_size_bytes};
 
     if (!out1_only) {
         uint32_t z_stride_cum = 0;

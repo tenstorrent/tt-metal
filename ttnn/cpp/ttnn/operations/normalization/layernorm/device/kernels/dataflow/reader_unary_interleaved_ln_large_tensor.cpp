@@ -103,19 +103,19 @@ void kernel_main() {
     const uint32_t src0_page_bytes = get_tile_size(cb_id_in0);
 #endif
 
-    const auto src_a = TensorAccessor(src0_args, src_addr);
+    const auto src_a = decltype(TensorAccessor(src0_args, src_addr)){src0_args, src_addr, src0_page_bytes};
 
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
+    const auto addrg = decltype(TensorAccessor(gamma_args, gamma_addr)){gamma_args, gamma_addr, gamma_tile_bytes};
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr);
+    const auto addrb = decltype(TensorAccessor(beta_args, beta_addr)){beta_args, beta_addr, beta_tile_bytes};
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr);
+    const auto src_b = decltype(TensorAccessor(src1_args, b_addr)){src1_args, b_addr, src1_tile_bytes};
 #endif
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.

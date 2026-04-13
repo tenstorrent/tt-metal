@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
     constexpr auto output_args = TensorAccessorArgs<6>();
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
+    const auto output_addrgen = decltype(TensorAccessor(output_args, output_base_addr)){output_args, output_base_addr, Tile_size_bytes};
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;

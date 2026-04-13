@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, tile_size};
 
     uint32_t src_tile_id = start_id;
     cb_reserve_back(cb_id_in0, num_tiles);

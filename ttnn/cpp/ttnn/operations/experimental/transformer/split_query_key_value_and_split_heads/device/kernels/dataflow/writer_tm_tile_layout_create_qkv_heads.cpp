@@ -31,9 +31,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_out1 = 1;  // same as cb_id_in1
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
-    const auto sq = TensorAccessor(q_args, q_tensor_addr);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr);
+    const auto sq = decltype(TensorAccessor(q_args, q_tensor_addr)){q_args, q_tensor_addr, single_tile_size_bytes};
+    const auto sk = decltype(TensorAccessor(k_args, k_tensor_addr)){k_args, k_tensor_addr, single_tile_size_bytes};
+    const auto sv = decltype(TensorAccessor(v_args, v_tensor_addr)){v_args, v_tensor_addr, single_tile_size_bytes};
 
     uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
     uint32_t l1_read_addr_out1 = get_read_ptr(cb_id_out1);

@@ -33,7 +33,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = decltype(TensorAccessor(out_args, out_tensor_addr)){out_args, out_tensor_addr, single_tile_size_bytes};
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_out(cb_id_out0);

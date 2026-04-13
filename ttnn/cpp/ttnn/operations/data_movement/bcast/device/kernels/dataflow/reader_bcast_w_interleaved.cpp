@@ -34,8 +34,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s0 = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, in0_tile_bytes};
+    const auto s1 = decltype(TensorAccessor(src1_args, src1_addr)){src1_args, src1_addr, in1_tile_bytes};
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {

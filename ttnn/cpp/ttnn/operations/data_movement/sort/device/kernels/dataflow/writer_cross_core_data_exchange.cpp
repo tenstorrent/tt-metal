@@ -41,7 +41,7 @@ void kernel_main() {
 
     // Output tensor config
     const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
-    const auto output_tensor_accessor = TensorAccessor(value_tensor_args, output_tensor_buffer_addr);
+    const auto output_tensor_accessor = decltype(TensorAccessor(value_tensor_args, output_tensor_buffer_addr)){value_tensor_args, output_tensor_buffer_addr, value_tensor_tile_size_bytes};
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Generate input index tiles

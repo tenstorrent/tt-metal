@@ -161,7 +161,7 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
 #ifndef BIAS_SHARDED
-    const auto s3 = TensorAccessor(bias_args, in3_tensor_addr);
+    const auto s3 = decltype(TensorAccessor(bias_args, in3_tensor_addr)){bias_args, in3_tensor_addr, bias_single_tile_size_bytes};
 #endif  // BIAS_SHARDED
 #endif  // FUSE_BIAS
 
@@ -196,16 +196,16 @@ void kernel_main() {
 #else
     uint32_t l1_write_addr_in1;
 
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    const auto s1 = decltype(TensorAccessor(in1_args, in1_tensor_addr)){in1_args, in1_tensor_addr, in1_single_tile_size_bytes};
 #endif  // IN1_SHARDED
 
     //  WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = decltype(TensorAccessor(out_args, out_tensor_addr)){out_args, out_tensor_addr, output_single_tile_size_bytes};
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+    const auto s_sparsity = decltype(TensorAccessor(sparsity_args, sparsity_addr)){sparsity_args, sparsity_addr, sparsity_pagesize};
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted

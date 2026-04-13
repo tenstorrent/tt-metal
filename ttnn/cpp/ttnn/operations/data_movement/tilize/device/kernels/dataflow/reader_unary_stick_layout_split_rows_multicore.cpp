@@ -26,7 +26,7 @@ void kernel_main() {
 
     constexpr auto src_tensor_args = TensorAccessorArgs<3>();
 
-    const auto s = TensorAccessor(src_tensor_args, src_addr);
+    const auto s = decltype(TensorAccessor(src_tensor_args, src_addr)){src_tensor_args, src_addr, page_size};
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         cb_reserve_back(cb_id_in0, num_tiles);

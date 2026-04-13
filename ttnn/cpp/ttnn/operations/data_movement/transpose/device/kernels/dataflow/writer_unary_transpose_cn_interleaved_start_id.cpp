@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, page_size};
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
