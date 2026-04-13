@@ -184,6 +184,12 @@ class TestConfig:
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
     INFRA_TESTING: ClassVar[bool] = False
 
+    # CLI perf counter flags
+    ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_COUNTERS: ClassVar[bool] = False
+    DUMP_RAW_METRICS: ClassVar[bool] = False
+    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
     RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
@@ -198,15 +204,16 @@ class TestConfig:
 
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
-    # Single shared buffer layout: 86 config words + 172 data words + 1 sync control word
-    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x16A000
-    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 86
-    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 172
+    # Buffer layout: 137 config words + 274 data words + sync control words
+    PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
+    PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 3  # Max zones (must match counters.h)
+    _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 137
+    _PERF_COUNTERS_DATA_WORDS: ClassVar[int] = 274
     _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = (
         _PERF_COUNTERS_CONFIG_WORDS + _PERF_COUNTERS_DATA_WORDS
-    ) * 4  # 1032 bytes (0x408)
+    ) * 4  # 1644 bytes
 
-    # Shared buffer addresses (all threads use same buffer)
+    # Flat buffer addresses (used by counters.py for single-zone read/write)
     PERF_COUNTERS_CONFIG_ADDR: ClassVar[int] = PERF_COUNTERS_BASE_ADDR
     PERF_COUNTERS_DATA_ADDR: ClassVar[int] = (
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_CONFIG_WORDS * 4
@@ -215,10 +222,13 @@ class TestConfig:
         PERF_COUNTERS_BASE_ADDR + _PERF_COUNTERS_BUFFER_SIZE
     )
 
-    # Total size for memory reservation
+    # Size of one full zone including sync words
+    PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_BUFFER_SIZE + 40
+
+    # Total size for memory reservation across all zones
     PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_BUFFER_SIZE + 4
-    )  # +4 for sync control word
+        PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+    )
 
     @staticmethod
     def setup_arch():
@@ -812,9 +822,17 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+                # Only compile BRISC with counter support when counters are enabled,
+                # otherwise BRISC arms counter hardware which adds monitoring overhead.
+                perf_cnt_flag = (
+                    "-DPERF_COUNTERS_COMPILED "
+                    if TestConfig.ENABLE_PERF_COUNTERS
+                    else ""
+                )
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
+                    f"{perf_cnt_flag}"
                     f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
@@ -1084,6 +1102,9 @@ class TestConfig:
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+                if TestConfig.ENABLE_PERF_COUNTERS:
+                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "

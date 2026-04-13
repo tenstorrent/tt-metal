@@ -269,6 +269,28 @@ def pytest_configure(config):
         config.option.log_cli = True
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
+    TestConfig.DUMP_RAW_COUNTERS = config.getoption(
+        "--dump-raw-counters", default=False
+    )
+    TestConfig.DUMP_RAW_METRICS = config.getoption("--dump-raw-metrics", default=False)
+    TestConfig.DUMP_CSV_COUNTERS = config.getoption(
+        "--dump-csv-counters", default=False
+    )
+    # --dump-raw-counters, --dump-raw-metrics, or --dump-csv-counters imply --enable-perf-counters
+    TestConfig.ENABLE_PERF_COUNTERS = (
+        config.getoption("--enable-perf-counters", default=False)
+        or TestConfig.DUMP_RAW_COUNTERS
+        or TestConfig.DUMP_RAW_METRICS
+        or TestConfig.DUMP_CSV_COUNTERS
+    )
+    compile_producer = config.getoption("--compile-producer", default=False)
+    compile_consumer = config.getoption("--compile-consumer", default=False)
+    TestConfig.setup_mode(compile_consumer, compile_producer)
+
+    with_coverage = config.getoption("--coverage", default=False)
+    detailed_artefacts = config.getoption("--detailed-artefacts", default=False)
+    no_debug_symbols = config.getoption("--no-debug-symbols", default=False)
+    speed_of_light = config.getoption("--speed-of-light", default=False)
 
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
@@ -570,6 +592,39 @@ def pytest_sessionstart(session):
 
 
 @pytest.fixture(scope="module", autouse=True)
+def counter_report(request, worker_id):
+    """Separate report for raw hardware counter CSV data (--dump-csv-counters)."""
+    if not TestConfig.DUMP_CSV_COUNTERS:
+        PerfConfig.COUNTER_REPORT = None
+        yield None
+        return
+
+    test_module = request.path.stem
+    temp_report = PerfReport()
+    PerfConfig.COUNTER_REPORT = temp_report
+
+    try:
+        yield temp_report
+    except Exception as e:
+        logger.warning("Counter report: Unexpected error, saving anyway: {}", e)
+
+    PerfConfig.COUNTER_REPORT = None
+
+    if TestConfig.MODE == TestMode.PRODUCE:
+        return
+
+    if PerfConfig.TEST_COUNTER == 0:
+        return
+
+    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+
+    if counters_path.exists():
+        counters_path.unlink()
+
+    temp_report.dump_csv(counters_path)
+
+
+@pytest.fixture(scope="module", autouse=True)
 def perf_report(request, worker_id):
 
     test_module = request.path.stem
@@ -620,6 +675,115 @@ def pytest_sessionfinish(session):
             process_coverage_run_artefacts()
 
     _stop_exalens_server()
+
+
+# Define the possible custom command line options
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-simulator", action="store_true", help="Run tests using the simulator."
+    )
+    parser.addoption(
+        "--port",
+        action="store",
+        type=int,
+        default=5555,
+        help="Integer number of the server port.",
+    )
+    parser.addoption(
+        "--reset-simulator-per-test",
+        action="store_true",
+        default=False,
+        help="Restart the tt-exalens server after each test. "
+        "Only effective with --run-simulator.",
+    )
+
+    parser.addoption(
+        "--coverage",
+        action="store_true",
+        help="Enables coverage *.info file generation for every test variant run",
+    )
+
+    parser.addoption(
+        "--compile-producer",
+        action="store_true",
+        help="Only compile *.elf(s) for every test variant selected and store them on path specified",
+    )
+
+    parser.addoption(
+        "--compile-consumer",
+        action="store_true",
+        help="Consume pre-compiled *.elf(s) for every test variant selected, from pre-specified path, and execute specified variants",
+    )
+
+    parser.addoption(
+        "--detailed-artefacts",
+        action="store_true",
+        help="Insert few more compilation flags to produce binary artefacts suitable for debugging",
+    )
+
+    parser.addoption(
+        "--skip-codegen",
+        action="store_true",
+        default=False,
+        help="Skip C++ code generation for fused tests and use existing files",
+    )
+
+    parser.addoption(
+        "--no-debug-symbols",
+        action="store_true",
+        default=False,
+        help="Compile without debug symbols (-g flag) to save disk space",
+    )
+
+    parser.addoption(
+        "--logging-level",
+        action="store",
+        default=None,
+        help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "
+        "Overrides LOGURU_LEVEL env var. Default: INFO",
+    )
+
+    parser.addoption(
+        "--speed-of-light",
+        action="store_true",
+        default=False,
+        help="Should tests be compiled with everything runtime, converted to compile-time",
+    )
+
+    parser.addoption(
+        "--test-order-file",
+        action="store",
+        default=None,
+        help="Path to file containing ordered list of tests to run",
+    )
+
+    parser.addoption(
+        "--enable-perf-counters",
+        action="store_true",
+        default=False,
+        help="Enable hardware performance counter collection during perf tests",
+    )
+
+    parser.addoption(
+        "--dump-raw-counters",
+        action="store_true",
+        default=False,
+        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-raw-metrics",
+        action="store_true",
+        default=False,
+        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-csv-counters",
+        action="store_true",
+        default=False,
+        help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
+    )
 
 
 # Skip decorators for specific architectures
