@@ -47,6 +47,13 @@ ROUTER_KEY_ALIASES = {
     "router.2.bias": ("Linear_Temporal.2.bias", "router.2.bias"),
 }
 CHECKPOINT_BASE_DIR = "/demo_checkpoints"
+ALLOWED_CHECKPOINT_FILES = {
+    "etth1_DLinear_mole_sl336_pl96_td4_lr0.01_hd0.2_sd2021_MoLE_DLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.01_sd2021_hd0.2/checkpoint.pth",
+    "etth1_DLinear_linear_sl336_pl96_td1_lr0.01_hd0.0_sd2021_MoLE_DLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_1_f_mask_0.5_0.01_sd2021_hd0.0/checkpoint.pth",
+    "etth1_RLinear_mole_sl336_pl96_td4_lr0.005_hd0.2_sd2021_MoLE_RLinear_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.005_sd2021_hd0.2/checkpoint.pth",
+    "etth1_RMLP_mole_sl336_pl96_td4_lr0.005_hd0.2_sd2021_MoLE_RMLP_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.005_sd2021_hd0.2/checkpoint.pth",
+}
+ALLOWED_DATASET_FILES = {"ETTh1.csv"}
 
 
 @dataclass(frozen=True)
@@ -88,7 +95,12 @@ def add_dataset_arguments(
     parser: ArgumentParser,
 ) -> None:
     """Register dataset-related command-line arguments."""
-    parser.add_argument("--dataset-dir", type=str, required=True, help="Directory containing dataset CSV")
+    parser.add_argument(
+        "--dataset-dir",
+        type=str,
+        default=CHECKPOINT_BASE_DIR,
+        help="Dataset directory (must be /demo_checkpoints)",
+    )
     parser.add_argument(
         "--dataset-file",
         type=str,
@@ -144,20 +156,14 @@ def select_ttnn_memory_config(config: MoLEConfig) -> Any:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def _resolve_path_in_base(base_dir: str | Path, user_input: str, *, kind: str) -> str:
-    base = os.path.abspath(os.path.expanduser(str(base_dir)))
-    if not os.path.isdir(base):
-        raise FileNotFoundError(f"{kind} directory not found: {base}")
-
-    candidate = os.path.abspath(os.path.join(base, user_input))
-    base_prefix = base if base.endswith(os.sep) else base + os.sep
-    if candidate != base and not candidate.startswith(base_prefix):
-        raise ValueError(f"{kind} path escapes base directory")
-    return candidate
-
-
 def resolve_checkpoint_path(checkpoint_file: str) -> str:
-    checkpoint_path = _resolve_path_in_base(CHECKPOINT_BASE_DIR, checkpoint_file, kind="checkpoint")
+    if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
+        raise ValueError("checkpoint_file is not in the predefined safelist")
+
+    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
+    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
+    if not checkpoint_path.startswith(base_dir + os.sep):
+        raise ValueError("checkpoint path escapes checkpoint base directory")
 
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
@@ -169,22 +175,27 @@ def _resolve_checkpoint_path(checkpoint_file: str) -> str:
 
 
 def _resolve_dataset_csv_path(dataset_dir: str | Path, dataset_file: str | None) -> Path:
-    base = Path(os.path.abspath(os.path.expanduser(str(dataset_dir))))
-    if not base.exists() or not base.is_dir():
-        raise FileNotFoundError(f"dataset directory not found: {base}")
+    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
+    requested_dir = os.path.abspath(os.path.expanduser(str(dataset_dir)))
+    if requested_dir != base_dir:
+        raise ValueError("dataset_dir must be /demo_checkpoints")
+    if not os.path.isdir(base_dir):
+        raise FileNotFoundError(f"dataset directory not found: {base_dir}")
 
     if dataset_file is not None:
-        csv_path = Path(_resolve_path_in_base(base, dataset_file, kind="dataset"))
+        if dataset_file not in ALLOWED_DATASET_FILES:
+            raise ValueError("dataset_file is not in the predefined safelist")
+        csv_path = Path(os.path.abspath(os.path.join(base_dir, dataset_file)))
+        if not str(csv_path).startswith(base_dir + os.sep):
+            raise ValueError("dataset path escapes dataset base directory")
         if not csv_path.exists():
             raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
         return csv_path
 
-    csv_files = sorted(base.glob("*.csv"))
-    if len(csv_files) == 1:
-        return csv_files[0]
-    if not csv_files:
-        raise FileNotFoundError(f"no CSV files found in dataset directory: {base}")
-    raise ValueError(f"multiple CSV files found in {base}; pass --dataset-file to choose one")
+    csv_path = Path(os.path.join(base_dir, "ETTh1.csv"))
+    if csv_path.exists():
+        return csv_path
+    raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
 
 
 def _parse_timestamp(raw_value: str) -> datetime:

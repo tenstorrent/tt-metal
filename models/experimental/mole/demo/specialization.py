@@ -15,6 +15,7 @@ from matplotlib.patches import Patch
 import torch
 
 from models.experimental.mole.demo.run import (
+    ALLOWED_CHECKPOINT_FILES,
     add_dataset_arguments,
     add_model_arguments,
     CheckpointEndpointOptions,
@@ -46,6 +47,9 @@ class VisualizationOptions:
 
 
 def _resolve_checkpoint_path(checkpoint_file: str) -> str:
+    if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
+        raise ValueError("checkpoint_file is not in the predefined safelist")
+
     base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
     checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
     if not checkpoint_path.startswith(base_dir + os.sep):
