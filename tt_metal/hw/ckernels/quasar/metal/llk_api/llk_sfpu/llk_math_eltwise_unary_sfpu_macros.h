@@ -193,7 +193,7 @@
 // For the compare with zero ops (eqz, nez, ltz, gtz, lez, gez)
 #define SFPU_ZERO_KERNEL(OP, MODE, APPROXIMATE, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(   \
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::OP>, DST_IDX 8);
+        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::OP>, DST_IDX, 8);
 
 // Generalized macro for compare-with-zero ops for any type (e.g., int, uint16)
 #define SFPU_ZERO_KERNEL_TYPE(TYPE, OP, MODE, APPROXIMATE, DST_IDX) \

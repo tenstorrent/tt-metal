@@ -15,10 +15,7 @@
 
 namespace ckernel {
 
-ALWI void relu_tile_init() {
-    MATH(SFPU_UNARY_KERNEL_INIT(relu_min, APPROX));
-}  // in quasar the llk init func takes but doesnt use op or approx flag
-// so functionally its the same no matter what op we pass in
+ALWI void relu_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(relu_min, APPROX)); }
 
 // clang-format off
 /**
