@@ -518,6 +518,7 @@ def run_demo_whisper_for_translation_dataset(
     task: str = "translate",
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
+    use_batched_decoder_prefill=True,
 ):
     torch.manual_seed(0)
 
@@ -552,6 +553,7 @@ def run_demo_whisper_for_translation_dataset(
         language=language,
         task=task,
         batch_size_per_device=batch_size_per_device,
+        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     logger.info(f"Loading FLEURS dataset for {language} (code: {source_lang_code_full})")
@@ -1023,6 +1025,10 @@ def test_demo_for_conditional_generation_dataset(
     "stream",
     [True],
 )
+@pytest.mark.parametrize(
+    "use_batched_decoder_prefill",
+    [True],
+)
 def test_demo_for_translation_dataset(
     mesh_device,
     model_repo,
@@ -1037,6 +1043,7 @@ def test_demo_for_translation_dataset(
     return_timestamps,
     stream,
     request,
+    use_batched_decoder_prefill,
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
@@ -1057,4 +1064,5 @@ def test_demo_for_translation_dataset(
         task="translate",
         batch_size_per_device=batch_size_per_device,
         stream=stream,
+        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
