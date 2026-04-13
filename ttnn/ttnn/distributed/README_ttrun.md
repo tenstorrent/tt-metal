@@ -188,3 +188,62 @@ Both modes support:
 - `--force-rediscovery` – **New mode only.** Always run Phase 1 and refresh the Phase 1 cache even when a cache hit would otherwise skip `generate_rank_bindings`. Ignored with `--rank-binding` (legacy mode). When new mode continues to **Phase 2**, failures there (config, mpirun, non-zero program exit, or Ctrl+C during a hang) log a hint to try **`--force-rediscovery`**.
 
 Run `tt-run --help` for the full list.
+
+---
+
+## Docker Mode
+
+When `--docker-image` is provided, tt-run wraps each MPI rank in a `docker run` command. Works with both auto allocation and legacy mode. Phase 1 also runs inside Docker when using auto allocation mode.
+
+Each container runs with `--rm --net=host --privileged`. MPI variables (`OMPI_*`, `PMIX_*`) are forwarded dynamically at spawn time. Rank variables (`TT_MESH_ID`, `TT_MESH_HOST_RANK`, etc.) are injected as `-e` flags. The launch workspace is bind-mounted into the container so host-absolute paths resolve correctly.
+
+### Usage
+
+```bash
+tt-run --mesh-graph-descriptor "$MGD" \
+  --hosts "$HOSTS" \
+  --docker-image "$IMAGE" \
+  --docker-empty-entrypoint \
+  "$BINARY" --test_config "$CFG"
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--docker-image <image>` | Enable Docker mode with this image |
+| `--docker-volume <host:container[:opts]>` | Additional volume mount (repeatable) |
+| `--docker-args "<args>"` | Extra `docker run` arguments (quoted string) |
+| `--docker-empty-entrypoint` | Override the image entrypoint with `--entrypoint=""` |
+
+### Default Mounts
+
+- `/tmp:/tmp`
+- `/dev/hugepages-1G:/dev/hugepages-1G`
+- `$HOME:$HOME` (home directory)
+- `/etc/passwd:/etc/passwd:ro`, `/etc/group:/etc/group:ro` (user/group mapping)
+- Launch workspace directory (bind-mounted at the same path, set as working directory)
+
+### Migrating from mpi-docker
+
+Before (mpi-docker, manual per-rank env):
+
+```bash
+./tools/scaleout/exabox/mpi-docker --image "$IMAGE" \
+    --empty-entrypoint --host "$HOSTS" \
+    -np 1 -x TT_MESH_ID=0 -x TT_MESH_GRAPH_DESC_PATH="$MGD" -x TT_MESH_HOST_RANK=0 "$BINARY" : \
+    -np 1 -x TT_MESH_ID=0 -x TT_MESH_GRAPH_DESC_PATH="$MGD" -x TT_MESH_HOST_RANK=1 "$BINARY" : \
+    ...
+```
+
+After (tt-run handles rank env automatically):
+
+```bash
+tt-run --mesh-graph-descriptor "$MGD" \
+  --hosts "$HOSTS" \
+  --docker-image "$IMAGE" \
+  --docker-empty-entrypoint \
+  "$BINARY"
+```
+
+`/data/scaleout_configs` is not mounted by default. Add `--docker-volume /data/scaleout_configs:/data/scaleout_configs` if needed.

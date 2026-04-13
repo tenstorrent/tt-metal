@@ -40,6 +40,10 @@ from ttnn.distributed.ttrun import (
     read_stored_phase1_cache_key,
     PHASE2_MOCK_MAPPING_FILENAME,
     PHASE1_CACHE_ID_HEX_LEN,
+    DockerConfig,
+    build_docker_wrapped_program,
+    DEFAULT_DOCKER_VOLUMES,
+    DOCKER_MPI_ENV_PREFIXES,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
@@ -1047,3 +1051,364 @@ class TestNewModeFlow:
             call_args = mock_phase1.call_args
             assert call_args.kwargs["mock_rank_to_desc"] is not None
             assert len(call_args.kwargs["mock_rank_to_desc"]) == 2
+
+
+class TestDockerMode:
+    """Tests for Docker mode: wrapping MPI rank processes inside Docker containers."""
+
+    def _make_docker_config(self, **overrides):
+        defaults = dict(
+            image="myregistry/myimage:latest",
+            volumes=list(DEFAULT_DOCKER_VOLUMES),
+            extra_args=[],
+            empty_entrypoint=False,
+            mount_home=True,
+            map_user=True,
+        )
+        defaults.update(overrides)
+        return DockerConfig(**defaults)
+
+    # -- build_docker_wrapped_program -----------------------------------------
+
+    def test_build_docker_wrapped_program_basic_structure(self):
+        """Generated command is ['bash', '-c', '<shell string>']."""
+        cfg = self._make_docker_config()
+        result = build_docker_wrapped_program(cfg, {"FOO": "bar"}, ["./my_app", "--flag"])
+        assert result[0] == "bash"
+        assert result[1] == "-c"
+        assert isinstance(result[2], str)
+
+    def test_build_docker_wrapped_program_contains_image(self):
+        cfg = self._make_docker_config(image="registry/img:v1")
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "registry/img:v1" in shell_cmd
+
+    def test_build_docker_wrapped_program_static_env_vars(self):
+        cfg = self._make_docker_config()
+        shell_cmd = build_docker_wrapped_program(cfg, {"TT_MESH_ID": "42", "OTHER": "val"}, ["echo"])[2]
+        assert "-e" in shell_cmd
+        assert "TT_MESH_ID=42" in shell_cmd
+        assert "OTHER=val" in shell_cmd
+
+    def test_build_docker_wrapped_program_dynamic_mpi_forwarding(self):
+        """The command contains the dynamic env | grep snippet for OMPI_/PMIX_ vars."""
+        cfg = self._make_docker_config()
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "OMPI_" in shell_cmd
+        assert "PMIX_" in shell_cmd
+        assert "env | grep" in shell_cmd
+
+    def test_build_docker_wrapped_program_volumes(self):
+        cfg = self._make_docker_config(volumes=["/tmp:/tmp", "/data:/data:ro"])
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "-v /tmp:/tmp" in shell_cmd
+        assert "-v /data:/data:ro" in shell_cmd
+
+    def test_build_docker_wrapped_program_home_mount(self):
+        cfg = self._make_docker_config(mount_home=True)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "-v $HOME:$HOME" in shell_cmd
+
+    def test_build_docker_wrapped_program_no_home_mount(self):
+        cfg = self._make_docker_config(mount_home=False)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "$HOME:$HOME" not in shell_cmd
+
+    def test_build_docker_wrapped_program_user_mapping(self):
+        cfg = self._make_docker_config(map_user=True)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "--user $(id -u):$(id -g)" in shell_cmd
+        assert "/etc/passwd" in shell_cmd
+        assert "/etc/group" in shell_cmd
+
+    def test_build_docker_wrapped_program_no_user_mapping(self):
+        cfg = self._make_docker_config(map_user=False)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "$(id -u)" not in shell_cmd
+        assert "/etc/passwd" not in shell_cmd
+
+    def test_build_docker_wrapped_program_working_directory(self):
+        """Container working directory and volume mount use the launch workspace path."""
+        cfg = self._make_docker_config()
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        cwd = str(Path.cwd())
+        assert f"-w {cwd}" in shell_cmd
+        assert f"-v {cwd}:{cwd}" in shell_cmd
+
+    def test_build_docker_wrapped_program_empty_entrypoint(self):
+        cfg = self._make_docker_config(empty_entrypoint=True)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert '--entrypoint=""' in shell_cmd
+
+    def test_build_docker_wrapped_program_no_empty_entrypoint(self):
+        cfg = self._make_docker_config(empty_entrypoint=False)
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "--entrypoint" not in shell_cmd
+
+    def test_build_docker_wrapped_program_extra_args(self):
+        cfg = self._make_docker_config(extra_args=["--shm-size=64g", "--ulimit", "memlock=-1"])
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "--shm-size=64g" in shell_cmd
+        assert "--ulimit" in shell_cmd
+        assert "memlock=-1" in shell_cmd
+
+    def test_build_docker_wrapped_program_quotes_program_args(self):
+        cfg = self._make_docker_config()
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["./app", "--config", "path with spaces"])[2]
+        assert "'path with spaces'" in shell_cmd
+
+    def test_build_docker_wrapped_program_privileged_and_host_network(self):
+        cfg = self._make_docker_config()
+        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
+        assert "--rm" in shell_cmd
+        assert "--net=host" in shell_cmd
+        assert "--privileged" in shell_cmd
+
+    # -- _phase1_docker_config ------------------------------------------------
+
+    def test_phase1_docker_config_adds_output_dir_volume(self, temp_dir):
+        from ttnn.distributed.ttrun import _phase1_docker_config
+
+        cfg = self._make_docker_config()
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+
+        result = _phase1_docker_config(cfg, output_dir, mgd)
+        resolved = str(output_dir.resolve())
+        assert any(resolved in v for v in result.volumes)
+
+    def test_phase1_docker_config_adds_mgd_dir_readonly(self, temp_dir):
+        from ttnn.distributed.ttrun import _phase1_docker_config
+
+        cfg = self._make_docker_config()
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        mgd = temp_dir / "descriptors" / "mesh.proto"
+        mgd.parent.mkdir()
+        mgd.touch()
+
+        result = _phase1_docker_config(cfg, output_dir, mgd)
+        mgd_dir = str(mgd.resolve().parent)
+        matching = [v for v in result.volumes if mgd_dir in v and ":ro" in v]
+        assert len(matching) == 1
+
+    def test_phase1_docker_config_adds_mock_desc_dirs(self, temp_dir):
+        from ttnn.distributed.ttrun import _phase1_docker_config
+
+        cfg = self._make_docker_config()
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+        desc_dir = temp_dir / "descs"
+        desc_dir.mkdir()
+        desc0 = desc_dir / "desc0.yaml"
+        desc0.touch()
+        desc1 = desc_dir / "desc1.yaml"
+        desc1.touch()
+
+        result = _phase1_docker_config(cfg, output_dir, mgd, mock_rank_to_desc={0: desc0, 1: desc1})
+        resolved_desc_dir = str(desc_dir.resolve())
+        matching = [v for v in result.volumes if resolved_desc_dir in v]
+        assert len(matching) == 1, "Duplicate desc dirs from same parent should be deduplicated"
+
+    def test_phase1_docker_config_deduplicates_existing_volumes(self, temp_dir):
+        from ttnn.distributed.ttrun import _phase1_docker_config
+
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+        resolved_output = str(output_dir.resolve())
+        cfg = self._make_docker_config(volumes=[f"{resolved_output}:{resolved_output}", "/tmp:/tmp"])
+
+        result = _phase1_docker_config(cfg, output_dir, mgd)
+        count = sum(1 for v in result.volumes if resolved_output in v)
+        assert count == 1, "Pre-existing output_dir volume should not be duplicated"
+
+    def test_phase1_docker_config_preserves_base_config(self, temp_dir):
+        from ttnn.distributed.ttrun import _phase1_docker_config
+
+        cfg = self._make_docker_config(
+            image="test:img", extra_args=["--foo"], empty_entrypoint=True, mount_home=False, map_user=False
+        )
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+
+        result = _phase1_docker_config(cfg, output_dir, mgd)
+        assert result.image == "test:img"
+        assert result.extra_args == ["--foo"]
+        assert result.empty_entrypoint is True
+        assert result.mount_home is False
+        assert result.map_user is False
+
+    # -- build_generate_rank_bindings_mpi_cmd with docker_config --------------
+
+    def test_build_phase1_cmd_docker_hosts(self, temp_dir):
+        """Phase 1 with hosts + docker wraps the executable in docker run."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+        output_dir = temp_dir / "output"
+
+        cfg = self._make_docker_config()
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd, ["node1", "node2"], output_dir, docker_config=cfg)
+        joined = " ".join(cmd)
+        assert "bash" in joined
+        assert "docker run" in joined
+        assert cfg.image in joined
+
+    def test_build_phase1_cmd_docker_mock(self, temp_dir):
+        """Phase 1 with mock descriptors + docker wraps each rank in docker run."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+        output_dir = temp_dir / "output"
+        desc0 = temp_dir / "desc0.yaml"
+        desc0.touch()
+        desc1 = temp_dir / "desc1.yaml"
+        desc1.touch()
+
+        cfg = self._make_docker_config()
+        cmd = build_generate_rank_bindings_mpi_cmd(
+            executable, mgd, None, output_dir, mock_rank_to_desc={0: desc0, 1: desc1}, docker_config=cfg
+        )
+        joined = " ".join(cmd)
+        assert joined.count("docker run") == 2, "Each mock rank should get its own docker run"
+        assert "TT_METAL_MOCK_CLUSTER_DESC_PATH" in joined
+
+    def test_build_phase1_cmd_no_docker_unchanged(self, temp_dir):
+        """Phase 1 without docker_config should not contain any docker commands."""
+        executable = temp_dir / "generate_rank_bindings"
+        executable.touch()
+        mgd = temp_dir / "mesh.proto"
+        mgd.touch()
+        output_dir = temp_dir / "output"
+
+        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd, ["node1"], output_dir, docker_config=None)
+        joined = " ".join(cmd)
+        assert "docker" not in joined
+
+    # -- build_mpi_command with docker_config ---------------------------------
+
+    def test_build_mpi_command_docker_wraps_each_rank(self, sample_rank_binding_yaml):
+        """Each rank should produce a separate docker run in the MPI command."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cfg = self._make_docker_config()
+        cmd = build_mpi_command(config, ["./my_app"], docker_config=cfg)
+        joined = " ".join(cmd)
+        assert joined.count("docker run") == len(config.rank_bindings)
+
+    def test_build_mpi_command_docker_injects_rank_env(self, sample_rank_binding_yaml):
+        """Docker mode should inject TT_MESH_ID and other rank env vars as -e flags."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cfg = self._make_docker_config()
+        cmd = build_mpi_command(config, ["./my_app"], docker_config=cfg)
+        joined = " ".join(cmd)
+        assert "TT_MESH_ID" in joined
+
+    def test_build_mpi_command_docker_still_has_mpi_x_flags(self, sample_rank_binding_yaml):
+        """Docker mode should still emit MPI -x flags for host-side env forwarding."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cfg = self._make_docker_config()
+        cmd = build_mpi_command(config, ["./my_app"], docker_config=cfg)
+        assert "-x" in cmd
+
+    def test_build_mpi_command_no_docker_no_docker_commands(self, sample_rank_binding_yaml):
+        """Without docker_config, no docker commands should appear."""
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["./my_app"], docker_config=None)
+        joined = " ".join(cmd)
+        assert "docker" not in joined
+
+    # -- CLI option parsing ---------------------------------------------------
+
+    def test_cli_docker_image_dry_run(self, runner, sample_rank_binding_yaml):
+        """--docker-image should be accepted and produce docker run in dry-run output."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--docker-image",
+                "myregistry/img:v1",
+                "--dry-run",
+                "./my_app",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "docker run" in result.output
+
+    def test_cli_docker_volume_dry_run(self, runner, sample_rank_binding_yaml):
+        """--docker-volume should appear as -v in the generated command."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--docker-image",
+                "img:v1",
+                "--docker-volume",
+                "/data/models:/data/models",
+                "--dry-run",
+                "./my_app",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "/data/models:/data/models" in result.output
+
+    def test_cli_docker_empty_entrypoint_dry_run(self, runner, sample_rank_binding_yaml):
+        """--docker-empty-entrypoint should produce --entrypoint="" in the command."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--docker-image",
+                "img:v1",
+                "--docker-empty-entrypoint",
+                "--dry-run",
+                "./my_app",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "--entrypoint" in result.output
+
+    def test_cli_docker_args_dry_run(self, runner, sample_rank_binding_yaml):
+        """--docker-args should be forwarded into the docker run command."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--docker-image",
+                "img:v1",
+                "--docker-args",
+                "--shm-size=64g",
+                "--dry-run",
+                "./my_app",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "--shm-size=64g" in result.output
+
+    def test_cli_no_docker_image_no_docker_output(self, runner, sample_rank_binding_yaml):
+        """Without --docker-image, no docker commands should appear in dry-run."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--dry-run",
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "docker run" not in result.output

@@ -746,6 +746,128 @@ def build_phase2_mock_mapping(
     return phase2_mock_mapping
 
 
+# ---------------------------------------------------------------------------
+# Docker mode: wrapping MPI rank processes inside Docker containers
+# ---------------------------------------------------------------------------
+
+# Default Docker volume mounts for TT hardware environments.
+DEFAULT_DOCKER_VOLUMES = [
+    "/tmp:/tmp",
+    "/dev/hugepages-1G:/dev/hugepages-1G",
+]
+
+# MPI runtime env var prefixes that must be forwarded into Docker containers.
+# These are set by mpirun at spawn time, so they can only be captured dynamically.
+DOCKER_MPI_ENV_PREFIXES = ("OMPI_", "PMIX_")
+
+
+@dataclass
+class DockerConfig:
+    """Configuration for wrapping MPI rank programs inside Docker containers."""
+
+    image: str
+    volumes: List[str]
+    extra_args: List[str]
+    empty_entrypoint: bool = False
+    mount_home: bool = True
+    map_user: bool = True
+
+
+def build_docker_wrapped_program(
+    docker_config: DockerConfig,
+    rank_env: Dict[str, str],
+    program: List[str],
+) -> List[str]:
+    """Wrap a program invocation in a ``docker run`` command for use as an MPI rank process.
+
+    The returned command is ``["bash", "-c", "<docker_run_shell_string>"]`` so that
+    mpirun can spawn it via SSH on remote hosts. The shell string dynamically forwards
+    MPI runtime variables (OMPI_*, PMIX_*) and statically injects all rank env vars.
+
+    Args:
+        docker_config: Docker settings (image, volumes, etc.)
+        rank_env: Environment variables for this rank (from get_rank_environment)
+        program: The actual program + args to run inside the container
+
+    Returns:
+        ["bash", "-c", "<shell command>"] list suitable for extending an mpirun command
+    """
+    parts = ["docker run --rm --net=host --privileged"]
+
+    # Dynamic forwarding of MPI runtime env vars (only known at mpirun spawn time)
+    parts.append(
+        '$(env | grep -E "^('
+        + "|".join(DOCKER_MPI_ENV_PREFIXES)
+        + ')" | cut -f1 -d= | awk \'{ print "-e " $1 }\' | tr "\\n" " ")'
+    )
+
+    # Static env vars for this rank
+    for key, value in rank_env.items():
+        parts.append(f"-e {shlex.quote(f'{key}={value}')}")
+
+    # Volume mounts
+    for vol in docker_config.volumes:
+        parts.append(f"-v {vol}")
+
+    if docker_config.mount_home:
+        parts.append("-v $HOME:$HOME")
+
+    if docker_config.map_user:
+        parts.extend(
+            [
+                "--user $(id -u):$(id -g)",
+                "-v /etc/passwd:/etc/passwd:ro",
+                "-v /etc/group:/etc/group:ro",
+            ]
+        )
+
+    # Mount the launch workspace so host-absolute paths (LD_LIBRARY_PATH,
+    # TT_METAL_HOME, MGD paths, etc.) resolve correctly inside the container.
+    # Use the literal ORIGINAL_CWD rather than $(pwd) because mpirun may SSH
+    # to remote hosts where the shell's pwd differs from the launch directory.
+    cwd_str = str(ORIGINAL_CWD)
+    parts.append(f"-v {cwd_str}:{cwd_str}")
+    parts.append(f"-w {cwd_str}")
+
+    # Extra docker args (user-provided)
+    for arg in docker_config.extra_args:
+        parts.append(arg)
+
+    if docker_config.empty_entrypoint:
+        parts.append('--entrypoint=""')
+
+    # Image
+    parts.append(docker_config.image)
+
+    # Program and its arguments
+    for arg in program:
+        parts.append(shlex.quote(arg))
+
+    docker_cmd = " ".join(parts)
+    return ["bash", "-c", docker_cmd]
+
+
+def _docker_path_is_mounted(path: Path, docker_config: DockerConfig) -> bool:
+    """Check whether *path* (resolved) would be accessible inside a Docker container.
+
+    Returns True if *path* falls under any explicit volume mount, ``$HOME``
+    (when ``mount_home`` is True), the launch workspace (``ORIGINAL_CWD``),
+    or ``/tmp``.
+    """
+    resolved = str(path.resolve())
+    for vol in docker_config.volumes:
+        host_part = vol.split(":")[0]
+        if resolved.startswith(host_part):
+            return True
+    if docker_config.mount_home:
+        home = os.environ.get("HOME", "")
+        if home and resolved.startswith(home):
+            return True
+    if resolved.startswith(str(ORIGINAL_CWD)):
+        return True
+    return False
+
+
 def _phase1_docker_config(
     docker_config: DockerConfig,
     output_dir: Path,
@@ -796,25 +918,21 @@ _DEFAULT_DOCKER_PHASE1_EXECUTABLE = "build/tools/scaleout/generate_rank_bindings
 
 
 def _find_phase1_executable_for_docker() -> str:
-    """Resolve the generate_rank_bindings path for use inside a Docker container.
+    """Return the generate_rank_bindings path for use inside a Docker container.
 
-    Tries the host filesystem first (works when host and container share a filesystem
-    via NFS or bind-mount). Falls back to the standard relative build path, which
-    resolves inside the container's working directory.
+    Always returns the default relative path (``build/tools/scaleout/generate_rank_bindings``)
+    because the executable must exist *inside* the Docker image's filesystem, not on the host.
+    Host-resolved absolute paths (e.g. ``/data/.../build_Release/...``) are typically not
+    accessible inside the container and would cause "no such file or directory" errors.
+
+    The relative path resolves against the Docker image's WORKDIR which should contain
+    the built tt-metal tree.
     """
-    try:
-        host_path = find_generate_rank_bindings_executable()
-        logger.debug(
-            f"{TT_RUN_PREFIX} Docker Phase 1: using host-resolved executable {host_path} "
-            "(assumed accessible inside container via volume mounts)"
-        )
-        return str(host_path)
-    except FileNotFoundError:
-        logger.info(
-            f"{TT_RUN_PREFIX} generate_rank_bindings not found on host; "
-            f"using default path '{_DEFAULT_DOCKER_PHASE1_EXECUTABLE}' inside Docker container"
-        )
-        return _DEFAULT_DOCKER_PHASE1_EXECUTABLE
+    logger.debug(
+        f"{TT_RUN_PREFIX} Docker Phase 1: using default container path "
+        f"'{_DEFAULT_DOCKER_PHASE1_EXECUTABLE}' (resolved relative to image WORKDIR)"
+    )
+    return _DEFAULT_DOCKER_PHASE1_EXECUTABLE
 
 
 def build_generate_rank_bindings_mpi_cmd(
@@ -864,7 +982,13 @@ def build_generate_rank_bindings_mpi_cmd(
 
     # Build the base program command (executable + args)
     exe_str = str(executable.resolve()) if not docker_config else str(executable)
-    base_program = [exe_str, "--mesh-graph-descriptor", str(mgd_path.resolve()), "--output-dir", str(output_dir.resolve())]
+    base_program = [
+        exe_str,
+        "--mesh-graph-descriptor",
+        str(mgd_path.resolve()),
+        "--output-dir",
+        str(output_dir.resolve()),
+    ]
 
     # Prepare Phase 1-specific DockerConfig with extra volume mounts
     p1_docker: Optional[DockerConfig] = None
@@ -979,22 +1103,35 @@ def run_phase1_generate_rank_bindings(
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
 
-    # Wait for file sync (NFS, shared storage)
-    if sleep_secs > 0:
-        logger.info(f"{TT_RUN_PREFIX} Waiting {sleep_secs} seconds for file sync...")
-        time.sleep(sleep_secs)
-
-    # Validate outputs exist
+    # Wait for file sync (NFS, shared storage).
+    # When generate_rank_bindings runs inside Docker on a remote host, the output
+    # files are written to an NFS mount.  The launch host's NFS client may have a
+    # stale attribute cache, so a simple sleep + exists() can miss newly created
+    # files.  We retry with explicit directory listings to force the NFS client to
+    # refresh its metadata cache.
     rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
-
-    if not rank_bindings_path.exists():
+    max_retries = 6
+    retry_interval = max(sleep_secs, 2)
+    for attempt in range(max_retries):
+        # Force NFS attribute cache invalidation by listing the directory
+        try:
+            os.listdir(output_dir)
+        except OSError:
+            pass
+        if rank_bindings_path.exists() and rankfile_path.exists():
+            break
+        if attempt == 0:
+            logger.info(f"{TT_RUN_PREFIX} Waiting for Phase 1 output files (NFS sync)...")
+        time.sleep(retry_interval)
+    else:
+        missing = []
+        if not rank_bindings_path.exists():
+            missing.append(str(rank_bindings_path))
+        if not rankfile_path.exists():
+            missing.append(str(rankfile_path))
         raise RuntimeError(
-            f"Phase 1 output not found: {rank_bindings_path}. " f"generate_rank_bindings may have failed silently."
-        )
-
-    if not rankfile_path.exists():
-        raise RuntimeError(
-            f"Phase 1 output not found: {rankfile_path}. " f"generate_rank_bindings may have failed silently."
+            f"Phase 1 output not found after {max_retries * retry_interval}s: {', '.join(missing)}. "
+            f"generate_rank_bindings may have failed silently."
         )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1 complete. Generated: {rank_bindings_path}, {rankfile_path}")
@@ -1279,94 +1416,6 @@ class TracyConfig:
     output_root: Path
     base_port: int
     passthrough_args: List[str]
-
-
-# Default Docker volume mounts for TT hardware environments.
-# These provide access to device nodes, shared memory, and host identity.
-DEFAULT_DOCKER_VOLUMES = [
-    "/tmp:/tmp",
-    "/dev/hugepages-1G:/dev/hugepages-1G",
-]
-
-# MPI runtime env var prefixes that must be forwarded into Docker containers.
-# These are set by mpirun at spawn time, so they can only be captured dynamically.
-DOCKER_MPI_ENV_PREFIXES = ("OMPI_", "PMIX_")
-
-
-@dataclass
-class DockerConfig:
-    """Configuration for wrapping MPI rank programs inside Docker containers."""
-
-    image: str
-    volumes: List[str]
-    extra_args: List[str]
-    empty_entrypoint: bool = False
-    mount_home: bool = True
-    map_user: bool = True
-
-
-def build_docker_wrapped_program(
-    docker_config: DockerConfig,
-    rank_env: Dict[str, str],
-    program: List[str],
-) -> List[str]:
-    """Wrap a program invocation in a ``docker run`` command for use as an MPI rank process.
-
-    The returned command is ``["bash", "-c", "<docker_run_shell_string>"]`` so that
-    mpirun can spawn it via SSH on remote hosts. The shell string dynamically forwards
-    MPI runtime variables (OMPI_*, PMIX_*) and statically injects all rank env vars.
-
-    Args:
-        docker_config: Docker settings (image, volumes, etc.)
-        rank_env: Environment variables for this rank (from get_rank_environment)
-        program: The actual program + args to run inside the container
-
-    Returns:
-        ["bash", "-c", "<shell command>"] list suitable for extending an mpirun command
-    """
-    parts = ["docker run --rm --net=host --privileged"]
-
-    # Dynamic forwarding of MPI runtime env vars (only known at mpirun spawn time)
-    parts.append(
-        '$(env | grep -E "^('
-        + "|".join(DOCKER_MPI_ENV_PREFIXES)
-        + ')" | cut -f1 -d= | awk \'{ print "-e " $1 }\' | tr "\\n" " ")'
-    )
-
-    # Static env vars for this rank
-    for key, value in rank_env.items():
-        parts.append(f"-e {shlex.quote(f'{key}={value}')}")
-
-    # Volume mounts
-    for vol in docker_config.volumes:
-        parts.append(f"-v {vol}")
-
-    if docker_config.mount_home:
-        parts.append("-v $HOME:$HOME")
-
-    if docker_config.map_user:
-        parts.extend([
-            "--user $(id -u):$(id -g)",
-            "-v /etc/passwd:/etc/passwd:ro",
-            "-v /etc/group:/etc/group:ro",
-        ])
-
-    # Extra docker args (user-provided)
-    for arg in docker_config.extra_args:
-        parts.append(arg)
-
-    if docker_config.empty_entrypoint:
-        parts.append('--entrypoint=""')
-
-    # Image
-    parts.append(docker_config.image)
-
-    # Program and its arguments
-    for arg in program:
-        parts.append(shlex.quote(arg))
-
-    docker_cmd = " ".join(parts)
-    return ["bash", "-c", docker_cmd]
 
 
 def parse_tracy_args(raw: str) -> TracyConfig:
@@ -1884,6 +1933,14 @@ def build_mpi_command(
 
     parent_env_prefix = _parent_env_prefix_from_environ()
 
+    if docker_config is not None and tracy_config is not None:
+        if not _docker_path_is_mounted(tracy_config.output_root, docker_config):
+            logger.warning(
+                f"{TT_RUN_PREFIX} Tracy output root '{tracy_config.output_root}' is not under any Docker volume mount. "
+                "Tracy output files written inside the container will be lost when it exits. "
+                "Add --docker-volume to mount the output directory."
+            )
+
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
@@ -2312,8 +2369,8 @@ def legacy_flow(
     if not program:
         raise click.ClickException("No program specified. Please provide a program to run.")
 
-    # Validate program executable exists
-    if not skip_executable_check:
+    # Validate program executable exists (skip in Docker mode: the binary lives in the image)
+    if not skip_executable_check and docker_config is None:
         program_path = Path(program[0])
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")

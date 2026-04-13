@@ -106,12 +106,10 @@ echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
 
-./tools/scaleout/exabox/mpi-docker \
-    --image "$DOCKER_IMAGE" \
-    --empty-entrypoint \
-    --host "$HOSTS" \
-    -x TT_MESH_ID=0 \
-    -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+tt-run --mesh-graph-descriptor "$MESH_GRAPH_DESC_PATH" \
+    --hosts "$HOSTS" \
+    --docker-image "$DOCKER_IMAGE" \
+    --docker-empty-entrypoint \
     ./build/test/tt_metal/unit_tests_dispatch \
     --gtest_filter="\
 UnitMeshCQProgramFixture.TensixTestRandomizedProgram:\
