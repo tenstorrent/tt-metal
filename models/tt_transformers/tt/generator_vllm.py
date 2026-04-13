@@ -547,7 +547,7 @@ class Gemma3ForConditionalGeneration(GemmaMultimodalGenerator, SupportsMultiModa
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(**kwargs)
+        return super().prefill_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
