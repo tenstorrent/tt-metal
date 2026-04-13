@@ -278,7 +278,6 @@ device_config = {
 | `enable_ddp` | `bool` | `False` | Enable distributed data-parallel training. |
 | `mesh_shape` | `list[int]` | `[1, 1]` | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`. |
 | `device_ids` | `list[int] \| None` | `None` | Specific device IDs to use (default: auto-select). |
-| `enable_tp` | `bool` | `False` | Enable tensor parallelism (mutually exclusive with DDP). |
 
 `GrpoTrainer.train()` handles device setup automatically — calling `enable_fabric`,
 `open_device`, and `initialize_parallelism_context` based on this config.
@@ -296,6 +295,31 @@ DDP is configured entirely through `device_config`. When `enable_ddp=True`:
 
 `batch_size` specifies the **global** batch size across all devices. Each device
 processes `batch_size // total_devices` prompts per batch.
+
+---
+
+## Checkpointing
+
+When `checkpointing=True`, the trainer saves a full checkpoint every
+`checkpoint_interval` optimizer steps into `output_dir/checkpoints/grpo_step_{step}/`.
+
+Each checkpoint directory contains:
+
+| File | Contents | Source |
+|------|----------|--------|
+| `model.safetensors` | Model weights in safetensors format | `model.parameters()` exported as float32 numpy arrays |
+| `config.json` | HuggingFace model configuration | `AutoConfig.from_pretrained(model_source)` |
+| `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
+| `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |
+| `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GrpoConfig` and tokenizer |
+| `trainer_state.json` | Training progress (global step, learning rate) | Current optimizer step and LR |
+| `scheduler.pt` | Learning rate scheduler state (base LR, warmup config, step) | `torch.save()` |
+| `rng_state.pth` | Python, NumPy, and PyTorch RNG states for reproducibility | `torch.save()` |
+| `training_args.bin` | Full `GrpoConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
+| `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
+
+To resume from a checkpoint, point `model_source` at the checkpoint directory
+(it contains `model.safetensors` and the tokenizer files).
 
 ---
 
