@@ -467,6 +467,31 @@ Fix: add paged read support to the TQ reader, or store TQ data in paged format.
 Implemented: batch × heads distributed across compute grid (~8× speedup).
 Pre-rescaled mode now matches standard SDPA latency.
 
+### Prefill → TQ decode migration (quality issue)
+
+`eval_e2e_prefill.py` migrates prefill KV from native BFP8 into TQ pre-rescaled
+format (centroid×norm in BF16). The migration works mechanically but produces
+**repetitive output** (e.g. "France's capital of France's... Paris.") because
+TQ 3-bit quantization (MSE=0.034) applied retroactively to a high-quality prefill
+context creates a quality discontinuity that attention amplifies into loops.
+
+Teacher-forced decode (`eval_e2e.py`) doesn't have this issue because all positions
+are TQ-quantized consistently from the start (no prefill → decode quality jump).
+
+**Potential fixes (priority order):**
+
+1. **Use 4-bit TQ for migration** — MSE drops from 0.034 to 0.009, reducing the
+   quality gap between native prefill and TQ decode. May be enough to eliminate
+   the repetition loops.
+
+2. **Sequential prefill through decode path** — feed prompt tokens one-by-one
+   through the decode forward (like teacher-forcing), so every position is
+   TQ-quantized from the start. Slower prefill but guaranteed quality match.
+
+3. **Build the fused TQ SDPA kernel** — the `sdpa/device/` code already written
+   reads BFP4 indices + norms directly and dequantizes on-the-fly, bypassing
+   the layer_past format entirely. This is the proper long-term fix.
+
 ### Other Next Steps
 
 **Quality benchmarks:**
