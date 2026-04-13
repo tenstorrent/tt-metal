@@ -85,6 +85,39 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     return ordered_worker_cores_with_data;
 }
 
+// Helper: find the best 1D shard size along a single dimension.
+// Searches for the maximum number of cores that produce even (no-remainder) shards.
+// Returns {best_num_cores, best_shard_dim}.
+static std::pair<uint32_t, uint32_t> find_best_1d_shard(
+    uint32_t total_dim, uint32_t alignment, uint32_t max_grid_cores) {
+    uint32_t max_possible_cores = std::min(max_grid_cores, total_dim / alignment);
+    max_possible_cores = std::max(1u, max_possible_cores);
+
+    uint32_t best_num_cores = 1;
+    uint32_t best_shard_dim = tt::round_up(total_dim, alignment);
+
+    for (uint32_t try_cores = max_possible_cores; try_cores >= 1; --try_cores) {
+        uint32_t shard_d = tt::round_up(tt::div_up(total_dim, try_cores), alignment);
+        uint32_t actual_cores = tt::div_up(total_dim, shard_d);
+
+        if (actual_cores > max_grid_cores) {
+            continue;
+        }
+
+        bool is_even = (total_dim % shard_d == 0);
+        bool is_better = (actual_cores > best_num_cores) || (actual_cores == best_num_cores && is_even);
+
+        if (is_better) {
+            best_num_cores = actual_cores;
+            best_shard_dim = shard_d;
+            if (is_even && best_num_cores >= max_possible_cores) {
+                break;
+            }
+        }
+    }
+    return {best_num_cores, best_shard_dim};
+}
+
 MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config) {
     // If output memory config is not sharded or already has a shard_spec, return as-is
     if (!output_memory_config.is_sharded() || output_memory_config.shard_spec().has_value()) {
@@ -94,11 +127,9 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
     // If input tensor has a shard_spec AND the output uses the same sharding scheme, reuse it.
     // If the sharding layouts differ (e.g., input HEIGHT_SHARDED, output WIDTH_SHARDED),
     // we must compute a new spec for the requested scheme rather than blindly reusing.
-    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()) {
-        if (input_tensor.memory_config().memory_layout() == output_memory_config.memory_layout()) {
-            return output_memory_config.with_shard_spec(input_tensor.shard_spec().value());
-        }
-        // Fall through to compute a new shard spec for the different output layout
+    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+        input_tensor.memory_config().memory_layout() == output_memory_config.memory_layout()) {
+        return output_memory_config.with_shard_spec(input_tensor.shard_spec().value());
     }
 
     TT_FATAL(
@@ -160,37 +191,9 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
                 total_width,
                 l1_aligned_tile_w);
 
-            // Find maximum cores that produce even shards (no remainder).
-            // Even shards have significantly better performance than uneven ones.
-            uint32_t max_possible_cores = std::min(max_grid_cores, total_width / l1_aligned_tile_w);
-            max_possible_cores = std::max(1u, max_possible_cores);
-
-            uint32_t best_num_cores = 1;
-            uint32_t best_shard_width = tt::round_up(total_width, l1_aligned_tile_w);
-
-            for (uint32_t try_cores = max_possible_cores; try_cores >= 1; --try_cores) {
-                uint32_t shard_w = tt::round_up(tt::div_up(total_width, try_cores), l1_aligned_tile_w);
-                uint32_t actual_cores = tt::div_up(total_width, shard_w);
-
-                if (actual_cores > max_grid_cores) {
-                    continue;
-                }
-
-                // Prefer even shards: total_width % shard_w == 0
-                bool is_even = (total_width % shard_w == 0);
-                bool is_better = (actual_cores > best_num_cores) || (actual_cores == best_num_cores && is_even);
-
-                if (is_better) {
-                    best_num_cores = actual_cores;
-                    best_shard_width = shard_w;
-                    if (is_even && best_num_cores >= max_possible_cores) {
-                        break;
-                    }
-                }
-            }
-
-            shard_shape = {total_height, best_shard_width};
-            num_cores = best_num_cores;
+            auto [cores, best_shard_w] = find_best_1d_shard(total_width, l1_aligned_tile_w, max_grid_cores);
+            shard_shape = {total_height, best_shard_w};
+            num_cores = cores;
             break;
         }
         case TensorMemoryLayout::HEIGHT_SHARDED: {
@@ -213,34 +216,9 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
                 l1_alignment,
                 l1_aligned_tile_w);
 
-            uint32_t max_possible_cores = std::min(max_grid_cores, total_height / TILE_H);
-            max_possible_cores = std::max(1u, max_possible_cores);
-
-            uint32_t best_num_cores = 1;
-            uint32_t best_shard_height = tt::round_up(total_height, TILE_H);
-
-            for (uint32_t try_cores = max_possible_cores; try_cores >= 1; --try_cores) {
-                uint32_t shard_h = tt::round_up(tt::div_up(total_height, try_cores), TILE_H);
-                uint32_t actual_cores = tt::div_up(total_height, shard_h);
-
-                if (actual_cores > max_grid_cores) {
-                    continue;
-                }
-
-                bool is_even = (total_height % shard_h == 0);
-                bool is_better = (actual_cores > best_num_cores) || (actual_cores == best_num_cores && is_even);
-
-                if (is_better) {
-                    best_num_cores = actual_cores;
-                    best_shard_height = shard_h;
-                    if (is_even && best_num_cores >= max_possible_cores) {
-                        break;
-                    }
-                }
-            }
-
-            shard_shape = {best_shard_height, total_width};
-            num_cores = best_num_cores;
+            auto [cores, best_shard_h] = find_best_1d_shard(total_height, TILE_H, max_grid_cores);
+            shard_shape = {best_shard_h, total_width};
+            num_cores = cores;
             break;
         }
         case TensorMemoryLayout::BLOCK_SHARDED: {
