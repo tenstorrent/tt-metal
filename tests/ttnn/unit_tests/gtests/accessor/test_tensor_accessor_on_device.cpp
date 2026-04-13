@@ -154,7 +154,6 @@ static void test_multi_core_copy(
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto aligned_page_size = input_buffer->aligned_page_size();
 
     auto program = CreateProgram();
     auto core_groups = input_buffer->buffer_distribution_spec().value().core_groups();
@@ -164,7 +163,7 @@ static void test_multi_core_copy(
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
-    std::vector<uint32_t> compile_time_args{aligned_page_size};
+    std::vector<uint32_t> compile_time_args;
     input_accessor_args.append_to(compile_time_args);
     output_accessor_args.append_to(compile_time_args);
 

@@ -102,7 +102,6 @@ static std::vector<uint32_t> get_ctime_args_single_core(
                 src_cb_index,
                 dst_cb_index,
                 src_page_size,
-                dst_page_size,
                 tile_height,
                 tile_width,
                 h_tiles,

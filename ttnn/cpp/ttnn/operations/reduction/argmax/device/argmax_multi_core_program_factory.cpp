@@ -200,7 +200,6 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     const uint32_t num_total_cores = num_cores0 + num_cores1;
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
-    const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
     const auto dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
 
     // Create input CB to read reduction dim worth of data at once (split across all cores)
@@ -297,7 +296,6 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
         dst_cb_idx,
         red_idxs_cb_idx,
         red_vals_cb_idx,
-        src_page_size,
         dst_page_size,
         red_idxs_page_size / num_total_cores,
         red_vals_page_size / num_total_cores,

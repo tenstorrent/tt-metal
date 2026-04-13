@@ -28,8 +28,6 @@ void kernel_main() {
     const uint32_t current_block_start = get_arg_val<uint32_t>(index++);
     const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
     const uint32_t row_width_elements = get_arg_val<uint32_t>(index++);
-    const uint32_t page_size_a_arg = get_arg_val<uint32_t>(index++);
-    index++;  // Skip tensor-B page size.
     const uint32_t alignment_a = get_arg_val<uint32_t>(index++);
     index++;  // Skip tensor-B alignment.
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
@@ -54,9 +52,7 @@ void kernel_main() {
     const uint32_t outN = aN;
     const uint32_t outD = aD;
     const uint32_t outND = cND;
-
-    const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
-    const auto src = TensorAccessor(src_args, src_addr, page_size_a);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     cb_src_b.reserve_back(1);
 #ifdef FILL_WITH_VALUE_FLOAT_B

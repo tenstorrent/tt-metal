@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

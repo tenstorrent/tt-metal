@@ -41,15 +41,14 @@ void kernel_main() {
     const auto sem_topk_ready = get_arg_val<uint32_t>(argidx++);
     const auto indices_rm_addr = get_arg_val<uint32_t>(argidx++);
     const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
-    const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_weight = tt::CBIndex::c_0;
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_bias = tt::CBIndex::c_4;
 
-    const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr, tile_size);
-    const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr, tile_size);
+    const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr);
+    const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr);
 
     // Push tiles in blocks so compute can start matmul before all tiles arrive.
     constexpr uint32_t BLOCK_SIZE = 2;
@@ -80,7 +79,7 @@ void kernel_main() {
 
     // Read bias (worker only, 1 tile)
     if (is_worker) {
-        const auto bias_addrgen = TensorAccessor(bias_accessor_args, bias_addr, tile_size);
+        const auto bias_addrgen = TensorAccessor(bias_accessor_args, bias_addr);
 
         cb_reserve_back(cb_bias, 1);
         uint32_t bias_write_ptr = get_write_ptr(cb_bias);

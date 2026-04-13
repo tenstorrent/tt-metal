@@ -55,7 +55,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     bool use_index_tensor = update_idxs_tensor.has_value();
     uint32_t index_tensor_tile_size = 0;
     uint32_t index_buffer_addr = 0;
-    uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
     if (use_index_tensor) {
@@ -71,7 +70,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
     uint32_t page_table_stick_size = 0;
-    uint32_t log2_page_table_stick_size = 0;
     tt::DataFormat page_table_data_format = tt::DataFormat::Int32;
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
@@ -165,7 +163,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
-        log2_page_size,
         index_stick_size,
         // page_table args
         (std::uint32_t)is_paged_cache,
@@ -173,7 +170,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         (std::uint32_t)block_size,
         (std::uint32_t)block_size_t,
         (std::uint32_t)max_blocks_per_seq,
-        log2_page_table_stick_size,
         page_table_stick_size,
         cb_pagetable_id,
         St,

@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr auto dst0_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto dst1_args = TensorAccessorArgs<dst0_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, input_addr, aligned_elements * element_size);
-    const auto out0 = TensorAccessor(dst0_args, output_addr_0, 32);
-    const auto out1 = TensorAccessor(dst1_args, output_addr_1, aligned_elements * element_size);
+    const auto s0 = TensorAccessor(src0_args, input_addr);
+    const auto out0 = TensorAccessor(dst0_args, output_addr_0);
+    const auto out1 = TensorAccessor(dst1_args, output_addr_1);
 
     uint64_t src_noc_addr = get_noc_addr(0, s0);
     uint32_t input_l1_addr = get_write_ptr(input_cb_index);

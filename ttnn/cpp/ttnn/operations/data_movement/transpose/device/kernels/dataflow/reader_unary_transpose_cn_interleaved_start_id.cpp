@@ -19,14 +19,13 @@ void kernel_main() {
     uint32_t n = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t read_size = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t read_size = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr, page_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t page_idx = start_id;

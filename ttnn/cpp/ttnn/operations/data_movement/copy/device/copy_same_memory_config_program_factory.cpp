@@ -84,8 +84,8 @@ CopySameMemoryConfigProgramFactory::cached_program_t CopySameMemoryConfigProgram
     if (tilized) {
         writer_compile_time_args = {(std::uint32_t)output_cb_index};
     } else {
-        reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)input_unit_size};
-        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_unit_size};
+        reader_compile_time_args = {(std::uint32_t)src0_cb_index};
+        writer_compile_time_args = {(std::uint32_t)output_cb_index};
     }
     std::map<std::string, std::string> kernel_defines;
     if (sharded) {

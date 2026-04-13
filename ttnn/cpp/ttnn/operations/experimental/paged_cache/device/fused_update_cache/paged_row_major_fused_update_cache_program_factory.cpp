@@ -64,7 +64,6 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
     // Index tensor-specific parameters
     const bool use_index_tensor = update_idxs_tensor.has_value();
     uint32_t index_buffer_addr = 0;
-    const uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
     Buffer* index_buffer_ptr = nullptr;
@@ -83,7 +82,6 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
     uint32_t page_table_stick_size = 0;
-    const uint32_t log2_page_table_stick_size = 0;
     tt::DataFormat page_table_data_format = tt::DataFormat::Int32;
     bool page_table_is_dram = true;
     uint32_t num_pages_page_table = 1;
@@ -217,7 +215,6 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
-        log2_page_size,
         index_stick_size,
         // page_table args
         is_paged_cache,
@@ -225,7 +222,6 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
         block_size,
         block_size_t,
         max_blocks_per_seq,
-        log2_page_table_stick_size,
         page_table_stick_size,
         page_table_is_dram,
         cb_pagetable_id,

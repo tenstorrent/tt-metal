@@ -263,11 +263,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 index_info[2].is_defined,
                 index_info[3].is_defined,
                 index_info[4].is_defined,
-                index_info[0].unit_size,
-                index_info[1].unit_size,
-                index_info[2].unit_size,
-                index_info[3].unit_size,
-                index_info[4].unit_size,
                 index_size,
 
                 // output
@@ -304,7 +299,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 // etc
                 start_id,
                 num_units_per_core,
-                output_unit_size,
                 output.element_size(),
                 num_elements_per_alignment,
                 num_alignment_width,
@@ -483,11 +477,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[2].is_defined,
             index_info[3].is_defined,
             index_info[4].is_defined,
-            index_info[0].unit_size,
-            index_info[1].unit_size,
-            index_info[2].unit_size,
-            index_info[3].unit_size,
-            index_info[4].unit_size,
             index_size,
 
             // output

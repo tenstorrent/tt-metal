@@ -290,7 +290,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         tt::LogOp, "Fabric max packet size: {} bytes, L1 alignment: {} bytes", fabric_max_packet_size, l1_alignment);
 
     // Compile-time args shared by reader and writer
-    std::vector<uint32_t> compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         // CB IDs (10)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
@@ -312,14 +312,68 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         detail::get_num_pages(metadata_tensor),
         detail::get_num_pages(dispatch_table_tensor),
 
-        // Page sizes (7)
-        detail::get_page_size(input_tensor),
-        detail::get_page_size(indices_tensor),
-        detail::get_page_size(weights_tensor),
-        detail::get_page_size(offsets_tensor),
-        detail::get_page_size(output_tensor),
-        detail::get_page_size(metadata_tensor),
-        detail::get_page_size(dispatch_table_tensor),
+        // Operation parameters (8)
+        mesh_view.num_devices(),  // num_devices
+        (uint32_t)hidden_size,
+        operation_attributes.experts_per_chip,
+        operation_attributes.num_routed_experts,
+        operation_attributes.num_experts_per_tok,
+        operation_attributes.metadata_len,
+        operation_attributes.max_dispatched_tokens_per_expert,
+        (uint32_t)tokens_per_device,
+
+        // Mesh information (5)
+        src_mesh_id,
+        src_chip_id,
+        mesh_view.num_rows(),
+        mesh_view.num_cols(),
+        linearized_mesh_coord,
+
+        // Aligned page sizes (6, excluding output)
+        detail::get_aligned_page_size(input_tensor),
+        detail::get_aligned_page_size(indices_tensor),
+        detail::get_aligned_page_size(weights_tensor),
+        detail::get_aligned_page_size(offsets_tensor),
+        detail::get_aligned_page_size(metadata_tensor),
+        detail::get_aligned_page_size(dispatch_table_tensor),
+
+        // Fabric configuration (4)
+        (uint32_t)fabric_max_packet_size,
+        l1_alignment,
+        static_cast<uint32_t>(operation_attributes.num_links),
+        static_cast<uint32_t>(topology),
+    };
+
+    // Append TensorAccessorArgs for all 7 tensors (reader)
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        // CB IDs (10)
+        static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id
+        static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
+        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_weights_id
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
+        static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
+        static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
+        static_cast<uint32_t>(tt::CBIndex::c_6),  // cb_metadata_for_writer_id
+        static_cast<uint32_t>(tt::CBIndex::c_7),  // cb_metadata_temp_id
+        static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_packet_header_id
+        static_cast<uint32_t>(tt::CBIndex::c_9),  // cb_dispatch_table_id
+
+        // Page counts (7)
+        detail::get_num_pages(input_tensor),
+        detail::get_num_pages(indices_tensor),
+        detail::get_num_pages(weights_tensor),
+        detail::get_num_pages(offsets_tensor),
+        detail::get_num_pages(output_tensor),
+        detail::get_num_pages(metadata_tensor),
+        detail::get_num_pages(dispatch_table_tensor),
 
         // Operation parameters (8)
         mesh_view.num_devices(),  // num_devices
@@ -338,14 +392,9 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         mesh_view.num_cols(),
         linearized_mesh_coord,
 
-        // Aligned page sizes (7)
-        detail::get_aligned_page_size(input_tensor),
-        detail::get_aligned_page_size(indices_tensor),
-        detail::get_aligned_page_size(weights_tensor),
-        detail::get_aligned_page_size(offsets_tensor),
+        // Aligned page sizes (output and metadata only)
         detail::get_aligned_page_size(output_tensor),
         detail::get_aligned_page_size(metadata_tensor),
-        detail::get_aligned_page_size(dispatch_table_tensor),
 
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
@@ -354,14 +403,14 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         static_cast<uint32_t>(topology),
     };
 
-    // Append TensorAccessorArgs for all 7 tensors
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
+    // Append TensorAccessorArgs for all 7 tensors (writer)
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
@@ -382,7 +431,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-            .compile_args = compile_time_args,
+            .compile_args = reader_compile_time_args,
             .defines = fabric_defines});
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -393,7 +442,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-            .compile_args = compile_time_args,
+            .compile_args = writer_compile_time_args,
             .defines = fabric_defines});
 
     // Runtime args: all cores process all tokens, experts split round-robin

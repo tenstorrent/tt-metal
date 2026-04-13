@@ -39,42 +39,35 @@ void kernel_main() {
     constexpr uint32_t output_pages = get_compile_time_arg_val(9);
 
     // Page sizes (indices 10-13)
-    constexpr uint32_t dispatched_buffer_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t dispatched_metadata_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t experts_tok_counter_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
 
     // Operation parameters (indices 14-18)
-    constexpr uint32_t num_chips = get_compile_time_arg_val(14);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(16);
-    constexpr uint32_t seq_len_per_chip = get_compile_time_arg_val(17);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(18);
+    constexpr uint32_t num_chips = get_compile_time_arg_val(10);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(11);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(12);
+    constexpr uint32_t seq_len_per_chip = get_compile_time_arg_val(13);
+    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(14);
 
     // Hidden dimension (index 19)
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(19);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(15);
 
     // Aligned page sizes (indices 20-23)
-    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(20);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(21);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(22);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(23);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(16);
 
     // Mesh information (indices 24-28)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(28);
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(17);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(18);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(19);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(20);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(21);
 
     // Fabric configuration (indices 29-32)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(29);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(30);
-    constexpr uint32_t num_links = get_compile_time_arg_val(31);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(22);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(23);
+    constexpr uint32_t num_links = get_compile_time_arg_val(24);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(25);
 
     // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<26>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -165,7 +158,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     // Sentinel-terminated fabric send loop
     while (true) {

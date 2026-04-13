@@ -85,8 +85,6 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
     uint32_t output_single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
-    uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
-    uint32_t output_stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
 
     // Input CB
     uint32_t input_cb_num_tiles = num_tiles_per_block;
@@ -120,7 +118,6 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
-        (uint32_t)output_stick_size,
         (uint32_t)tile_height,
         (uint32_t)num_blocks_across_height,
         (uint32_t)num_columns_of_blocks,

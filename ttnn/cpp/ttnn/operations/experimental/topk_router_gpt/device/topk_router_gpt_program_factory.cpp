@@ -265,7 +265,6 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     // Dispatch output addresses
     uint32_t indices_rm_addr = std::get<0>(tensor_return_value).buffer()->address();
     uint32_t weights_rm_addr = std::get<1>(tensor_return_value).buffer()->address();
-    uint32_t dispatch_aligned_page_size = std::get<0>(tensor_return_value).buffer()->aligned_page_size();
 
     // Set the runtime arguments for the kernels
     // Shared layout across all 3 kernels (each reads only what it needs):
@@ -275,8 +274,8 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     //   [8]  is_collector       [9]  num_k_tiles         [10] k_tile_offset
     //   [11] n_tile_id          [12] worker_phys_x       [13] worker_phys_y
     //   [14] sender_slot        [15] worker_gather_slot   [16] sem_topk_ready
-    //   [17] indices_rm_addr    [18] weights_rm_addr      [19] aligned_page_size
-    std::vector<uint32_t> runtime_args(20, 0);
+    //   [17] indices_rm_addr    [18] weights_rm_addr
+    std::vector<uint32_t> runtime_args(19, 0);
     runtime_args[2] = tensor_args.weight_tensor.buffer()->address();
     runtime_args[3] = tensor_args.input_tensor.buffer()->address();
     runtime_args[4] = tensor_args.bias_tensor.buffer()->address();
@@ -284,7 +283,6 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
     runtime_args[16] = sem_topk_ready;
     runtime_args[17] = indices_rm_addr;
     runtime_args[18] = weights_rm_addr;
-    runtime_args[19] = dispatch_aligned_page_size;
 
     std::vector<CoreCoord> configured_cores;
     configured_cores.reserve(required_cores);
@@ -325,7 +323,7 @@ TopkRouterGptProgramFactory::cached_program_t TopkRouterGptProgramFactory::creat
         runtime_args[13] = worker_physical.y;
         runtime_args[14] = pos_in_group;  // sender_slot
         runtime_args[15] = group_id;      // worker_gather_slot
-        // [16-19] already set
+        // [16-18] already set
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -349,7 +347,7 @@ void TopkRouterGptProgramFactory::override_runtime_arguments(
 
     // Update runtime args for all kernels with new tensor addresses
     // Runtime args layout: [2] = weight, [3] = input, [4] = bias,
-    //                      [17] = indices_rm, [18] = weights_rm, [19] = aligned_page_size
+    //                      [17] = indices_rm, [18] = weights_rm
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
@@ -358,7 +356,6 @@ void TopkRouterGptProgramFactory::override_runtime_arguments(
             runtime_args[4] = tensor_args.bias_tensor.buffer()->address();
             runtime_args[17] = std::get<0>(tensor_return_value).buffer()->address();
             runtime_args[18] = std::get<1>(tensor_return_value).buffer()->address();
-            runtime_args[19] = std::get<0>(tensor_return_value).buffer()->aligned_page_size();
         }
     }
 }

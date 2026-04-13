@@ -25,10 +25,9 @@ void kernel_main() {
     const uint32_t LW = get_arg_val<uint32_t>(14);
     const uint32_t input_cb_page_size = get_arg_val<uint32_t>(15);
     const uint32_t dram_aligned_input_cb_page_size = get_arg_val<uint32_t>(16);
-    const uint32_t output_cb_page_size = get_arg_val<uint32_t>(17);
-    const uint32_t start_id = get_arg_val<uint32_t>(18);
-    const uint32_t num_units_per_core = get_arg_val<uint32_t>(19);
-    const uint32_t aligned = get_arg_val<uint32_t>(20);
+    const uint32_t start_id = get_arg_val<uint32_t>(17);
+    const uint32_t num_units_per_core = get_arg_val<uint32_t>(18);
+    const uint32_t aligned = get_arg_val<uint32_t>(19);
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
@@ -39,7 +38,7 @@ void kernel_main() {
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
-    const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
+    const auto s0 = TensorAccessor(input_args, input_addr);
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
         cb_reserve_back(output_cb_id, onetile);

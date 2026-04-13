@@ -16,26 +16,25 @@ void kernel_main() {
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
-    constexpr uint32_t tile_height = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(4);
 
     // Input padded size (last two dims) in tiles
-    constexpr uint32_t input_height = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr uint32_t input_height = get_compile_time_arg_val(5);
+    constexpr uint32_t input_width = get_compile_time_arg_val(6);
 
     // Input logical size (last two dims) in data elements
-    constexpr uint32_t logical_height = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_height = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_width = get_compile_time_arg_val(8);
 
     // Size of all dims combined, excluding the last two dims.
-    constexpr uint32_t outer_dim_size = get_compile_time_arg_val(10);
+    constexpr uint32_t outer_dim_size = get_compile_time_arg_val(9);
 
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(11);
-    constexpr bool keepdim = (bool)get_compile_time_arg_val(12);
+    constexpr bool reduce_all = (bool)get_compile_time_arg_val(10);
+    constexpr bool keepdim = (bool)get_compile_time_arg_val(11);
 
-    constexpr uint32_t num_c_time_args = 13;
+    constexpr uint32_t num_c_time_args = 12;
 
     // Runtime args
     // ------------
@@ -47,8 +46,8 @@ void kernel_main() {
     constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
-    auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     using dst_accessor_type = decltype(s_dst);
 

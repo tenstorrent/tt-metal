@@ -269,7 +269,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
                 cb_local_vals_index,
                 output_ind_cb_index,
                 aligned_final_indices_rm_unit_size,
-                aligned_out0_unit_size,
                 rand_tile_index,
                 k_cb_index,
                 p_cb_index,

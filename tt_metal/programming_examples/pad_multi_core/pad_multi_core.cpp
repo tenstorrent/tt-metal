@@ -109,9 +109,7 @@ int main() {
     reader_compile_time_args.push_back(num_packed_row_dst);   // C_padded
     reader_compile_time_args.push_back(stick_size_padded);    // stick_size_padded (32B pad pattern)
     reader_compile_time_args.push_back(0);                    // stick_size_padded_front (left-align)
-    reader_compile_time_args.push_back(0);                    // stick_size_padded_end
     reader_compile_time_args.push_back(1);                    // num_zero_pad_sticks_read
-    reader_compile_time_args.push_back(stick_size_padded);    // last_zero_stick_size (32)
     reader_compile_time_args.push_back(1);                    // not_pad_by_zero
     // pass packed pad value directly as compile-time arg as TTNN does
     reader_compile_time_args.push_back(pad_vec[0]);           // packed_pad_value

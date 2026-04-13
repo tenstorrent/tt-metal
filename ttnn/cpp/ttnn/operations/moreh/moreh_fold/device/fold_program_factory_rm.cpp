@@ -173,7 +173,6 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
             LW,
             input_cb_page_size,
             dram_aligned_input_cb_page_size,
-            aligned_output_cb_page_size,
             start_id,
             num_units_per_core,
             aligned};

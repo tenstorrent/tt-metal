@@ -110,8 +110,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         increment = std::min(increment, input_num_pages - page_idx_start);
         page_idx_end += increment;
 
-        const std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(), increment, page_idx_start, input_page_size_bytes};
+        const std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(), increment, page_idx_start};
         tt::tt_metal::SetRuntimeArgs(program, send_unary_reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {

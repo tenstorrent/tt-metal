@@ -35,14 +35,12 @@ void kernel_main() {
     constexpr uint32_t num_blocks_of_work_per_head = get_compile_time_arg_val(3);
     constexpr uint32_t block_size_t = get_compile_time_arg_val(4);
     constexpr uint32_t Wt = get_compile_time_arg_val(5);
-    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(6);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(7);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(6);
 
     // New compile-time args for optional batch_idx_tensor
-    constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
-    constexpr uint32_t batch_idx_stick_size =
-        get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+    constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(8);       // CB for reading from batch_idx_tensor
+    constexpr uint32_t batch_idx_stick_size = get_compile_time_arg_val(9);  // Expected to be small (e.g., 4 for uint32)
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t page_table_addr = get_arg_val<uint32_t>(1);
@@ -56,7 +54,7 @@ void kernel_main() {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<11>();
+    constexpr auto s0_args = TensorAccessorArgs<10>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
@@ -64,7 +62,7 @@ void kernel_main() {
     if constexpr (use_batch_idx_tensor) {
         uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
 
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr, batch_idx_stick_size);
+        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
         cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
         uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
         uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
@@ -80,9 +78,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    const auto out_gen = TensorAccessor(s0_args, dst_addr, tile_bytes);
+    const auto out_gen = TensorAccessor(s0_args, dst_addr);
 
-    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
+    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
     uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);

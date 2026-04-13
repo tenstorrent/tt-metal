@@ -111,8 +111,7 @@ inline void setup_set_state_for_direction(
 //   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState) - NOTE: only used for BasicWrite
 //   2: TOTAL_PAGES
 //   3: PAGE_SIZE (actual data size to transfer)
-//   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
-//   5: SRC_ALIGNED_PAGE_SIZE (source CB stride for scatter operations)
+//   4: SRC_ALIGNED_PAGE_SIZE (source CB stride for scatter operations)
 //
 // RT args (must match host):
 //   0:  dst_base       (u32)
@@ -130,8 +129,7 @@ void kernel_main() {
     constexpr uint32_t API_VARIANT = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
-    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
-    constexpr uint32_t SRC_ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 5);
+    constexpr uint32_t SRC_ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     // Cast to enum types for clearer comparisons
@@ -198,10 +196,9 @@ void kernel_main() {
         senderS.open<true>();
     }
 
-    // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
-    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
-    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
+    // scatter_acc uses SRC_ALIGNED_PAGE_SIZE (CB stride) which differs from dst buffer's aligned page size
+    const auto scatter_acc = decltype(dst_acc)(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;

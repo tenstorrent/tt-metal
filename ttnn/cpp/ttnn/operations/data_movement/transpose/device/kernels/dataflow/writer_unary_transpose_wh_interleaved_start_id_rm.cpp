@@ -23,9 +23,8 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t stick_size_bytes = H_size_bytes;
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(9);
-    constexpr auto dst_args = TensorAccessorArgs<10>();
-    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    constexpr auto dst_args = TensorAccessorArgs<9>();
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t i_stick = start_id;
 

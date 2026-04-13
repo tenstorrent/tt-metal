@@ -96,7 +96,6 @@ void kernel_main() {
     const auto sem_topk_ready = get_arg_val<uint32_t>(argidx++);
     const auto indices_rm_addr = get_arg_val<uint32_t>(argidx++);
     const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
-    const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_partial_recv = tt::CBIndex::c_2;
@@ -308,8 +307,8 @@ void kernel_main() {
     // Complete the CB reserve/push lifecycle
     cb_push_back(cb_dispatch, 1);
 
-    const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr, aligned_page_size);
-    const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr, aligned_page_size);
+    const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr);
+    const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr);
     for (uint32_t p = 0; p < 32; p++) {
         noc_async_write_page(p, idx_ag, idx_base + p * data_size);
         noc_async_write_page(p, wgt_ag, wgt_base + p * data_size);

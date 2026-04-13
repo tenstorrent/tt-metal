@@ -122,9 +122,9 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         writer_compile_time_args = {(uint32_t)dst_cb_id};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     } else {
-        reader_compile_time_args = {(uint32_t)src_cb_id, (uint32_t)input_unit_size};
+        reader_compile_time_args = {(uint32_t)src_cb_id};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        writer_compile_time_args = {(uint32_t)dst_cb_id, (uint32_t)output_unit_size};
+        writer_compile_time_args = {(uint32_t)dst_cb_id};
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     }
 

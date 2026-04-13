@@ -73,7 +73,6 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
     uint32_t page_size = a.logical_shape()[-1] * a.element_size();
-    uint32_t aligned_page_size = a.buffer()->aligned_page_size();
     uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
     if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         page_size = a.buffer()->page_size();
@@ -89,7 +88,6 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
         elem_size,
         num_pages_in_row,
         page_size,
-        aligned_page_size,
         size_of_valid_data_in_last_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(

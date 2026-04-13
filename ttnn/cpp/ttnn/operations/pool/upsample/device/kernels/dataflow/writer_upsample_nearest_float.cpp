@@ -18,7 +18,7 @@ void kernel_main() {
 
     // Tensor accessor compile-time args start at index 3
     constexpr auto dst_args = TensorAccessorArgs<2>();
-    const auto output_tensor_accessor = TensorAccessor(dst_args, output_buffer_addr, aligned_stick_nbytes);
+    const auto output_tensor_accessor = TensorAccessor(dst_args, output_buffer_addr);
 
     // Process sticks assigned to this core
     uint32_t stick_id = start_stick_id;

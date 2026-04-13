@@ -59,12 +59,10 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
     CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     std::map<std::string, std::string> reader_defines;
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), src0_buffer->aligned_page_size(), stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(src0_cb_index), stick_size};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     std::map<std::string, std::string> writer_defines;
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), dst_buffer->aligned_page_size(), stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(src0_cb_index), stick_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     if (row_major) {

@@ -36,7 +36,6 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
     std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_for_sharded_tensor(output);
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
 
-    const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 
     constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
@@ -49,7 +48,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
 
     uint32_t elems_per_page = page_size / datum_size(data_format);
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)cb_fill_value_id, elems_per_page, page_size, aligned_page_size, tensor_width_in_pages};
+        (uint32_t)cb_fill_value_id, elems_per_page, page_size, tensor_width_in_pages};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(

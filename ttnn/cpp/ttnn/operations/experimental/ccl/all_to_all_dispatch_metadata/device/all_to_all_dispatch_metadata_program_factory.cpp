@@ -509,10 +509,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         metadata_pages,
 
         input_page_size,
-        indices_page_size,
-        mapping_page_size,
         output_page_size,
-        metadata_page_size,
 
         num_devices,
         hidden_size,
@@ -531,8 +528,61 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
         aligned_input_page_size,
         aligned_indices_page_size,
-        aligned_mapping_page_size,
         aligned_output_page_size,
+
+        (uint32_t)fabric_max_packet_size,
+
+        l1_alignment,
+        metadata_buffer_id,
+        0,
+        linearized_mesh_coord,
+
+        dispatch_devices,
+
+        // scores tensor args
+        scores_tensor_cb_id,
+        scores_pages,
+        aligned_scores_page_size,
+    };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        input_tensor_cb_id,
+        indices_tensor_cb_id,
+        mapping_tensor_cb_id,
+        packet_header_cb_id,
+        send_preparation_buffer_id,
+
+        input_pages,
+        indices_pages,
+        mapping_pages_for_kernel,  // Only 1 page - source device's mapping row
+        output_pages,
+        metadata_pages,
+
+        input_page_size,
+        output_page_size,
+        metadata_page_size,
+
+        num_devices,
+        hidden_size,
+        batch_size,
+        selected_experts_k,
+        experts,
+        tokens_per_device,
+
+        num_links,
+        (uint32_t)topology,
+
+        src_mesh_id,
+        (uint32_t)src_chip_id,
+        mesh_view.num_rows(),
+        mesh_view.num_cols(),
+
         aligned_metadata_page_size,
 
         (uint32_t)fabric_max_packet_size,
@@ -547,18 +597,15 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         // scores tensor args
         scores_tensor_cb_id,
         scores_pages,
-        scores_page_size,
         aligned_scores_page_size,
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
-
-    const auto& writer_compile_time_args = reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

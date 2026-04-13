@@ -146,8 +146,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
-    // get size of target indexes inner dimension
-    uint32_t target_indexes_inner_dim_size = target.logical_shape()[-1] * target.element_size();
     // read target indexes by pages(32 indexes in page)
     uint32_t uint32_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * kPageElementsNumber;
 
@@ -297,8 +295,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     CrossEntropyBackwardKernels kernels;
     {
-        std::vector<uint32_t> reader_compile_time_args{
-            block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+        std::vector<uint32_t> reader_compile_time_args{block_size, Wt, mask_w, Ht, uint32_read_page_size};
         tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
         kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);

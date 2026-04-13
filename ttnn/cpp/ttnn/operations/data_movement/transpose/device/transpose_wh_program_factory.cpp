@@ -267,7 +267,6 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         reader_compile_time_args.push_back(ht * wt);
         reader_compile_time_args.push_back(W * input_tensor.element_size());
         reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
-        reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     }
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
@@ -281,7 +280,6 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         writer_compile_time_args.push_back(ht * wt);
         writer_compile_time_args.push_back(H * output_tensor.element_size());
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
-        writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     }
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 

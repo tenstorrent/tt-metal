@@ -95,23 +95,22 @@ void kernel_main() {
     constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(19);
     constexpr uint32_t in_row_size_bytes = get_compile_time_arg_val(20);
     constexpr uint32_t C_in_block_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(22);
-    constexpr bool is_padding_zeros = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_t = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(26);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
-    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
+    constexpr bool is_padding_zeros = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t stride_t = get_compile_time_arg_val(24);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(25);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t dilation_t = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(29);
     // L1 prefetch buffer parameters
-    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
-    constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
-    constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
-    constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
+    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(30);
+    constexpr uint32_t T_shard_max = get_compile_time_arg_val(31);
+    constexpr uint32_t H_shard_max = get_compile_time_arg_val(32);
+    constexpr uint32_t W_shard_max = get_compile_time_arg_val(33);
 
     // Padding bytes to append after each patch row to reach tile-aligned CB page width
-    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
+    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(34);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
     // Load input/output addresses and range parameters
@@ -129,8 +128,8 @@ void kernel_main() {
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in_args = TensorAccessorArgs<36>();
-    const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
+    constexpr auto in_args = TensorAccessorArgs<35>();
+    const auto in_reader = TensorAccessor(in_args, in_addr);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;

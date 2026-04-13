@@ -22,7 +22,6 @@ void kernel_main() {
 
     const uint32_t current_block_start = get_arg_val<uint32_t>(index++);
     const uint32_t rows_per_tile = get_arg_val<uint32_t>(index++);
-    const uint32_t page_size_arg = get_arg_val<uint32_t>(index++);
     const uint32_t alignment = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
     const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
@@ -36,10 +35,9 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);
     constexpr uint32_t element_size = tile_bytes / tile_hw;
-    const uint32_t full_page_size = align(page_size_arg, alignment);
     const uint32_t row_width_bytes = row_width_elements * element_size;
 
-    const auto dst = TensorAccessor(dst_args, dst_addr, full_page_size);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t row_blocks_per_channel = (outHt + rows_per_tile - 1) / rows_per_tile;
 

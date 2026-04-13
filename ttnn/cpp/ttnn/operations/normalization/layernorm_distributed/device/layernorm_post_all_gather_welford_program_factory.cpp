@@ -287,8 +287,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
         beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
-    reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
-    reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
     reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
     reader_compile_time_args.push_back((std::uint32_t)cb_length);

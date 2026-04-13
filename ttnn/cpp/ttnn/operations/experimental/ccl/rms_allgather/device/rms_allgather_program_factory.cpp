@@ -672,13 +672,6 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         in3_cb_index,
         in4_cb_index,
         in5_cb_index};
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        writer_compile_time_args.push_back(gamma_stick_size);
-    } else {
-        writer_compile_time_args.push_back(0);
-    }
-
     writer_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
 
     // write back compile time args

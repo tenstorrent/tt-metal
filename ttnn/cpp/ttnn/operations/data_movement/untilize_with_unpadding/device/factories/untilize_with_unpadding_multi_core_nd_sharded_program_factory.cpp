@@ -144,17 +144,14 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
 
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = output_page_width;
-    uint32_t output_stick_size = num_cols_per_output_block * output_element_size;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
-        (uint32_t)output_stick_size,
         (uint32_t)tile_height,
         (uint32_t)num_tiles_per_input_block,
         (uint32_t)output_num_blocks_across_width,
         (uint32_t)output_element_size,
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
-        (uint32_t)input_single_tile_size,
         (uint32_t)num_shards,
         (uint32_t)num_compute_cores,
         (uint32_t)num_tiles_per_input_row,
