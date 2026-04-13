@@ -189,7 +189,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = decltype(TensorAccessor(gamma_args, gamma_addr)){gamma_args, gamma_addr, stick_size};
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;
