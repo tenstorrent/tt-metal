@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
 
 import ttnn
@@ -21,6 +20,7 @@ from models.experimental.mole.demo.run import (
     close_ttnn_device,
     model_config_from_args,
     open_ttnn_device,
+    resolve_checkpoint_path,
     set_random_seed,
     unpack_batch,
     upload_mole_inputs,
@@ -213,7 +213,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = model_config_from_args(args)
-    checkpoint_path = str(Path(args.checkpoint_dir) / args.checkpoint_file)
+    checkpoint_path = resolve_checkpoint_path(args.checkpoint_dir, args.checkpoint_file)
 
     device = open_ttnn_device()
     try:

@@ -21,6 +21,7 @@ from models.experimental.mole.demo.run import (
     close_ttnn_device,
     model_config_from_args,
     open_ttnn_device,
+    resolve_checkpoint_path,
     set_random_seed,
     unpack_batch,
 )
@@ -214,7 +215,7 @@ if __name__ == "__main__":
         help="Maximum number of contiguous test samples to visualize",
     )
     args = parser.parse_args()
-    checkpoint_path = str(Path(args.checkpoint_dir) / args.checkpoint_file)
+    checkpoint_path = resolve_checkpoint_path(args.checkpoint_dir, args.checkpoint_file)
     options = VisualizationOptions(
         checkpoint_path=checkpoint_path,
         checkpoint_debug_keys=args.checkpoint_debug_keys,

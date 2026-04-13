@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from argparse import ArgumentParser, Namespace
 import csv
+import os
 import random
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -142,11 +143,24 @@ def select_ttnn_memory_config(config: MoLEConfig) -> Any:
     return ttnn.L1_MEMORY_CONFIG
 
 
-def _resolve_checkpoint_path(checkpoint_dir: str | Path, checkpoint_file: str) -> str:
-    checkpoint_path = Path(checkpoint_dir) / checkpoint_file
-    if not checkpoint_path.exists():
+def resolve_checkpoint_path(checkpoint_dir: str | Path, checkpoint_file: str) -> str:
+    base_dir = os.path.abspath(os.path.expanduser(str(checkpoint_dir)))
+    if not os.path.isdir(base_dir):
+        raise FileNotFoundError(f"checkpoint directory not found: {base_dir}")
+
+    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
+
+    base_prefix = base_dir if base_dir.endswith(os.sep) else base_dir + os.sep
+    if checkpoint_path != base_dir and not checkpoint_path.startswith(base_prefix):
+        raise ValueError("checkpoint path escapes checkpoint_dir")
+
+    if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
-    return str(checkpoint_path)
+    return checkpoint_path
+
+
+def _resolve_checkpoint_path(checkpoint_dir: str | Path, checkpoint_file: str) -> str:
+    return resolve_checkpoint_path(checkpoint_dir, checkpoint_file)
 
 
 def _resolve_dataset_csv_path(dataset_dir: str | Path, dataset_file: str | None) -> Path:
