@@ -186,7 +186,7 @@ jobs:
           echo "=============================================="
           echo "Device Performance Tests"
           echo "=============================================="
-          models/demos/deepseek_v3/tests/fused_op_unit_tests/run_ci_device_perf_tracy.sh
+          bash models/demos/deepseek_v3/tests/fused_op_unit_tests/run_ci_device_perf_tracy.sh
 
           echo "=============================================="
           echo "All device perf tests completed!"
