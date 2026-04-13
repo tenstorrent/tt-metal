@@ -1486,15 +1486,20 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     log_info(tt::LogTest, "generic_op mesh quiesced for all_gather via generic_op with MUX");
 
     log_info(tt::LogTest, "Reading output tensor via parent mesh CQ...");
-    auto all_data = output_tensor.to_vector<bfloat16>();
-    log_info(tt::LogTest, "Read {} elements, validating...", all_data.size());
+    auto host_output = output_tensor.cpu(/*blocking=*/true);
+    log_info(tt::LogTest, "Output tensor copied to host, validating per-device data...");
 
+    const auto& host_buf = host_output.host_tensor().buffer();
     const size_t per_device_elements = tensor_spec.logical_shape().volume();
     for (uint32_t dev_idx = 0; dev_idx < ring_size; dev_idx++) {
-        for (size_t i = 0; i < per_device_elements; i++) {
+        auto shard = host_buf.get_shard(MeshCoordinate(0, dev_idx));
+        TT_FATAL(shard.has_value(), "Missing host shard for device {}", dev_idx);
+        auto data = shard->view_as<bfloat16>();
+        ASSERT_EQ(data.size(), output_tensor_spec.logical_shape().volume());
+        for (size_t i = 0; i < data.size(); i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
             auto expected = static_cast<float>(i / per_device_elements);
-            EXPECT_EQ(static_cast<float>(all_data[dev_idx * per_device_elements + i]), expected);
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
     log_info(tt::LogTest, "Validation complete");
