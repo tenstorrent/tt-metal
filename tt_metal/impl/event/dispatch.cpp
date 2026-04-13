@@ -68,17 +68,17 @@ void issue_record_event_commands(
     }
 
     // Calculate the actual command size
-    bool dispatch_s_enabled =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled();
+    bool distributed_dispatcher =
+        MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     tt::tt_metal::DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
-        if (dispatch_s_enabled) {
+        if (distributed_dispatcher) {
             calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait (forwards worker count to DISPATCH_MASTER)
         }
         calculator.add_dispatch_wait();
     }
     if (num_worker_counters > 0) {
-        if (dispatch_s_enabled) {
+        if (distributed_dispatcher) {
             calculator.add_dispatch_wait();  // DISPATCH_SUBORDINATE wait before the final prefetch-stall
         }
         calculator.add_dispatch_wait_with_prefetch_stall();
@@ -110,14 +110,19 @@ void issue_record_event_commands(
                                     (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                                     ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0);
 
-        if (dispatch_s_enabled) {
-            // When DISPATCH_S (subordinate) is active, it owns the worker-done stream registers.
-            // DISPATCH_D (master) cannot see them directly. We must first send a wait to DISPATCH_S
-            // so it forwards the current worker count to DISPATCH_D, then send the wait to DISPATCH_D
-            // so it blocks until that count is reached. We use WAIT_STREAM only (no CLEAR_STREAM) so
+        if (distributed_dispatcher) {
+            // In distributed-dispatcher mode (ETH 1CQ), DISPATCH_S (subordinate) and DISPATCH_D
+            // (master) run on DIFFERENT cores. DISPATCH_S owns the worker-done stream registers;
+            // DISPATCH_D cannot see them directly. We must first send a wait to DISPATCH_S so it
+            // forwards the current worker count to DISPATCH_D, then send the wait to DISPATCH_D so
+            // it blocks until that count is reached. We use WAIT_STREAM only (no CLEAR_STREAM) so
             // cumulative worker tracking on DISPATCH_S is preserved.
-            // This applies to all dispatch_s_enabled configs (WORKER and ETH dispatch), not just
-            // distributed_dispatcher (ETH 1CQ only).
+            //
+            // For WORKER dispatch (dispatch_s_enabled=true, distributed_dispatcher=false),
+            // DISPATCH_S and DISPATCH_D run on the SAME Tensix core (NCRISC + BRISC) and share
+            // stream registers. Workers write done signals to the shared stream; DISPATCH_D reads
+            // it directly. Sending a DISPATCH_S wait here would race: DISPATCH_D might clear the
+            // shared stream before DISPATCH_S reads it, causing DISPATCH_S to spin forever.
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,

@@ -281,14 +281,18 @@ void process_go_signal_mcast_cmd() {
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    // dispatch_s should get a wait command only if it's not on the same core as dispatch_d.
-    // Supports WAIT_STREAM with or without CLEAR_STREAM:
-    //   - With CLEAR_STREAM: waits, forwards count to dispatch_d, then resets dispatch_s counter (original behavior).
+    // dispatch_s should only get a wait command in distributed-dispatcher mode (ETH 1CQ),
+    // where dispatch_s and dispatch_d run on DIFFERENT cores. Supports WAIT_STREAM with or
+    // without CLEAR_STREAM:
+    //   - With CLEAR_STREAM: waits, forwards count to dispatch_d, then resets dispatch_s counter.
     //   - Without CLEAR_STREAM: waits, forwards count to dispatch_d, leaves dispatch_s counter intact
     //     (used by event recording to snapshot the current worker count without disrupting cumulative tracking).
-    // dispatch_s receives wait commands in all dispatch_s_enabled configs (WORKER and ETH dispatch),
-    // not just distributed_dispatcher (ETH 1CQ only). Remove that gate so WORKER dispatch works too.
-    ASSERT(cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM);
+    // For WORKER dispatch (same Tensix core, BRISC=dispatch_d + NCRISC=dispatch_s), dispatch_d reads
+    // the shared stream registers directly. Sending a WAIT to dispatch_s here would race with dispatch_d's
+    // CLEAR_STREAM: dispatch_d clears the stream before dispatch_s reads it → dispatch_s hangs.
+    ASSERT(
+        (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM) &&
+        distributed_dispatcher);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
     volatile uint32_t* worker_sem =
