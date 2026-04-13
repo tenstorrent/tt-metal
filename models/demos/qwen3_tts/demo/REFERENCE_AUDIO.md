@@ -26,7 +26,9 @@ python demo_full_ttnn_tts.py \
     --text "Hello, this is a test." \
     --ref-audio /path/to/your/reference.wav \
     --ref-text "Text spoken in the reference audio" \
-    --output /tmp/output.wav
+    --output /tmp/output.wav \
+    --seed 42 \
+    --use-2cq
 ```
 
 ### Option 2: Extract from Video
@@ -80,7 +82,9 @@ python demo_full_ttnn_tts.py \
     --ref-audio jim_reference.wav \
     --ref-text "Let me also go over the review slides." \
     --language french \
-    --output /tmp/french_with_english_voice.wav
+    --output /tmp/french_with_english_voice.wav \
+    --seed 42 \
+    --use-2cq
 ```
 
 Supported languages: english, chinese, french, german, italian, japanese, korean, portuguese, russian, spanish
@@ -95,7 +99,9 @@ python demo_full_ttnn_tts.py \
     --ref-audio reference.wav \
     --ref-text "Reference text" \
     --trim-frames 0 \
-    --auto-trim-bleed
+    --auto-trim-bleed \
+    --seed 42 \
+    --use-2cq
 ```
 
 ### Stale cache issues
