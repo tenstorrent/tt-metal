@@ -44,6 +44,7 @@ class DRAMZeroFill:
         max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
         kvpe_dim: int = DEFAULT_KVPE_DIM,
         dtype: ttnn.DataType = ttnn.bfloat8_b,
+        mesh_shape: tuple[int, int] | None = None,
     ) -> ttnn.Tensor:
         """
         Allocate a zero-filled KV cache tensor in DRAM with the standard
@@ -58,13 +59,21 @@ class DRAMZeroFill:
             max_seq_len: Total (global) sequence length across all mesh rows.
             kvpe_dim: Combined KNOPE + KROPE feature dimension.
             dtype: Data type for the cache (default bfloat8_b).
+            mesh_shape: (rows, cols) mesh shape for the tensor topology.
+                Dim 2 is sharded across rows, replicated across cols
+                (matching ShardTensor2dMesh dims=(2, None)).
+                Defaults to ``(device.shape[0], device.shape[1])``.
 
         Returns:
             A zero-filled DRAM tensor of per-device shape
             ``[num_users, 1, max_seq_len // mesh_rows, kvpe_dim]``.
         """
         mesh_rows = device.shape[0]
+        mesh_cols = device.shape[1]
         per_device_seq = max_seq_len // mesh_rows
+
+        if mesh_shape is None:
+            mesh_shape = (mesh_rows, mesh_cols)
 
         program_config = FlashMLADecode.ProgramConfig(k_chunk_size=DEFAULT_K_CHUNK_SIZE, exp_approx_mode=False)
         kv_nd_shard_spec = ttnn.NdShardSpec(
@@ -78,6 +87,17 @@ class DRAMZeroFill:
         shape = ttnn.Shape([num_users, 1, per_device_seq, kvpe_dim])
         tensor = ttnn.allocate_tensor_on_device(shape, dtype, ttnn.TILE_LAYOUT, device, kv_mem)
         DRAMZeroFill.op(tensor)
+
+        # Set the correct topology so downstream ops see this tensor as TP=2, SP=4
+        # which is what ShardTensor2dMesh() would produce
+        dist_shape = ttnn.MeshShape(mesh_shape[0], mesh_shape[1])
+        placements = [ttnn.PlacementShard(2), ttnn.PlacementReplicate()]
+        coords = [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(dist_shape)
+        ]
+        tensor.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
+
         return tensor
 
     @staticmethod

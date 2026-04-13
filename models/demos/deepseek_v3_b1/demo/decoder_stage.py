@@ -400,13 +400,13 @@ def create_decoder_block_tensors(
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
     kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     if position_id == 0:
-        # Fast path for empty-context decode: allocate directly in DRAM and zero on device.
         ttnn_kv_cache = DRAMZeroFill.allocate_kv_cache_on_device(
             submesh,
             num_users=torch_kv_cache.shape[0],
             max_seq_len=max_seq_len,
             kvpe_dim=kvpe_dim,
             dtype=ttnn.bfloat8_b,
+            mesh_shape=(mesh_rows, mesh_cols),
         )
     else:
         ttnn_kv_cache = ttnn.from_torch(
@@ -421,14 +421,24 @@ def create_decoder_block_tensors(
     # ── KV cache clone for standalone AttentionBlock.op sanity check ──
     ttnn_kv_cache_attn_ref = None
     if validate_debug_tensors:
-        ttnn_kv_cache_attn_ref = ttnn.from_torch(
-            torch_kv_cache_shuffled,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=kv_mem,
-            mesh_mapper=kv_cache_2d_mesh_mapper,
-        )
+        if position_id == 0:
+            ttnn_kv_cache_attn_ref = DRAMZeroFill.allocate_kv_cache_on_device(
+                submesh,
+                num_users=torch_kv_cache.shape[0],
+                max_seq_len=max_seq_len,
+                kvpe_dim=kvpe_dim,
+                dtype=ttnn.bfloat8_b,
+                mesh_shape=(mesh_rows, mesh_cols),
+            )
+        else:
+            ttnn_kv_cache_attn_ref = ttnn.from_torch(
+                torch_kv_cache_shuffled,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=kv_mem,
+                mesh_mapper=kv_cache_2d_mesh_mapper,
+            )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
