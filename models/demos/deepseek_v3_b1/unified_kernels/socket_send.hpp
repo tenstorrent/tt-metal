@@ -22,11 +22,11 @@ FORCE_INLINE void socket_send_from_cb(
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, total_send_bytes);
-    DPRINT << ">socket reserve pages" << ENDL();
+    DPRINT << "Arg Max Reserve Pages" << ENDL();
     socket_reserve_pages(sender_socket, 1);
-    DPRINT << ">soc" << ENDL();
+    DPRINT << "Arg Max Wait Front" << ENDL();
     cb_wait_front(cb_id, num_cb_pages);
-    DPRINT << ">socket wait front done" << ENDL();
+    DPRINT << "Arg Max Wait front done" << ENDL();
     const uint32_t read_addr = get_read_ptr(cb_id);
 
     if constexpr (SocketMode == 1) {
@@ -44,6 +44,7 @@ FORCE_INLINE void socket_send_from_cb(
     } else {
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
+            DPRINT << "Arg Max Write to Downstream" << ENDL();
             noc_async_write(
                 read_addr,
                 get_noc_addr(
@@ -52,7 +53,9 @@ FORCE_INLINE void socket_send_from_cb(
                     sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
                 total_send_bytes);
         }
+        DPRINT << "Arg Max Write to Downstream Barrier" << ENDL();
         noc_async_write_barrier();
+        DPRINT << "Arg Max Write to Downstream Barrier done" << ENDL();
     }
     cb_pop_front(cb_id, num_cb_pages);
     socket_push_pages(sender_socket, 1);
