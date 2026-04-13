@@ -302,12 +302,6 @@ def run_all_to_all_dispatch_metadata_test(
         expected_batch = batch
         expected_k = select_experts_k
 
-        # Critical check: batch dimension depends on dispatch_devices from cluster_axis
-        # With cluster_axis=0 and 4x8 mesh: dispatch_devices=4, so batch should be batches_per_device * 4
-        # If axis logic is wrong: dispatch_devices=8, so batch would be batches_per_device * 8 (WRONG!)
-        expected_dispatch_devices = mesh_shape[cluster_axis]
-        calculated_batch_from_shape = tt_metadata_tensor.shape[1]
-
         assert tt_torch_tensor.shape[0] == expected_devices, (
             f"Output tokens shape[0] mismatch: got {tt_torch_tensor.shape[0]}, expected {expected_devices}. "
             f"All {expected_devices} devices should output tensors!"
