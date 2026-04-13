@@ -1491,6 +1491,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
         }
     }
 
+    // Validate emulated mode configuration
+    if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
+        TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+
     // Set inspector log path
     this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
