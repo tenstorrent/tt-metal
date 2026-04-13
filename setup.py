@@ -363,7 +363,7 @@ class CMakeBuild(build_ext):
             "impl/dispatch/kernels/**/*",
             "include/**/*",
             "kernels/**/*",
-            "third_party/tt_llk/**/*",
+            "tt-llk/**/*",
             "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
             "sfpi-version",
