@@ -716,8 +716,8 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     ]
 
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
     replace_thinker_lm_head_with_ttnn(model.thinker)
@@ -822,8 +822,8 @@ def test_qwen_omni(mesh_device):
 
     print("Registering TTNN module replacements...")
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
     replace_thinker_lm_head_with_ttnn(model.thinker)

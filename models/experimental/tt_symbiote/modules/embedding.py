@@ -15,13 +15,72 @@ from models.experimental.tt_symbiote.core.run_config import (
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
 
 
+def _aligned_up(x: int, alignment: int) -> int:
+    return ((int(x) + alignment - 1) // alignment) * alignment
+
+
+def _pad_last_dim_row_major(tensor, pad_amount: int, *, value):
+    """Right-pad the last dimension (row-major)."""
+    rank = len(tensor.shape)
+    last = rank - 1
+    padding = tuple((0, pad_amount if i == last else 0) for i in range(rank))
+    return ttnn.pad(tensor, padding=padding, value=value)
+
+
+def _slice_dim(tensor, dim: int, length: int):
+    starts = [0] * len(tensor.shape)
+    ends = list(tensor.shape)
+    ends[dim] = length
+    return ttnn.slice(tensor, starts, ends)
+
+
+def _prepare_embedding_indices(tt_indices):
+    """Return ``(indices_uint32_or_unchanged, orig_seq_len)`` for ``ttnn.embedding``.
+
+    ``ttnn.embedding`` requires indices in **UINT32** or BFLOAT16; symbiote maps ``torch.long`` → INT32.
+    ``ttnn.typecast`` to UINT32 on row-major INT32 requires the **last dim** to be a multiple of 32;
+    we pad with 0, then the caller must slice the **embedding output** on the sequence dim when
+    ``orig_seq_len`` is not ``None``.
+    """
+    if not isinstance(tt_indices, ttnn.Tensor):
+        return tt_indices, None
+    dt = tt_indices.dtype
+    if dt == ttnn.uint32 or dt == ttnn.bfloat16:
+        return tt_indices, None
+
+    rank = len(tt_indices.shape)
+    seq_dim = rank - 1
+    seq_len = int(tt_indices.shape[seq_dim])
+    padded_len = _aligned_up(seq_len, 32)
+    orig_seq_len = None
+    if padded_len != seq_len:
+        tt_indices = _pad_last_dim_row_major(tt_indices, padded_len - seq_len, value=0)
+        orig_seq_len = seq_len
+
+    tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+    return tt_indices, orig_seq_len
+
+
+def _maybe_slice_embedding_output(out, orig_seq_len):
+    """Undo sequence padding: embedding output is ``[..., seq, hidden]``."""
+    if orig_seq_len is None:
+        return out
+    rank = len(out.shape)
+    seq_dim = rank - 2
+    return _slice_dim(out, seq_dim, orig_seq_len)
+
+
 @trace_enabled
 class TTNNEmbedding(TTNNModule):
-    """TTNN-accelerated embedding lookup for Ling/Bailing models.
+    """TTNN-accelerated embedding lookup for Ling/Bailing-style models.
 
-    Replaces nn.Embedding (word_embeddings). Weight is replicated across all
-    devices on a mesh — no CCL needed since downstream column-parallel linears
-    expect replicated input.
+    Replaces ``nn.Embedding``. On a multi-device mesh, **weights are sharded along the hidden
+    dimension** (``ShardTensor2dMesh``), so each device holds a slice of the embedding table—appropriate
+    when downstream layers consume column-sharded activations.
+
+    :class:`TTNNQwen3OmniMoeCodecPredictorEmbedding` extends this with UINT32 index handling and
+    optional ``padding_idx`` for ``codec_embedding``; weights stay **hidden-sharded** like here so
+    downstream column-parallel layers match.
     """
 
     @classmethod
@@ -61,6 +120,47 @@ class TTNNEmbedding(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+
+@trace_enabled
+class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
+    """``nn.Embedding`` slots in ``Qwen3OmniMoeTalkerCodePredictorModel.codec_embedding`` (``ModuleList``).
+
+    HF builds ``nn.ModuleList([nn.Embedding(vocab_size, hidden_size), ...])`` for
+    ``num_code_groups - 1`` groups. Weights use the same **hidden-dim sharding** as
+    :class:`TTNNEmbedding` so activations align with :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm`
+    and the rest of the talker decoder on mesh. This class adds ``ttnn.embedding``-compatible index
+    prep (UINT32 / sequence padding) and optional ``padding_idx``.
+    """
+
+    @property
+    def weight(self):
+        return self.torch_layer.weight
+
+    @property
+    def padding_idx(self):
+        return self.torch_layer.padding_idx
+
+    def forward(self, tt_indices):
+        tt_indices, orig_seq_len = _prepare_embedding_indices(tt_indices)
+        pad = self.torch_layer.padding_idx
+        pad_token = int(pad) if pad is not None and int(pad) >= 0 else None
+        if pad_token is None:
+            out = ttnn.embedding(
+                tt_indices,
+                self.tt_weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            out = ttnn.embedding(
+                tt_indices,
+                self.tt_weight,
+                padding_idx=pad_token,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return _maybe_slice_embedding_output(out, orig_seq_len)
 
 
 class TTNNBailingPaddedEmbedding(TTNNModule):

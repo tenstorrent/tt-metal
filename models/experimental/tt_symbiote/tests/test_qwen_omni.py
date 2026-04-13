@@ -71,7 +71,10 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
 )
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNQwenLayerNorm
+from models.experimental.tt_symbiote.modules.normalization import (
+    TTNNDistributedRMSNorm,
+    TTNNQwenLayerNorm,
+)
 from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
     TTNNQwenOmniThinkerLmHead,
     replace_code_predictor_lm_head_with_ttnn,
@@ -91,6 +94,7 @@ from models.experimental.tt_symbiote.modules.conv import (
     TTNNQwenOmniConv2dNHWC,
 )
 from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
+from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
 from models.experimental.tt_symbiote.modules.qwen_omni_audio_encoder import TTNNQwen3OmniMoeAudioEncoder
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device
@@ -262,12 +266,16 @@ NN_TO_TTNN_TALKER = {
 # Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
 # ``Qwen3OmniMoeTalkerCodePredictorDecoderLayer`` uses ``Qwen3OmniMoeMLP`` (dense SiLU MLP), not
 # ``Qwen3OmniMoeThinkerTextMLP``; without this, ``gate_proj`` / ``up_proj`` / ``down_proj`` stay on PyTorch.
-# ``Qwen3OmniMoeRMSNorm`` (``input_layernorm`` / ``post_attention_layernorm`` / ``model.norm``) maps to
-# ``TTNNDistributedRMSNorm``; HF uses ``hidden_size`` (e.g. 1024) so ``(hidden_size//32)`` aligns with T3K mesh width.
+# ``Qwen3OmniMoeRMSNorm`` maps to ``TTNNDistributedRMSNorm`` (inherited from ``NN_TO_TTNN_TALKER``).
+# Codec embedding uses :class:`TTNNQwen3OmniMoeCodecPredictorEmbedding` (hidden-sharded like
+# :class:`TTNNEmbedding`) so layernorm sees column-sharded activations consistent with attention/MLP.
+# HF ``Qwen3OmniMoeTalkerCodePredictorModel.codec_embedding`` is ``nn.ModuleList([nn.Embedding(...)])`` with
+# ``len == num_code_groups - 1`` (see ``modeling_qwen3_omni_moe.py``).
 NN_TO_TTNN_CODE_PREDICTOR = {
     **NN_TO_TTNN_TALKER,
     Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     Qwen3OmniMoeMLP: TTNNGlm4MoeMLP,
+    torch.nn.Embedding: TTNNQwen3OmniMoeCodecPredictorEmbedding,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
@@ -310,10 +318,13 @@ def _register_code2wav_nn_to_ttnn(model) -> dict:
 def _register_code_predictor_nn_to_ttnn(model) -> dict:
     """Register TTNN layers on ``talker.code_predictor`` (nested ``PreTrainedModel``).
 
-    ``NN_TO_TTNN_TALKER`` maps ``Qwen3OmniMoeTalkerCodePredictorAttention`` → ``TTNNQwen3Attention``.
-    Replacement from ``register_module_replacement_dict(model.talker, ...)`` usually reaches this subtree;
-    calling this explicitly matches ``_register_code2wav_nn_to_ttnn`` and guarantees code-predictor attention
-    is converted and later receives ``set_device`` like the main talker stack.
+    **Call this before** ``register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, ...)``.
+    Otherwise ``torch.nn.Embedding`` / ``Qwen3OmniMoeMLP`` / rotary overrides in
+    :data:`NN_TO_TTNN_CODE_PREDICTOR` never apply because ``NN_TO_TTNN_TALKER`` already replaced
+    shared submodules.
+
+    ``NN_TO_TTNN_TALKER`` still maps shared classes inside ``code_predictor`` (e.g. attention) on the
+    second pass—already-TTNN submodules are skipped because their classes are not in the talker map.
     """
     talker = getattr(model, "talker", None)
     cp = getattr(talker, "code_predictor", None) if talker is not None else None
@@ -829,8 +840,8 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     ]
 
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     replace_thinker_lm_head_with_ttnn(model.thinker)
     replace_code_predictor_lm_head_with_ttnn(model.talker)
@@ -884,17 +895,27 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 f"(HF Qwen3OmniMoeMLP), got {type(layer.mlp)}"
             )
             assert isinstance(layer.input_layernorm, TTNNDistributedRMSNorm), (
-                f"talker.code_predictor.model.layers[{i}].input_layernorm expected TTNNDistributedRMSNorm, "
-                f"got {type(layer.input_layernorm)}"
+                f"talker.code_predictor.model.layers[{i}].input_layernorm expected "
+                f"TTNNDistributedRMSNorm, got {type(layer.input_layernorm)}"
             )
             assert isinstance(layer.post_attention_layernorm, TTNNDistributedRMSNorm), (
-                f"talker.code_predictor.model.layers[{i}].post_attention_layernorm expected TTNNDistributedRMSNorm, "
-                f"got {type(layer.post_attention_layernorm)}"
+                f"talker.code_predictor.model.layers[{i}].post_attention_layernorm expected "
+                f"TTNNDistributedRMSNorm, got {type(layer.post_attention_layernorm)}"
             )
     if cp is not None and getattr(cp, "model", None) is not None and getattr(cp.model, "norm", None) is not None:
         assert isinstance(
             cp.model.norm, TTNNDistributedRMSNorm
         ), f"talker.code_predictor.model.norm expected TTNNDistributedRMSNorm, got {type(cp.model.norm)}"
+    if (
+        cp is not None
+        and getattr(cp, "model", None) is not None
+        and getattr(cp.model, "codec_embedding", None) is not None
+    ):
+        for i, emb in enumerate(cp.model.codec_embedding):
+            assert isinstance(emb, TTNNQwen3OmniMoeCodecPredictorEmbedding), (
+                f"talker.code_predictor.model.codec_embedding[{i}] expected "
+                f"TTNNQwen3OmniMoeCodecPredictorEmbedding, got {type(emb)}"
+            )
     if cp is not None and getattr(cp, "lm_head", None) is not None:
         lh = cp.lm_head
         if isinstance(lh, (list, torch.nn.ModuleList)):
@@ -960,8 +981,8 @@ def test_qwen_omni(mesh_device):
 
     print("Registering TTNN module replacements...")
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     replace_thinker_lm_head_with_ttnn(model.thinker)
     replace_code_predictor_lm_head_with_ttnn(model.talker)
