@@ -296,6 +296,13 @@
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
+    ls -la /mnt/MLPerf/
+    ls -la /mnt/MLPerf/tt_dnn-models/
+    ls -la /mnt/MLPerf/tt_dnn-models/openai/
+    ls -la /mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
+    ls -la /mnt/MLPerf/huggingface/
+    ls -la /mnt/MLPerf/huggingface/tt_cache/
+    ls -la /mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
   model: gpt-oss-120b-high-batch-galaxy
   skus:
