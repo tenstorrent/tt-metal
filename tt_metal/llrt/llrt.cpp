@@ -265,7 +265,11 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
-        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
+        // RUN_MSG_INIT is valid here: it means the core has been initialized by the host
+        // but BRISC firmware has not yet completed its startup sequence.  Treat it the
+        // same as run_state (i.e. "not done yet") rather than fataling.
+        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE &&
+            run != tt_metal::dev_msgs::RUN_MSG_INIT) {
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",

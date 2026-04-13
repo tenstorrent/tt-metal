@@ -283,10 +283,16 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        // Initialize signal to RUN_MSG_INIT so that wait_for_cores_idle() cannot mistake
+        // an unbooted core (whose L1 is zero-initialized = RUN_MSG_DONE) for an idle core.
+        // BRISC firmware overwrites this with RUN_MSG_DONE once it has fully initialized
+        // and is ready to receive a GO signal.
+        auto init_go_msg = hal.get_dev_msgs_factory(programmable_core_type).create<dev_msgs::go_msg_t>();
+        init_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+        cluster.write_core(init_go_msg.data(), init_go_msg.size(), tt_cxy_pair(id_, virtual_core), go_message_addr);
         cluster.l1_barrier(id_);
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
