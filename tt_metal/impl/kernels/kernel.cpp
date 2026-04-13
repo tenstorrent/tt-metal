@@ -104,13 +104,15 @@ Kernel::Kernel(
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines,
-    const std::unordered_map<std::string, uint32_t>& named_compile_args) :
+    const std::unordered_map<std::string, uint32_t>& named_compile_args,
+    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
+    dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -267,6 +269,13 @@ void Kernel::process_compile_time_args(const std::function<void(const std::vecto
 void Kernel::process_named_compile_time_args(
     const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
     callback(this->named_compile_time_args());
+}
+
+void Kernel::process_dataflow_buffer_local_accessor_handles(
+    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
+    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_local_accessor_handles_) {
+        callback(accessor_name, logical_dfb_id);
+    }
 }
 
 void Kernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {

@@ -5,9 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
-#include <functional>
 #include <unordered_map>
 
 namespace tt::tt_metal {
@@ -31,6 +31,11 @@ public:
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
+    // DataflowBuffer local accessor name -> logical DFB id (device JIT header generation). Immutable after Kernel
+    // construction; empty when the kernel has no ProgramSpec DFB bindings.
+    virtual void process_dataflow_buffer_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

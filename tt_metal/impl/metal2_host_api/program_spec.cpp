@@ -4,7 +4,9 @@
 
 #include <bit>
 #include <functional>
+#include <limits>
 #include <set>
+#include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -171,6 +173,26 @@ void accumulate_nodes(
     }
 }
 
+// TODO -- figure out if there's a nicer spot for this in program_spec.cpp
+// This is nice, but we don't really do it for CTAs or defines...
+// I guess it's more necessary though?
+bool IsValidCppIdentifier(std::string_view s) {
+    if (s.empty()) {
+        return false;
+    }
+    const unsigned char c0 = static_cast<unsigned char>(s[0]);
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) {
+        return false;
+    }
+    for (size_t i = 1; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ============================================================================
 // Step 1: Spec Collection & Validation
 // ============================================================================
@@ -213,6 +235,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             TT_FATAL(
                 inserted,
                 "Kernel '{}' has duplicate local_accessor_name '{}'",
+                kernel.unique_id,
+                dfb_binding.local_accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(dfb_binding.local_accessor_name),
+                "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 dfb_binding.local_accessor_name);
 
@@ -1040,6 +1067,25 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // Step 3: Program Building Helpers
 // ============================================================================
 
+// Create map of local accessor name -> logical DFB id
+// TODO: Should probably get rid of the need for uint16_t cast in a future refactor
+tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.dfb_bindings.size());
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            dfb_binding.dfb_spec_name,
+            id);
+        out.emplace(dfb_binding.local_accessor_name, static_cast<uint16_t>(id));
+    }
+    return out;
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -1188,8 +1234,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
 // MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
-experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
     // Convert defines from vector<pair> to map (yuck)
@@ -1198,15 +1243,11 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
         defines_map[key] = value;
     }
 
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // only named_compile_args is used
         .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
@@ -1241,9 +1282,6 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         defines_map[key] = value;
     }
 
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
@@ -1254,7 +1292,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1347,20 +1385,25 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
 
+        // Make the local accessor name -> DFB ID map for this kernel
+        const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
+            MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
+
+        // Create the kernel object
         std::shared_ptr<Kernel> kernel;
 
         if (is_gen2_arch()) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_dm_kernel()) {
-                auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                    kernel_src, node_ranges, config, processors);
+                    kernel_src, node_ranges, config, processors, dfb_handles);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                    kernel_src, node_ranges, config, processors);
+                    kernel_src, node_ranges, config, processors, dfb_handles);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
