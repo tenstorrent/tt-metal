@@ -59,7 +59,7 @@ constexpr std::array<float, 25> ERFC_LUT = {{// Breakpoints
                                              1.2677097321e-01f,
                                              -2.1375391632e-02f}};
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
