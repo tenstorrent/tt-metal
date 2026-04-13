@@ -1613,7 +1613,7 @@ def _reconstruct_expert_memory_config(device, K: int, N_padded: int):
             )
         }
     )
-    num_banks = device.dram_grid_size().x * device.dram_grid_size().y
+    num_banks = device.dram_grid_size().x
     per_core_N = N_padded // num_banks
     shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
