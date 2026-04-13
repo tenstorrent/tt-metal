@@ -19,7 +19,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core.run_config import disable_trace
+from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled
 import math
 
 
@@ -1495,8 +1495,12 @@ class TTNNMoE(TTNNModule):
         return output
 
 
+@trace_enabled
 class TTNNBailingMoE(TTNNMoE):
-    """TTNN MoE for BailingMoeV2 architecture (Ling-mini-2.0 model)."""
+    """TTNN MoE for BailingMoeV2 architecture (Ling-mini-2.0 model).
+
+    Trace replay applies on single-token decode (see ``HF_chat`` ``_TRACE_RUNNING`` gating).
+    """
 
     @classmethod
     def from_torch(cls, torch_moe):

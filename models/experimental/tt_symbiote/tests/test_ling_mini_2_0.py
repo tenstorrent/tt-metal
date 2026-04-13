@@ -137,12 +137,12 @@ def test_ling_mini_2_0(mesh_device):
 
     decode_params = DecodeParams()  # greedy: temperature=0
 
-    # Warmup run without trace
+    # Warmup
     decode_with_logit_postprocess(
         model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 2, decode_params, mesh_device
     )
     paged_cache.reset()
-    # Actual run with trace
+    # Short decode (program cache hot)
     decode_with_logit_postprocess(
         model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 4, decode_params, mesh_device
     )

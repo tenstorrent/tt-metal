@@ -4,12 +4,15 @@
 
 """Interactive chatbot for HF models with TTNN backend."""
 
+from __future__ import annotations
+
 import argparse
 import os
 import secrets
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 # Fix import path: ensure project root comes before script directory in sys.path
 # This prevents importing the local 'models/' subdirectory instead of the project 'models/' package
@@ -28,6 +31,7 @@ import torch
 from torch import nn
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.logits_process import (
     LogitsProcessorList,
     NoRepeatNGramLogitsProcessor,
@@ -39,7 +43,6 @@ from transformers.generation.logits_process import (
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-import models.experimental.tt_symbiote.core.run_config as _run_config
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
@@ -55,7 +58,15 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
+from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+
+if TYPE_CHECKING:
+    from torch import Tensor
+else:
+    # Runtime: ``Tensor`` is not imported (avoid torch in this module's namespace for tools
+    # that evaluate annotations); type checkers still see ``torch.Tensor`` above.
+    Tensor = Any  # type: ignore[misc]
 
 # Stop decode on degenerate output (common in traced greedy if logits stall).
 _DECODE_MAX_SAME_TOKEN_STREAK = 8
@@ -149,7 +160,13 @@ def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_toke
 
 @dataclass
 class DecodeParams:
-    """Decode-time logits controls (HF processors / warpers / ``ttnn.sampling`` top_k cap ≤ 32)."""
+    """Decode-time logits controls for ``decode_with_logit_postprocess``.
+
+    With ``temperature > 0``, sampling uses ``ttnn.sampling`` on the last-row logits (device),
+    with ``top_k`` (cap 32) and ``top_p`` as supported by that op.  Greedy decode uses
+    ``ttnn.argmax``.  Repetition / no-repeat-ngram processors run on a CPU logits row from capture
+    then re-upload for ``ttnn.sampling`` when sampling is enabled.
+    """
 
     temperature: float = 0.0
     top_p: float = 0.95
@@ -226,6 +243,156 @@ def _trim_logits_to_vocab(logits_2d: torch.Tensor, vocab_size: int) -> torch.Ten
     if vocab_size <= 0 or logits_2d.shape[-1] <= vocab_size:
         return logits_2d
     return logits_2d[..., :vocab_size]
+
+
+def _resolve_captured_lm_logits_ttnn(captured):
+    """Return ``(ttnn.Tensor, mesh_composer|None)`` for lm_head capture.
+
+    Supports :class:`~models.experimental.tt_symbiote.core.tensor.TorchTTNNTensor` (``ttnn_tensor`` set)
+    or a raw :class:`ttnn.Tensor` when ``lm_head`` runs with ``_bypass_tensor_wrapping``."""
+    if isinstance(captured, ttnn.Tensor):
+        return captured, None
+    tt = getattr(captured, "ttnn_tensor", None)
+    if tt is not None:
+        cfg = getattr(captured, "ttnn_distributed_tensor_config", None)
+        mc = cfg.mesh_composer if cfg is not None else None
+        return tt, mc
+    return None, None
+
+
+def _captured_logits_last_row_to_torch(captured, mesh_device) -> torch.Tensor:
+    """Last sequence row of lm_head logits on device, then composed ``to_torch``.
+
+    When ``seq_len > 1``, ``ttnn.slice`` keeps only the last token row before the
+    host read, so we transfer ``O(vocab)`` instead of ``O(seq * vocab)`` for logits.
+    """
+    tt, mesh_composer = _resolve_captured_lm_logits_ttnn(captured)
+    if tt is None:
+        x = captured.to_torch.float()
+        return x.reshape(-1, x.shape[-1])[-1:, :]
+
+    sh = list(tt.shape)
+    rank = len(sh)
+    tt_row = tt
+    if rank >= 2:
+        seq_dim = rank - 2
+        s = int(sh[seq_dim])
+        if s > 1:
+            starts = [0] * rank
+            ends = list(sh)
+            starts[seq_dim] = s - 1
+            ends[seq_dim] = s
+            tt_row = ttnn.slice(tt, starts, ends)
+    try:
+        if mesh_composer is not None:
+            row = ttnn.to_torch(tt_row, mesh_composer=mesh_composer).float()
+        else:
+            row = ttnn.to_torch(tt_row).float()
+        return row.reshape(-1, row.shape[-1])
+    finally:
+        if tt_row is not tt:
+            ttnn.deallocate(tt_row)
+
+
+def _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz: int) -> tuple:
+    """Shared: last-token logits as ``[1, V]`` bf16 ROW_MAJOR on device (slice, trim, reshape, cast).
+
+    Returns ``(work, to_free, orig_v, tt)`` where ``to_free`` lists tensors to deallocate (not ``tt``).
+    """
+    tt, _ = _resolve_captured_lm_logits_ttnn(captured)
+    if tt is None:
+        raise ValueError(
+            "lm_head capture must be a ttnn.Tensor or TorchTTNNTensor with ttnn_tensor set (no CPU fallback)"
+        )
+
+    to_free: list = []
+    cur = tt
+    sh = list(cur.shape)
+    rank = len(sh)
+    if rank >= 2:
+        seq_dim = rank - 2
+        s = int(sh[seq_dim])
+        if s > 1:
+            starts = [0] * rank
+            ends = list(sh)
+            starts[seq_dim] = s - 1
+            ends[seq_dim] = s
+            cur = ttnn.slice(tt, starts, ends)
+            to_free.append(cur)
+    rsh = list(cur.shape)
+    if vocab_sz > 0 and rsh[-1] > vocab_sz:
+        starts = [0] * len(rsh)
+        ends = list(rsh)
+        ends[-1] = vocab_sz
+        cur2 = ttnn.slice(cur, starts, ends)
+        if cur is not tt:
+            ttnn.deallocate(cur)
+            to_free.pop()
+        cur = cur2
+        to_free.append(cur)
+    work = cur
+    if work.layout != ttnn.ROW_MAJOR_LAYOUT:
+        lay = ttnn.to_layout(work, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if work is not tt:
+            ttnn.deallocate(work)
+            to_free.pop()
+        work = lay
+        to_free.append(work)
+    v = int(work.shape[-1])
+    if len(work.shape) != 2 or int(work.shape[0]) != 1:
+        r2 = ttnn.reshape(work, (1, v))
+        if work is not tt:
+            ttnn.deallocate(work)
+            to_free.pop()
+        work = r2
+        to_free.append(work)
+    if work.dtype != ttnn.bfloat16:
+        tc = ttnn.typecast(work, ttnn.bfloat16)
+        if work is not tt:
+            ttnn.deallocate(work)
+            to_free.pop()
+        work = tc
+        to_free.append(work)
+    orig_v = int(work.shape[-1])
+    return work, to_free, orig_v, tt
+
+
+def _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz: int) -> int:
+    """Greedy next token id with lm_head output kept on TTNN until ``argmax``.
+
+    **Why this exists (vs. :func:`_captured_logits_last_row_to_torch`):** greedy decode only needs
+    ``argmax(logits_last_row)``.  Pulling logits via ``ttnn.to_torch`` moves the **entire** vocab row
+    to the host each step.  This path slices the last sequence position and trims padded vocab on
+    device, runs ``ttnn.argmax``, then reads back **only** the small index tensor (no full-vocab
+    logits round-trip).
+
+    Use when HF logits processors are disabled.  Processors need CPU float rows, so they must keep
+    using :func:`_captured_logits_last_row_to_torch` — there is **no** silent CPU fallback from this
+    function; missing device logits (no ``ttnn.Tensor`` / ``ttnn_tensor``) raises.
+    """
+    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz)
+    tt_idx = None
+    try:
+        tt_idx = ttnn.argmax(work, dim=-1, keepdim=True)
+        next_id = _int_flat0_from_ttnn_tt(tt_idx, mesh_device)
+        return _clamp_vocab_id(next_id, orig_v)
+    finally:
+        if tt_idx is not None:
+            ttnn.deallocate(tt_idx)
+        for t in reversed(to_free):
+            if t is not tt:
+                ttnn.deallocate(t)
+
+
+def _device_sample_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz: int, params: DecodeParams) -> int:
+    """Sample next token via ``ttnn.sampling`` on captured lm_head logits (no full-vocab ``to_torch``)."""
+    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz)
+    try:
+        return _ttnn_sampling_from_row_bf16(mesh_device, work, orig_v, params)
+    finally:
+        for t in reversed(to_free):
+            if t is not tt:
+                ttnn.deallocate(t)
 
 
 def _upload_logits_row_to_mesh(mesh_device, scores_2d: torch.Tensor, mesh_mapper):
@@ -378,13 +545,53 @@ def _sample_next_id_ttnn_sampling(mesh_device, scores_1xV: torch.Tensor, params:
 
 
 def _tt_tensor_replicated_token_id(mesh_device, token_id: int) -> ttnn.Tensor:
+    """Single replicated token id on mesh without ``torch.tensor`` (``ttnn.full``)."""
+    return ttnn.full(
+        (1, 1),
+        fill_value=token_id,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _hf_long_tensor_ids_batch1(ids_seq: list[int], device):
+    """HF ``prepare_inputs_for_generation`` expects ``torch.LongTensor`` ``[1, seq]`` (batch size 1)."""
+    import torch
+
+    return torch.as_tensor([ids_seq], dtype=torch.long, device=device)
+
+
+def _prompt_ids_to_mesh_tt(input_ids, mesh_device, mesh_mapper) -> ttnn.Tensor:
+    import torch
+
     return ttnn.from_torch(
-        torch.tensor([[token_id]], dtype=torch.int32),
+        input_ids.detach().cpu().to(torch.int32).contiguous(),
         device=mesh_device,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=_mesh_replicate_mapper(mesh_device),
+        mesh_mapper=mesh_mapper,
     )
+
+
+def _greedy_argmax_logits_row(row) -> int:
+    """Argmax over vocab from a [1, V] row (Tensor or tensor-like); no ``torch.argmax``."""
+    v = row.reshape(-1).tolist()
+    return _clamp_vocab_id(int(max(range(len(v)), key=lambda i: v[i])), len(v))
+
+
+def _hf_outputs_last_token_logits_32(outputs, device):
+    """Last-token logits row as float32 on ``device`` (HF fallback path)."""
+    import torch
+
+    return outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32, device=device)
+
+
+def _int_flat0_from_ttnn_tt(tt, mesh_device) -> int:
+    """First element of a small TTNN tensor as Python ``int`` (e.g. sampled token id)."""
+    x = _ttnn_to_torch_mesh(tt, mesh_device)
+    return int(x.reshape(-1)[0].item())
 
 
 def _greedy_id_ttnn_upload(mesh_device, scores: torch.Tensor, mesh_mapper) -> int:
@@ -410,8 +617,6 @@ def _pick_next_token_device_logits(tt_logits, logits_processor, input_ids, mesh_
     ``vocab_size`` must be the *real* vocab size so that padded positions produced by the
     column-sharded linear are trimmed before argmax/sampling.
     """
-    out_mapper = _mesh_replicate_mapper(mesh_device)
-
     # Always pull to CPU so we can trim padding and apply processors uniformly.
     logits_cpu = _ttnn_to_torch_mesh(tt_logits, mesh_device).float()
     # Shape may be [1, 1, V] or [1, V]; normalise to [batch, V].
@@ -424,13 +629,7 @@ def _pick_next_token_device_logits(tt_logits, logits_processor, input_ids, mesh_
         scores = logits_processor(input_ids, row)
         next_id = _greedy_id_torch(scores)
 
-    tt_next = ttnn.from_torch(
-        torch.tensor([[next_id]], dtype=torch.int32),
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=out_mapper,
-    )
+    tt_next = _tt_tensor_replicated_token_id(mesh_device, next_id)
     return tt_next, next_id
 
 
@@ -485,53 +684,191 @@ def _pick_next_token_ttnn_after_torch_processors(
             finally:
                 ttnn.deallocate(tt_scores)
 
-    return ttnn.from_torch(
-        torch.tensor([[next_id]], dtype=torch.int32),
+    return _tt_tensor_replicated_token_id(mesh_device, next_id)
+
+
+class _LmHeadCapture:
+    """Wraps lm_head ``call`` to capture on-device logits and return a dummy.
+
+    The HF CausalLM forward calls ``logits = logits.float()`` right after
+    ``self.lm_head(hidden_states)``.  That ``.float()`` triggers
+    ``__torch_dispatch__`` → ``_unwrap_to_torch`` → ``ttnn.to_torch()``
+    (expensive full-vocab device→host transfer, ~154ms × 128 steps ≈ 19s).
+
+    This wrapper:
+    1. Captures on-device logits as ``TorchTTNNTensor`` (``ttnn_tensor`` set) or a raw ``ttnn.Tensor``
+       when ``lm_head`` uses ``_bypass_tensor_wrapping``.
+    2. Returns a tiny CPU scalar instead so ``.float()`` becomes free.
+
+    ``decode_with_logit_postprocess`` reads ``cap.captured_result``;
+    ``outputs.logits`` (the dummy) is never used.
+    ``_update_model_kwargs_for_generation`` only touches ``past_key_values``.
+    """
+
+    def __init__(self):
+        self.captured_result = None
+        self._orig_call = None
+
+    def install(self, lm_head):
+        self._orig_call = lm_head.call
+        cap = self
+
+        def _capturing_call(*args, **kwargs):
+            result = cap._orig_call(*args, **kwargs)
+            if cap.captured_result is None:
+                tt = getattr(result, "ttnn_tensor", None)
+                if isinstance(result, ttnn.Tensor):
+                    cap.captured_result = result
+                    return torch.tensor(0.0)
+                if tt is not None:
+                    cap.captured_result = result
+                    return torch.tensor(0.0)
+            return result
+
+        lm_head.call = _capturing_call
+
+    def uninstall(self, lm_head):
+        if self._orig_call is not None:
+            lm_head.call = self._orig_call
+
+
+def _causal_lm_forward_pure_ttnn(model, model_inputs: dict, mesh_device) -> CausalLMOutputWithPast:
+    """Run Ling/Bailing MoE V2 without HuggingFace ``forward`` on the transformer body.
+
+    The base model uses :meth:`TTNNBailingMoeV2Model.forward_ttnn` (raw ``ttnn.Tensor`` via
+    ``_bypass_tensor_wrapping``). ``lm_head`` also uses bypass so logits are raw ``ttnn.Tensor``;
+    :class:`_LmHeadCapture` and :func:`_resolve_captured_lm_logits_ttnn` accept that shape.
+    """
+    base = model.model
+    if not isinstance(base, TTNNBailingMoeV2Model):
+        raise TypeError(f"_causal_lm_forward_pure_ttnn requires TTNNBailingMoeV2Model, got {type(base).__name__}")
+
+    ids = model_inputs["input_ids"]
+    mesh_mapper = _mesh_replicate_mapper(mesh_device)
+    input_ids_tt = ttnn.from_torch(
+        ids.cpu().to(torch.int32),
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=out_mapper,
+        mesh_mapper=mesh_mapper,
     )
+
+    attention_mask = model_inputs.get("attention_mask")
+    past_key_values = model_inputs.get("past_key_values")
+    cache_position = model_inputs.get("cache_position")
+    position_ids = model_inputs.get("position_ids")
+
+    cp_ttnn = None
+    if cache_position is not None and isinstance(cache_position, torch.Tensor):
+        cp_ttnn = ttnn.from_torch(
+            cache_position.cpu().to(torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+
+    pos_ttnn = None
+    if position_ids is not None and isinstance(position_ids, torch.Tensor):
+        pos_ttnn = ttnn.from_torch(
+            position_ids.cpu().to(torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+
+    lm = model.lm_head
+    prev_lm_bypass = getattr(lm, "_bypass_tensor_wrapping", False)
+    try:
+        if isinstance(lm, TTNNModule):
+            lm._bypass_tensor_wrapping = True
+        base_out = base.forward_ttnn(
+            input_ids_tt,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=pos_ttnn,
+            cache_position=cp_ttnn,
+            use_cache=True,
+            return_dict=True,
+        )
+        logits = lm(base_out.last_hidden_state)
+    finally:
+        if isinstance(lm, TTNNModule):
+            lm._bypass_tensor_wrapping = prev_lm_bypass
+        ttnn.deallocate(input_ids_tt)
+        if cp_ttnn is not None:
+            ttnn.deallocate(cp_ttnn)
+        if pos_ttnn is not None:
+            ttnn.deallocate(pos_ttnn)
+
+    return CausalLMOutputWithPast(logits=logits, past_key_values=base_out.past_key_values)
 
 
 def decode_with_logit_postprocess(
     model,
-    input_ids: torch.LongTensor,
-    attention_mask: torch.LongTensor,
+    input_ids: Tensor,
+    attention_mask: Tensor,
     past_key_values,
     max_new_tokens: int,
     decode_params: DecodeParams,
     mesh_device,
     *,
     prompt_ids_tt: ttnn.Tensor | None = None,
+    decode_pure_ttnn: bool | None = None,
 ) -> ttnn.Tensor:
     """Autoregressive decode; state is ``input_ids_tt`` on mesh (HF only for ``prepare_inputs_for_generation`` / ``model()``).
 
+    A wrapper on ``lm_head.call`` captures the raw on-device ``ttnn_tensor``
+    before HF's ``logits.float()`` triggers the expensive ``_unwrap_to_torch``
+    dispatch path.  The wrapper returns a tiny scalar so ``.float()`` is free.
+    Each forward must capture on-device logits from ``lm_head`` (``TorchTTNNTensor`` with
+    ``ttnn_tensor``, or raw ``ttnn.Tensor`` when ``lm_head`` uses bypass).  If capture fails, this raises — there is no fallback through HF
+    ``outputs.logits`` (TTNN-only decode path; see CLAUDE.md symbiote CPU–TTNN roundtrip removal).
+
     If ``prompt_ids_tt`` is passed, it must match ``input_ids`` shape; the decode loop takes ownership and
     will deallocate it (avoid passing a tensor you still need elsewhere).
+
+    Decode keeps token ids in a Python ``list`` (``ids_seq``) and builds HF ``input_ids`` via
+    :func:`_hf_long_tensor_ids_batch1` instead of ``torch.cat`` / mesh round-trips.
+    Greedy: ``ttnn.argmax`` on the captured last row (via :func:`_lm_head_capture_last_row_bf16_1xv`).
+    ``temperature > 0``: ``ttnn.sampling`` on that same device row (via
+    :func:`_device_sample_token_id_from_lm_head_capture`).  With logits processors, logits are
+    ``to_torch``'d once for HF processors, then ``ttnn.sampling`` if ``temperature > 0``.
+
+    PyTorch is only used inside small helpers (HF ``prepare_inputs_for_generation`` expects
+    integer token tensors); this function body has no ``torch.`` calls.
+
+    ``_TRACE_RUNNING`` is forced True for the whole decode loop: TracedRun replay is unsafe here
+    because paged KV and cache state change every step while a recorded trace replays fixed buffer
+    traffic — that mismatch yields wrong logits (e.g. repeated punctuation). Normal forward keeps
+    output correct and matches the intended perf profile for this path.
+
+    When ``decode_pure_ttnn`` is True (default), Ling-mini uses :func:`_causal_lm_forward_pure_ttnn` so the
+    transformer stack runs as raw ``ttnn.Tensor`` (no ``TorchTTNNTensor`` in the body). Set env
+    ``SYMBIOTE_DECODE_PURE_TTNN=0`` or pass ``decode_pure_ttnn=False`` to use ``model(**model_inputs)``.
     """
-    torch_device = input_ids.device
+    import models.experimental.tt_symbiote.core.run_config as _run_config
+
+    if decode_pure_ttnn is None:
+        decode_pure_ttnn = os.environ.get("SYMBIOTE_DECODE_PURE_TTNN", "1") != "0"
+
+    if int(input_ids.shape[0]) != 1:
+        raise ValueError("decode_with_logit_postprocess supports batch size 1 only")
+    bookkeeping_device = input_ids.device
     mesh_mapper = _mesh_replicate_mapper(mesh_device)
     if prompt_ids_tt is not None:
         if tuple(int(i) for i in prompt_ids_tt.shape) != tuple(input_ids.shape):
             raise ValueError("prompt_ids_tt shape must match input_ids")
         input_ids_tt = prompt_ids_tt
     else:
-        input_ids_tt = ttnn.from_torch(
-            input_ids.detach().cpu().to(torch.int32).contiguous(),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
-        )
+        input_ids_tt = _prompt_ids_to_mesh_tt(input_ids, mesh_device, mesh_mapper)
 
     if max_new_tokens <= 0:
         ttnn.synchronize_device(mesh_device)
         return input_ids_tt
 
     logits_processor = build_logits_postprocess_processors(decode_params)
-    logits_warper = build_logits_postprocess_warpers(decode_params)
-    do_sample = decode_params.temperature > 0
 
     model_kwargs: dict = {
         "attention_mask": attention_mask,
@@ -539,10 +876,8 @@ def decode_with_logit_postprocess(
         "use_cache": True,
     }
     cur_len = input_ids.shape[-1]
-    model_kwargs = model._get_initial_cache_position(cur_len, torch_device, model_kwargs)
+    model_kwargs = model._get_initial_cache_position(cur_len, bookkeeping_device, model_kwargs)
 
-    # model.config.eos_token_id may only list <|endoftext|>; generation_config typically
-    # also contains <|im_end|> which is the real chat-turn terminator for Qwen2/Ling models.
     _eos_cfg = model.config.eos_token_id
     _eos_gen = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
     _eos_set: set[int] = set()
@@ -560,69 +895,88 @@ def decode_with_logit_postprocess(
 
     vocab_sz = int(getattr(model.config, "vocab_size", None) or 0)
 
-    # Traces bake `cache_position` (a torch.Tensor) as a fixed value at capture time.
-    # Replaying with a stale cache_position makes every decode step write to the same
-    # KV slot, producing identical logits → repeating tokens. Force normal (non-traced)
-    # execution for the decode loop so each step gets fresh KV cache writes.
     _prev_trace_running = _run_config._TRACE_RUNNING
     _run_config._TRACE_RUNNING = True
 
-    for _ in range(max_new_tokens):
-        ids_torch = _ttnn_to_torch_mesh(input_ids_tt, mesh_device).long().to(torch_device)
-        model_inputs = model.prepare_inputs_for_generation(ids_torch, **model_kwargs)
-        outputs = model(**model_inputs, return_dict=True)
+    cap = _LmHeadCapture()
+    cap.install(model.lm_head)
 
-        tt_logits_raw = getattr(outputs.logits, "ttnn_tensor", None)
-        if tt_logits_raw is not None and not do_sample:
-            tt_next, next_id = _pick_next_token_device_logits(
-                tt_logits_raw, logits_processor, ids_torch, mesh_device, vocab_sz
-            )
-        elif tt_logits_raw is not None and do_sample and not logits_processor:
-            next_id = _sample_next_id_from_tt_logits(mesh_device, tt_logits_raw, decode_params, vocab_sz)
+    ids_seq = [int(x) for x in input_ids[0].tolist()]
+
+    try:
+        for _ in range(max_new_tokens):
+            ids_for_hf = _hf_long_tensor_ids_batch1(ids_seq, bookkeeping_device)
+            model_inputs = model.prepare_inputs_for_generation(ids_for_hf, **model_kwargs)
+            if decode_pure_ttnn and isinstance(model.model, TTNNBailingMoeV2Model):
+                outputs = _causal_lm_forward_pure_ttnn(model, model_inputs, mesh_device)
+            else:
+                outputs = model(**model_inputs, return_dict=True)
+
+            captured = cap.captured_result
+            cap.captured_result = None
+
+            if captured is None:
+                raise RuntimeError(
+                    "lm_head did not yield a TTNN-backed logits tensor this step (capture empty). "
+                    "Decode expects TTNN logits only — fix lm_head / symbiote wiring so "
+                    "`TorchTTNNTensor.ttnn_tensor` is set (no HF outputs.logits fallback)."
+                )
+            if not logits_processor:
+                if decode_params.temperature > 0:
+                    next_id = _device_sample_token_id_from_lm_head_capture(
+                        captured, mesh_device, vocab_sz, decode_params
+                    )
+                else:
+                    next_id = _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz)
+            else:
+                logits_cpu = _captured_logits_last_row_to_torch(captured, mesh_device)
+                row = _trim_logits_to_vocab(logits_cpu, vocab_sz)
+                scores = logits_processor(ids_for_hf, row)
+                if decode_params.temperature > 0:
+                    next_id = _sample_next_id_ttnn_sampling(
+                        mesh_device,
+                        scores,
+                        decode_params,
+                        _mesh_replicate_mapper(mesh_device),
+                    )
+                else:
+                    next_id = _greedy_argmax_logits_row(scores)
             tt_next = _tt_tensor_replicated_token_id(mesh_device, next_id)
-        else:
-            next_token_logits = outputs.logits[:, -1, :].to(copy=True, dtype=torch.float32, device=torch_device)
-            next_token_logits = _trim_logits_to_vocab(next_token_logits, vocab_sz)
-            tt_next = _pick_next_token_ttnn_after_torch_processors(
-                mesh_device,
-                ids_torch,
-                next_token_logits,
-                logits_processor,
-                logits_warper,
-                do_sample,
-                decode_params,
+
+            model_kwargs = model._update_model_kwargs_for_generation(
+                outputs,
+                model_kwargs,
+                is_encoder_decoder=getattr(model.config, "is_encoder_decoder", False),
             )
-            next_id = int(_ttnn_to_torch_mesh(tt_next, mesh_device).reshape(-1)[0].item())
+            del outputs
 
-        model_kwargs = model._update_model_kwargs_for_generation(
-            outputs,
-            model_kwargs,
-            is_encoder_decoder=getattr(model.config, "is_encoder_decoder", False),
-        )
-        del outputs
+            new_ids_tt = ttnn.concat([input_ids_tt, tt_next], dim=-1)
+            ttnn.deallocate(input_ids_tt)
+            ttnn.deallocate(tt_next)
+            input_ids_tt = new_ids_tt
 
-        new_ids_tt = ttnn.concat([input_ids_tt, tt_next], dim=-1)
-        ttnn.deallocate(input_ids_tt)
-        ttnn.deallocate(tt_next)
-        input_ids_tt = new_ids_tt
+            ids_seq.append(next_id)
 
-        if _token_is_eos(next_id, eos_token_id):
-            break
+            if _token_is_eos(next_id, eos_token_id):
+                break
 
-        gen_hist.append(next_id)
-        w = _DECODE_CYCLE_WINDOW
-        if len(gen_hist) >= 2 * w and gen_hist[-w:] == gen_hist[-2 * w : -w]:
-            break
+            gen_hist.append(next_id)
+            w = _DECODE_CYCLE_WINDOW
+            if len(gen_hist) >= 2 * w and gen_hist[-w:] == gen_hist[-2 * w : -w]:
+                break
 
-        if prev_tok is not None and next_id == prev_tok:
-            same_tok_run += 1
-        else:
-            same_tok_run = 1
-            prev_tok = next_id
-        if same_tok_run >= _DECODE_MAX_SAME_TOKEN_STREAK:
-            break
+            if prev_tok is not None and next_id == prev_tok:
+                same_tok_run += 1
+            else:
+                same_tok_run = 1
+                prev_tok = next_id
+            if same_tok_run >= _DECODE_MAX_SAME_TOKEN_STREAK:
+                break
 
-    _run_config._TRACE_RUNNING = _prev_trace_running
+    finally:
+        _run_config._TRACE_RUNNING = _prev_trace_running
+        cap.uninstall(model.lm_head)
+
     ttnn.synchronize_device(mesh_device)
     return input_ids_tt
 
