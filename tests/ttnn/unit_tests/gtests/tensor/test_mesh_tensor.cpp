@@ -557,6 +557,11 @@ INSTANTIATE_TEST_SUITE_P(
 //                    Data Movement Tests (2x2 mesh, Runtime Tensor)
 // ======================================================================================
 
+class MeshDevice2x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 2}}) {}
+};
+
 using MeshTensorDataMovementTest = MeshDevice2x2Fixture;
 
 using tt::tt_metal::DistributedHostBuffer;
