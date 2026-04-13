@@ -95,7 +95,7 @@ def test_all_gather_16x4(
         assert eq, mess
 
 
-@pytest.mark.requires_device(["QUAD"])
+@pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],

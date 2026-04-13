@@ -134,7 +134,7 @@ def mesh_device(request, device_params):
     # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
     # torch inherits this setting, which makes CPU-side reference model computations extremely slow.
     # We restore a reasonable thread count for torch.
-    if requested_system_name.upper() in ("DUAL", "DUAL_BH", "QUAD"):
+    if requested_system_name.upper() in ("DUAL", "DUAL_BH", "QUAD", "QUAD_BH"):
         num_torch_threads = max(1, os.cpu_count())
         logger.info(f"Restoring torch num_threads to {num_torch_threads}")
         torch.set_num_threads(num_torch_threads)
@@ -297,7 +297,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_device(device_types): mark test to run only on specified device types. "
-        "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
+        "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, DUAL_BH, QUAD, QUAD_BH. "
         "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
     )
     config.addinivalue_line(
