@@ -134,7 +134,7 @@ def mesh_device(request, device_params):
     # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
     # torch inherits this setting, which makes CPU-side reference model computations extremely slow.
     # We restore a reasonable thread count for torch.
-    if requested_system_name.upper() in ("DUAL", "QUAD"):
+    if requested_system_name.upper() in ("DUAL", "DUAL_BH", "QUAD"):
         num_torch_threads = max(1, os.cpu_count())
         logger.info(f"Restoring torch num_threads to {num_torch_threads}")
         torch.set_num_threads(num_torch_threads)
