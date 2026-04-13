@@ -59,7 +59,7 @@ def transpose(
     logger.info(output)
     assert passing
 
-    if expected_program_cache_size != None:
+    if expected_program_cache_size is not None:
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 

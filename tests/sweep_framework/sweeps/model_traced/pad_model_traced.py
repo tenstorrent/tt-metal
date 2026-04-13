@@ -107,7 +107,7 @@ def run(
     elif output_padded_shape is not None and input_tensor_start is not None:
         # Calculate padding from output_padded_shape (alternative format)
         calculated_padding = []
-        for i in range(len(shape)):
+        for i, shape in enumerate(shape):
             start = input_tensor_start[i] if i < len(input_tensor_start) else 0
             end = output_padded_shape[i] - shape[i] - start
             calculated_padding.append([start, max(0, end)])

@@ -267,7 +267,7 @@ def run_test_rotary_embedding_llama(
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
     does_pass = True
-    for i in range(len(pytorch_out)):
+    for i, pytorch_out in enumerate(pytorch_out):
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
         assert pytorch_out[i].shape == tt_out[i].shape
@@ -394,7 +394,7 @@ def run_test_row_major_rotary_embedding_llama(
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
     does_pass = True
-    for i in range(len(pytorch_out)):
+    for i, pytorch_out in enumerate(pytorch_out):
         out_pass, output_pcc = comp_pcc(pytorch_out[i], tt_out[i], pcc)
         # Check each shape matches
         assert pytorch_out[i].shape == tt_out[i].shape

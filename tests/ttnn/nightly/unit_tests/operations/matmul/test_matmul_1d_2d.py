@@ -485,7 +485,7 @@ def test_multi_core_matmul_2d_wh(
     if has_bias:
         pt_out = pt_out + bias
 
-    if activation != None:
+    if activation is not None:
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 

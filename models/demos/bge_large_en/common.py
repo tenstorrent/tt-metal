@@ -22,7 +22,7 @@ def load_config(config_name="configs/config.json"):
 
 def load_torch_model(reference_model, target_prefix="", model_location_generator=None):
     """Load BGE-large-en-v1.5 model weights."""
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         torch_model = transformers.AutoModel.from_pretrained(
             "BAAI/bge-large-en-v1.5", local_files_only=os.getenv("CI") == "true"
         )
@@ -43,7 +43,7 @@ def load_torch_model(reference_model, target_prefix="", model_location_generator
     keys = [name for name, parameter in reference_model.state_dict().items()]
     values = [parameter for name, parameter in module_state_dict.items()]
 
-    for i in range(len(keys)):
+    for i, keys in enumerate(keys):
         new_state_dict[keys[i]] = values[i]
 
     reference_model.load_state_dict(new_state_dict)

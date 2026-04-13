@@ -15,7 +15,7 @@ VANILLA_UNET_PCC_WH = 0.97700
 
 
 def load_reference_model(model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         weights_path = "models/demos/vision/segmentation/vanilla_unet/unet.pt"
         if not os.path.exists(weights_path):
             os.system("bash models/demos/vision/segmentation/vanilla_unet/weights_download.sh")
@@ -35,7 +35,7 @@ def load_reference_model(model_location_generator=None):
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
     values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
+    for i, keys in enumerate(keys):
         new_state_dict[keys[i]] = values[i]
 
     reference_model.load_state_dict(new_state_dict)

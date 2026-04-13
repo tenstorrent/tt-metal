@@ -143,13 +143,13 @@ def run(
         grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, alpha=alpha, memory_config=output_memory_config
     )
 
-    for i in range(len(output_tensor)):
+    for i, output_tensor in enumerate(output_tensor):
         output_tensor[i] = ttnn.to_torch(output_tensor[i])
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = [True, 1.0]
 
-    for i in range(len(output_tensor)):
+    for i, output_tensor in enumerate(output_tensor):
         pcc_tmp = check_with_pcc(torch_output_tensor[i], output_tensor[i], 0.999)
         pcc[0] = pcc[0] and pcc_tmp[0]
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))

@@ -423,7 +423,7 @@ class TTSampling(LightweightModule):
             topk_values_list = []
             topk_indices_list = []
 
-            for i in range(len(x_bf16_list)):
+            for i, x_bf16_list in enumerate(x_bf16_list):
                 topk_values, topk_indices = ttnn.topk(
                     x_bf16_list[i],
                     k=self.max_top_k,
@@ -439,7 +439,7 @@ class TTSampling(LightweightModule):
             topk_values_gathered_bf16_interleaved = ttnn.concat(topk_values_list, dim=3)
             topk_indices_gathered = ttnn.concat(topk_indices_list, dim=3)
 
-            for i in range(len(topk_indices_list)):
+            for i, topk_indices_list in enumerate(topk_indices_list):
                 ttnn.deallocate(topk_values_list[i])
                 ttnn.deallocate(topk_indices_list[i])
 

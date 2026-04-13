@@ -240,7 +240,7 @@ def handle_slice(func, args, kwargs):
     ]
     if len(args) == 5:
         steps = []
-        for i in range(len(input_shape)):
+        for i, input_shape in enumerate(input_shape):
             if i == dim:
                 steps.append(args[4])
             else:

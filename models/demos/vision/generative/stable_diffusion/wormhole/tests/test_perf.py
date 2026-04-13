@@ -42,7 +42,7 @@ def unsqueeze_all_params_to_4d(params):
         for key in params.keys():
             params[key] = unsqueeze_all_params_to_4d(params[key])
     elif isinstance(params, ttnn.ttnn.model_preprocessing.ParameterList):
-        for i in range(len(params)):
+        for i, params in enumerate(params):
             params[i] = unsqueeze_all_params_to_4d(params[i])
     elif isinstance(params, ttnn.Tensor):
         params = unsqueeze_to_4D(params)

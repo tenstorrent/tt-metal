@@ -176,7 +176,7 @@ def test_moreh_sgd(
 
         assert passing
     if momentum == 0:
-        assert dev_momentum_buffer_out == None
+        assert dev_momentum_buffer_out is None
 
 
 @pytest.mark.parametrize(

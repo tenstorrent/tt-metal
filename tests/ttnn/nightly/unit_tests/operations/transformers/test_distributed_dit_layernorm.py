@@ -147,7 +147,7 @@ def run_distributed_dit_layernorm(
 
     # Run post_allgather on each chunk with gathered stats
     tt_out = []
-    for idx in range(len(tt_inp)):
+    for idx, tt_inp in enumerate(tt_inp):
         tt_out.append(
             ttnn.experimental.dit_layernorm_post_allgather(
                 tt_inp[idx],
@@ -421,7 +421,7 @@ def run_distributed_dit_layernorm_batched_affine(
 
     # Run post_allgather on each chunk with gathered stats and batched weight/bias
     tt_out = []
-    for idx in range(len(tt_inp)):
+    for idx, tt_inp in enumerate(tt_inp):
         tt_out.append(
             ttnn.experimental.dit_layernorm_post_allgather(
                 tt_inp[idx],

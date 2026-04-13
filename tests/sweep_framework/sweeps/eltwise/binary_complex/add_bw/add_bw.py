@@ -128,7 +128,7 @@ def run(
 
     passed = []
     output_string = ""
-    for i in range(len(torch_output_tensors)):
+    for i, torch_output_tensors in enumerate(torch_output_tensors):
         torch_output_tensor = torch_output_tensors[i]
         output_tensor = torch.complex(
             ttnn.to_torch(output_tensors[i].real).to(torch.float32),

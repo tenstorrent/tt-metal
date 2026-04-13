@@ -136,7 +136,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     h_prev = ttnn.Tensor(h_prev, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device, h_memory_config)
 
     actual = []
-    for idx in range(len(a_chunks)):
+    for idx, a_chunks in enumerate(a_chunks):
         a_chunk = to_device(a_chunks[idx])
         bx_chunk = to_device(bx_chunks[idx])
 

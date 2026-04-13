@@ -90,7 +90,7 @@ def custom_preprocessor(torch_model, name, mesh_mapper=None):
         tranformer_block_preprocessor = create_custom_mesh_preprocessor_transformer_block(mesh_mapper)
         patch_merging_preprocessor = create_custom_mesh_preprocessor_patch_merging(mesh_mapper)
         depths_list = [2, 2, 18, 2]
-        for i_stage in range(len(depths_list)):
+        for i_stage, depths_list in enumerate(depths_list):
             index_list = [1, 3, 5, 7]
             parameters["features"][index_list[i_stage]] = {}
             for i_layer in range(depths_list[i_stage]):

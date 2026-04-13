@@ -433,7 +433,7 @@ def gen_default_dtype_layout_rm_device(
 
 
 def sanitize_args(input_shapes, input_setup):
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         shape = input_shapes[i]
 
         if (
@@ -442,7 +442,7 @@ def sanitize_args(input_shapes, input_setup):
             )  # Shape cannot be tilized
             or (
                 input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
-                and input_setup[i]["input_mem_config"] != None
+                and input_setup[i]["input_mem_config"] is not None
                 and shape[-1] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
@@ -464,7 +464,7 @@ def gen_dtype_layout_device(
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
 
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         dtype_mem_config_layout = []
 
         for dtype, layout, input_mem_config in product(
@@ -510,7 +510,7 @@ def gen_dtype_layout_device(
 def sanitize_args_layernorm(
     input_shapes, input_setup, runtime_tile_padding_layernorm=False, runtime_tile_padding_add_layernorm=False
 ):
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         shape = input_shapes[i]
         if (
             (
@@ -528,7 +528,7 @@ def sanitize_args_layernorm(
             )  # Shape cannot be tilized
             or (
                 input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
-                and input_setup[i]["input_mem_config"] != None
+                and input_setup[i]["input_mem_config"] is not None
                 and shape[3] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
@@ -550,7 +550,7 @@ def gen_dtype_layout_device_layernorm(
     # last buffer_types option is for output buffer
     input_setups = []
 
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         input_setup = []
 
         for dtype, layout, input_mem_config in product(
@@ -2055,7 +2055,7 @@ def gen_dtype_layout_device_coregrid(
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
 
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         dtype_mem_config_layout = []
 
         for dtype, layout, input_mem_config in product(
@@ -2112,7 +2112,7 @@ def gen_dtype_layout_device_matmul(
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
 
-    for i in range(len(input_shapes)):
+    for i, input_shapes in enumerate(input_shapes):
         dtype_mem_config_layout = []
 
         for dtype, layout, input_mem_config in product(

@@ -31,7 +31,7 @@ class TtTensorLoader:
             torch_tensor=None,
             return_as_torch=False,
         ):
-            if layer_num == None:
+            if layer_num is None:
                 tensor_name = name
             else:
                 tensor_name = f"layers.{layer_num}.{name}"

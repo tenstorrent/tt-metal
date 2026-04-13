@@ -11,7 +11,7 @@ SWIN_S_L1_SMALL_SIZE = 32768
 
 
 def load_torch_model(torch_model, i=0, j=0, module="model", model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         model = models.swin_s(weights="IMAGENET1K_V1")
         state_dict = model.state_dict()
     else:
@@ -27,7 +27,7 @@ def load_torch_model(torch_model, i=0, j=0, module="model", model_location_gener
         keys = [name for name, parameter in torch_model.state_dict().items()]
         values = [parameter for name, parameter in mlp_state_dict.items()]
 
-        for i in range(len(keys)):
+        for i, keys in enumerate(keys):
             new_state_dict[keys[i]] = values[i]
 
     elif module == "patchmerging":
@@ -36,7 +36,7 @@ def load_torch_model(torch_model, i=0, j=0, module="model", model_location_gener
         keys = [name for name, parameter in torch_model.state_dict().items()]
         values = [parameter for name, parameter in patchmerging_state_dict.items()]
 
-        for i in range(len(keys)):
+        for i, keys in enumerate(keys):
             new_state_dict[keys[i]] = values[i]
 
     elif module == "attention":
@@ -45,7 +45,7 @@ def load_torch_model(torch_model, i=0, j=0, module="model", model_location_gener
         keys = [name for name, parameter in torch_model.state_dict().items()]
         values = [parameter for name, parameter in ds_state_dict.items()]
 
-        for i in range(len(keys)):
+        for i, keys in enumerate(keys):
             new_state_dict[keys[i]] = values[i]
 
     elif module == "transformer_block":
@@ -54,7 +54,7 @@ def load_torch_model(torch_model, i=0, j=0, module="model", model_location_gener
         keys = [name for name, parameter in torch_model.state_dict().items()]
         values = [parameter for name, parameter in ds_state_dict.items()]
 
-        for i in range(len(keys)):
+        for i, keys in enumerate(keys):
             new_state_dict[keys[i]] = values[i]
 
     else:

@@ -91,7 +91,7 @@ def run_demo_semantic_segmentation(device, model_location_generator, device_batc
         h = w = int(math.sqrt(ttnn_output.shape[-1]))
         ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
         ref_logits = reference_model(input).logits
-        for i in range(len(masks)):
+        for i, masks in enumerate(masks):
             mask = masks[i]
             ref_up = torch.nn.functional.interpolate(
                 ref_logits[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False

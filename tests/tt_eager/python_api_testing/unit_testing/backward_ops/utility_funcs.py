@@ -69,7 +69,7 @@ def data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim, required_grad
 
 def compare_results(tt_tensor, golden_tensor, pcc=0.99):
     status = True
-    for i in range(len(tt_tensor)):
+    for i, tt_tensor in enumerate(tt_tensor):
         tt_out_tensor = tt_tensor[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
@@ -83,7 +83,7 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
 
 def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     status = True
-    for i in range(len(tt_tensor)):
+    for i, tt_tensor in enumerate(tt_tensor):
         tt_out_tensor = tt_tensor[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
@@ -95,7 +95,7 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
 
 def compare_all_close(tt_tensor, golden_tensor, atol=4, rtol=1e-1):
     status = True
-    for i in range(len(tt_tensor)):
+    for i, tt_tensor in enumerate(tt_tensor):
         tt_out_tensor = tt_tensor[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_all, comp_out = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=atol, rtol=rtol)

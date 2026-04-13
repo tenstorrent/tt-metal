@@ -277,7 +277,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     tt_out = ttnn.to_torch(ttnn_result)
 
     # Verify results
-    if fused_activation != None:
+    if fused_activation is not None:
         expected_pcc = 0.98
     else:
         expected_pcc = 0.99

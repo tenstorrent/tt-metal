@@ -53,7 +53,7 @@ class TtDeiTForImageClassification(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[tuple]:
-        assert labels == None, "we do not support training, hence labels should be None"
+        assert labels is None, "we do not support training, hence labels should be None"
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.deit(

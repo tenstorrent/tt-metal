@@ -492,7 +492,7 @@ def run_conv_with_split(
     else:
         split_bias_tensors = [torch_bias_tensor]
 
-    for i in range(len(split_weight_tensors)):
+    for i, split_weight_tensors in enumerate(split_weight_tensors):
         split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
 
     conv_config = ttnn.Conv2dConfig(
@@ -1639,8 +1639,8 @@ def test_sd_conv_wh(
 
     # Skip test cases raising OOM, but do not affect the SD e2e test
     if (
-        (input_channels == 320 and config_override == None and output_dtype == ttnn.bfloat16)
-        or (input_channels == 960 and config_override == None and fp32_accum == True)
+        (input_channels == 320 and config_override is None and output_dtype == ttnn.bfloat16)
+        or (input_channels == 960 and config_override is None and fp32_accum == True)
         or (
             output_channels == 1280
             and input_height == 32
@@ -5177,7 +5177,7 @@ def test_conv2d_1kX1k(
     config_override["act_block_h"] = act_block_h_override
     slice_config = None
 
-    if slice_type != None:
+    if slice_type is not None:
         slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type)
 
     run_conv(

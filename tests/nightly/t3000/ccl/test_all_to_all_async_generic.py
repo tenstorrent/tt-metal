@@ -135,7 +135,7 @@ def run_all_to_all_impl(
 
         if cluster_axis == 0:
             output_tensor_golden_transposed = []
-            for i in range(len(output_tensor_golden)):
+            for i, output_tensor_golden in enumerate(output_tensor_golden):
                 col = i // mesh_device.shape[1]
                 row = i % mesh_device.shape[1]
                 index = row * mesh_device.shape[0] + col
@@ -198,7 +198,7 @@ def run_all_to_all_impl(
 
     passed = True
     if do_check:
-        for tensor_index in range(len(tt_out_tensor_list)):
+        for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
             tt_out_tensor = tt_out_tensor_list[tensor_index]
             output_tensors = output_tensor_goldens_list[tensor_index if not reuse_inputs else 0]
             tt_output_tensor = ttnn.to_torch(

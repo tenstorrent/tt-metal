@@ -212,7 +212,7 @@ def run_mesh_partition_test(
     first_failed_tensor_index = None
     failed_indices = []
     expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 1.0
-    for tensor_index in range(len(tt_out_tensor_list)):
+    for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=mesh_axes),

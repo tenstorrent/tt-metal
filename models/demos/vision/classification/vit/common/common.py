@@ -12,7 +12,7 @@ def load_torch_model(model_location_generator=None, embedding=False):
     config = transformers.ViTConfig.from_pretrained("google/vit-base-patch16-224")
     if not embedding:
         config.num_hidden_layers = 12
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
         return model.eval()
     else:

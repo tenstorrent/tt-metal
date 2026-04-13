@@ -80,7 +80,7 @@ def get_updated_message(message, perf_result):
         tokens = base_message.split()
         # Build once from the original tokens to avoid cascading on appended tokens
         added_parts = []
-        for i in range(len(tokens)):
+        for i, tokens in enumerate(tokens):
             if tokens[i] == "ROOFLINE":
                 if (i + 1) < len(tokens):
                     suffix = label_suffix or ""

@@ -342,7 +342,7 @@ def test_sd35_transformer2d_model(
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 
     # Compare outputs
-    for i in range(len(tt_output_tensors)):
+    for i, tt_output_tensors in enumerate(tt_output_tensors):
         logger.info(f"Checking output tensor {i}")
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
         assert_quality(torch_output.squeeze(), tt_output_torch.squeeze(), pcc=0.998_000)

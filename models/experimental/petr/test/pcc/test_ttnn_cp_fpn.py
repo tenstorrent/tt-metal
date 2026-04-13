@@ -29,7 +29,7 @@ def test_cp_fpn(device, reset_seeds):
     ttnn_input_2 = ttnn.from_torch(input_b.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_output = ttnn_model(device, [ttnn_input_1, ttnn_input_2])
 
-    for i in range(len(ttnn_output)):
+    for i, ttnn_output in enumerate(ttnn_output):
         ttnn_output_check = ttnn.to_torch(ttnn_output[i])
         ttnn_output_check = ttnn_output_check.permute(0, 3, 1, 2)
         pcc_threshold = 0.99

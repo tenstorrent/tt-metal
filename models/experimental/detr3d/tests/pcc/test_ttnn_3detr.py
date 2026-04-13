@@ -113,7 +113,7 @@ def test_3detr_model(encoder_only, input_shape, device):
 
         # Check auxiliary outputs only if flag is enabled
         if CHECK_AUX_OUTPUTS:
-            for i in range(len(ref_aux_outputs)):
+            for i, ref_aux_outputs in enumerate(ref_aux_outputs):
                 for key in ref_aux_outputs[i]:
                     if key in SKIP_KEYS:
                         logger.info(f"Aux Output {i} Key '{key}' - Skipped (in SKIP_KEYS)")

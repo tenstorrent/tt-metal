@@ -126,7 +126,7 @@ def _parse_signposts(rows, *, op_code_idx=0, op_type_idx=1):
     if trace_capture_open is not None and trace_capture_close is not None:
         signpost_info["trace_capture_range"] = (trace_capture_open, trace_capture_close)
 
-    for i in range(len(trace_exec_closes)):
+    for i, trace_exec_closes in enumerate(trace_exec_closes):
         signpost_info["trace_execution_ranges"].append((trace_exec_opens[i] + 1, trace_exec_closes[i] - 1))
 
     return signpost_info

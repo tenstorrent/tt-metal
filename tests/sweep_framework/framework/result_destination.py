@@ -323,7 +323,7 @@ class FileResultDestination(ResultDestination):
 
         # Map internal TestStatus enum (or strings) to file schema enum values via module helper
 
-        for i in range(len(results)):
+        for i, results in enumerate(results):
             header = header_info[i]
             raw = results[i]
 

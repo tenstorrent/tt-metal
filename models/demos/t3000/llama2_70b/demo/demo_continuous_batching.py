@@ -244,7 +244,7 @@ def run_decode(
             next_token = sampling_func(next_logits)
 
             # Update datastructures
-            for i in range(len(batch_valid)):
+            for i, batch_valid in enumerate(batch_valid):
                 if batch_valid[i]:
                     batch_token_inputs[i] = next_token[i].item()
                     batch_token_outputs[i].append(next_token[i].item())

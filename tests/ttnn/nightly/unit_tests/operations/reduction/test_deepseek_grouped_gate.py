@@ -100,7 +100,7 @@ def get_valid_expert_sets(biased_scores_row, selected_groups, n_activated_expert
     # Partition experts into: strictly above threshold, at threshold (tied)
     above_threshold = []
     at_threshold = []
-    for e in range(len(masked_scores)):
+    for e, masked_scores in enumerate(masked_scores):
         score = masked_scores[e].item()
         if score > threshold + atol:
             above_threshold.append(e)

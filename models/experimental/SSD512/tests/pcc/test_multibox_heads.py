@@ -224,7 +224,7 @@ def test_multibox_heads(device, pcc, size, reset_seeds):
         dtype=ttnn.bfloat8_b,
     )
 
-    for source_idx in range(len(sources)):
+    for source_idx, sources in enumerate(sources):
         tt_loc = ttnn.to_torch(tt_loc_preds[source_idx])
         tt_conf = ttnn.to_torch(tt_conf_preds[source_idx])
         tt_loc = tt_loc.float()

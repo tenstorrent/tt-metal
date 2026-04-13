@@ -72,7 +72,7 @@ class TtSSDregressionhead(nn.Module):
 
     def forward(self, x: List[ttnn.Tensor]) -> ttnn.Tensor:
         all_results = []
-        for i in range(len(x)):
+        for i, x in enumerate(x):
             result = self._get_result_from_module_list(x[i], i * 2)
             result = tt_to_torch_tensor(result)
             N, _, H, W = result.shape

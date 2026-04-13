@@ -108,7 +108,7 @@ class TtTrOCRAttention(nn.Module):
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
-        if attention_mask != None:
+        if attention_mask is not None:
             attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device, put_on_device=False)
 
         is_cross_attention = key_value_states is not None
@@ -172,7 +172,7 @@ class TtTrOCRAttention(nn.Module):
 
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
 
-            if attention_mask == None:
+            if attention_mask is None:
                 attn_weights = ttnn.add(attn_weights, attention_mask)
 
             attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)

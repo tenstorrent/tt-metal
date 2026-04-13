@@ -61,7 +61,7 @@ class SwinTransformer(nn.Module):
         total_stage_blocks = sum(depths)
         stage_block_id = 0
         # build SwinTransformer blocks
-        for i_stage in range(len(depths)):
+        for i_stage, depths in enumerate(depths):
             stage: List[nn.Module] = []
             dim = embed_dim * 2**i_stage
             for i_layer in range(depths[i_stage]):

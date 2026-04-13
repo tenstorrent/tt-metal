@@ -108,10 +108,10 @@ def main():
     issues = parser.parse_args().issues
     username = parser.parse_args().username
 
-    if token == None:
+    if token is None:
         print("You forget to provide the --token")
 
-    if issues != None:
+    if issues is not None:
         reviewers_info = get_reviewers_and_pending_reviewers(issues, token)
 
         for pr, info in reviewers_info.items():
@@ -119,7 +119,7 @@ def main():
                 f"PR {pr} - Reviewers: {info['reviewers']}, State: {info['state']}, Pending Reviewers: {info['pending_reviewers']}, Mergeable: {info['mergeable']}"
             )
 
-    elif username != None:
+    elif username is not None:
         pending_reviews = get_my_pending_reviews(username, token)
         for title, url in pending_reviews:
             print(f"{url} -> {title}")

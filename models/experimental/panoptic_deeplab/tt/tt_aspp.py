@@ -193,7 +193,7 @@ class TtASPP(LightweightModule):
         pooled = ttnn.reshape(pooled, (N, output_h, output_w, C))
 
         # Move all branches to DRAM
-        for i in range(len(res)):
+        for i, res in enumerate(res):
             res[i] = ttnn.to_memory_config(res[i], ttnn.DRAM_MEMORY_CONFIG)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -228,7 +228,7 @@ class TtASPP(LightweightModule):
 
         # Ensure all tensors have the same dtype before concatenation
         target_dtype = ttnn.bfloat8_b
-        for i in range(len(res)):
+        for i, res in enumerate(res):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
 
@@ -341,7 +341,7 @@ class TtASPP(LightweightModule):
 
         # Ensure all tensors have the same dtype before concatenation
         target_dtype = ttnn.bfloat8_b
-        for i in range(len(res)):
+        for i, res in enumerate(res):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
 

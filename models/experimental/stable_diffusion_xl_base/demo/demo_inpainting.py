@@ -150,7 +150,7 @@ def run_demo_inference(
     mask = torch.cat(mask, dim=0)
 
     # This is used in the inpainting pipeline, if the following arguments are provided:
-    # - masked_image_latents == None
+    # - masked_image_latents is None
     # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
     masked_image = [i * (m < 0.5) for i, m in zip(init_image, mask)]
     masked_image = torch.stack(masked_image, dim=0)

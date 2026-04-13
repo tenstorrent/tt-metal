@@ -803,7 +803,7 @@ def print_error_histograms(
         print(f"\n📊 ABSOLUTE ERROR HISTOGRAM ({tensor_name}):")
         max_count = max(counts) if max(counts) > 0 else 1
 
-        for i in range(len(counts)):
+        for i, counts in enumerate(counts):
             bin_start = bin_edges[i]
             bin_end = bin_edges[i + 1]
             count = counts[i]

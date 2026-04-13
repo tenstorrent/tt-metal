@@ -40,7 +40,7 @@ class SQUADV2Dataset(Dataset):
         """
 
         self.data = []
-        for i in range(len(dataset_question)):
+        for i, dataset_question in enumerate(dataset_question):
             self.data.append(
                 (
                     tokenizer.batch_encode_plus(

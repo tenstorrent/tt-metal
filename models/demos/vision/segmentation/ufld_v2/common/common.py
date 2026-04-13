@@ -17,7 +17,7 @@ def load_torch_model(model_location_generator=None, use_pretrained_weight=True):
     if not use_pretrained_weight:
         return torch_model
 
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         weights_path = "models/demos/vision/segmentation/ufld_v2/common/tusimple_res34.pth"
         if not os.path.exists(weights_path):
             os.system("bash models/demos/vision/segmentation/ufld_v2/common/weights_download.sh")

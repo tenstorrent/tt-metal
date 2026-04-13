@@ -438,7 +438,7 @@ class TtVAD:
 
         r_list, c_list = linear_sum_assignment(dist)
 
-        for i in range(len(r_list)):
+        for i, r_list in enumerate(r_list):
             if dist[r_list[i], c_list[i]] <= match_dis_thresh:
                 matched_bbox_result[c_list[i]] = r_list[i]
 

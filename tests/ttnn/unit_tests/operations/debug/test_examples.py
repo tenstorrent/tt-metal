@@ -48,10 +48,10 @@ def test_composite_example_multiple_return(device, height, width, return_outputs
         output_tensor1 = ttnn.to_torch(output1)
         assert_equal(torch_output_tensor, output_tensor1)
     else:
-        assert output1 == None
+        assert output1 is None
 
     if return_output2:
         output_tensor2 = ttnn.to_torch(output2)
         assert_equal(torch_output_tensor, output_tensor2)
     else:
-        assert output2 == None
+        assert output2 is None

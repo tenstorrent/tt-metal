@@ -169,7 +169,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
         feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask)
         reference_output = feats.last_hidden_state
-        if return_intermediate != None:
+        if return_intermediate is not None:
             intermediates = [tens_input[:, :ntok, :]]
             for l in range(n_layers):
                 intermediates.append(callable_reference.layers[l](tt_intermed_torch[l])[0])

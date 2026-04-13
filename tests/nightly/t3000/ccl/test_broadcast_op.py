@@ -213,7 +213,7 @@ def run_broadcast_impl(
 
     passed = True
     # compare tensors
-    for iter_idx in range(len(tt_out_tensor_list)):
+    for iter_idx, tt_out_tensor_list in enumerate(tt_out_tensor_list):
         output_tensor_torch = ttnn.to_torch(
             tt_out_tensor_list[iter_idx],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=cluster_axis),

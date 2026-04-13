@@ -256,7 +256,7 @@ def test_deepseek_v3_mla_all_gather_trace_mode(
         # Verify correctness
         logger.info("Verifying correctness")
         passed = True
-        for tensor_index in range(len(tt_out_tensor_list)):
+        for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
             tt_out_tensor = tt_out_tensor_list[tensor_index]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()

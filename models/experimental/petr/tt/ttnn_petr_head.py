@@ -217,7 +217,7 @@ class ttnn_PETRHead:
         """
         PETR Head Forward function.
         """
-        for i in range(len(mlvl_feats)):
+        for i, mlvl_feats in enumerate(mlvl_feats):
             mlvl_feats[i] = ttnn.to_memory_config(mlvl_feats[i], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = mlvl_feats[0]

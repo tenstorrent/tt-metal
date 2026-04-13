@@ -28,7 +28,7 @@ def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_
                 pytest.skip("Illegal config")
     inputs = []
     tt_inputs = []
-    for i in range(len(shapes)):
+    for i, shapes in enumerate(shapes):
         shape = torch.Size(shapes[i])
         inputs.append(torch.rand(shape).to(torch.bfloat16))
         tt_inputs.append(

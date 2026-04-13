@@ -181,7 +181,7 @@ def get_block_locations(
     block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = defaultdict(dict)
     chip_blocks_list = inspector_data.getBlocksByType().chips
 
-    for i in range(len(chip_blocks_list)):
+    for i, chip_blocks_list in enumerate(chip_blocks_list):
         metal_device_id = chip_blocks_list[i].chipId
         device_id = metal_device_id_mapping.get_device_id(metal_device_id)
         if device_id in device_map:

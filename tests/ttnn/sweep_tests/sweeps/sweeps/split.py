@@ -172,7 +172,7 @@ def run(config, memory_config, *, device) -> Tuple[bool, Optional[str]]:
         )
 
     shape_mismatch_exceptions = ""
-    for i in range(len(torch_output_tensors)):
+    for i, torch_output_tensors in enumerate(torch_output_tensors):
         if torch_output_tensors[i].shape != output_tensors[i].shape:
             shape_mismatch_exceptions += (
                 f"tensor {i}: ttnn shape {output_tensors[i].shape} vs pytorch shape {torch_output_tensors[i].shape} "
@@ -184,7 +184,7 @@ def run(config, memory_config, *, device) -> Tuple[bool, Optional[str]]:
         )
 
     pcc_mismatch_exceptions = ""
-    for i in range(len(torch_output_tensors)):
+    for i, torch_output_tensors in enumerate(torch_output_tensors):
         pcc_passed, pcc_message = check_with_pcc(torch_output_tensors[i], output_tensors[i], 0.9999)
         if not pcc_passed:
             pcc_mismatch_exceptions += f"tensor {i}: {pcc_message} "

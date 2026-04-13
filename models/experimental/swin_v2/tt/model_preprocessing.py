@@ -61,7 +61,7 @@ def create_custom_preprocessor(device):
 
             patch_merging_preprocessor = create_custom_preprocessor_patch_merging_v2(device)
             depths_list = [2, 2, 18, 2]
-            for i_stage in range(len(depths_list)):
+            for i_stage, depths_list in enumerate(depths_list):
                 index_list = [1, 3, 5, 7]
                 parameters["features"][index_list[i_stage]] = {}
                 for i_layer in range(depths_list[i_stage]):

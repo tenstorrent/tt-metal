@@ -210,7 +210,7 @@ def test_bitcast_sharded(
     torch_output_flat = torch_output.flatten()
     ttnn_output_flat = ttnn_output.flatten()
 
-    for i in range(len(torch_output_flat)):
+    for i, torch_output_flat in enumerate(torch_output_flat):
         expected = torch_output_flat[i].item()
         actual = ttnn_output_flat[i].item()
 

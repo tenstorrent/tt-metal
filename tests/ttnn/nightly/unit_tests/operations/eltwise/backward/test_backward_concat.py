@@ -138,7 +138,7 @@ def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = True
-    for i in range(len(are_required_outputs)):
+    for i, are_required_outputs in enumerate(are_required_outputs):
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
@@ -208,7 +208,7 @@ def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, 
     golden_tensor = golden_function(grad_data, in_data, other_data, dimension)
 
     status = True
-    for i in range(len(are_required_outputs)):
+    for i, are_required_outputs in enumerate(are_required_outputs):
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status

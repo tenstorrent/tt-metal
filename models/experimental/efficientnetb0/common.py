@@ -12,7 +12,7 @@ EFFICIENTNETB0_L1_SMALL_SIZE = 79104
 
 
 def load_torch_model(model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         model = EfficientNet.from_pretrained("efficientnet-b0").eval()
         state_dict = model.state_dict()
     else:

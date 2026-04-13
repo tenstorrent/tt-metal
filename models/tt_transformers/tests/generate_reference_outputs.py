@@ -103,7 +103,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
             all_top5_tokens.append(chunk_top5_tokens)
 
             # Print predictions for this chunk
-            for i in range(len(chunk_next_tokens)):
+            for i, chunk_next_tokens in enumerate(chunk_next_tokens):
                 global_pos = chunk_start + i
                 next_token = chunk_next_tokens[i]
 

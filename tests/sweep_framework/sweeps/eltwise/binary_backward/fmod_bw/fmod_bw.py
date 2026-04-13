@@ -128,7 +128,7 @@ def run(
 
     passed = []
     output_string = ""
-    for i in range(len(torch_output_tensors)):
+    for i, torch_output_tensors in enumerate(torch_output_tensors):
         output_tensor = ttnn.to_torch(output_tensors[i])
         passed_, output_string_ = check_with_pcc(torch_output_tensors[i], output_tensor, 0.999)
         passed.append(passed_)

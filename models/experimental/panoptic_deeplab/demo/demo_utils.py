@@ -135,12 +135,12 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
 
         # Find pairs to merge - use more aggressive iterative merging
         merged = set()
-        for i in range(len(instance_ids)):
+        for i, instance_ids in enumerate(instance_ids):
             if i in merged:
                 continue
 
             # Merge all instances within distance to instance i
-            for j in range(len(instance_ids)):
+            for j, instance_ids in enumerate(instance_ids):
                 if i == j or j in merged:
                     continue
 
@@ -210,7 +210,7 @@ def create_deeplab_v3plus_visualization(
     h, w = semantic_classes.shape
     vis_image = np.zeros((h, w, 3), dtype=np.uint8)
 
-    for class_id in range(len(CITYSCAPES_CATEGORIES)):
+    for class_id, CITYSCAPES_CATEGORIES in enumerate(CITYSCAPES_CATEGORIES):
         mask = semantic_classes == class_id
         if np.any(mask):
             color = CITYSCAPES_CATEGORIES[class_id]["color"]
@@ -421,7 +421,7 @@ def create_panoptic_visualization(
     background_mask = (panoptic_seg == 0) | (panoptic_seg == 255)
 
     # Create clean semantic fallback for unassigned regions
-    for class_id in range(len(CITYSCAPES_CATEGORIES)):
+    for class_id, CITYSCAPES_CATEGORIES in enumerate(CITYSCAPES_CATEGORIES):
         class_mask = (semantic_classes == class_id) & background_mask
         if np.any(class_mask):
             color = CITYSCAPES_CATEGORIES[class_id]["color"]

@@ -140,7 +140,7 @@ def run_resnet_inference(
             input_image = input_image.convert(mode="RGB")
         input = image_processor(input_image, return_tensors="pt")
         input = input["pixel_values"]
-        if inputs == None:
+        if inputs is None:
             inputs = input
         else:
             inputs = torch.cat((inputs, input), dim=0)

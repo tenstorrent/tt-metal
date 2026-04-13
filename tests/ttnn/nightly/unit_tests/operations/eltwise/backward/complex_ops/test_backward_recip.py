@@ -63,7 +63,7 @@ def test_level2_recip_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
 
     tt_cpu = [torch.cat((grad_res_real, grad_res_imag), dim=-1)]
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(tt_cpu[i], tt_dev[i])
         else:
@@ -114,7 +114,7 @@ def test_level2_recip_bw_inp_zero(bs, hw, memcfg, dtype, device, function_level_
 
     tt_cpu = [torch.cat((grad_res_real, grad_res_imag), dim=-1)]
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(tt_cpu[i], tt_dev[i])
         else:

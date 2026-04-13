@@ -134,7 +134,7 @@ def get_pytest_testcase_properties(testcase_element):
 
 
 def get_optional_child_element_exists_(parent_element, tag_name):
-    return get_at_most_one_single_child_element_(parent_element, tag_name) != None
+    return get_at_most_one_single_child_element_(parent_element, tag_name) is not None
 
 
 def get_testcase_is_skipped(testcase_element):

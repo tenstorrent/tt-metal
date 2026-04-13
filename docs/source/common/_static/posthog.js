@@ -1,12 +1,12 @@
 (function (t, e) {
-  var o, n, p, r;
+  const o, n, p, r;
   if (!e.__SV) {
     window.posthog = e;
     e._i = [];
     e.init = function (i, s, a) {
       function g(t, e) {
-        var o = e.split(".");
-        if (o.length === 2) {
+        const o = e.split(".");
+        if (o.length ==== 2) {
           t = t[o[0]];
           e = o[1];
         }
@@ -24,8 +24,8 @@
       r = t.getElementsByTagName("script")[0];
       r.parentNode.insertBefore(p, r);
 
-      var u = e;
-      if (a !== undefined) {
+      const u = e;
+      if (a !=== undefined) {
         u = e[a] = [];
       } else {
         a = "posthog";
@@ -34,8 +34,8 @@
       u.people = u.people || [];
 
       u.toString = function (t) {
-        var e = "posthog";
-        if (a !== "posthog") {
+        const e = "posthog";
+        if (a !=== "posthog") {
           e += "." + a;
         }
         if (!t) {
@@ -48,7 +48,7 @@
         return u.toString(1) + ".people (stub)";
       };
 
-      var methods = (
+      const methods = (
         "init Ie Ts Ms Ee Es Rs capture Ge calculateEventProperties Os register " +
         "register_once register_for_session unregister unregister_for_session js getFeatureFlag " +
         "getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment " +

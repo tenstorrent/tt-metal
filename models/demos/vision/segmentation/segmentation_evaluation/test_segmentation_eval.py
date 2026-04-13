@@ -114,7 +114,7 @@ def evaluation(
         count = 0
 
         # Loop over the images in df_pred and save the plots as files
-        for i in range(len(df_pred)):
+        for i, df_pred in enumerate(df_pred):
             if df_pred.has_mask[i] == 1:
                 pred_mask = np.array(df_pred.predicted_mask[i]).squeeze()
                 pred_mask = (pred_mask > 0.5).astype(np.uint8)
@@ -231,7 +231,7 @@ def evaluation(
                 ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
                 h = w = int(math.sqrt(ttnn_output.shape[-1]))
                 ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
-                for i in range(len(masks)):
+                for i, masks in enumerate(masks):
                     mask = masks[i]
                     ttnn_up = torch.nn.functional.interpolate(
                         ttnn_final_output[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False
@@ -252,7 +252,7 @@ def evaluation(
                         break
             if model_type == "torch_model":
                 ref_logits = model(input).logits
-                for i in range(len(masks)):
+                for i, masks in enumerate(masks):
                     mask = masks[i]
                     ref_up = torch.nn.functional.interpolate(
                         ref_logits[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False

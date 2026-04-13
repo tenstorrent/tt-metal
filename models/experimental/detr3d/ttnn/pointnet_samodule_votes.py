@@ -338,14 +338,14 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                 )
                 ttnn.deallocate(slice_input)
 
-            for i in range(len(partial_maxpool_out)):
+            for i, partial_maxpool_out in enumerate(partial_maxpool_out):
                 partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, C))
 
             new_features = ttnn.concat((partial_maxpool_out), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
             new_features = ttnn.permute(
                 new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
             )  # (B, mlp[-1], npoint)
-            for i in range(len(partial_maxpool_out)):
+            for i, partial_maxpool_out in enumerate(partial_maxpool_out):
                 ttnn.deallocate(partial_maxpool_out[i])
         else:
             raise NotImplementedError("Currently only Maxpool is supported")

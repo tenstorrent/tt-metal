@@ -341,7 +341,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
             final_outputs.append(final_output)
-            for i in range(len(deepstack_visual_embeds_list)):
+            for i, deepstack_visual_embeds_list in enumerate(deepstack_visual_embeds_list):
                 if deepstack_visual_embeds_list[i] is None:
                     deepstack_visual_embeds_list[i] = deepstack_visual_embeds_torch[i]
                 else:

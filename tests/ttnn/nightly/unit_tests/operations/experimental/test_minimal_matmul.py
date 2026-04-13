@@ -605,7 +605,7 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
     print(config_details)
     print(header)
     print(sep)
-    for idx in range(len(TABLE_CONFIGS)):
+    for idx, TABLE_CONFIGS in enumerate(TABLE_CONFIGS):
         M, K, N = TABLE_CONFIGS[idx]
         measured_ns = perf_results[idx]
         ideal_ns = expected_results[idx]

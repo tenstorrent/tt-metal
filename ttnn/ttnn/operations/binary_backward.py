@@ -50,7 +50,7 @@ def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, in
         pyt_y = torch.clone(input_tensor_a)
         input_tensor_a.retain_grad()
         pyt_y.backward(gradient=grad_tensor)
-        if input_tensor_b == None:
+        if input_tensor_b is None:
             golden_tensor = [input_tensor_a.grad]
             return golden_tensor
         else:
@@ -82,7 +82,7 @@ def _golden_function_backward_with_dim(
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
 
-    if dimension == None:
+    if dimension is None:
         pyt_y = torch.concat((input_tensor_a, input_tensor_b))
     else:
         pyt_y = torch.concat((input_tensor_a, input_tensor_b), dim=dimension)
@@ -96,7 +96,7 @@ def _golden_function_backward_with_float(
 ):
     import torch
 
-    if alpha == None:
+    if alpha is None:
         pyt_y = torch_op(input_tensor_a, input_tensor_b)
     else:
         pyt_y = torch_op(input_tensor_a, input_tensor_b, alpha=alpha)

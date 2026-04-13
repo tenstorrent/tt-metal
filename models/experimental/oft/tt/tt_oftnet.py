@@ -320,7 +320,7 @@ class TTOftNet:
         slices = [1, 3, 3, 2]
         start = 0
         parts = []
-        for i in range(len(slices)):
+        for i, slices in enumerate(slices):
             parts.append(outputs[:, :, start : start + slices[i], :, :])
             start += slices[i]
         parts[0] = ttnn.squeeze(parts[0], dim=2)  # remove the 1 slice dimension

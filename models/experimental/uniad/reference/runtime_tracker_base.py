@@ -19,7 +19,7 @@ class RuntimeTrackerBase(object):
 
     def update(self, track_instances: Instances, iou_thre=None):
         track_instances.disappear_time[track_instances.scores >= self.score_thresh] = 0
-        for i in range(len(track_instances)):
+        for i, track_instances in enumerate(track_instances):
             if track_instances.obj_idxes[i] == -1 and track_instances.scores[i] >= self.score_thresh:
                 if iou_thre is not None and track_instances.pred_boxes[track_instances.obj_idxes >= 0].shape[0] != 0:
                     iou3ds = iou_3d(

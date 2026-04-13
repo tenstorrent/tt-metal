@@ -240,7 +240,7 @@ class TtPansegformerHead(nn.Module):
         lane_list = []
         lane_score_list = []
         score_list = []
-        for img_id in range(len(img_metas)):
+        for img_id, img_metas in enumerate(img_metas):
             cls_score = cls_scores[img_id]
             bbox_pred = bbox_preds[img_id]
             img_shape = (self.canvas_size[0], self.canvas_size[1], 3)
@@ -413,7 +413,7 @@ class TtPansegformerHead(nn.Module):
             lane_score_list.append(lane_score)
 
         results = []
-        for i in range(len(img_metas)):
+        for i, img_metas in enumerate(img_metas):
             results.append(
                 {
                     "bbox": bbox_list[i],

@@ -358,7 +358,7 @@ def postprocess_per_volume(input_list, pred_list, true_list, patient_slice_index
     volumes = {}
     num_slices = np.bincount([p[0] for p in patient_slice_index])
     index = 0
-    for p in range(len(num_slices)):
+    for p, num_slices in enumerate(num_slices):
         volume_in = np.array(input_list[index : index + num_slices[p]])
         volume_pred = np.round(np.array(pred_list[index : index + num_slices[p]])).astype(int)
         volume_pred = largest_connected_component(volume_pred)

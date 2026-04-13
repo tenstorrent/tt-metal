@@ -58,7 +58,7 @@ def test_hrnet_module_inference(device, model_name, pcc, reset_seeds):
     tt_outputs_torch = [tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))]
 
     does_pass_list = []
-    for i in range(len(tt_outputs_torch)):
+    for i, tt_outputs_torch in enumerate(tt_outputs_torch):
         does_pass, pcc_message = comp_pcc(torch_outputs[i], tt_outputs_torch[i], pcc)
         does_pass_list.append(does_pass)
         logger.info(comp_allclose(torch_outputs[i], tt_outputs_torch[i]))

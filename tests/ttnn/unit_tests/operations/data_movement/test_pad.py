@@ -169,7 +169,7 @@ def to_torch_padding(padspec):
         input_shape = padspec["input_shape"]
 
         padding = []
-        for i in range(len(pad_to_shape)):
+        for i, pad_to_shape in enumerate(pad_to_shape):
             this_dim_padding = (input_tensor_start[i], pad_to_shape[i] - input_shape[i] - input_tensor_start[i])
             padding.append(this_dim_padding)
         return padding

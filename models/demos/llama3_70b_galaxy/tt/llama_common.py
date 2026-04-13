@@ -216,7 +216,7 @@ def copy_host_to_device(host_tensors, device_tensors=None, shard_specs=None, mes
     if device_tensors is None:
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
-        for i in range(len(host_tensors)):
+        for i, host_tensors in enumerate(host_tensors):
             if shard_specs and shard_specs[i] is not None:
                 on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
             else:
@@ -224,7 +224,7 @@ def copy_host_to_device(host_tensors, device_tensors=None, shard_specs=None, mes
             ret.append(on_device)
         return ret
     else:
-        for i in range(len(host_tensors)):
+        for i, host_tensors in enumerate(host_tensors):
             if host_tensors[i] is None:
                 assert device_tensors[i] is None
                 continue

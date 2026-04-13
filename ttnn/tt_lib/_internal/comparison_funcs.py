@@ -158,7 +158,7 @@ def comp_pcc_list(golden, calculated, pcc=0.99):
     total_str = ""
     min_pcc = 1
 
-    for i in range(len(golden)):
+    for i, golden in enumerate(golden):
         if golden[i].dtype != calculated[i].dtype:
             calculated[i] = calculated[i].type(golden[i].dtype)
         _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden[i], calculated[i])
@@ -180,7 +180,7 @@ def comp_equal_list(golden, calculated):
 
     equal = []
 
-    for i in range(len(golden)):
+    for i, golden in enumerate(golden):
         if golden[i].dtype != calculated[i].dtype:
             calculated[i] = calculated[i].type(golden[i].dtype)
         _, _, _, output_str = get_atol_rtol_pcc(golden[i], calculated[i])

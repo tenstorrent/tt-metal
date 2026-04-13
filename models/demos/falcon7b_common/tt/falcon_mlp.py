@@ -54,7 +54,7 @@ def falcon_dense_h_to_4h_matmul(
     seq_len = input_tensor_a.padded_shape[2]
     if seq_len > 1024:
         # TODO: Review if this path is used? If not, we can delete
-        assert fused_activation == None
+        assert fused_activation is None
         return ttnn.matmul(
             input_tensor_a,
             input_tensor_b,

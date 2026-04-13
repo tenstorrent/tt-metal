@@ -73,7 +73,7 @@ def run_segformer_classification_demo(
         ttnn_final_output = ttnn.to_torch(ttnn_output.logits, mesh_composer=output_composer)
         torch_predicted_ids = torch_final_output.argmax(dim=-1)
         ttnn_predicted_ids = ttnn_final_output.argmax(dim=-1)
-        for i in range(len(labels)):
+        for i, labels in enumerate(labels):
             label_id = labels[i]
             label_str = reference_model.config.id2label[label_id]
             torch_predicted_label = reference_model.config.id2label[torch_predicted_ids[i].item()]

@@ -158,7 +158,7 @@ class ttBatchNorm:
         momentum=0.1,
         device=None,
     ):
-        if (gamma == None) | (beta == None) | (running_mean == None) | (running_var == None):
+        if (gamma is None) | (beta is None) | (running_mean is None) | (running_var is None):
             # The scale parameter and the shift parameter (model parameters) are initialized to 1 and 0, respectively
             zeros_torch = torch.tensor([[[bn_size * [0.0]]]])
             zeros_padded = pad_activation(zeros_torch)

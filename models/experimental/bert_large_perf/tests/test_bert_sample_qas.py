@@ -317,7 +317,7 @@ def run_bert_question_and_answering_inference(
 
     profiler.start("processing_output_to_string")
 
-    for i in range(len(tt_out_list)):
+    for i, tt_out_list in enumerate(tt_out_list):
         single_input = samples[i]["single_input"]
         nlp = samples[i]["nlp"]
         postprocess_params = samples[i]["postprocess_params"]

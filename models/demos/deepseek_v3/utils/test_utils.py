@@ -239,7 +239,7 @@ def paged_caches_from_torch(
     Helper function for calling `paged_cache_from_torch` for several torch caches.
     Please refer to the `paged_cache_from_torch` documentation for details.
     """
-    assert mappings == None or len(mappings) == len(torch_caches)
+    assert mappings is None or len(mappings) == len(torch_caches)
     if mappings is None:
         mappings = (None,) * len(torch_caches)
     paged_caches, mappings = zip(

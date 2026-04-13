@@ -266,7 +266,7 @@ def postprocess(df_pred, x_test, model_type):
     count = 0
 
     # Loop over the images in df_pred and save the plots as files
-    for i in range(len(df_pred)):
+    for i, df_pred in enumerate(df_pred):
         if df_pred.has_mask[i] == 1 and count < 15:
             # Create a new figure for each image and save it
             fig, axs = plt.subplots(1, 5, figsize=(30, 7))

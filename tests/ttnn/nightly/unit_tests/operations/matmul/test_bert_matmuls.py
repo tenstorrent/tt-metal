@@ -205,7 +205,7 @@ def test_bert_linear_batch7(
     if has_bias:
         pt_out = pt_out + bias
 
-    if activation != None:
+    if activation is not None:
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
@@ -333,7 +333,7 @@ def run_bert_linear_batch4(
     if has_bias:
         pt_out = pt_out + bias
 
-    if activation != None:
+    if activation is not None:
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
@@ -555,7 +555,7 @@ def test_bert_linear_batch4_fp32_input_output(
     pt_out = in0 @ in1
     if has_bias:
         pt_out = pt_out + bias
-    if activation != None:
+    if activation is not None:
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 

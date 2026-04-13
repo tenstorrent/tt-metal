@@ -149,7 +149,7 @@ class BBoxTestMixin(object):
         aug_img_metas = []
         for i in range(samples_per_gpu):
             aug_img_meta = []
-            for j in range(len(img_metas)):
+            for j, img_metas in enumerate(img_metas):
                 aug_img_meta.append(img_metas[j][i])
             aug_img_metas.append(aug_img_meta)
         # after merging, proposals will be rescaled to the original image size

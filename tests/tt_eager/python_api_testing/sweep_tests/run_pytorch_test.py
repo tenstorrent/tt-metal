@@ -98,7 +98,7 @@ def generate_test_sweep_parameters(input_test_config, env=""):
     generated_test_sweep_parameters = []
     random.seed(0)
 
-    for i in range(len(pytorch_test_list)):
+    for i, pytorch_test_list in enumerate(pytorch_test_list):
         for test_name, test_config in pytorch_test_list[i].items():
             # Get env variables from yaml (yaml overrides CLI)
             yaml_env_dict = test_config.get("env", {})

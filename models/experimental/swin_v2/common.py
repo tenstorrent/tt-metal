@@ -11,7 +11,7 @@ SWIN_V2_L1_SMALL_SIZE = 24576
 
 
 def load_torch_model(torch_model, i=0, j=0, module="model", model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         model = models.swin_v2_s(weights="IMAGENET1K_V1")
         state_dict = model.state_dict()
     else:

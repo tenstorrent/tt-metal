@@ -1015,7 +1015,7 @@ def test_dram_read_remote_cb_sync(
     time_list = []
     throughput_list = []
     for _ in range(num_tests):
-        if test == None:
+        if test is None:
             k = int(test_vector[0])
             n = int(test_vector[1])
         elif test == "Matmul":
@@ -1027,7 +1027,7 @@ def test_dram_read_remote_cb_sync(
             input_size += k * n * 1088 // 1024
         elif data_format == 1:
             input_size += k * n * 2048 // 1024
-        if test == None:
+        if test is None:
             for i in range(num_mixed_df_layers - 1):
                 if i % 2 == 0:
                     input_size += k * n * 1088 // 1024
@@ -1056,7 +1056,7 @@ def test_dram_read_remote_cb_sync(
     data.append([throughput])
     # check within range
     bw_lower_bound = 0.0
-    if test == None:
+    if test is None:
         if arch == "wormhole_b0":
             bw_lower_bound = 21.5
     elif test == "Matmul":

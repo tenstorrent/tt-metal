@@ -51,7 +51,7 @@ def string_similarity_score(ground_truths, predictions):
         if len(ground_truth) == 0:
             return 0
         score = 0
-        for i in range(len(ground_truth)):
+        for i, ground_truth in enumerate(ground_truth):
             if i < len(prediction) and ground_truth[i] == prediction[i]:
                 score += 1
         scores.append(score / len(ground_truth))

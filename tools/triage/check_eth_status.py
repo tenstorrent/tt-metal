@@ -100,7 +100,7 @@ class EthCore(ABC):
                 self.location, self.eth_core_definitions.port_status, context=self.context
             )
             port_status_str = self.port_status_to_string(port_status)
-            if port_status_str == None:
+            if port_status_str is None:
                 output.port_status = "Unknown"
             else:
                 output.port_status = port_status_str

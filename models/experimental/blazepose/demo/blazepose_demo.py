@@ -101,7 +101,7 @@ draw_detections(frame, pose_detections)
 
 draw_roi(frame, box)
 
-for i in range(len(flags)):
+for i, flags in enumerate(flags):
     landmark, flag = landmarks[i], flags[i]
     if flag > 0.5:
         draw_landmarks(frame, landmark, POSE_CONNECTIONS, size=2)

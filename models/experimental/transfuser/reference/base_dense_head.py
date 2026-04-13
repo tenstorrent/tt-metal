@@ -93,7 +93,7 @@ class BaseDenseHead(BaseModule, metaclass=ABCMeta):
 
         result_list = []
 
-        for img_id in range(len(img_metas)):
+        for img_id, img_metas in enumerate(img_metas):
             img_meta = img_metas[img_id]
             cls_score_list = select_single_mlvl(cls_scores, img_id)
             bbox_pred_list = select_single_mlvl(bbox_preds, img_id)

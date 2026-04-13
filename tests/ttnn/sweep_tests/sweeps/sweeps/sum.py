@@ -47,7 +47,7 @@ def run(
     high = 100
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.bfloat16)
-    if dim == None:
+    if dim is None:
         torch_output_tensor = torch.sum(torch_input_tensor)
     else:
         torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=True)
@@ -55,13 +55,13 @@ def run(
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
-    if dim == None:
+    if dim is None:
         output_tensor = ttnn.sum(input_tensor)
     else:
         output_tensor = ttnn.sum(input_tensor, dim=dim, memory_config=output_memory_config)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    if dim == None:
+    if dim is None:
         output_tensor = output_tensor[0, 0, 0, 0]
 
     return check_with_pcc(torch_output_tensor, output_tensor)

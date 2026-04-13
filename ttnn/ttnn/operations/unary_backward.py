@@ -272,7 +272,7 @@ def _golden_function(grad_tensor, input_tensor, min_val=None, max_val=None, *arg
     import torch
 
     input_tensor.retain_grad()
-    if min_val != None and max_val != None:
+    if min_val is not None and max_val is not None:
         pyt_y = torch.nn.functional.hardtanh(input_tensor, min_val, max_val)
     else:
         pyt_y = torch.nn.functional.hardtanh(input_tensor)
@@ -288,7 +288,7 @@ def _golden_function(grad_tensor, input_tensor, beta=None, threshold=None, *args
     import torch
 
     input_tensor.retain_grad()
-    if beta != None and threshold != None:
+    if beta is not None and threshold is not None:
         pyt_y = torch.nn.functional.softplus(input_tensor, beta, threshold)
     else:
         pyt_y = torch.nn.functional.softplus(input_tensor)

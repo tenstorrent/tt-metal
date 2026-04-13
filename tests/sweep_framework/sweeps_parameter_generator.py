@@ -166,7 +166,7 @@ def _serialize_vectors(vectors):
     serialized_vectors = dict()
     warnings = []
 
-    for i in range(len(vectors)):
+    for i, vectors in enumerate(vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize_structured(vectors[i][elem], warnings)

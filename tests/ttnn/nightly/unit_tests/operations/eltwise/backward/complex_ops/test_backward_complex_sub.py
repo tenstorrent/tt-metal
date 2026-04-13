@@ -58,7 +58,7 @@ def test_level2_complex_sub_bw(bs, hw, alpha, memcfg, dtype, device, function_le
     golden_function = ttnn.get_golden_function(ttnn.sub_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, alpha=alpha)
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         else:

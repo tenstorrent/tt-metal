@@ -11,7 +11,7 @@ MOBILENETV2_BATCH_SIZE = 10
 
 
 def load_torch_model(torch_model, model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         weights_path = "models/demos/vision/classification/mobilenetv2/mobilenet_v2-b0353104.pth"
         if not os.path.exists(weights_path):
             os.system("bash models/demos/vision/classification/mobilenetv2/weights_download.sh")

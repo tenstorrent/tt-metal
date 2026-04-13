@@ -1163,11 +1163,11 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
         for col_idx in range(0, int(num_pages_width)):
             tile_idx = col_idx + num_pages_width * row_idx
             tile = torch.full((1, 1, page_width, page_height), tile_idx + 1, dtype=dtype)
-            if tile_row == None:
+            if tile_row is None:
                 tile_row = tile
             else:
                 tile_row = torch.cat((tile_row, tile), 3)
-        if torch_tensor == None:
+        if torch_tensor is None:
             torch_tensor = tile_row
         else:
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)

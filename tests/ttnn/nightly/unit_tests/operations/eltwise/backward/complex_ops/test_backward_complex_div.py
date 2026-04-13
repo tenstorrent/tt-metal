@@ -66,7 +66,7 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         else:
@@ -116,7 +116,7 @@ def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, functio
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         else:

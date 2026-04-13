@@ -212,7 +212,7 @@ def run_all_broadcast_impl(
         logger.info(f"Done op")
 
     passed = True
-    for tensor_index in range(len(tt_out_tensor_list)):
+    for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
         tt_out_tensors = tt_out_tensor_list[tensor_index]
         output_tensors = output_tensor_goldens_list[tensor_index]
         for k in range(num_devices):

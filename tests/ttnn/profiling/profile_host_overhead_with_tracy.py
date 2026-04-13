@@ -24,7 +24,7 @@ def extract_profile_detail(df, op_begin_ind, key, final_df, index):
     host_duration = 0
     count = 0
 
-    for i in range(len(start_index)):
+    for i, start_index in enumerate(start_index):
         si = start_index[i]
         ei = end_index[i]
 
@@ -133,7 +133,7 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
             if start_index and end_index:
                 host_duration = 0
 
-                for i in range(len(start_index)):
+                for i, start_index in enumerate(start_index):
                     si = start_index[i]
                     ei = end_index[i]
 

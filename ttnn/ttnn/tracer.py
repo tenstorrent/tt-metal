@@ -324,7 +324,7 @@ def visualize_node(
 
     output_layouts = []
     output_memory_configs = []
-    for output_index in range(len(output_tensors)):
+    for output_index, output_tensors in enumerate(output_tensors):
         if "layouts" in attributes:
             output_layouts.append(attributes["layouts"][output_index])
         else:

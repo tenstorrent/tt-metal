@@ -179,7 +179,7 @@ def test_vision_model_inference(
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC of output: {pcc_message}")
     deepstack_visual_embeds_passing = True
-    for i in range(len(tt_deepstack_visual_embeds)):
+    for i, tt_deepstack_visual_embeds in enumerate(tt_deepstack_visual_embeds):
         deepstack_visual_embeds_passing_i, pcc_message = comp_pcc(
             reference_deepstack_visual_embeds[i],
             tt_deepstack_visual_embeds_torch[i],

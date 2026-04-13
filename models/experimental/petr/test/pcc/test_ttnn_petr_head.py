@@ -212,7 +212,7 @@ def test_petr_head(device, reset_seeds):
         query_embedding_input=query_embedding_input,
     )
 
-    for i in range(len(mlvl_feats)):
+    for i, mlvl_feats in enumerate(mlvl_feats):
         mlvl_feats[i] = ttnn.from_torch(mlvl_feats[i], layout=ttnn.TILE_LAYOUT, device=device)
 
     # Run TTNN model

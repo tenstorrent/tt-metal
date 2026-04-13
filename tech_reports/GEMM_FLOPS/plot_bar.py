@@ -135,7 +135,7 @@ ax.bar(positions, heights, width=bar_width, color=colors_list, edgecolor="black"
 
 # Add performance multiplier annotations (baseline: N150 BFLOAT16-HiFi4 per matrix size)
 max_height = max(heights)
-for pair_idx in range(len(all_m_values)):
+for pair_idx, all_m_values in enumerate(all_m_values):
     baseline = None
     for info in bar_info:
         if info["pair_idx"] == pair_idx and info["dtype"] == "BFLOAT16_HiFi4" and info["source"] == "N150":

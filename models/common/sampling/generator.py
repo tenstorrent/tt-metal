@@ -410,7 +410,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     TOP_P_MIN = 0.0
     TOP_P_MAX = 1.0
 
-    for i in range(len(temperature)):
+    for i, temperature in enumerate(temperature):
         top_p[i] = clamp(top_p[i], TOP_P_MIN, TOP_P_MAX)
 
         if temperature[i] == 0:

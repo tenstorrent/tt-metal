@@ -100,7 +100,7 @@ def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
     each_shard = []
 
     current_N_tile = 0
-    for ring_pos in range(len(ring2cores)):
+    for ring_pos, ring2cores in enumerate(ring2cores):
         _, _, send_flag = ring2cores[ring_pos]
 
         if send_flag:
@@ -160,7 +160,7 @@ def prepare_output_tensor(tt_output, ring2cores):
 
     each_shard = []
     current_column = 0
-    for ring_pos in range(len(ring2cores)):
+    for ring_pos, ring2cores in enumerate(ring2cores):
         _, _, send_flag = ring2cores[ring_pos]
         if not send_flag:
             each_shard.append(tt_output[:, current_column : current_column + ttnn.TILE_SIZE])

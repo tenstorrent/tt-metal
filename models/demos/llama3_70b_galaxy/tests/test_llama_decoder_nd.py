@@ -162,7 +162,7 @@ def test_llama_decoder_same(
     for arr in [outs]:
         golden = arr[0]
         all_passing = True
-        for i in range(len(arr)):
+        for i, arr in enumerate(arr):
             logger.info(f"Checking output for iteration {i}")
 
             passing = torch.all(arr[i] == golden)

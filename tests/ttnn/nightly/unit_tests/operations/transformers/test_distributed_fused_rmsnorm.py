@@ -136,7 +136,7 @@ def run_distributed_fused_rmsnorm(
     tt_stats_gathered = ttnn.concat(tt_stats, -1)
 
     tt_out = []
-    for idx in range(len(tt_inp)):
+    for idx, tt_inp in enumerate(tt_inp):
         tt_out.append(
             ttnn.experimental.wan_fused_rmsnorm_post_allgather(
                 tt_inp[idx],

@@ -165,7 +165,7 @@ def load_inputs(user_input, batch, instruct):
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(len(user_input)):
+    for i, user_input in enumerate(user_input):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
@@ -1005,7 +1005,7 @@ def test_demo_text(
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
 
         if batch_idx != 0:
-            for i in range(len(model)):
+            for i, model in enumerate(model):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -1248,7 +1248,7 @@ def test_demo_text(
 
             batch_outputs = []
             if all_outputs and len(all_outputs) > 0:
-                for user_idx in range(len(all_outputs)):
+                for user_idx, all_outputs in enumerate(all_outputs):
                     final_output_text = tokenizer.decode(all_outputs[user_idx])
                     batch_outputs.append(final_output_text)
                 test_demo_text.batch32_outputs.append(batch_outputs)

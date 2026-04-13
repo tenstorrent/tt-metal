@@ -461,7 +461,7 @@ def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
 
     # Pick appropriate number of column tiles for each core based on the ring position.
     start_tile = 0
-    for ring_pos in range(len(ring2cores)):
+    for ring_pos, ring2cores in enumerate(ring2cores):
         (_, _, pad_flag) = ring2cores[ring_pos]
         num_tiles = 5 if pad_flag else 6
         each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
@@ -502,7 +502,7 @@ def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
     each_shard = []
 
     start_col = 0
-    for ring_pos in range(len(ring2cores)):
+    for ring_pos, ring2cores in enumerate(ring2cores):
         (_, _, pad_flag) = ring2cores[ring_pos]
         last_group_tiles = 3 if pad_flag else 2
         last_group_pad_tiles = 1 if pad_flag else 2
@@ -538,7 +538,7 @@ def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
 
     each_shard = []
     # Assemble the number of such N tiles based on the ring position.
-    for core_id in range(len(ring2cores)):
+    for core_id, ring2cores in enumerate(ring2cores):
         each_chunk = []
         for chunk_id in core_chunk_order:
             start_pos = chunk_start_positions[chunk_id]

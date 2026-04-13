@@ -589,7 +589,7 @@ def run_all_to_all_dispatch_test(
     failed_indices = []
     failed_metadata_indices = []
 
-    for tensor_index in range(len(tt_out_tensor_list)):
+    for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),

@@ -24,7 +24,7 @@ def run_send_recv_test(
 
     socket_connections = []
     for coord in ttnn.MeshCoordinateRange(mesh_shape):
-        for i in range(len(sender_logical_coord)):
+        for i, sender_logical_coord in enumerate(sender_logical_coord):
             socket_connections.append(
                 ttnn.SocketConnection(
                     ttnn.MeshCoreCoord(coord, sender_logical_coord[i]), ttnn.MeshCoreCoord(coord, recv_logical_coord[i])

@@ -1405,7 +1405,7 @@ def run_tt_denoising(
         tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if not compile_run else None
         unet_outputs = []
         tt_latents = tt_latents_device
-        for unet_slice in range(len(ttnn_prompt_embeds)):
+        for unet_slice, ttnn_prompt_embeds in enumerate(ttnn_prompt_embeds):
             tt_latent_model_input = tt_latents
             noise_pred, noise_shape = run_tt_iteration(
                 tt_unet,

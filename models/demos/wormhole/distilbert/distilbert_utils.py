@@ -36,7 +36,7 @@ class SQUADV2Dataset(Dataset):
         token_type_ids : bool
         """
         self.data = []
-        for i in range(len(dataset_question)):
+        for i, dataset_question in enumerate(dataset_question):
             self.data.append(
                 (
                     tokenizer(

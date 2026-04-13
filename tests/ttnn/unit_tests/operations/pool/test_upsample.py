@@ -151,7 +151,7 @@ def upsample_multicore_common(
     shard_grid = None
     device_grid = device.compute_with_storage_grid_size()
     max_grid_size = (device_grid.y, device_grid.x)
-    if core_range != None:
+    if core_range is not None:
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(core[0][0], core[0][1]), ttnn.CoreCoord(core[1][0], core[1][1]))

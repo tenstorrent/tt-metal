@@ -292,14 +292,14 @@ def test_reshard(
         torch_input_tensor, layout=input_memory_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    if input_override == None:
+    if input_override is None:
         input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
     else:
         input_shard_memory_config = ttnn.create_sharded_memory_config(
             input_override, **input_sharded_memory_config_args, use_height_and_width_as_shard_shape=True
         )
 
-    if output_override == None:
+    if output_override is None:
         output_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **output_sharded_memory_config_args)
     else:
         output_shard_memory_config = ttnn.create_sharded_memory_config(
@@ -505,7 +505,7 @@ def test_bh_alignment_i2s(
 ):
     torch.manual_seed(0)
     input_data = torch.randn(shape, dtype=torch.bfloat16)
-    if shard_shape == None:
+    if shard_shape is None:
         shard_config = ttnn.create_sharded_memory_config(
             shape=shape,
             core_grid=core_grid,

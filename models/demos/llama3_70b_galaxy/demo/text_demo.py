@@ -69,7 +69,7 @@ def load_inputs(user_input, len_per_batch, instruct):
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(len(user_input)):
+    for i, user_input in enumerate(user_input):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             # TODO This might override the expected input size give in the prompt file

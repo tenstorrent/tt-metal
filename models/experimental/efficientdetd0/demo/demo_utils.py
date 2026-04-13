@@ -249,7 +249,7 @@ def postprocess(
 
 def invert_affine(metas, preds):
     """Transform bounding boxes back to original image coordinates."""
-    for i in range(len(preds)):
+    for i, preds in enumerate(preds):
         if len(preds[i]["rois"]) == 0:
             continue
         else:

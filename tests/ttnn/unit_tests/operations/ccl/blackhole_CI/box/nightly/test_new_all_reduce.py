@@ -283,7 +283,7 @@ def run_all_reduce_impl(
         logger.info(f"PCC output is: {output}")
 
     if validate_all:
-        for tensor_index in range(len(tt_outs)):
+        for tensor_index, tt_outs in enumerate(tt_outs):
             tt_out_tensor = tt_outs[tensor_index]
             output_tensor = output_tensor_goldens_list[tensor_index]
             validate(tt_out_tensor, output_tensor)

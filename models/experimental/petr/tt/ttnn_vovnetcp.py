@@ -172,7 +172,7 @@ class ttnn_osa_module:
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             output.append(x)
         output_tensor = []
-        for idx in range(len(output)):
+        for idx, output in enumerate(output):
             if output[idx].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                 output[idx] = ttnn.to_layout(output[idx], ttnn.ROW_MAJOR_LAYOUT)
             if hasattr(output[idx], "memory_config") and output[idx].memory_config().is_sharded():

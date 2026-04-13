@@ -96,7 +96,7 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
     golden_tensor = golden_function(grad_data, in_data, other_data, alpha)
 
     status = True
-    for i in range(len(are_required_outputs)):
+    for i, are_required_outputs in enumerate(are_required_outputs):
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
@@ -138,7 +138,7 @@ def test_bw_addalpha_with_opt_output_wo_alpha(input_shapes, device, are_required
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
     status = True
-    for i in range(len(are_required_outputs)):
+    for i, are_required_outputs in enumerate(are_required_outputs):
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status

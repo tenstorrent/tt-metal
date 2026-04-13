@@ -244,7 +244,7 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
     pcc_per_iter = []
     tt_latents_output = None
     logger.info("Starting ttnn inference...")
-    for iter in range(len(prompts)):
+    for iter, prompts in enumerate(prompts):
         prepare_input_tensors(
             [
                 tt_latents,

@@ -1970,7 +1970,7 @@ def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, rounding_
     golden_tensor = golden_function(in_data, param, rounding_mode=rounding_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if (rounding_mode != None) and (torch_dtype == torch.bfloat16):
+    if (rounding_mode is not None) and (torch_dtype == torch.bfloat16):
         assert_with_pcc(golden_tensor, output_tensor, pcc=0.999)
     else:
         assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=3, allow_nonfinite=True)

@@ -739,7 +739,7 @@ def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
 
     flattened_host = flatten_list(tensor_list_host)
     # Verify at least some values match within tolerance
-    for i in range(len(data)):
+    for i, data in enumerate(data):
         assert (
             abs(data[i] - flattened_host[i]) < atol
         ), f"Host tensor mismatch at index {i}: expected {data[i]}, got {flattened_host[i]}"
@@ -756,7 +756,7 @@ def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
     flattened_device = flatten_list(tensor_list_device)
 
     # Check values within tolerance
-    for i in range(len(data)):
+    for i, data in enumerate(data):
         assert (
             abs(data[i] - flattened_device[i]) < atol
         ), f"Device tensor mismatch at index {i}: expected {data[i]}, got {flattened_device[i]}"

@@ -135,7 +135,7 @@ def inspect_reference_file(reference_file: Path = REFERENCE_FILE):
 
         # Find first non-zero entry (should be index 1)
         first_nonzero = None
-        for i in range(len(top5)):
+        for i, top5 in enumerate(top5):
             if top5[i].sum() != 0:
                 first_nonzero = i
                 break

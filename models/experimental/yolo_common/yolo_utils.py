@@ -52,7 +52,7 @@ def sharded_concat(input_tensors, num_cores=56, dim=3):
         use_height_and_width_as_shard_shape=True,
     )
     out_shard_width = 0
-    for i in range(len(input_tensors)):
+    for i, input_tensors in enumerate(input_tensors):
         out_shard_width += input_tensors[i].shape[-1]
         input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
 

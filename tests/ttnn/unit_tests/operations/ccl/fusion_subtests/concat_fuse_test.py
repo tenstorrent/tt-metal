@@ -301,7 +301,7 @@ def run_concat_fuse_impl(
         logger.info(f"Done op")
 
     passed = True
-    for tensor_index in range(len(tt_out_tensor_list)):
+    for tensor_index, tt_out_tensor_list in enumerate(tt_out_tensor_list):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
         output_tensor = output_tensor_goldens_list[tensor_index]
         output_tensor = output_tensor[:, :, :8, :]

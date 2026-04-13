@@ -153,7 +153,7 @@ class ModulatedDeformConv2dPack(nn.Module):
 
 
 def build_conv_layer(cfg: Optional[Dict], *args, **kwargs) -> nn.Module:
-    if cfg == None:
+    if cfg is None:
         layer = nn.Conv2d(*args, **kwargs)
     else:
         layer = ModulatedDeformConv2dPack(*args, **kwargs)

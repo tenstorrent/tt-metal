@@ -36,7 +36,7 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device, device):
 
     tt_out = fallback_ops.chunk(t0, chunks, dim)
 
-    for i in range(len(pt_out)):
+    for i, pt_out in enumerate(pt_out):
         pt_output = pt_out[i]
         tt_output = tt_out[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)

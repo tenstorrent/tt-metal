@@ -89,7 +89,7 @@ def test_slice_write_four_dim(dims, begins, ends, layout, dtype, device):
     torch.manual_seed(2005)
     torch_output = torch.zeros(dims)
     slices = []
-    for i in range(len(dims)):
+    for i, dims in enumerate(dims):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_input = torch_output[slices[0], slices[1], slices[2], slices[3]]
@@ -490,7 +490,7 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, devic
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, dims)
     slices = []
-    for i in range(len(dims)):
+    for i, dims in enumerate(dims):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
@@ -514,7 +514,7 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype,
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, dims)
     slices = []
-    for i in range(len(dims)):
+    for i, dims in enumerate(dims):
         slices.append(slice(begins[i], ends[i], strides[i]))
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]

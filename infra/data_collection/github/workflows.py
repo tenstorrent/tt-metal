@@ -423,7 +423,7 @@ def get_tests_from_test_report_path(test_report_path):
     if is_pytest or is_gtest:
         logger.info(f"Found {len(report_root)} testsuites")
         tests = []
-        for i in range(len(report_root)):
+        for i, report_root in enumerate(report_root):
             testsuite = report_root[i]
             testsuite_name = testsuite.attrib.get("name") if is_gtest else None
             default_timestamp = datetime.fromisoformat(testsuite.attrib["timestamp"])

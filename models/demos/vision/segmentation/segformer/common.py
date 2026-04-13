@@ -21,7 +21,7 @@ def load_config(config_name="configs/segformer_semantic_config.json"):
 
 
 def load_torch_model(reference_model, target_prefix, module="semantic_sub", model_location_generator=None):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         if module == "image_classification":
             torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
         elif module == "semantic_sub":
@@ -53,7 +53,7 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
     keys = [name for name, parameter in reference_model.state_dict().items()]
     values = [parameter for name, parameter in module_state_dict.items()]
 
-    for i in range(len(keys)):
+    for i, keys in enumerate(keys):
         new_state_dict[keys[i]] = values[i]
 
     reference_model.load_state_dict(new_state_dict)
@@ -62,7 +62,7 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
 
 
 def download_and_unzip_dataset(model_location_generator, dataset_path, dataset_name):
-    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
         if not os.path.exists(f"models/demos/vision/segmentation/segformer/demo/{dataset_name}"):
             os.system("bash models/demos/vision/segmentation/segformer/demo/data_download.sh")
         return f"models/demos/vision/segmentation/segformer/demo/{dataset_name}"

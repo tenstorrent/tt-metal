@@ -133,7 +133,7 @@ def get_profiler_data():
 
 # Check if test is run with profiler build enabled.
 def get_profiler_build_enabled():
-    return os.getenv("TT_METAL_DEVICE_PROFILER") != None
+    return os.getenv("TT_METAL_DEVICE_PROFILER") is not None
 
 
 # These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size

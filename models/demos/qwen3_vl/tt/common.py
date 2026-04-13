@@ -37,7 +37,7 @@ def merge_vision_tokens(
 
     input_embeds = input_embeds.masked_scatter(image_mask, image_embeds)
     if deepstack_visual_embeds is not None:
-        for i in range(len(deepstack_visual_embeds)):
+        for i, deepstack_visual_embeds in enumerate(deepstack_visual_embeds):
             zeros = torch.zeros_like(input_embeds)
             deepstack_visual_embeds[i] = zeros.masked_scatter(image_mask, deepstack_visual_embeds[i])
         return input_embeds, deepstack_visual_embeds

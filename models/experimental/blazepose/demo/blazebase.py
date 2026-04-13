@@ -249,7 +249,7 @@ class BlazeLandmark(BlazeBase):
 
     def denormalize_landmarks(self, landmarks, affines):
         landmarks[:, :, :2] *= self.resolution
-        for i in range(len(landmarks)):
+        for i, landmarks in enumerate(landmarks):
             landmark, affine = landmarks[i], affines[i]
             landmark = (affine[:, :2] @ landmark[:, :2].T + affine[:, 2:]).T
             landmarks[i, :, :2] = landmark
@@ -329,7 +329,7 @@ class BlazeDetector(BlazeBase):
 
         # 4. Non-maximum suppression to remove overlapping detections:
         filtered_detections = []
-        for i in range(len(detections)):
+        for i, detections in enumerate(detections):
             faces = self._weighted_non_max_suppression(detections[i])
             faces = (
                 torch.stack(faces)

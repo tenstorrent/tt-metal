@@ -649,7 +649,7 @@ class TtMotionTransformerDecoder:
                 )
 
                 agent_level_embedding = pos2posemb2d(norm_points(ep_agent_embed[..., -1, :], self.pc_range))
-                for index in range(len(agent_level_embedding_layer)):
+                for index, agent_level_embedding_layer in enumerate(agent_level_embedding_layer):
                     if index % 2 == 0:
                         agent_level_embedding = ttnn.linear(
                             agent_level_embedding,
@@ -661,7 +661,7 @@ class TtMotionTransformerDecoder:
                         agent_level_embedding = ttnn.relu(agent_level_embedding)
 
                 scene_level_ego_embedding = pos2posemb2d(norm_points(ep_ego_embed[..., -1, :], self.pc_range))
-                for index in range(len(scene_level_ego_embedding_layer)):
+                for index, scene_level_ego_embedding_layer in enumerate(scene_level_ego_embedding_layer):
                     if index % 2 == 0:
                         scene_level_ego_embedding = ttnn.linear(
                             scene_level_ego_embedding,
@@ -673,7 +673,7 @@ class TtMotionTransformerDecoder:
                         scene_level_ego_embedding = ttnn.relu(scene_level_ego_embedding)
 
                 scene_level_offset_embedding = pos2posemb2d(norm_points(ep_offset_embed[..., -1, :], self.pc_range))
-                for index in range(len(scene_level_ego_embedding_layer)):
+                for index, scene_level_ego_embedding_layer in enumerate(scene_level_ego_embedding_layer):
                     if index % 2 == 0:
                         scene_level_offset_embedding = ttnn.linear(
                             scene_level_offset_embedding,

@@ -73,7 +73,7 @@ class LidarEncoder(nn.Module):
         # Change the first conv layer so that it matches the amount of channels in the LiDAR
         # Timm might be able to do this automatically
         _tmp = self._model.conv1
-        use_bias = _tmp.bias != None
+        use_bias = _tmp.bias is not None
         self._model.conv1 = nn.Conv2d(
             in_channels,
             out_channels=_tmp.out_channels,

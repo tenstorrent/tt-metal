@@ -605,7 +605,7 @@ def test_gpt_oss_demo(
             # Fix for ND hangs with multiple repeat batches
             generator.prev_page_table = None
 
-            for i in range(len(model)):
+            for i, model in enumerate(model):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.self_attn.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -776,7 +776,7 @@ def test_gpt_oss_demo(
                 logger.info("Finished traced row-parallel prefill warmup")
 
                 # Clear KV caches (warmup wrote to them)
-                for i in range(len(model)):
+                for i, model in enumerate(model):
                     for layer_obj in model[i].layers:
                         k_cache, v_cache = layer_obj.self_attn.layer_past
                         ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -945,7 +945,7 @@ def test_gpt_oss_demo(
                 logger.info("Finished row-parallel prefill warmup")
 
                 # Clear KV caches before real prefill (warmup wrote to them)
-                for i in range(len(model)):
+                for i, model in enumerate(model):
                     for layer_obj in model[i].layers:
                         k_cache, v_cache = layer_obj.self_attn.layer_past
                         ttnn.mul(k_cache, 0, output_tensor=k_cache)

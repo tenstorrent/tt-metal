@@ -620,7 +620,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.012)
 
-    for i in range(len(tt_feat_cache)):
+    for i, tt_feat_cache in enumerate(tt_feat_cache):
         tt_feat_cache[i] = ttnn.to_torch(
             tt_feat_cache[i],
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -772,7 +772,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
-    for i in range(len(tt_feat_cache)):
+    for i, tt_feat_cache in enumerate(tt_feat_cache):
         tt_feat_cache[i] = ttnn.to_torch(
             tt_feat_cache[i],
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
@@ -923,7 +923,7 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.008)
 
-    for i in range(len(tt_feat_cache)):
+    for i, tt_feat_cache in enumerate(tt_feat_cache):
         logger.info(f"checking feat_cache {i}")
         if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
             logger.info(f"feat_cache {i} is Rep")
@@ -1067,7 +1067,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=0.999_000, relative_rmse=0.02)
 
-        for i in range(len(tt_feat_cache)):
+        for i, tt_feat_cache in enumerate(tt_feat_cache):
             logger.info(f"checking feat_cache {i}")
             if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
                 logger.info(f"feat_cache {i} is Rep")
@@ -1085,7 +1085,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 
         # Defrag the cache
         tt_feat_cache_host = []
-        for i in range(len(tt_feat_cache)):
+        for i, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
                 tt_feat_cache_host.append(tt_feat_cache[i])
             else:
@@ -1098,7 +1098,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
                     )
                 )
                 ttnn.deallocate(tt_feat_cache[i])
-        for i in range(len(tt_feat_cache)):
+        for i, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
                 tt_feat_cache[i] = tt_feat_cache_host[i]
             else:
@@ -1266,7 +1266,7 @@ def test_wan_decoder3d(
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
+            for cache_idx, tt_feat_cache in enumerate(tt_feat_cache):
                 logger.info(f"checking feat_cache {cache_idx}")
                 if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
                     logger.info(f"feat_cache {cache_idx} is Rep")
@@ -1299,7 +1299,7 @@ def test_wan_decoder3d(
 
         # Defrag the cache
         tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
+        for j, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
                 tt_feat_cache_host.append(tt_feat_cache[j])
             else:
@@ -1312,7 +1312,7 @@ def test_wan_decoder3d(
                     )
                 )
                 ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
+        for j, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
                 tt_feat_cache[j] = tt_feat_cache_host[j]
             else:
@@ -1621,7 +1621,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
+            for cache_idx, tt_feat_cache in enumerate(tt_feat_cache):
                 logger.info(f"checking feat_cache {cache_idx}")
                 if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
                     logger.info(f"feat_cache {cache_idx} is Rep")
@@ -1654,7 +1654,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 
         # Defrag the cache
         tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
+        for j, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
                 tt_feat_cache_host.append(tt_feat_cache[j])
             else:
@@ -1667,7 +1667,7 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
                     )
                 )
                 ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
+        for j, tt_feat_cache in enumerate(tt_feat_cache):
             if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
                 tt_feat_cache[j] = tt_feat_cache_host[j]
             else:

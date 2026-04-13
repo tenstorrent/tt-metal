@@ -488,7 +488,7 @@ class TtSDXLPipeline(LightweightModule):
                     negative_pooled_prompt_embeds,
                 ) = batch_embeds
                 # Split the tensors by batch dimension and create individual tuples
-                for j in range(len(batch_prompts)):
+                for j, batch_prompts in enumerate(batch_prompts):
                     all_embeds.append(
                         (
                             prompt_embeds[j : j + 1],  # Keep batch dimension

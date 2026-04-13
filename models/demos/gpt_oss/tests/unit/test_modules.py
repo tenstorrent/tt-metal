@@ -21,7 +21,7 @@ def run_component_comparison(tt_output, reference_output, mesh_device, pcc_thres
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 
     passing_final = True
-    for i in range(len(tt_output_tensors)):
+    for i, tt_output_tensors in enumerate(tt_output_tensors):
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
         passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
         passing_final = passing_final and passing

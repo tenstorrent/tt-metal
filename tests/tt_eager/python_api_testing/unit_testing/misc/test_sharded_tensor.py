@@ -273,7 +273,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
         device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
     )
 
-    if grid_override == None:
+    if grid_override is None:
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), compute_grid)})
     else:
         shard_grid = grid_override

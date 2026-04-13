@@ -626,7 +626,7 @@ class Instances:
         for k in instance_lists[0]._fields.keys():
             values = [i.get(k) for i in instance_lists]
             v0 = values[0]
-            for i in range(len(values)):
+            for i, values in enumerate(values):
                 values[i] = ttnn.to_layout(values[i], layout=ttnn.TILE_LAYOUT)
                 # values[i] = ttnn.to_torch(values[i])
             if isinstance(v0, torch.Tensor):

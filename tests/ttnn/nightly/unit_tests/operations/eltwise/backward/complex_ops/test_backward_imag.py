@@ -55,7 +55,7 @@ def test_level2_imag_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     golden_function = ttnn.get_golden_function(ttnn.imag_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
-    for i in range(len(tt_dev)):
+    for i, tt_dev in enumerate(tt_dev):
         if is_wormhole_b0():
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         else:
