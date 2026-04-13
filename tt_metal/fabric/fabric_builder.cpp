@@ -280,10 +280,20 @@ void FabricBuilder::create_kernels() {
 }
 
 // ============ Plugin Factory Registration ============
+//
+// Thread safety: registration must happen before any fabric init call.
+// This is a program-startup operation, not a concurrent runtime operation.
+// No mutex is needed because the ordering contract is: register once during
+// setup, then fabric init reads it. Concurrent registration is a programming error.
 
 static FabricBuilderFactory g_fabric_builder_factory = nullptr;
 
-void register_fabric_builder_factory(FabricBuilderFactory factory) { g_fabric_builder_factory = std::move(factory); }
+void register_fabric_builder_factory(FabricBuilderFactory factory) {
+    TT_FATAL(
+        !g_fabric_builder_factory || !factory,
+        "FabricBuilder factory already registered. Call with nullptr to clear before re-registering.");
+    g_fabric_builder_factory = std::move(factory);
+}
 
 const FabricBuilderFactory& get_fabric_builder_factory() { return g_fabric_builder_factory; }
 

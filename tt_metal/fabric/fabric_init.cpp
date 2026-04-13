@@ -31,6 +31,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     const auto& factory = get_fabric_builder_factory();
     auto builder_ptr = factory ? factory(device, *fabric_program_ptr, fabric_context)
                                : std::make_unique<FabricBuilder>(device, *fabric_program_ptr, fabric_context);
+    TT_FATAL(builder_ptr != nullptr, "FabricBuilder factory returned nullptr");
     auto& builder = *builder_ptr;
 
     // Execute build phases

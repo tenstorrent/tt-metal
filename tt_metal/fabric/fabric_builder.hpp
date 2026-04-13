@@ -35,6 +35,13 @@ class FabricBuilderContext;
  *      discover_channels() -> create_routers() -> connect_routers() ->
  *      compile_ancillary_kernels() -> create_kernels()
  *   3. FabricBuilder is destroyed, router builders are destroyed
+ *
+ * ABI note: This class has virtual methods (added for plugin subclassing support).
+ * This means it carries a vptr and its layout differs from a non-virtual version.
+ * FabricBuilder is only constructed via fabric_init.cpp (never embedded in other
+ * structs or passed across shared library boundaries by value), so the ABI impact
+ * is limited to callers that previously constructed FabricBuilder directly. The
+ * register_fabric_builder_factory() API is the intended extension point.
  */
 class FabricBuilder {
 public:
@@ -154,14 +161,25 @@ protected:
  * out-of-tree builder implementations without compile-time coupling.
  *
  * The factory receives the same arguments as the FabricBuilder constructor and must
- * return a fully-functional FabricBuilder (or subclass) that implements all build phases:
- * discover_channels, create_routers, connect_routers, compile_ancillary_kernels, create_kernels.
+ * return a non-null, fully-functional FabricBuilder (or subclass) that implements all
+ * build phases: discover_channels, create_routers, connect_routers,
+ * compile_ancillary_kernels, create_kernels.
+ *
+ * Thread safety: Registration must happen before any call to
+ * create_and_compile_tt_fabric_program(). This is a program-startup operation.
+ * Concurrent registration or registration during fabric init is a programming error.
+ * Double-registration without clearing (nullptr) first will assert.
+ *
+ * Note: This header is currently internal (not in the public api/ install set).
+ * Out-of-tree consumers must include it from the tt-metal source tree. A public
+ * forwarding header under api/tt-metalium/experimental/fabric/ may be added in the
+ * future if this API stabilizes.
  *
  * Usage:
  *   // In plugin initialization (before fabric init):
  *   tt::tt_fabric::register_fabric_builder_factory(
- *       [](IDevice* device, Program& program, FabricContext& ctx)
- *           -> std::unique_ptr<FabricBuilder> {
+ *       [](tt::tt_metal::IDevice* device, tt::tt_metal::Program& program,
+ *          tt::tt_fabric::FabricContext& ctx) -> std::unique_ptr<tt::tt_fabric::FabricBuilder> {
  *           return std::make_unique<MyCustomFabricBuilder>(device, program, ctx);
  *       });
  */
@@ -171,6 +189,8 @@ using FabricBuilderFactory = std::function<std::unique_ptr<FabricBuilder>(
 /**
  * Register a custom FabricBuilder factory. When set, fabric initialization will use this
  * factory instead of constructing the default FabricBuilder. Pass nullptr to clear.
+ * Asserts if a factory is already registered (clear first with nullptr before re-registering).
+ * Must be called before any fabric init. The factory must return a non-null pointer.
  */
 void register_fabric_builder_factory(FabricBuilderFactory factory);
 
