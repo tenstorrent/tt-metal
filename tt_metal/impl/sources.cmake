@@ -120,4 +120,5 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_utils.cpp
 )

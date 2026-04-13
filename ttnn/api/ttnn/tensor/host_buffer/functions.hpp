@@ -6,22 +6,14 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+// Exports functions
+#include <tt-metalium/experimental/tensor/tensor_utils.hpp>
 namespace tt::tt_metal::host_buffer {
 
 HostBuffer get_host_buffer(const Tensor& tensor);
-HostBuffer get_host_buffer(const HostTensor& tensor);
-
-template <typename T>
-ttsl::Span<const T> get_as(const HostBuffer& buffer);
-
-template <typename T>
-ttsl::Span<T> get_as(HostBuffer& buffer);
 
 template <typename T>
 ttsl::Span<const T> get_as(const Tensor& tensor);
-
-template <typename T>
-ttsl::Span<const T> get_as(const HostTensor& tensor);
 
 template <typename T>
 ttsl::Span<T> get_as(Tensor& tensor);

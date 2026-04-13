@@ -16,9 +16,15 @@
 
 namespace tt::tt_metal {
 
-// Returns true if the tensor data is stored in row-major layout and the logical shape matches the physical shape.
-// When true, no encoding/decoding is needed to convert between logical and physical representations.
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+//
+// TODO(#40348): Does this function make sense to be in the general utility?
+// If so, better name?
 bool logical_matches_physical(const TensorSpec& tensor_spec);
+
 namespace host_buffer {
 
 HostBuffer get_host_buffer(const HostTensor& tensor);
