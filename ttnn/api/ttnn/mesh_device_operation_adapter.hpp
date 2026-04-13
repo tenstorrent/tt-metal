@@ -193,27 +193,23 @@ public:
                 DescriptorFactory::prepare_resources(a, t, r);
             };
 
+        struct empty_resource_t {};
+
         // Deduce the return type of prepare_resources when it exists; fall back to
-        // monostate otherwise. SFINAE via the Dummy parameter prevents a hard error
-        // when DescriptorFactory::prepare_resources does not exist.
-        template <typename T, typename = void>
+        // an empty resource otherwise.
+        template <typename T, bool HasPrepareResources = false>
         struct deduce_resource_type {
-            using type = std::monostate;
+            using type = empty_resource_t;
         };
         template <typename T>
-        struct deduce_resource_type<
-            T,
-            std::void_t<decltype(T::prepare_resources(
-                std::declval<const operation_attributes_t&>(),
-                std::declval<const tensor_args_t&>(),
-                std::declval<tensor_return_value_t&>()))>> {
+        struct deduce_resource_type<T, true> {
             using type = decltype(T::prepare_resources(
                 std::declval<const operation_attributes_t&>(),
                 std::declval<const tensor_args_t&>(),
                 std::declval<tensor_return_value_t&>()));
         };
 
-        using resource_t = typename deduce_resource_type<DescriptorFactory>::type;
+        using resource_t = typename deduce_resource_type<DescriptorFactory, has_prepare_resources>::type;
 
         struct shared_variables_t {
             [[no_unique_address]] resource_t resources{};

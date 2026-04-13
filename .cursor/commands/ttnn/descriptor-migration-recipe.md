@@ -238,6 +238,9 @@ TT_METAL_HOME=$PWD ./build_Release/bin/tt-nn-validation-basic \
     --gtest_filter="*DescriptorBenchmark.DispatchPerformance*"
 ```
 
+If you're running from IRD where local docker/SSH credentials are not available, run these commands on a standard
+dev environment (or CI runner) with normal build access instead of from IRD.
+
 Run the performance test **3-5 times** and compute the average overhead.
 
 ### 2.3 Acceptance criteria
