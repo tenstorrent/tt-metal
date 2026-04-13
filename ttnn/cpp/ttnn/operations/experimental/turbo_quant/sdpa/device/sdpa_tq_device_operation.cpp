@@ -15,15 +15,17 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.q.layout() == Layout::TILE, "Q must be TILE layout");
     TT_FATAL(args.q.dtype() == tt::tt_metal::DataType::BFLOAT16, "Q must be BF16");
 
-    // K/V indices: BFP4 or BF16 (BF16 for MVP/debugging)
+    // K/V indices: BFP4, BFP8, or BF16
     TT_FATAL(
         args.k_indices.dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+            args.k_indices.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
             args.k_indices.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "K indices must be BFP4_B or BF16");
+        "K indices must be BFP4_B, BFP8_B, or BF16");
     TT_FATAL(
         args.v_indices.dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+            args.v_indices.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
             args.v_indices.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "V indices must be BFP4_B or BF16");
+        "V indices must be BFP4_B, BFP8_B, or BF16");
     TT_FATAL(args.k_indices.layout() == Layout::TILE, "K indices must be TILE layout");
     TT_FATAL(args.v_indices.layout() == Layout::TILE, "V indices must be TILE layout");
 
