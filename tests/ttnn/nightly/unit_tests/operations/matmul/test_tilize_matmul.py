@@ -6,7 +6,8 @@
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import untilize, tilize_to_list, comp_pcc, skip_for_blackhole
+from models.common.utility_functions import untilize, tilize_to_list, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import torch
 
 
@@ -40,10 +41,9 @@ def run_tilize_matmul_test(M, K, N, device):
 
     ref_bmm = torch.matmul(A.reshape(1, M, K), B.reshape(1, K, N))
     ref_bmm = ref_bmm.reshape(1, 1, M, N)
-    passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
-    logger.debug(f"Passing={passing_pcc}")
-    logger.debug(f"Output pcc={output_pcc}")
-    assert passing_pcc
+    assert_numeric_metrics(
+        ref_bmm, pyt_got_back_rm, atol=0.007 * K, rtol=0.142 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )
 
 
 @skip_for_blackhole("Hanging on BH, see #12349")

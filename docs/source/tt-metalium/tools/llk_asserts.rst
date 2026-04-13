@@ -104,7 +104,7 @@ LLK asserts are defined and used throughout the tt-llk library under:
 
 .. code-block:: text
 
-   tt_metal/third_party/tt_llk/
+   tt_metal/tt-llk/
    ├── tt_llk_blackhole/
    │   ├── llk_lib/
    │   │   ├── llk_assert.h          # Assert macro definitions

@@ -35,7 +35,7 @@ process_agmm_fusion_program_and_create_override_variables(
     const tt::tt_metal::Tensor& /*a*/,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,

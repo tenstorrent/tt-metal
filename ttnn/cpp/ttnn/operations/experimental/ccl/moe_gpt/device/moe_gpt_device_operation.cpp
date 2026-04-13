@@ -188,10 +188,11 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], device);
 
     // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
-    const auto& output_storage = tilize_output_tensor.device_storage();
-    const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor output_tensor(output_storage, output_spec, output_topology);
+    const auto output_tensor =
+        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+    TT_FATAL(
+        output_tensor.tensor_spec() == output_specs[4],
+        "Reinterpreted tensor spec does not match expected output_specs[4]");
 
     return {
         create_device_tensor(output_specs[0], device),
