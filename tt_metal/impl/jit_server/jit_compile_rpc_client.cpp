@@ -23,7 +23,7 @@ constexpr const char* kJitServerEndpointsEnv = "TT_METAL_JIT_SERVER_ENDPOINTS";
 constexpr const char* kJitServerEnableEnv = "TT_METAL_JIT_SERVER_ENABLE";
 
 std::string trim_ascii_whitespace(std::string_view input) {
-    size_t begin = 0;
+    size_t begin = 0u;
     while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin]))) {
         ++begin;
     }
@@ -36,7 +36,7 @@ std::string trim_ascii_whitespace(std::string_view input) {
 
 std::vector<std::string> parse_endpoint_list(std::string_view endpoints) {
     std::vector<std::string> parsed;
-    size_t start = 0;
+    size_t start = 0u;
     while (start <= endpoints.size()) {
         size_t comma = endpoints.find(',', start);
         size_t end = (comma == std::string_view::npos) ? endpoints.size() : comma;
@@ -47,7 +47,7 @@ std::vector<std::string> parse_endpoint_list(std::string_view endpoints) {
         if (comma == std::string_view::npos) {
             break;
         }
-        start = comma + 1;
+        start = comma + 1u;
     }
     return parsed;
 }
