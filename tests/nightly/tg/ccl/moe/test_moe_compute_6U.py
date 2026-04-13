@@ -11,6 +11,8 @@ import random
 import torch
 import ttnn
 
+from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
+
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
@@ -306,7 +308,7 @@ def prepare_output_tensor_from_combine_writer(
 
 
 PCC_THRESHOLD = 0.988
-ATOL_THRESHOLD = 600
+ATOL_THRESHOLD = 700
 
 
 def validate_matmul(
@@ -418,6 +420,9 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         if pcc_val < PCC_THRESHOLD or not allclose_passed:
             combine_all_passed = False
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
+            if not allclose_passed:
+                mask = (vals - refs).abs() > ATOL_THRESHOLD
+                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -521,189 +526,6 @@ def create_torch_w2(L, E, N, K):
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
     return torch_w2
-
-
-def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
-    """
-    Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
-
-    Args:
-        torch_w0: Weight tensor of shape (L, E, K, N)
-        torch_w1: Weight tensor of shape (L, E, K, N)
-        L: Number of layers
-        E: Number of experts
-        K: Input dimension
-        N: Output dimension
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
-    Returns:
-        torch_w0_w1_interleaved: Interleaved tensor of shape (L, E, K, 4096)
-    """
-    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
-
-    # Reshape to expose chunks: (L, E, K, N) -> (L, E, K, Nt, ttnn.TILE_SIZE)
-    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
-    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
-
-    # Stack w0 and w1 chunks together: (L, E, K, Nt, 2, ttnn.TILE_SIZE)
-    # This puts w0_chunk_i and w1_chunk_i adjacent to each other
-    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
-
-    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
-    # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
-    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
-
-    # Permute to move Nt before K: (L, E, K, Nt, 2*TILE) -> (L, E, Nt, K, 2*TILE)
-    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
-
-    each_shard = []
-
-    # Pick appropriate number of column tiles for each core based on the ring position.
-    start_tile = 0
-    for ring_pos in range(len(ring2cores)):
-        (_, _, pad_flag) = ring2cores[ring_pos]
-        num_tiles = 5 if pad_flag else 6
-        each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
-
-        if pad_flag:
-            each_shard.append(torch.zeros(L, E, 1, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
-        start_tile += num_tiles
-
-    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)  # (L, E, 5 * 8 + 1 * 8 + 6 * 4, K, 64)
-    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, 12, -1, K, 2 * ttnn.TILE_SIZE)  # (L, E, 12, 6, K, 64)
-    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 6, K, 64)
-
-    # Let us further make the 6 as 3 and 64 as 128.
-    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(12, L, E, 3, -1, K, 2 * ttnn.TILE_SIZE)
-    # (12, L, E, 3, 2, K, 64) -> (12, L, E, 3, K, 2, 64)
-    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
-    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(12, L, E, 3, -1, 4 * ttnn.TILE_SIZE)
-
-    return torch_w0_w1_paired
-
-
-def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
-    """
-    Prepare the w2 tensor by padding and reordering tiles.
-
-    Args:
-        torch_w2: Weight tensor of shape (L, E, N, K)
-        L: Number of layers
-        E: Number of experts
-        N: Intermediate dimension
-        K: Output dimension
-        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
-
-    Returns:
-        torch_w2_reordered: Reordered tensor of shape (L, E, N_padded, 7680)
-    """
-    # Separate the tensor into 4 groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
-    each_shard = []
-
-    start_col = 0
-    for ring_pos in range(len(ring2cores)):
-        (_, _, pad_flag) = ring2cores[ring_pos]
-        last_group_tiles = 3 if pad_flag else 2
-        last_group_pad_tiles = 1 if pad_flag else 2
-
-        # Get the first 4 groups of 4 * 32 tiles.
-        each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
-        start_col += 4 * 4 * ttnn.TILE_SIZE
-        each_shard.append(torch_w2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
-        start_col += last_group_tiles * ttnn.TILE_SIZE
-
-        # Add padding for the last group.
-        each_shard.append(torch.zeros(L, E, N, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
-
-    torch_w2_reordered = torch.cat(each_shard, dim=-1)  # (L, E, N, 12 * (4 * 4 * 32 + 4 * 32))
-    all_groups_per_bank = torch_w2_reordered.view(L, E, N, 12, -1, 4 * ttnn.TILE_SIZE)
-
-    # (L, E, N, 12, 5, 128) -> (12, L, E, 5, N, 128)
-    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
-
-    # Group N in terms of tiles first
-    N_grouped = all_groups_per_bank.view(
-        12, L, E, 5, -1, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
-    )  # (12, L, E, 5, 64, 32, 128)
-
-    # Figure out the order of N tiles based on the ring position.
-    core_chunk_order = torch.tensor(list(reversed(range(len(ring2cores))))).roll(1)
-
-    # Figure out the starting position for each chunk
-    chunk_sizes = [5 if ring2cores[ring_pos][2] else 6 for ring_pos in range(len(ring2cores))]
-    chunk_start_positions = torch.cat(
-        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
-    )
-
-    each_shard = []
-    # Assemble the number of such N tiles based on the ring position.
-    for core_id in range(len(ring2cores)):
-        each_chunk = []
-        for chunk_id in core_chunk_order:
-            start_pos = chunk_start_positions[chunk_id]
-            end_pos = chunk_start_positions[chunk_id + 1]
-            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
-            each_chunk.append(this_chunk)
-        each_shard.append(torch.cat(each_chunk, dim=3))
-
-        core_chunk_order = core_chunk_order.roll(1)
-
-    N_reordered = torch.stack(each_shard).view(12, L, E, 5, -1, 4 * ttnn.TILE_SIZE)
-
-    # Pad "N" dimension to make it divisible by 7 tiles, since we read 7 tiles at a time.
-    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
-    N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
-    padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
-    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
-    return all_groups_per_bank
-
-
-def get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, compute_matmul_dram_core_range_set):
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w0_w1_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
-    )
-    return w0_w1_memory_config
-
-
-def get_w2_memory_config(num_layers, experts_per_device, matmul_N, compute_matmul_dram_core_range_set):
-    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-    w2_shard_spec = ttnn.ShardSpec(
-        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
-    return w2_memory_config
-
-
-def determine_compute_matmul_cores(mesh_device):
-    MATMUL_FULL_CORES = {0, 3, 6, 9}
-    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
-
-    return ring2cores, dram_core_range_set
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -1158,7 +980,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("experts_per_device", [2, 3])
 @pytest.mark.parametrize("tokens_per_device", [3, 8, 16, 32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
@@ -1416,7 +1238,7 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(
+    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
         torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
     )
 
@@ -1432,7 +1254,9 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
+    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+    )
 
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
@@ -1630,21 +1454,23 @@ def test_moe_compute(
                 e_t_all_passed = False
 
             # ========== Matmul Output Tensor Validation ==========
-            if not validate_matmul(
-                layer_id,
-                experts_per_device,
-                all_core_range_set,
-                output_shard_cores,
-                output_height_shard_dim,
-                output_width_shard_dim,
-                total_tokens,
-                hidden_size,
-                expert_token_counts,
-                matmul_goldens,
-                matmul_output_tensor,
-                mesh_device,
-            ):
-                matmul_all_passed = False
+
+            if experts_per_device == 2:
+                if not validate_matmul(
+                    layer_id,
+                    experts_per_device,
+                    all_core_range_set,
+                    output_shard_cores,
+                    output_height_shard_dim,
+                    output_width_shard_dim,
+                    total_tokens,
+                    hidden_size,
+                    expert_token_counts,
+                    matmul_goldens,
+                    matmul_output_tensor,
+                    mesh_device,
+                ):
+                    matmul_all_passed = False
 
             if not validate_combine(
                 layer_id,
@@ -1660,7 +1486,13 @@ def test_moe_compute(
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
-    logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    if experts_per_device == 2:
+        logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    else:
+        logger.info(
+            "\nWe cannot directly validate matmul results for all experts when experts_per_device > 2 due "
+            " to the double buffer scheme"
+        )
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"

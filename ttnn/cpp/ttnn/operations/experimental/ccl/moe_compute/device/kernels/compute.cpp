@@ -134,15 +134,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
 
-    uint32_t num_active_tokens[2];
-
     constexpr uint32_t BITS_PER_EXPERT = 10;
     constexpr uint32_t EXPERT_MASK = 0x3FFu;
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-        num_active_tokens[expert_id] = num_tokens;
     }
 
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
@@ -174,13 +171,6 @@ void kernel_main() {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
-
-            // for (uint32_t i = 0; i < 224; ++i) {
-            //                 if (i % 2 == 0) {
-            //                     const uint32_t idx = (use_second_half_buffer)? num_w0_w1_tiles_h+i:i;
-            //                     PACK((print_tile_rows(cb_s2c_in, idx, true, 0, num_active_tokens[expert_id])));
-            //                 }
-            //             }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -284,6 +274,7 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
+
                 tile_regs_commit();
 
                 tile_regs_wait();
