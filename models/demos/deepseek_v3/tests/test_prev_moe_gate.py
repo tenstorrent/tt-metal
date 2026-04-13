@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.prev_moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -126,7 +126,9 @@ def test_forward_pass(
     model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MoEGate.create_shared_state(hf_config, mesh_device)
+    model_state = {
+        "mesh_device": mesh_device,
+    }
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
