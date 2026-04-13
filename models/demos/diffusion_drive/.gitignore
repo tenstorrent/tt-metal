@@ -1,0 +1,7 @@
+# Downloaded weights and sample data
+data/
+reference/golden/
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
