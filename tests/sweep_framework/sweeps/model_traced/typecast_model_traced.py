@@ -97,7 +97,11 @@ def run(
         # Use torch.int32 for uint16 input — matching the pattern in working unit tests
         # (test_typecast_int.py).  torch.int16 causes sign-extension corruption for
         # values >32767 during from_torch conversion.
-        torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32).clamp(0, 65535)
+        # On mesh devices, from_torch with ReplicateTensorToMesh + uint16 also
+        # corrupts values >32767 (internal int32→int16→uint16 path), so limit
+        # the input range to the safe int16-positive range [0, 32767] on mesh.
+        uint16_max = 32767 if is_mesh_device else 65535
+        torch_input_tensor_a = torch.randint(0, uint16_max + 1, shape, dtype=torch.int32)
     elif input_a_dtype == ttnn.uint32:
         torch_input_tensor_a = torch.randint(0, 2**32, shape, dtype=torch.int64)
     else:
