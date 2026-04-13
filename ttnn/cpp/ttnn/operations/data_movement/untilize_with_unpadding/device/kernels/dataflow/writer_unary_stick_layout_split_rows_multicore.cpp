@@ -22,7 +22,7 @@ void kernel_main() {
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, unpadded_X_size};
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {

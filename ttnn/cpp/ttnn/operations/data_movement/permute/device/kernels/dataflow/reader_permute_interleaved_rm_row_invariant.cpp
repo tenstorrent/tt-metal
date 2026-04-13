@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
-    const auto s0 = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, page_size};
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t curr_addr = src_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {

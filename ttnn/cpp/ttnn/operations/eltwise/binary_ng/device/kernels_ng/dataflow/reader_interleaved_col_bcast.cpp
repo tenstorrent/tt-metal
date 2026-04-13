@@ -50,7 +50,7 @@ void kernel_main() {
 #endif
 #else
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, src_tile_bytes};
+    const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if SRC_SHARDED_B
 #if !SRC_BCAST_B
@@ -59,7 +59,7 @@ void kernel_main() {
 #endif
 #else
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const auto src_b = decltype(TensorAccessor(src_b_args, src_addr_b)){src_b_args, src_addr_b, src_tile_bytes_b};
+    const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;

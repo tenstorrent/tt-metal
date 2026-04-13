@@ -31,7 +31,7 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_in1);
 
-    const auto s1 = decltype(TensorAccessor(src1_args, src1_addr)){src1_args, src1_addr, tile_bytes};
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb0(cb_id_in0);

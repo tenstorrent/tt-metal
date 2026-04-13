@@ -12,7 +12,7 @@ void kernel_main() {
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    const auto s = decltype(TensorAccessor(dst_args, output_buffer_address)){dst_args, output_buffer_address, get_tile_size(dst_cb_id)};
+    const auto s = TensorAccessor(dst_args, output_buffer_address);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

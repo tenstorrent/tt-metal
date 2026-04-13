@@ -42,8 +42,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, original_page_size_bytes};
-    const auto d = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, original_page_size_bytes};
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;

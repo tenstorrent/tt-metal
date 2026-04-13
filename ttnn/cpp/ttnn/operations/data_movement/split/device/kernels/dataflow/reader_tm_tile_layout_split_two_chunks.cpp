@@ -32,7 +32,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = decltype(TensorAccessor(in0_tensor_args, in0_tensor_addr)){in0_tensor_args, in0_tensor_addr, single_tile_size_bytes};
+    const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
