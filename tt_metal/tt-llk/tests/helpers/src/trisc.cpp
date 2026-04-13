@@ -86,10 +86,6 @@ int main(void)
     ckernel::reset_dest_offset_id();
 #endif
 
-#ifdef PERF_COUNTERS_COMPILED
-    llk_perf::start_perf_counters(0);
-#endif
-
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
     llk_profiler::sync_threads();
@@ -106,10 +102,6 @@ int main(void)
 
         ckernel::tensix_sync();
     }
-
-#ifdef PERF_COUNTERS_COMPILED
-    llk_perf::stop_perf_counters(0);
-#endif
 
     *mailbox = ckernel::KERNEL_COMPLETE;
 }

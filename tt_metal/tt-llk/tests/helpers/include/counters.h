@@ -4,11 +4,11 @@
 
 #pragma once
 
-// MEASURE_PERF_COUNTERS always expands to nothing in BOTH builds.
-// All counter work (start/stop/read) happens in trisc.cpp and brisc.cpp,
-// not inside run_kernel. This ensures run_kernel compiles identically
-// regardless of PERF_COUNTERS_COMPILED — zero overhead.
+// Default: MEASURE_PERF_COUNTERS expands to nothing.
+// perf.h may provide its own definition (with forward declarations), so guard this.
+#ifndef MEASURE_PERF_COUNTERS
 #define MEASURE_PERF_COUNTERS(zone_name)
+#endif
 
 #ifndef PERF_COUNTERS_COMPILED
 
@@ -721,14 +721,14 @@ public:
     PerfCounterManager(PerfCounterManager&&)                 = delete;
     PerfCounterManager& operator=(PerfCounterManager&&)      = delete;
 
-    // Lightweight start: thread 0 arms zone 0. Other zones have no counter overhead.
+    // Per-zone start: first thread to arrive configures + arms hardware.
     // On first call, reads pre-computed metadata from L1 (~5 cycles, written by BRISC).
     void start(std::uint32_t zone)
     {
         compute_metadata();
 
-        // Only zone 0 has counter work; zone > 0 is a no-op.
-        if (get_active_bank_mask() == 0 || zone != 0)
+        // Skip if no valid counters configured for this zone.
+        if (get_active_bank_mask() == 0 || get_valid_count(zone) == 0)
         {
             return;
         }
@@ -759,20 +759,26 @@ public:
             }
         }
 
-        // Barrier: atomically increment counter, spin until all 3 threads arrive.
-        // No reset needed — start() only runs once per kernel execution.
-        volatile std::uint32_t* barrier = reinterpret_cast<volatile std::uint32_t*>(perf_counters_start_barrier_addr(zone));
-        atincget_l1(reinterpret_cast<std::uint32_t>(barrier), 1);
-        while (read_l1_word(barrier) < PERF_COUNTER_THREADS)
+        // L1-flag barrier: each thread signals arrival, then spins until all arrive.
+        // Uses per-zone stop_counter memory (separate from stop_flags used by stop())
+        // to avoid ATINCGET which requires compile-time constant zone addresses.
+        volatile std::uint32_t* start_flags       = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
+        start_flags[thread_info::get_thread_id()] = 1;
+        ckernel::invalidate_data_cache();
+        for (std::uint32_t t = 0; t < PERF_COUNTER_THREADS; ++t)
         {
+            while (!start_flags[t])
+            {
+            }
         }
     }
 
-    // Lightweight stop: per-thread L1 flags for last-thread detection.
-    // Only zone 0 has counter work; zone > 0 is a no-op.
+    // Per-zone stop: last thread to leave freezes + reads + deconfigures.
+    // Early threads wait for the last thread to finish all hardware ops.
     void stop(std::uint32_t zone)
     {
-        if (get_active_bank_mask() == 0 || zone != 0)
+        // Skip if no valid counters configured for this zone.
+        if (get_active_bank_mask() == 0 || get_valid_count(zone) == 0)
         {
             return;
         }
@@ -784,7 +790,7 @@ public:
         stop_flags[thread_id] = 1;
         ckernel::invalidate_data_cache();
 
-        // Check if we're the last thread (other two flags already set).
+        // Check if we're the last thread (other flags already set).
         bool is_last = true;
         for (std::uint32_t t = 0; t < PERF_COUNTER_THREADS; ++t)
         {
@@ -797,38 +803,35 @@ public:
 
         if (!is_last)
         {
-            // For zone 0: early threads must wait until the last thread finishes
-            // freeze + read + deconfigure. Otherwise they enter TILE_LOOP while
-            // counter hardware is still active, adding FPU pipeline overhead.
-            if (zone == 0)
+            // Early threads must wait until the last thread finishes
+            // freeze + read + deconfigure. Otherwise they enter the next zone
+            // while counter hardware is still active, causing bus contention.
+            volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
+            while (read_l1_word(sync_ctrl) == 0)
             {
-                volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
-                while (read_l1_word(sync_ctrl) == 0)
-                {
-                    // Spin — last thread will write SYNC_ZONE_COMPLETE when done.
-                }
+                // Spin — last thread will write SYNC_ZONE_COMPLETE when done.
             }
             return;
         }
 
-        // Only zone 0 has armed counters (start() only arms zone 0).
-        // Must complete ALL hardware ops (freeze + read + deconfigure) before
-        // signaling — read_hardware writes mode registers which cause bus
-        // contention with FPU operations if done concurrently with TILE_LOOP.
-        if (zone == 0)
-        {
-            freeze_hardware();
-            read_hardware(zone);
-            deconfigure_hardware();
-        }
+        // Last thread out: complete ALL hardware ops before signaling.
+        // read_hardware writes mode registers which cause bus contention
+        // with FPU operations if done concurrently with the next zone.
+        freeze_hardware();
+        read_hardware(zone);
+        deconfigure_hardware();
 
-        // Clear flags for next zone (so other threads can enter next zone's stop).
+        // Clear stop flags AND start flags for next zone.
         stop_flags[0] = 0;
         stop_flags[1] = 0;
         stop_flags[2] = 0;
 
+        volatile std::uint32_t* start_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
+        start_flags[0]                      = 0;
+        start_flags[1]                      = 0;
+        start_flags[2]                      = 0;
+
         // Signal early threads that ALL hardware ops are done.
-        // They're spinning on this in the barrier above.
         volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
         *sync_ctrl                        = SYNC_ZONE_COMPLETE | (thread_id << SYNC_STOPPER_SHIFT);
         ckernel::invalidate_data_cache();
@@ -902,24 +905,41 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = sizeof(BUILTIN_COUNTER_CONFIG) /
 
 inline void configure_and_arm_from_brisc()
 {
-    // Write built-in config to L1 (local write, no NOC)
-    volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_config_addr(0));
-    for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+    // Write built-in config to ALL zone L1 buffers (local write, no NOC).
+    // Each zone needs its own copy so configure_hardware(zone) can read it.
+    for (std::uint32_t zone = 0; zone < 2; ++zone)
     {
-        config_mem[i] = BUILTIN_COUNTER_CONFIG[i];
-    }
-    // Zero remaining slots
-    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
-    {
-        config_mem[i] = 0;
+        volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_config_addr(zone));
+        for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+        {
+            config_mem[i] = BUILTIN_COUNTER_CONFIG[i];
+        }
+        for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
+        {
+            config_mem[i] = 0;
+        }
+
+        // Clear data buffer for this zone.
+        volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_data_addr(zone));
+        for (std::uint32_t i = 0; i < PERF_COUNTERS_DATA_WORDS; i++)
+        {
+            data_mem[i] = 0;
+        }
+
+        // Clear sync control + stop flags + barriers for this zone.
+        // 10 words covers: sync_ctrl(1) + stop_flags(3) + start_counter(3) +
+        // stop_counter(3) + stop_elect(1) + start_barrier(1) + stop_barrier(1)
+        volatile std::uint32_t* sync_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone));
+        for (std::uint32_t i = 0; i < 10; i++)
+        {
+            sync_mem[i] = 0;
+        }
     }
 
-    // Only compute and write L1 metadata — no hardware register writes.
+    // Compute and write L1 metadata for all zones — no hardware register writes.
     // Hardware configure+arm is done by TRISC start_perf_counters() inside
-    // the counter zone (outside profiler zone). Writing hw registers from
-    // BRISC causes ~5 cycle overhead on pack operations even though RTL
-    // says counters are passive — likely due to clock gating or internal
-    // state machine changes from ref_period/mode register writes.
+    // the counter zone. Writing hw registers from BRISC causes ~5 cycle
+    // overhead on pack operations.
     auto& mgr = PerfCounterManager::instance();
     mgr.configure_all_zones_metadata_only();
 }
@@ -1107,30 +1127,37 @@ constexpr std::uint32_t AVAILABLE_MATH                = 272;
 
 namespace llk_perf
 {
-// RAII wrapper for automatic counter start/stop (INIT zone only).
-// No member variable: INIT is always zone 0, so stop() hardcodes it.
-// Empty class = minimal stack impact (1 byte, often optimized away).
+// RAII wrapper for automatic per-zone counter start/stop.
+// May already be defined by perf.h (forward-declaration version).
+#ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
+#define _LLK_PERF_COUNTER_SCOPED_DEFINED_
+
 class perf_counter_scoped
 {
+    std::uint32_t m_zone;
+
 public:
     perf_counter_scoped(const perf_counter_scoped&)            = delete;
     perf_counter_scoped(perf_counter_scoped&&)                 = delete;
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    __attribute__((always_inline)) perf_counter_scoped()
+    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zone) : m_zone(zone)
     {
-        start_perf_counters(0);
+        start_perf_counters(m_zone);
     }
 
     __attribute__((always_inline)) ~perf_counter_scoped()
     {
-        stop_perf_counters(0);
+        stop_perf_counters(m_zone);
     }
 };
+#endif // _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
 // ── Runtime zone allocator ──────────────────────────────────────────
 // Maps compile-time zone name hashes to sequential zone IDs (0, 1, 2).
+// zone_name_hash may already be defined by perf.h (constexpr, can't duplicate).
+// Static storage and get_zone_id MUST come from counters.h (single definition).
 namespace detail
 {
 constexpr std::uint32_t ZONE_UNALLOCATED = 0xFF;
@@ -1138,6 +1165,9 @@ constexpr std::uint32_t ZONE_LOOKUP_SIZE = 32;
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_lookup[ZONE_LOOKUP_SIZE];
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t next_zone_id;
 __attribute__((section(".bss.perf_counters"))) static bool zone_lookup_ready;
+
+#ifndef _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
+#define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 
 constexpr std::uint32_t zone_name_hash(const char* s)
 {
@@ -1148,6 +1178,7 @@ constexpr std::uint32_t zone_name_hash(const char* s)
     }
     return h % ZONE_LOOKUP_SIZE;
 }
+#endif // _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 } // namespace detail
 
 __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t hash_val)
@@ -1169,20 +1200,14 @@ __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t h
 
 } // namespace llk_perf
 
-// ── MEASURE_PERF_COUNTERS ───────────────────────────────────────────
-// Auto-assigning performance counter zones. No registration needed.
-// First unique name gets zone 0, second gets zone 1, etc. (max 3).
-// Zone names are stored in the ELF .perf_counter_meta section for host-side parsing.
-// Uses __LINE__ for unique variable names and constexpr hashing for zone IDs.
-//
-// Counter code is confined entirely to the INIT scope via RAII (perf_counter_scoped).
-// TILE_LOOP and KERNEL scopes have ZERO counter code — no function calls, no
-// stack variables — producing identical codegen with or without counters.
-//
-// When PERF_COUNTERS_COMPILED is NOT defined, expands to nothing — the binary is
-// identical to a build without any counter code (Main vs Branch = 0% overhead).
-
-// No WC-specific macros needed — MEASURE_PERF_COUNTERS is defined
-// at the top of this file (always empty) before any #ifdef.
+// MEASURE_PERF_COUNTERS may already be defined by perf.h.
+// Only redefine here if perf.h was not included first.
+#ifndef PERF_COUNTER_VAR_CONCAT_
+#undef MEASURE_PERF_COUNTERS
+#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
+#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define MEASURE_PERF_COUNTERS(zone_name) \
+    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+#endif
 
 #endif // PERF_COUNTERS_COMPILED

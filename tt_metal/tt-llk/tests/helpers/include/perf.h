@@ -9,6 +9,72 @@
 
 #include "ckernel.h"
 
+// ── Per-zone performance counter measurement ──────────────────────────
+// MEASURE_PERF_COUNTERS("INIT") / MEASURE_PERF_COUNTERS("TILE_LOOP")
+// placed BEFORE ZONE_SCOPED in the same scope — counter stops AFTER profiler zone ends.
+// Full counter implementation is in counters.h (included by trisc.cpp).
+// We only need forward declarations + RAII class here to avoid pulling
+// ATINCGET assembly into the test source compilation context.
+
+#ifndef PERF_COUNTERS_COMPILED
+#ifndef MEASURE_PERF_COUNTERS
+#define MEASURE_PERF_COUNTERS(zone_name)
+#endif
+#else
+
+// Guards to prevent redefinition when counters.h is included later (via trisc.cpp)
+#define _LLK_PERF_COUNTER_SCOPED_DEFINED_
+#define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
+
+namespace llk_perf
+{
+namespace detail
+{
+constexpr std::uint32_t zone_name_hash(const char* s)
+{
+    std::uint32_t h = 5381;
+    while (*s)
+    {
+        h = h * 33 + static_cast<std::uint32_t>(*s++);
+    }
+    return h % 32;
+}
+} // namespace detail
+
+// Defined in counters.h (compiled via trisc.cpp in the same translation unit).
+void start_perf_counters(std::uint32_t zone);
+void stop_perf_counters(std::uint32_t zone);
+std::uint32_t get_zone_id(std::uint32_t hash_val);
+
+class perf_counter_scoped
+{
+    std::uint32_t m_zone;
+
+public:
+    perf_counter_scoped(const perf_counter_scoped&)            = delete;
+    perf_counter_scoped(perf_counter_scoped&&)                 = delete;
+    perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
+    perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
+
+    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zone) : m_zone(zone)
+    {
+        start_perf_counters(m_zone);
+    }
+
+    __attribute__((always_inline)) ~perf_counter_scoped()
+    {
+        stop_perf_counters(m_zone);
+    }
+};
+} // namespace llk_perf
+
+#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
+#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define MEASURE_PERF_COUNTERS(zone_name) \
+    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+
+#endif // PERF_COUNTERS_COMPILED
+
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
 constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
