@@ -2788,6 +2788,59 @@ def new_mode_flow(
     )
 
 
+def passthrough_flow(
+    ctx: click.Context,
+    hosts: List[str],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    bare: bool,
+    tcp_interface: Optional[str],
+    docker_config: Optional[DockerConfig] = None,
+) -> None:
+    """Passthrough mode: MPI launch without rank bindings or mesh env vars.
+
+    Builds a simple ``mpirun --host <hosts> -np <N> [docker run ...] <program>`` command.
+    No TT_MESH_ID, TT_MESH_HOST_RANK, or TT_MESH_GRAPH_DESC_PATH are injected.
+    """
+    program = list(ctx.args)
+    if not program:
+        raise click.ClickException("No program specified. Please provide a program to run.")
+
+    host_csv = ",".join(hosts)
+    num_hosts = len(hosts)
+    mpi_launcher = get_mpi_launcher()
+
+    cmd: List[str] = [mpi_launcher, "--tag-output", "--host", host_csv, "-np", str(num_hosts)]
+
+    if not bare:
+        cmd.extend(default_multihost_mpi_args(tcp_interface))
+
+    if mpi_args:
+        cmd.extend(mpi_args)
+
+    if docker_config:
+        wrapped = build_docker_wrapped_program(docker_config, {}, program)
+        cmd.extend(wrapped)
+    else:
+        cmd.extend(program)
+
+    if verbose or dry_run:
+        print_command(cmd)
+
+    if dry_run:
+        return
+
+    try:
+        result = subprocess.run(cmd, cwd=ORIGINAL_CWD)
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        logger.error(f"{TT_RUN_PREFIX} Interrupted")
+        sys.exit(INTERRUPTED_EXIT_CODE)
+    except OSError as e:
+        raise click.ClickException(f"Error launching mpirun: {e}")
+
+
 @click.command(
     context_settings=dict(
         ignore_unknown_options=True,
@@ -2911,6 +2964,13 @@ def new_mode_flow(
     is_flag=True,
     help='Pass --entrypoint="" to docker run (use when image has a default entrypoint that interferes).',
 )
+@click.option(
+    "--not-mesh-aware",
+    is_flag=True,
+    help="Passthrough mode: run the program on --hosts via MPI without rank bindings or mesh "
+    "graph descriptors. Optionally wrap each rank in Docker with --docker-image. "
+    "Mutually exclusive with --rank-binding and --mesh-graph-descriptor.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -2933,14 +2993,16 @@ def main(
     docker_volume: Tuple[str, ...],
     docker_args: Optional[str],
     docker_empty_entrypoint: bool,
+    not_mesh_aware: bool,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
-    tt-run operates in two modes:
+    tt-run operates in three modes:
         - Legacy mode: Use --rank-binding (see legacy_flow function for detailed documentation)
         - New mode: Use --mesh-graph-descriptor (mutually exclusive with --rank-binding)
+        - Passthrough mode: Use --not-mesh-aware (no rank bindings, no mesh env vars)
 
-    The two modes are mutually exclusive - you must specify exactly one.
+    The three modes are mutually exclusive - you must specify exactly one.
 
     \b
     Quick Start:
@@ -2951,6 +3013,9 @@ def main(
         tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
         # Or with mock cluster (makes --hosts optional):
         tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
+
+        # Passthrough mode (no mesh env vars)
+        tt-run --not-mesh-aware --hosts node1,node2 ./my_app
 
     For detailed documentation on legacy mode, see the legacy_flow function docstring.
     """
@@ -2978,15 +3043,37 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} Docker mode: image={docker_image}, volumes={volumes}")
 
     # Check for mutually exclusive options
-    if rank_binding is not None and mesh_graph_descriptor is not None:
+    mode_count = sum([rank_binding is not None, mesh_graph_descriptor is not None, not_mesh_aware])
+    if mode_count > 1:
         raise click.ClickException(
-            "--rank-binding and --mesh-graph-descriptor are mutually exclusive. " "Please use only one of them."
+            "--rank-binding, --mesh-graph-descriptor, and --not-mesh-aware are mutually exclusive. "
+            "Please use exactly one."
+        )
+    if mode_count == 0:
+        raise click.ClickException(
+            "One of --rank-binding (legacy mode), --mesh-graph-descriptor (new mode), "
+            "or --not-mesh-aware (passthrough mode) must be specified."
         )
 
-    if rank_binding is None and mesh_graph_descriptor is None:
-        raise click.ClickException(
-            "Either --rank-binding (legacy mode) or --mesh-graph-descriptor (new mode) must be specified."
+    # Passthrough mode: --not-mesh-aware
+    if not_mesh_aware:
+        if hosts is None:
+            raise click.ClickException("--hosts is required with --not-mesh-aware.")
+        if force_rediscovery:
+            logger.warning(f"{TT_RUN_PREFIX} --force-rediscovery does not apply to --not-mesh-aware; ignoring.")
+        if mock_cluster_rank_binding is not None:
+            logger.warning(f"{TT_RUN_PREFIX} --mock-cluster-rank-binding does not apply to --not-mesh-aware; ignoring.")
+        passthrough_flow(
+            ctx,
+            hosts,
+            dry_run,
+            verbose,
+            mpi_args,
+            bare,
+            tcp_interface,
+            docker_config=docker_cfg,
         )
+        return
 
     # Legacy mode: use --rank-binding
     if rank_binding is not None:
@@ -3019,9 +3106,7 @@ def main(
         return
 
     # New mode: --mesh-graph-descriptor is provided
-    # Validate required arguments for new mode
     if mesh_graph_descriptor is not None:
-        # --hosts is required unless --mock-cluster-rank-binding is provided
         if mock_cluster_rank_binding is None and hosts is None:
             raise click.ClickException(
                 "--hosts is required for new mode (--mesh-graph-descriptor) "

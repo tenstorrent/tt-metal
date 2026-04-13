@@ -148,23 +148,20 @@ run_cluster_validation() {
         local descriptor_args=(--cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH")
     fi
 
-    if [[ $DOCKER_IMAGE == "none" ]]; then
-        mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
-            --tag-output \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${descriptor_args[@]}" \
-            --send-traffic \
-            --num-iterations 10
-    else
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            "${descriptor_args[@]}" \
-            --send-traffic \
-            --num-iterations 10
+    local ttrun_args=(
+        --not-mesh-aware
+        --hosts "$HOSTS"
+        --mpi-args "--mca btl_tcp_if_exclude docker0,lo,tailscale0"
+    )
+    if [[ $DOCKER_IMAGE != "none" ]]; then
+        ttrun_args+=(--docker-image "$DOCKER_IMAGE" --docker-empty-entrypoint)
     fi
+
+    tt-run "${ttrun_args[@]}" \
+        ./build/tools/scaleout/run_cluster_validation \
+        "${descriptor_args[@]}" \
+        --send-traffic \
+        --num-iterations 10
 }
 
 # Function to run reset on hosts and return hosts that failed reset
