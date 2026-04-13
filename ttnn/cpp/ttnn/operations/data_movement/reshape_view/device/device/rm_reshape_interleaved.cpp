@@ -59,8 +59,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr);
-    const auto d = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, source_page_size_bytes};
+    const auto d = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, dest_page_size_bytes};
 
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;

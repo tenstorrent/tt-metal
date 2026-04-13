@@ -43,14 +43,14 @@ void kernel_main() {
     cb0.push_back(num_tiles);
 #else
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s0 = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, src0_tile_bytes};
 #endif
 #ifdef IN1_SHARDED
     cb1.reserve_back(num_tiles);
     cb1.push_back(num_tiles);
 #else
     uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s1 = decltype(TensorAccessor(src1_args, src1_addr)){src1_args, src1_addr, src1_tile_bytes};
 #endif
 
 #if !(defined IN0_SHARDED && defined IN1_SHARDED)

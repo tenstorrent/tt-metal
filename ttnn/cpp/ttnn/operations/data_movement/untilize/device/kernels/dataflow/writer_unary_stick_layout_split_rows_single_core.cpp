@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t output_single_block_width_size = get_compile_time_arg_val(7);
 
     constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_stick_size};
 
     uint64_t base_dst_noc_addr[tile_height];
 

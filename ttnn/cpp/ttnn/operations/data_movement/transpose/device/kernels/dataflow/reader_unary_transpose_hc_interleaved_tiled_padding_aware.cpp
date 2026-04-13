@@ -35,7 +35,7 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, tile_bytes};
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS

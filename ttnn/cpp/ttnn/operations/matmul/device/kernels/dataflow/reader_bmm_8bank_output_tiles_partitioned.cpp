@@ -54,8 +54,8 @@ void kernel_main() {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s0 = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, in0_tile_bytes};
+    const auto s1 = decltype(TensorAccessor(src1_args, src1_addr)){src1_args, src1_addr, in1_tile_bytes};
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);

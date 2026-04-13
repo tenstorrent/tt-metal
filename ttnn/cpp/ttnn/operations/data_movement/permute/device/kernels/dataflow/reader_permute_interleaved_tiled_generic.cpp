@@ -110,7 +110,7 @@ void kernel_main() {
     for (int i = RANK - 2; i >= 0; i--) {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, tile_bytes};
 
     // Stride for stepping along x_dim_index_in_input
     const uint32_t X_stride_tile = src_tiled_strides[x_dim_index_in_input];

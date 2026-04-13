@@ -29,11 +29,11 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
 
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, tile_size};
 
     // Create TensorAccessors for start and end tensors
-    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr);
-    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr);
+    const auto start_tensor_accessor = decltype(TensorAccessor(start_args, start_addr)){start_args, start_addr, tile_size};
+    const auto end_tensor_accessor = decltype(TensorAccessor(end_args, end_addr)){end_args, end_addr, tile_size};
 
     // Read start and end indices from tensors using TensorAccessor
     uint32_t start_indices[num_dims];

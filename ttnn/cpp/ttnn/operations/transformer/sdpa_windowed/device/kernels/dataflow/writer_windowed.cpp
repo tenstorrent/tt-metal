@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto out_writer = decltype(TensorAccessor(out_args, out_addr)){out_args, out_addr, tile_bytes};
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
 
