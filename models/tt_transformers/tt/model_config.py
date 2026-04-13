@@ -2607,9 +2607,7 @@ class ModelArgs:
             # No mesh (e.g. reference-output generation): pad to tile_size only
             self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
         else:
-            self.padded_vocab_size = math.ceil(self.vocab_size / (tile_size * self.num_devices)) * (
-                tile_size * self.num_devices
-            )
+            self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
