@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 using namespace ttnn::operations::ccl::common;
+using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -23,32 +25,35 @@ void kernel_main() {
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
+    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
+    constexpr uint32_t num_shared_experts = get_compile_time_arg_val(20);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
 
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);  // ew_dim
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
 
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(28);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(31);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
 
-    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(34);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
 
-    constexpr bool write_page_by_page = get_compile_time_arg_val(35);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
 
-    constexpr uint32_t dispatch_devices = get_compile_time_arg_val(37);
+    constexpr bool write_page_by_page = get_compile_time_arg_val(36);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
+
+    constexpr uint32_t dispatch_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
-    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(38);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_page_size = get_compile_time_arg_val(40);
-    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
+    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
-    constexpr auto input_args = TensorAccessorArgs<42>();
+    constexpr auto input_args = TensorAccessorArgs<45>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
@@ -74,6 +79,11 @@ void kernel_main() {
     uint32_t payload_offset = get_arg_val<uint32_t>(rt_ags++);
     uint32_t payload_size = get_arg_val<uint32_t>(rt_ags++);
     bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_ags++) == 1;
+
+    // Note: these values are uint16_t packed in the uint32_t rt arg buffer
+    const auto shared_expert_ids_addr = get_arg_addr(rt_ags++);
+    constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
+    constexpr uint16_t bf16_one = 0x3f80;
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
@@ -105,11 +115,25 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
 
+        // manually fill in shared expert IDs to the metadata
+        if constexpr (num_shared_experts > 0) {
+            const uint32_t shared_expert_id_l1_addr = l1_write_addr + indices_page_size;
+            tt_memmove<false, true, true, shared_expert_data_size_bytes>(
+                shared_expert_id_l1_addr, shared_expert_ids_addr, shared_expert_data_size_bytes);
+        }
+
         // Only primary worker reads scores (only primary sends metadata)
         if (is_primary_payload_worker) {
             cb_reserve_back(scores_tensor_cb_id, 1);
             l1_write_addr = get_write_ptr(scores_tensor_cb_id);
             noc_async_read_page(i, scores_addr_gen, l1_write_addr);
+
+            if constexpr (num_shared_experts > 0) {
+                auto* l1_scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+                for (uint32_t e = 0; e < num_shared_experts; ++e) {
+                    l1_scores_ptr[selected_experts_k + e] = bf16_one;
+                }
+            }
         }
 
         // Read input token (or portion of it in payload split mode)
@@ -130,14 +154,16 @@ void kernel_main() {
     // Only primary worker copies indices and scores to metadata buffer (only primary sends metadata)
     if (is_primary_payload_worker) {
         cb_reserve_back(metadata_buffer_id, tokens_per_device);
+        const uint32_t metadata_buffer_addr = get_write_ptr(metadata_buffer_id);
         noc_async_read(
             get_noc_addr(base_indices_addr),
-            get_write_ptr(metadata_buffer_id),
-            (token_end_idx - token_start_idx) * aligned_indices_page_size);
+            metadata_buffer_addr,
+            (token_end_idx - token_start_idx) * aligned_metadata_page_size);
         noc_async_read(
             get_noc_addr(base_scores_addr),
-            get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_indices_page_size,
-            (token_end_idx - token_start_idx) * aligned_scores_page_size);
+            get_write_ptr(metadata_buffer_id) + (token_end_idx - token_start_idx) * aligned_metadata_page_size,
+            (token_end_idx - token_start_idx) * aligned_output_scores_page_size);
+
         noc_async_read_barrier();
         cb_push_back(metadata_buffer_id, tokens_per_device);
 
