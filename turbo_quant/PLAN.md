@@ -377,8 +377,30 @@ Measured 2026-04-10, synthetic data, 8Q/8KV heads, hd=128, 3-bit, Wormhole N150.
  44.1ms     pre-rescale centroids×norms
  43.5ms     rsqrt norm + remove UINT32 typecast
  37.2ms     paged BF16 with paged SDPA (= baseline, 2 bytes/elem)
+ 37.2ms     BFP4 index cache (= baseline, FLAT 128→131072, 0.5 bytes/elem)
   0.17ms    fused BFP4 SDPA pre-rescaled @ seq=2048 (= baseline, 0.5 bytes/elem)
 ```
+
+### BFP4 Index Cache — Verified across all sequence lengths (2026-04-13)
+
+Integers 0-7 are exactly representable in BFP4. `paged_update_cache` supports
+BF16 input → BFP4 cache natively. Fused gather kernel handles BFP4 via unpacker.
+
+| max_seq | Baseline BFP8 | TurboQuant BFP4 | Overhead |
+|---------|--------------|-----------------|----------|
+| 128 | 37.0ms | 37.2ms | 1.005× |
+| 512 | 37.7ms | 37.2ms | 0.99× |
+| 1,024 | 37.7ms | 37.2ms | 0.99× |
+| 2,048 | 37.8ms | 37.2ms | 0.98× |
+| 4,096 | 37.7ms | 37.3ms | 0.99× |
+| 8,192 | — | 37.2ms | — |
+| 16,384 | — | 37.2ms | — |
+| 32,768 | — | 37.2ms | — |
+| 65,536 | — | 37.2ms | — |
+| 131,072 | — | 37.2ms | — |
+
+Quality: MSE=0.034, cosine=0.999 — matches paper's theoretical bounds exactly.
+9/9 hardware tests pass.
 
 ---
 
