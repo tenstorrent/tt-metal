@@ -295,7 +295,6 @@ def main():
     tp_size = args.tp
     use_ddp = dp_size > 1
     use_tp = tp_size > 1
-    distributed = use_ddp or use_tp
 
     set_seed(42)
 

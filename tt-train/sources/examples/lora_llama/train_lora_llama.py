@@ -293,7 +293,6 @@ def main():
     tp_size = args.tp
     use_ddp = dp_size > 1
     use_tp = tp_size > 1
-    distributed = use_ddp or use_tp
     mesh_shape = [dp_size, tp_size]
 
     if use_ddp and batch_size % dp_size != 0:
@@ -302,14 +301,14 @@ def main():
     if use_tp and (args.save_every > 0 or args.resume):
         raise ValueError("Checkpointing (--save_every, --resume) is not supported with tensor parallelism (--tp > 1)")
 
-    if distributed:
+    if use_ddp or use_tp:
         validate_mesh_graph_descriptor(mesh_shape)
 
     mesh = ttml.Mesh((dp_size, tp_size), ("dp", "tp"))
     ttml.open_device_mesh(mesh)
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
 
-    if distributed:
+    if use_ddp or use_tp:
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
         print(f"{mode} enabled: dp={dp_size}, tp={tp_size}, mesh_shape={mesh_shape}")
 
@@ -419,7 +418,7 @@ def main():
         logits = model(tt_x, None)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
-        if distributed:
+        if use_ddp or use_tp:
             loss_val = float(get_loss_over_devices(loss))
         else:
             loss_val = float(loss.get_value().item())
