@@ -26,8 +26,12 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
-    // Use FabricBuilder to coordinate the build phases
-    FabricBuilder builder(device, *fabric_program_ptr, fabric_context);
+    // Use FabricBuilder to coordinate the build phases.
+    // If a custom factory is registered, use it; otherwise construct the default.
+    const auto& factory = get_fabric_builder_factory();
+    auto builder_ptr = factory ? factory(device, *fabric_program_ptr, fabric_context)
+                               : std::make_unique<FabricBuilder>(device, *fabric_program_ptr, fabric_context);
+    auto& builder = *builder_ptr;
 
     // Execute build phases
     builder.discover_channels();

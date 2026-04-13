@@ -279,4 +279,12 @@ void FabricBuilder::create_kernels() {
     }
 }
 
+// ============ Plugin Factory Registration ============
+
+static FabricBuilderFactory g_fabric_builder_factory = nullptr;
+
+void register_fabric_builder_factory(FabricBuilderFactory factory) { g_fabric_builder_factory = std::move(factory); }
+
+const FabricBuilderFactory& get_fabric_builder_factory() { return g_fabric_builder_factory; }
+
 }  // namespace tt::tt_fabric

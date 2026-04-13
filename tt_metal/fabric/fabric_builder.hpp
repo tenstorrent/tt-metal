@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -38,32 +39,34 @@ class FabricBuilderContext;
 class FabricBuilder {
 public:
     FabricBuilder(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context);
+    virtual ~FabricBuilder() = default;
 
     /**
      * Discover active ethernet channels and neighbors for this device.
      * Must be called before create_routers().
      */
-    void discover_channels();
+    virtual void discover_channels();
 
     /**
      * Create all router builders for this device.
+     * Override to dispatch to custom FabricRouterBuilder subclasses.
      */
-    void create_routers();
+    virtual void create_routers();
 
     /**
      * Connect routers using topology-appropriate connections.
      */
-    void connect_routers();
+    virtual void connect_routers();
 
     /**
      * Compile ancillary kernels (e.g., tensix mux) for each router.
      */
-    void compile_ancillary_kernels();
+    virtual void compile_ancillary_kernels();
 
     /**
      * Create the main ERISC router kernels.
      */
-    void create_kernels();
+    virtual void create_kernels();
 
     /**
      * Check if any routers were created.
@@ -75,7 +78,7 @@ public:
      */
     size_t get_num_routers() const { return routers_.size(); }
 
-private:
+protected:
     /**
      * RouterConnectionPair - Internal struct for router connection info
      */
@@ -140,5 +143,40 @@ private:
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
 };
+
+// ============ Plugin Factory Registration ============
+
+/**
+ * Factory function type for creating custom FabricBuilder implementations.
+ *
+ * External code (e.g., custom fabric builder plugins) can register a factory function
+ * that will be called instead of constructing the default FabricBuilder. This enables
+ * out-of-tree builder implementations without compile-time coupling.
+ *
+ * The factory receives the same arguments as the FabricBuilder constructor and must
+ * return a fully-functional FabricBuilder (or subclass) that implements all build phases:
+ * discover_channels, create_routers, connect_routers, compile_ancillary_kernels, create_kernels.
+ *
+ * Usage:
+ *   // In plugin initialization (before fabric init):
+ *   tt::tt_fabric::register_fabric_builder_factory(
+ *       [](IDevice* device, Program& program, FabricContext& ctx)
+ *           -> std::unique_ptr<FabricBuilder> {
+ *           return std::make_unique<MyCustomFabricBuilder>(device, program, ctx);
+ *       });
+ */
+using FabricBuilderFactory = std::function<std::unique_ptr<FabricBuilder>(
+    tt::tt_metal::IDevice*, tt::tt_metal::Program&, FabricContext&)>;
+
+/**
+ * Register a custom FabricBuilder factory. When set, fabric initialization will use this
+ * factory instead of constructing the default FabricBuilder. Pass nullptr to clear.
+ */
+void register_fabric_builder_factory(FabricBuilderFactory factory);
+
+/**
+ * Returns the currently registered factory, or nullptr if none is registered.
+ */
+const FabricBuilderFactory& get_fabric_builder_factory();
 
 }  // namespace tt::tt_fabric
