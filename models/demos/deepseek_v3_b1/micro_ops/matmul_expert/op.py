@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -136,6 +136,7 @@ def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles: int)
     Returns:
         dict {MeshCoordinate: {core_idx: ttnn.Tensor}}
     """
+    num_experts = len(cts)
     mesh_shape = mesh_device.shape
     all_cores = ttnn.corerange_to_cores(core_grid)
     dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
@@ -204,6 +205,7 @@ def _build_program_for_device(
     cores_per_dram_bank: int = 1,
     num_in1_buffers: int = 3,
     # Routing (required).
+    is_dram_addrs: list = None,
     table_idx_addrs: list = None,
     accum_experts: bool = False,
     sram_per_core_n: int = 0,
@@ -346,6 +348,11 @@ def _build_program_for_device(
             other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="is_dram_l1_addr",
+            core_values=is_dram_addrs or [],
+            other_value=0,
+        ),
+        PerCoreCompileTimeDescriptor(
             named_compile_time_arg="table_idx_l1_addr",
             core_values=table_idx_addrs or [],
             other_value=0,
@@ -459,6 +466,7 @@ def create_dram_expert_metadata(
             core_meta = []
             core_fmt = []
 
+            num_iterations = num_subblocks_k * per_core_N
             num_tiles_k = subblock_k * num_subblocks_k
             dram_ct_idx = 0
             for global_expert_idx in range(num_total_experts):
@@ -687,6 +695,7 @@ def create_dram_expert_tensors_multi_device(
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
+            dev_idx = row * mesh_shape[1] + col
             logger.info(f"  Creating metadata for device ({row},{col})...")
             meta_tensors, per_core_fmt, meta_l1_addr, per_core_values = create_dram_expert_metadata(
                 mesh_device,
@@ -774,41 +783,21 @@ def _upload_per_core_uint8_array(mesh_device, compute_cores_list, data_np, devic
     return tensors, l1_addr_core_values
 
 
-def encode_expert_indices(expert_ids, is_dram_flags):
-    """Encode SRAM/DRAM routing into expert index values via bit 15.
-
-    SRAM experts (is_dram_flags[eid]==0) get bit 15 set: 0x8000 | global_expert_id.
-    DRAM experts (is_dram_flags[eid]==1) keep their global expert ID unchanged.
-
-    Args:
-        expert_ids: list/tensor of global expert IDs (the active experts to encode).
-        is_dram_flags: list of 0/1, length num_experts. 0=SRAM, 1=DRAM.
-
-    Returns:
-        list of encoded uint16 index values.
-    """
-    encoded = []
-    for eid in expert_ids:
-        eid = int(eid)
-        if not is_dram_flags[eid]:
-            encoded.append(0x8000 | eid)
-        else:
-            encoded.append(eid)
-    return encoded
-
-
 def create_expert_selection_meta(mesh_device, compute_cores_list, is_dram_flags, num_experts, device_coord=None):
-    """Create per-core table_idx L1 array for expert routing.
+    """Create per-core is_dram and table_idx L1 arrays for expert routing.
 
-    table_idx[eid]: packed index within that type's fmt/meta table (full byte, 0-255).
-    SRAM/DRAM routing is encoded in the index tensor via bit 15 (see encode_expert_indices).
+    Two separate uint8 arrays indexed by expert_id:
+      - is_dram[eid]: 0=SRAM, 1=DRAM
+      - table_idx[eid]: packed index within that type's fmt/meta table (full byte, 0-255)
 
     Args:
         is_dram_flags: list of 0/1, length num_experts. 0=SRAM, 1=DRAM.
 
     Returns:
-        (table_idx_tensors, table_idx_l1_addr)
+        (is_dram_tensors, is_dram_l1_addr, table_idx_tensors, table_idx_l1_addr)
     """
+    is_dram_arr = np.array(is_dram_flags, dtype=np.uint8)
+
     # Build packed table indices: sequential within each type.
     sram_idx = 0
     dram_idx = 0
@@ -822,11 +811,14 @@ def create_expert_selection_meta(mesh_device, compute_cores_list, is_dram_flags,
             sram_idx += 1
     table_idx_arr = np.array(table_idx_entries, dtype=np.uint8)
 
+    is_dram_tensors, is_dram_l1_addr = _upload_per_core_uint8_array(
+        mesh_device, compute_cores_list, is_dram_arr, device_coord
+    )
     table_idx_tensors, table_idx_l1_addr = _upload_per_core_uint8_array(
         mesh_device, compute_cores_list, table_idx_arr, device_coord
     )
 
-    return table_idx_tensors, table_idx_l1_addr
+    return is_dram_tensors, is_dram_l1_addr, table_idx_tensors, table_idx_l1_addr
 
 
 class ExpertKernel:
@@ -850,6 +842,7 @@ class ExpertKernel:
         dram_cts: list,
         output_tensor: ttnn.Tensor,
         index_tensor: ttnn.Tensor,
+        is_dram_flags: list,
         num_active_experts: int,
         subblock_k: int,
         dram_core_grid,  # CoreRangeSet for DRAM expert cores (always required).
@@ -875,13 +868,13 @@ class ExpertKernel:
             dram_cts: List of CompressedTensors for DRAM experts (DRAM WIDTH_SHARDED).
             output_tensor: Pre-allocated DRAM output, WIDTH_SHARDED on dram_core_grid.
             index_tensor: HEIGHT_SHARDED [1, 16] uint16, active expert IDs per core.
-                          SRAM experts must have bit 15 set (see encode_expert_indices).
+            is_dram_flags: list of 0/1, length num_experts (indexed by expert_id).
             num_active_experts: Number of entries in the index tensor (loop count).
             subblock_k: K subblock size in tiles.
             dram_core_grid: CoreRangeSet for DRAM expert cores (always required).
             dram_meta_tensors: {MeshCoordinate: tuple} from create_dram_expert_tensors_multi_device().
             dram_per_core_n: Number of N tiles per DRAM core.
-            expert_selection_meta: {MeshCoordinate: (table_idx_t, table_idx_l1)}
+            expert_selection_meta: {MeshCoordinate: (is_dram_t, is_dram_l1, table_idx_t, table_idx_l1)}
                           from create_expert_selection_meta(), built per device on the caller side.
             has_sram: Whether SRAM expert path is active.
             sram_core_grid: CoreRangeSet for SRAM expert cores (required when has_sram).
@@ -925,7 +918,7 @@ class ExpertKernel:
                 out_dev = out_per_device[dev_idx]
                 sram_out_dev = sram_out_per_device[dev_idx]
                 idx_dev = index_per_device[dev_idx]
-                _, table_idx_l1 = expert_selection_meta[coord]
+                _, is_dram_l1, _, table_idx_l1 = expert_selection_meta[coord]
 
                 # SRAM fmt for this device.
                 sram_fmt_l1 = []
@@ -974,6 +967,7 @@ class ExpertKernel:
                     subblock_k=subblock_k,
                     cores_per_dram_bank=cores_per_dram_bank,
                     num_in1_buffers=num_in1_buffers,
+                    is_dram_addrs=is_dram_l1,
                     table_idx_addrs=table_idx_l1,
                     accum_experts=accum_experts,
                     sram_per_core_n=sram_per_core_n,
@@ -992,7 +986,9 @@ class ExpertKernel:
         per_device_dram = []
         for in1_backing, meta_t, fmt_info, *_ in dram_meta_tensors.values():
             per_device_dram.extend([in1_backing, *meta_t.values(), fmt_info["fmt_dram_tensor"]])
-        all_routing_tensors = [t for rt in expert_selection_meta.values() for t in list(rt[0].values())]
+        all_routing_tensors = [
+            t for rt in expert_selection_meta.values() for t in list(rt[0].values()) + list(rt[2].values())
+        ]
         io_tensors = [
             a_tensor,
             *all_ct_data,

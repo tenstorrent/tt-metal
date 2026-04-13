@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -66,6 +66,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t next_core_noc_y_,
         uint32_t cores_per_bank_,
         uint32_t num_active_experts_,
+        uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
@@ -94,6 +95,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
         static constexpr uint32_t cores_per_bank = cores_per_bank_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
+        static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
@@ -115,6 +117,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t per_core_n_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
+        uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
@@ -132,6 +135,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
+        static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
@@ -174,17 +178,18 @@ struct MatmulExpertCompressedDRAM {
             uint64_t next_noc_addr = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, 0);
             uint64_t next_sem_noc_addr = next_noc_addr | next_sem_l1;
 
+            const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
+
             // CB base address — set on first DRAM expert.
             uint32_t cb_in1_base = 0;
             uint32_t cb_in1_end = 0;
             bool first_dram_expert = true;
 
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                if (raw_idx & 0x8000) {
-                    continue;  // bit15=1 → SRAM expert, skip
+                uint32_t expert_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                if (!is_dram_arr[expert_idx]) {
+                    continue;  // Skip SRAM experts
                 }
-                uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
                 // Index meta/fmt tables directly by global expert_idx (no table_idx indirection).
                 const volatile uint32_t* expert_meta = meta_base + expert_idx * meta_stride;
                 uint32_t expert_in1_addr = expert_meta[0];
@@ -316,17 +321,15 @@ struct MatmulExpertCompressedDRAM {
 
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
+            const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
 
             // Count DRAM experts and record activation tile offsets.
-            // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
-            // index_offset is used in TP=false mode, to offset to the correct expert in
-            // index tensor.
             uint32_t num_dram_experts = 0;
             uint32_t dram_act_tile_offset[num_active_experts];
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
-                if (raw_idx & 0x8000) {
-                    continue;  // bit15=1 → SRAM expert, skip
+                uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
+                if (!is_dram_arr[eid]) {
+                    continue;
                 }
                 if constexpr (CTArgs::accum_experts) {
                     dram_act_tile_offset[num_dram_experts] = exp_i * num_tiles_k;

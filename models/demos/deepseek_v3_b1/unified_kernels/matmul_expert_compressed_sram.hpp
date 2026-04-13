@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -6,8 +6,8 @@
 // SRAM expert matmul with compressed weights.
 //
 // B data is pre-loaded in L1 (WIDTH_SHARDED or HEIGHT_SHARDED for K-slicing).
-// The Op loops over the index array, skips DRAM experts (bit15=0), and
-// performs matmul for each SRAM expert (bit15=1) using per-core fmt tables.
+// The Op loops over the index array, skips DRAM experts (is_dram=1), and
+// performs matmul for each SRAM expert using per-core fmt tables.
 
 #include "kernel_utils.hpp"
 
@@ -43,6 +43,7 @@ struct MatmulExpertCompressedSRAM {
         uint32_t cb_in0_num_pages_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
+        uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t sram_k_per_core_ = 0,
@@ -57,6 +58,7 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t cb_in0_num_pages = cb_in0_num_pages_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
+        static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
@@ -72,6 +74,7 @@ struct MatmulExpertCompressedSRAM {
         uint32_t out_w_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
+        uint32_t is_dram_l1_addr_,
         uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t accum_experts_ = 0,
@@ -87,6 +90,7 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t out_w = out_w_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
+        static constexpr uint32_t is_dram_l1_addr = is_dram_l1_addr_;
         static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr bool accum_experts = accum_experts_ != 0;
@@ -131,10 +135,9 @@ struct MatmulExpertCompressedSRAM {
             cb_wait_front(cb_index, 1);
 
             // Count SRAM experts — all TRISCs agree on the loop bound.
-            // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
-            // Lower 15 bits hold the global expert ID (for table_idx lookup).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
+            const volatile uint8_t* is_dram_arr = reinterpret_cast<const volatile uint8_t*>(CTArgs::is_dram_l1_addr);
             const volatile uint8_t* table_idx_arr =
                 reinterpret_cast<const volatile uint8_t*>(CTArgs::table_idx_l1_addr);
 
@@ -149,11 +152,10 @@ struct MatmulExpertCompressedSRAM {
             uint32_t num_sram_experts = 0;
             SramExpertInfo sram_expert_info[num_active_experts];
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
-                if (!(raw_idx & 0x8000)) {
-                    continue;  // bit15=0 → DRAM expert, skip
+                uint32_t eid = static_cast<uint32_t>(index_ptr[exp_i]);
+                if (is_dram_arr[eid]) {
+                    continue;
                 }
-                uint32_t eid = raw_idx & 0x7FFF;
                 SramExpertInfo info;
                 info.eid = static_cast<uint16_t>(eid);
                 if constexpr (CTArgs::accum_experts) {
