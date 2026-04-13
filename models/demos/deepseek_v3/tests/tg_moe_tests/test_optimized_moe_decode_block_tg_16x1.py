@@ -6,12 +6,12 @@
 MoE Decode Block End-to-End Test
 
 Supports:
-Single Galaxy 16x1 Torus: Development/testing setup using top 2 rows of 4x8 TG
+Single Galaxy 16x1 Torus: Development/testing setup using TG
    - Requires: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
 
 Run with:
 'MESH_DEVICE=TG16X1 USE_TORUS_MODE=1 TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto" \
- pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
+ pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg_16x1.py -v'
 """
 
 import os
@@ -535,7 +535,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
     return pcc_passed and allclose_passed
 
 
-@pytest.mark.requires_device(["QUAD", "TG", "TG16X1"])
+@pytest.mark.requires_device(["QUAD", "TG16X1"])
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason=f"Requires ring fabric",
@@ -543,7 +543,6 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        # pytest.param((16, 8), (16, 8), id="16x8_quad"),
         pytest.param((16, 1), (16, 1), id="16x1_tg"),
     ],
     indirect=["mesh_device"],

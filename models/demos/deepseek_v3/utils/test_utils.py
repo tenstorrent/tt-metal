@@ -634,6 +634,7 @@ def get_rope_tensors(
 SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
     "TG": (4, 8),
     "TG16X1": (16, 1),
+    "TG8X4": (8, 4),
     "DUAL": (8, 8),
     "QUAD": (16, 8),
     "T3K": (1, 8),
