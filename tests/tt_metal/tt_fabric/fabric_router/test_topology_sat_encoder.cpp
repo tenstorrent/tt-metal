@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
-
 #include <gtest/gtest.h>
 
 #include <cadical.hpp>
@@ -100,8 +98,12 @@ TEST(TopologySatEncoderTest, TriangleTarget_PathGlobal_Unsat) {
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
     CaDiCaL::Solver solver;
     TopologySatHardEncoding enc;
-    ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
-    EXPECT_EQ(solver.solve(), CaDiCaL::UNSATISFIABLE);
+    const bool encoded = topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc);
+    if (encoded) {
+        EXPECT_EQ(solver.solve(), CaDiCaL::UNSATISFIABLE);
+    } else {
+        EXPECT_TRUE(enc.trivial_unsat) << "Should be trivially UNSAT (arc consistency detects infeasibility)";
+    }
 }
 
 TEST(TopologySatEncoderTest, SatVsDfs_SmallFixtures_Agree) {
@@ -134,20 +136,15 @@ TEST(TopologySatEncoderTest, SatVsDfs_SmallFixtures_Agree) {
         IntAdj(IntAdjMap{{10, {11}}, {11, {10, 12}}, {12, {11}}}));
 }
 
-TEST(TopologySatEncoderTest, SolveTopologyMapping_RespectsSatEnv) {
+TEST(TopologySatEncoderTest, SolveTopologyMapping_RespectsSolverEngineSelector) {
     IntAdj target(IntAdjMap{{0, {1}}, {1, {0}}});
     IntAdj global(IntAdjMap{{10, {11}}, {11, {10, 12}}, {12, {11}}});
     IntConstraints constraints;
 
-    ASSERT_EQ(setenv("TT_TOPOLOGY_SOLVER_ENGINE", "sat", 1), 0);
-    const auto sat_result =
-        solve_topology_mapping<int, int>(target, global, constraints, ConnectionValidationMode::RELAXED, true);
-    unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
-
-    ASSERT_EQ(setenv("TT_TOPOLOGY_SOLVER_ENGINE", "dfs", 1), 0);
-    const auto dfs_result =
-        solve_topology_mapping<int, int>(target, global, constraints, ConnectionValidationMode::RELAXED, true);
-    unsetenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    const auto sat_result = solve_topology_mapping<int, int>(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Sat);
+    const auto dfs_result = solve_topology_mapping<int, int>(
+        target, global, constraints, ConnectionValidationMode::RELAXED, true, TopologyMappingSolverEngine::Dfs);
 
     EXPECT_TRUE(sat_result.success);
     EXPECT_TRUE(dfs_result.success);

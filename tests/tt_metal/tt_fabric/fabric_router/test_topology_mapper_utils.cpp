@@ -15,6 +15,7 @@
 #include <set>
 #include <vector>
 #include <cstdint>
+#include <cstdlib>
 #include <random>
 #include <unordered_set>
 #include <string>
@@ -1086,7 +1087,10 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     verify_bidirectional_consistency(result);
     EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
     EXPECT_EQ(result.fabric_node_to_asic.at(ln1[0]), a100) << "Pinned fabric node must map to ASIC at pinned position";
-    if (::tt::tt_fabric::detail::topology_mapping_use_sat_engine()) {
+    const char* engine_env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+    const bool using_sat =
+        engine_env != nullptr && (std::string(engine_env) == "sat" || std::string(engine_env) == "1");
+    if (using_sat) {
         const tt::tt_metal::AsicID m0 = result.fabric_node_to_asic.at(ln0[0]);
         const tt::tt_metal::AsicID m1 = result.fabric_node_to_asic.at(ln0[1]);
         EXPECT_TRUE((m0 == a200 && m1 == a201) || (m0 == a201 && m1 == a200))

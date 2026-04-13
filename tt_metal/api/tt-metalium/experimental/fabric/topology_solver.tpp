@@ -1114,7 +1114,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     const AdjacencyGraph<GlobalNode>& global_graph,
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode connection_validation_mode,
-    bool quiet_mode) {
+    bool quiet_mode,
+    TopologyMappingSolverEngine solver_engine) {
     using namespace tt::tt_fabric::detail;
 
     auto start_time = std::chrono::steady_clock::now();
@@ -1129,7 +1130,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
     MappingResult<TargetNode, GlobalNode> result;
-    if (topology_mapping_use_sat_engine()) {
+    if (topology_mapping_should_use_sat_engine(solver_engine)) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         sat_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
         const auto& state = sat_engine.get_state();
