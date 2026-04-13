@@ -1,5 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import inspect
+import json
+import random
+from datetime import datetime, timezone
 from typing import List, Callable, Sequence
 
 from ttml.common.config import DeviceConfig, TransformerConfig
@@ -8,6 +11,7 @@ from utils.inference import completion_batched_multiple_prompts, deallocate_tens
 from utils.loss import compute_nlog_probs, compute_grpo_loss
 import os
 import numpy as np
+import torch
 import ttml
 import ttnn
 from safetensors.torch import save_file
@@ -92,11 +96,70 @@ def iter_micro_batch(prompts, completions, micro_batch_size=16):
         yield prompts[start:end], completions[start:end]
 
 
-def save_checkpoint(model, step, output_dir, dp_composer=None):
+def save_checkpoint(
+    model,
+    step,
+    output_dir,
+    dp_composer=None,
+    tokenizer=None,
+    grpo_config=None,
+    optimizer=None,
+    model_source=None,
+):
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
+
     tensors = {name: param.to_numpy(ttnn.DataType.FLOAT32, dp_composer) for name, param in model.parameters().items()}
-    save_file(tensors, os.path.join(ckpt_dir, f"model.safetensors"))
+    save_file(tensors, os.path.join(ckpt_dir, "model.safetensors"))
+
+    if model_source:
+        try:
+            from transformers import AutoConfig
+
+            hf_config = AutoConfig.from_pretrained(model_source)
+            hf_config.save_pretrained(ckpt_dir)
+        except Exception:
+            pass
+
+    if tokenizer is not None:
+        tokenizer.save_pretrained(ckpt_dir)
+
+    if grpo_config is not None:
+        gen_config = {
+            "temperature": grpo_config.temperature,
+            "max_new_tokens": grpo_config.max_completion_length,
+        }
+        if tokenizer is not None:
+            gen_config["eos_token_id"] = tokenizer.eos_token_id
+            gen_config["pad_token_id"] = tokenizer.pad_token_id
+        with open(os.path.join(ckpt_dir, "generation_config.json"), "w") as f:
+            json.dump(gen_config, f, indent=2)
+
+    trainer_state = {"global_step": step}
+    if optimizer is not None:
+        trainer_state["learning_rate"] = optimizer.get_lr()
+    with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
+        json.dump(trainer_state, f, indent=2)
+
+    scheduler_state = {
+        "base_lr": optimizer.get_lr() if optimizer else None,
+        "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
+        "last_step": step,
+    }
+    torch.save(scheduler_state, os.path.join(ckpt_dir, "scheduler.pt"))
+
+    rng_state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.random.get_rng_state(),
+    }
+    torch.save(rng_state, os.path.join(ckpt_dir, "rng_state.pth"))
+
+    if grpo_config is not None:
+        torch.save(asdict(grpo_config), os.path.join(ckpt_dir, "training_args.bin"))
+
+    with open(os.path.join(ckpt_dir, "timestamp.txt"), "w") as f:
+        f.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC\n"))
 
 
 class GrpoTrainer:
@@ -254,7 +317,14 @@ class GrpoTrainer:
 
                     if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                         save_checkpoint(
-                            inference_ctx.tt_model, num_steps, grpo_cfg.output_dir, inference_ctx.dp_composer
+                            inference_ctx.tt_model,
+                            num_steps,
+                            grpo_cfg.output_dir,
+                            dp_composer=inference_ctx.dp_composer,
+                            tokenizer=inference_ctx.tokenizer,
+                            grpo_config=grpo_cfg,
+                            optimizer=optimizer,
+                            model_source=self.model_source,
                         )
 
             for nlog_old, mask_old, _ in probs_old_list:
