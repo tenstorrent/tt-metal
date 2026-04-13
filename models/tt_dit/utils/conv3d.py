@@ -68,6 +68,10 @@ def compute_decoder_dims(
       cached:   T_tconv = cur_T + 2   (all frames + 2 causal pad from cache)
                 T_spatial = 2 * cur_T         (all frames doubled)
     """
+    if t_chunk_size is None or t_chunk_size < 1:
+        n = num_stages + 1
+        return [StageHW(0, 0)] * n, [StageT(T_res=0, T_tconv=0, T_spatial=0)] * n
+
     vae_scale = 2**num_stages
     # Height uses ceil because some configs don't divide evenly (e.g. 720/8/4=22.5 → 23);
     # the hardware pads height via conv_pad_height.  Width always divides evenly for
@@ -304,28 +308,28 @@ def get_conv3d_config(
             compute_with_storage_grid_size=grid_size,
         )
 
-    key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
-    shape_key = (in_channels, out_channels, kernel_size)
+    blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
+    channel_key = (in_channels, out_channels, kernel_size)
 
-    exact = _BLOCKINGS.get(key)
+    exact = _BLOCKINGS.get(blocking_key)
     if exact is not None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = exact
-        logger.info(
-            f"conv3d blocking [exact] {key} -> "
+        logger.debug(
+            f"conv3d blocking [exact] {blocking_key} -> "
             f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
         )
     else:
-        fallback = _DEFAULT_BLOCKINGS.get(shape_key)
+        fallback = _DEFAULT_BLOCKINGS.get(channel_key)
         if fallback is not None:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
             logger.warning(
-                f"conv3d blocking [fallback] {key} -> shape_key={shape_key} -> "
+                f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
         else:
             C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
             logger.warning(
-                f"conv3d blocking [NONE] {key} -> no match in any table, using hardcoded default: "
+                f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
 

@@ -435,11 +435,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
         tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
-        resolved_vae_t_chunk_size = (
-            vae_t_chunk_size if vae_t_chunk_size is not _UNSET else config.get("vae_t_chunk_size", 1)
-        )
+        if vae_t_chunk_size is _UNSET:
+            vae_t_chunk_size = config.get("vae_t_chunk_size", 1)
         full_latent_T = (num_frames - 1) // 4 + 1
-        resolved_t_chunk_size = full_latent_T if resolved_vae_t_chunk_size is None else resolved_vae_t_chunk_size
+        decoder_t_chunk_size = full_latent_T if vae_t_chunk_size is None else vae_t_chunk_size
 
         h_factor = tuple(mesh_device.shape)[tp_axis]
         w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -475,13 +474,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
-            vae_t_chunk_size=resolved_vae_t_chunk_size,
+            vae_t_chunk_size=vae_t_chunk_size,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only
             if sdpa_t_fracture_w_only is not None
             else config.get("sdpa_t_fracture_w_only", False),
             target_height=target_height,
             target_width=target_width,
-            t_chunk_size=resolved_t_chunk_size,
+            t_chunk_size=decoder_t_chunk_size,
         )
 
     def _prepare_text_encoder(self):
