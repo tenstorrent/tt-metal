@@ -80,7 +80,7 @@ inline void calculate_erfc() {
 
 template <bool APPROXIMATION_MODE>
 void erfc_init() {
-    sfpu_reciprocal_init();
+    sfpu_reciprocal_init<true>();
 }
 
 }  // namespace ckernel::sfpu

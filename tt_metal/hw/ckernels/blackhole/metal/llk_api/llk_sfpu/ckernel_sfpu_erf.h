@@ -76,7 +76,7 @@ inline void calculate_erf() {
 
 template <bool APPROXIMATION_MODE>
 void erf_init() {
-    sfpu_reciprocal_init();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
