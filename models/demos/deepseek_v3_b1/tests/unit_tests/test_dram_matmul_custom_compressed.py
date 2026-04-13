@@ -625,7 +625,11 @@ def test_dram_matmul_bspm_fallback(device):
 
 
 def test_dram_matmul_bspm_multi_expert(device):
-    """3 experts via prepare_routed_expert_weights() — validates DRAM contiguity.
+    """3 experts via prepare_routed_expert_weights() — validates DRAM layout post-Step-3.
+
+    Asserts that each expert's DRAM address is strictly greater than the previous
+    (no overlap) and that strides need NOT be constant (variable-size shards are
+    correct after cross-expert padding was removed in Step 3).
 
     Requires BSPM_DIR env var.
     """
@@ -688,20 +692,19 @@ def test_dram_matmul_bspm_multi_expert(device):
         assert low_p > 0, f"gate_list[{i}]: no bfp2/bfp0 tiles at 3.5 b/e"
         logger.info(f"gate_list[{i}] tile counts: {counts}")
 
-    gate_addrs = [gate_list[i].get_data_l1_address() for i in range(num_experts)]
+    # Use data.buffer_address() — the correct DRAM address accessor (not get_data_l1_address()).
+    gate_addrs = [int(gate_list[i].data.buffer_address()) for i in range(num_experts)]
     strides = [gate_addrs[i + 1] - gate_addrs[i] for i in range(num_experts - 1)]
     logger.info(f"Gate expert DRAM addresses: {gate_addrs}")
     logger.info(f"Gate expert DRAM strides: {strides}")
 
-    assert strides[0] > 0, "Expert addresses not increasing — experts may overlap"
-
-    constant_stride = all(s == strides[0] for s in strides)
-    if not constant_stride:
-        pytest.xfail(
-            f"Non-constant DRAM stride between BSPM experts: strides={strides}. "
-            "Variable-size CompressedTensors break kernel's fixed-stride expert indexing."
-        )
-    logger.info(f"Gate expert DRAM stride: {strides[0]} bytes — contiguity OK")
+    # Post-Step-3: cross-expert padding is removed, so each expert occupies its natural
+    # (variable) shard size.  Strides must be strictly positive (no overlap) but need
+    # NOT be constant — variable strides are the correct behavior.
+    assert all(
+        s > 0 for s in strides
+    ), f"Expert DRAM addresses not strictly increasing — experts may overlap: {gate_addrs}"
+    logger.info(f"Gate expert DRAM byte offsets (variable, no padding): {strides}")
 
 
 def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
@@ -785,6 +788,25 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
         compact_size,
         bfp4_size,
         100 * compact_size / bfp4_size,
+    )
+
+    # Per-tier tile counts: bfp4 + bfp2 + bfp0 must sum to total tile grid area.
+    counts = ct_miss.tile_counts  # {"bfp4": N, "bfp2": N, "bfp0": N}
+    total_tiles = tiles_h * tiles_w_grid
+    count_sum = counts.get("bfp4", 0) + counts.get("bfp2", 0) + counts.get("bfp0", 0)
+    assert count_sum == total_tiles, (
+        f"Tile count mismatch: bfp4={counts.get('bfp4',0)} + bfp2={counts.get('bfp2',0)} "
+        f"+ bfp0={counts.get('bfp0',0)} = {count_sum}, expected {total_tiles}"
+    )
+    assert counts.get("bfp4", 0) > 0, "No BFP4 tiles found — assignment may be wrong"
+    assert counts.get("bfp2", 0) > 0, "No BFP2 tiles found — assignment may be wrong"
+    assert counts.get("bfp0", 0) > 0, "No zero tiles found — assignment may be wrong"
+    logger.info(
+        "Tile counts — bfp4: {}, bfp2: {}, zero: {} (total {})",
+        counts.get("bfp4", 0),
+        counts.get("bfp2", 0),
+        counts.get("bfp0", 0),
+        total_tiles,
     )
 
     # --- Second call: cache hit — reloads from tiles.bin without calling preprocess ---

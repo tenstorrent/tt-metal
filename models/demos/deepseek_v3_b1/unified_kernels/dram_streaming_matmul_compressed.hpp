@@ -71,7 +71,11 @@ struct DRAMStreamingMatmulCompressed {
         uint32_t enable_indexing_ = 0,
         uint32_t cb_index_ = 0,
         uint32_t index_offset_ = 0,
-        uint32_t use_hardcoded_expert_index_ = 0>
+        uint32_t use_hardcoded_expert_index_ = 0,
+        // F1b multi-expert routing: L1 address of uint32 expert-byte-offset table (0 = disabled)
+        uint32_t expert_offsets_l1_addr_ = 0,
+        // F1b: L1 scratch cell where NCRISC writes the resolved expert_idx for TRISC
+        uint32_t expert_idx_scratch_l1_addr_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
@@ -95,6 +99,9 @@ struct DRAMStreamingMatmulCompressed {
         static constexpr uint32_t cb_index = cb_index_;
         static constexpr uint32_t index_offset = index_offset_;
         static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;
+        // F1b multi-expert routing
+        static constexpr uint32_t expert_offsets_l1_addr = expert_offsets_l1_addr_;
+        static constexpr uint32_t expert_idx_scratch_l1_addr = expert_idx_scratch_l1_addr_;
     };
 
     // Writer CTArgs (BRISC) - no-op
@@ -109,7 +116,9 @@ struct DRAMStreamingMatmulCompressed {
         uint32_t per_core_n_,
         uint32_t num_subblocks_k_,
         uint32_t fmt_l1_addr_,
-        uint32_t fuse_silu_ = 0>
+        uint32_t fuse_silu_ = 0,
+        // F1b multi-expert routing: same scratch cell written by NCRISC; 0 = disabled
+        uint32_t expert_idx_scratch_l1_addr_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -119,6 +128,7 @@ struct DRAMStreamingMatmulCompressed {
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr bool fuse_silu = fuse_silu_ == 1;
+        static constexpr uint32_t expert_idx_scratch_l1_addr = expert_idx_scratch_l1_addr_;
     };
 
     // ========================================================================
@@ -163,8 +173,6 @@ struct DRAMStreamingMatmulCompressed {
             constexpr uint32_t vc = CTArgs::vc;
             constexpr uint32_t max_page_size = CTArgs::noc_max_page_size;
 
-            const volatile uint32_t* meta_ptr = reinterpret_cast<const volatile uint32_t*>(CTArgs::meta_l1_addr);
-
             volatile tt_l1_ptr uint32_t* sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::pipeline_sem_id));
             uint32_t next_sem_l1 = get_semaphore(CTArgs::pipeline_sem_id);
@@ -179,14 +187,50 @@ struct DRAMStreamingMatmulCompressed {
 
             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
-            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
+            // Expert index CB: resolve which expert's data to read from DRAM.
+            // F1b path (expert_offsets_l1_addr != 0): read expert_idx from CB, look up
+            //   byte offset from L1 table, offset in1_tensor_addr, write expert_idx to
+            //   scratch cell for TRISC, offset meta_ptr to the expert's metadata block.
+            // Legacy path (expert_offsets_l1_addr == 0): expert offset pre-baked by host;
+            //   CB wait is synchronization-only; meta_ptr starts at position 0.
+            uint32_t effective_in1_addr = CTArgs::in1_tensor_addr;
+            const volatile uint32_t* meta_ptr = reinterpret_cast<const volatile uint32_t*>(CTArgs::meta_l1_addr);
 
-            // Expert index CB: wait for synchronization signal.
-            // The expert byte offset is pre-baked into in1_tensor_addr by the host;
-            // we only need the CB wait here to serialize against BRISC index broadcast.
             if constexpr (CTArgs::enable_indexing) {
                 cb_wait_front(CTArgs::cb_index, 1);
+
+                if constexpr (CTArgs::expert_offsets_l1_addr != 0) {
+                    // Read the routed expert index — matches DRAMStreamingMatmul convention:
+                    // index CB holds raw uint16 integer indices (not bf16-encoded floats).
+                    // use_hardcoded_expert_index=true means use index_offset directly (testing).
+                    uint32_t expert_idx;
+                    if constexpr (CTArgs::use_hardcoded_expert_index) {
+                        expert_idx = CTArgs::index_offset;
+                    } else {
+                        volatile tt_l1_ptr uint16_t* index_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
+                        expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset]);
+                    }
+
+                    // Look up per-expert byte offset from L1 table (uint32 per expert)
+                    const volatile uint32_t* offsets_ptr =
+                        reinterpret_cast<const volatile uint32_t*>(CTArgs::expert_offsets_l1_addr);
+                    effective_in1_addr = CTArgs::in1_tensor_addr + offsets_ptr[expert_idx];
+
+                    // Offset meta_ptr to this expert's metadata block
+                    // Each expert's meta block is per_core_n * num_subblocks_k uint32 entries
+                    constexpr uint32_t meta_entries_per_expert = CTArgs::per_core_n * CTArgs::num_subblocks_k;
+                    meta_ptr += expert_idx * meta_entries_per_expert;
+
+                    // Write expert_idx to scratch BEFORE first cb_push_back so TRISC sees
+                    // it after its cb_wait_front fence (guarantees NCRISC→TRISC ordering).
+                    volatile tt_l1_ptr uint32_t* scratch_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::expert_idx_scratch_l1_addr);
+                    *scratch_ptr = expert_idx;
+                }
             }
+
+            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, effective_in1_addr);
 
             uint32_t l1_write_addr_in1;
             uint32_t dram_read_offset = CTArgs::dram_start_offset;
@@ -329,7 +373,20 @@ struct DRAMStreamingMatmulCompressed {
             const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(CTArgs::fmt_l1_addr);
             constexpr uint32_t tiles_per_subblock = CTArgs::subblock_k;
 
+            // F1b multi-expert routing: fence on the first in1 subblock (already pushed by
+            // NCRISC after writing expert_idx to scratch), then read expert_idx from scratch
+            // to offset fmt_base_ptr to the routed expert's format metadata block.
+            // This fence provides the NCRISC→TRISC ordering guarantee without a dedicated
+            // synchronization primitive (NCRISC writes scratch BEFORE first cb_push_back).
             uint32_t fmt_tile_offset = 0;
+            if constexpr (CTArgs::expert_idx_scratch_l1_addr != 0) {
+                cb_wait_front(CTArgs::cb_in1, 1);
+                const volatile uint32_t* scratch_ptr =
+                    reinterpret_cast<const volatile uint32_t*>(CTArgs::expert_idx_scratch_l1_addr);
+                uint32_t expert_idx = *scratch_ptr;
+                // Each expert's fmt block is per_core_n * num_subblocks_k * subblock_k entries
+                fmt_tile_offset = expert_idx * CTArgs::per_core_n * CTArgs::num_subblocks_k * tiles_per_subblock;
+            }
 
             for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
                 cb_reserve_back(CTArgs::cb_out, 1);

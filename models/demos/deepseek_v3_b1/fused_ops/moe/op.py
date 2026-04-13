@@ -896,13 +896,16 @@ class MoeRoutedExpertOp:
         add_cb_out = cb_id_context.get_cb_id(data_format, TD_32x32)
 
         # Tensor-backed CBs (format from weight tensors)
-        gate_proj_cb_in1 = cb_id_context.get_cb_id(
-            gate_proj_weights_tensor.dtype, ttnn.TileDescriptor(gate_proj_weights_tensor.get_tile())
+        # F1b: gate/down_proj_weights_tensor may be a list[CT]; use expert[0] for dtype/tile.
+        _gate_proj_ct0 = (
+            gate_proj_weights_tensor[0] if isinstance(gate_proj_weights_tensor, list) else gate_proj_weights_tensor
         )
+        _down_proj_ct0 = (
+            down_proj_weights_tensor[0] if isinstance(down_proj_weights_tensor, list) else down_proj_weights_tensor
+        )
+        gate_proj_cb_in1 = cb_id_context.get_cb_id(_gate_proj_ct0.dtype, ttnn.TileDescriptor(_gate_proj_ct0.get_tile()))
         up_proj_cb_in1 = gate_proj_cb_in1  # intentional alias: sequential matmuls share CB slot
-        down_proj_cb_in1 = cb_id_context.get_cb_id(
-            down_proj_weights_tensor.dtype, ttnn.TileDescriptor(down_proj_weights_tensor.get_tile())
-        )
+        down_proj_cb_in1 = cb_id_context.get_cb_id(_down_proj_ct0.dtype, ttnn.TileDescriptor(_down_proj_ct0.get_tile()))
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1119,13 +1122,22 @@ class MoeRoutedExpertOp:
         # down:    num_subblocks_k=4 → subblock_k=16 → 3×16×1088=52224 B (fits)
         from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor as _CT
 
-        _is_compressed = gate_proj_weights_tensor is not None and isinstance(gate_proj_weights_tensor, _CT)
+        # F1b: weights may be a list[CT] (multi-expert routing). Use expert[0] for shape/dtype.
+        _gate_proj_ct0 = (
+            gate_proj_weights_tensor[0] if isinstance(gate_proj_weights_tensor, list) else gate_proj_weights_tensor
+        )
+        _up_proj_ct0 = up_proj_weights_tensor[0] if isinstance(up_proj_weights_tensor, list) else up_proj_weights_tensor
+        _down_proj_ct0 = (
+            down_proj_weights_tensor[0] if isinstance(down_proj_weights_tensor, list) else down_proj_weights_tensor
+        )
+
+        _is_compressed = _gate_proj_ct0 is not None and isinstance(_gate_proj_ct0, _CT)
         _gate_up_num_subblocks = 8 if _is_compressed else 4
         _down_num_subblocks = 4 if _is_compressed else 2
 
         gate_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
-            weights_tensor=gate_proj_weights_tensor,
+            weights_tensor=_gate_proj_ct0,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
@@ -1138,7 +1150,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         up_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
-            weights_tensor=up_proj_weights_tensor,
+            weights_tensor=_up_proj_ct0,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
@@ -1206,7 +1218,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         down_proj_params = MoeRoutedExpertOp.setup_dram_matmul(
             device=device,
-            weights_tensor=down_proj_weights_tensor,
+            weights_tensor=_down_proj_ct0,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
@@ -1414,12 +1426,13 @@ class MoeRoutedExpertOp:
             noc_x_core_values.append((core, phys.x))
             noc_y_core_values.append((core, phys.y))
 
-        # Detect BSPM compressed weights path
+        # Detect BSPM compressed weights path (single CT or list[CT])
         from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
 
-        bspm_compressed = gate_proj_weights_tensor is not None and isinstance(
-            gate_proj_weights_tensor, CompressedTensor
+        _gate_for_bspm = (
+            gate_proj_weights_tensor[0] if isinstance(gate_proj_weights_tensor, list) else gate_proj_weights_tensor
         )
+        bspm_compressed = _gate_for_bspm is not None and isinstance(_gate_for_bspm, CompressedTensor)
 
         # ==================================================================
         # Return context
@@ -1550,8 +1563,14 @@ class MoeRoutedExpertOp:
     def _setup_compressed_matmul_metadata(routed_ctx, device, gate_proj_ct, up_proj_ct, down_proj_ct):
         """Upload per-core meta and fmt L1 tensors for BSPM compressed matmul.
 
-        Computes per-core subblock byte sizes and tile format tables for gate/up/down proj.
-        Stores meta_l1_addr, fmt_l1_addr, and noc_max_page_size into each proj's params dict.
+        Accepts either a single CompressedTensor (legacy path) or a list of CompressedTensors
+        (F1b multi-expert path). For the multi-expert path:
+          - Meta and fmt tables are stacked per-expert: [expert0_block | expert1_block | ...]
+          - An expert byte-offset table is uploaded to L1 (one uint32 per expert per core)
+          - A scratch cell (one uint32 per core) is allocated for NCRISC→TRISC expert_idx handoff
+
+        Stores meta_l1_addr, fmt_l1_addr, noc_max_page_size, and (for F1b)
+        expert_offsets_l1_addr + expert_idx_scratch_l1_addr into each proj's params dict.
         Called after _overlap_cbs_with_sdpa_buffer so in1_buf_addr is set.
         """
         import numpy as np
@@ -1581,11 +1600,16 @@ class MoeRoutedExpertOp:
         gate_up_cb_in1_base = routed_ctx.gate_proj_params["in1_buf_addr"]
         down_cb_in1_base = routed_ctx.down_proj_params["in1_buf_addr"]
 
-        for ct_tensor, params, cb_in1_base in [
+        for ct_arg, params, cb_in1_base in [
             (gate_proj_ct, routed_ctx.gate_proj_params, gate_up_cb_in1_base),
             (up_proj_ct, routed_ctx.up_proj_params, gate_up_cb_in1_base),
             (down_proj_ct, routed_ctx.down_proj_params, down_cb_in1_base),
         ]:
+            # Normalize: list[CT] → F1b multi-expert; single CT → legacy
+            cts = ct_arg if isinstance(ct_arg, list) else [ct_arg]
+            num_experts = len(cts)
+            ct0 = cts[0]
+
             subblock_k = params["subblock_k"]
             per_core_n = params["per_core_n"]
             num_subblocks_k = params["num_subblocks_k"]
@@ -1595,59 +1619,68 @@ class MoeRoutedExpertOp:
             max_subblock_bytes_shifted = max_subblock_bytes >> _CB_ADDR_SHIFT
             num_buffers = 3
 
-            dram_cores = ttnn.corerange_to_cores(ct_tensor.data.memory_config().shard_spec.grid)
+            # All experts share the same DRAM shard grid
+            dram_cores = ttnn.corerange_to_cores(ct0.data.memory_config().shard_spec.grid)
 
-            per_core_block_sizes = {}
-            per_core_fmt_pairs = {}
+            # --- Build stacked meta/fmt tables (all experts, one block per expert) ---
+            # Layout per core: [expert0_meta | expert1_meta | ...] and [expert0_fmt | expert1_fmt | ...]
+            meta_entries_per_expert = per_core_n * num_subblocks_k
+            fmt_entries_per_expert = subblock_k * num_subblocks_k * per_core_n
+            meta_entries_total = num_experts * meta_entries_per_expert
+            fmt_entries_total = num_experts * fmt_entries_per_expert
+
+            per_core_meta_flat = {i: [] for i in range(num_cores)}
+            per_core_fmt_flat = {i: [] for i in range(num_cores)}
 
             for core_idx, compute_core in enumerate(compute_cores_list):
                 dram_core = dram_cores[core_idx]
-                shard_assignment = ct_tensor.get_assignment_per_shard(dram_core)
-                block_sizes, tile_infos = _compute_subblock_metadata(
-                    device,
-                    shard_assignment,
-                    subblock_k,
-                    per_core_n,
-                    num_subblocks_k,
-                    cb_in1_base_shifted,
-                    max_subblock_bytes_shifted,
-                    num_buffers,
-                    start_iteration=0,  # CBIn1BaseAddr always resets write ptr to base
-                )
-                per_core_block_sizes[core_idx] = block_sizes
-                per_core_fmt_pairs[core_idx] = tile_infos
+                for ct in cts:
+                    shard_assignment = ct.get_assignment_per_shard(dram_core)
+                    block_sizes, tile_infos = _compute_subblock_metadata(
+                        device,
+                        shard_assignment,
+                        subblock_k,
+                        per_core_n,
+                        num_subblocks_k,
+                        cb_in1_base_shifted,
+                        max_subblock_bytes_shifted,
+                        num_buffers,
+                        start_iteration=0,
+                    )
+                    per_core_meta_flat[core_idx].extend(block_sizes)
+                    per_core_fmt_flat[core_idx].extend(tile_infos)
 
-            # Upload block-size metadata to L1 (HEIGHT_SHARDED uint8)
-            meta_entries = per_core_n * num_subblocks_k
-            meta_flat = []
+            # Upload block-size metadata to L1 (HEIGHT_SHARDED uint32, 4 bytes each)
+            meta_flat_all = []
             for core_idx in range(num_cores):
-                meta_flat.extend(per_core_block_sizes[core_idx])
-            meta_torch = torch.tensor(meta_flat, dtype=torch.int32).reshape(num_cores, meta_entries)
-            meta_shard_spec = ttnn.ShardSpec(compute_cores, [1, meta_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
+                meta_flat_all.extend(per_core_meta_flat[core_idx])
+            meta_torch = torch.tensor(meta_flat_all, dtype=torch.int32).reshape(num_cores, meta_entries_total)
+            meta_shard_spec = ttnn.ShardSpec(
+                compute_cores, [1, meta_entries_total * 4], ttnn.ShardOrientation.ROW_MAJOR
+            )
             meta_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, meta_shard_spec
             )
             meta_tensor = ttnn.from_torch(
-                meta_torch.view(torch.uint8).reshape(num_cores, meta_entries * 4),
+                meta_torch.view(torch.uint8).reshape(num_cores, meta_entries_total * 4),
                 dtype=ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=meta_mem_config,
             )
 
-            # Upload per-tile format metadata to L1 (HEIGHT_SHARDED uint8)
-            num_tile_entries = subblock_k * num_subblocks_k * per_core_n
-            fmt_flat = []
+            # Upload per-tile format metadata to L1 (HEIGHT_SHARDED uint32, 4 bytes each)
+            fmt_flat_all = []
             for core_idx in range(num_cores):
-                fmt_flat.extend(per_core_fmt_pairs[core_idx])
-            fmt_np = np.array(fmt_flat, dtype=np.uint32).view(np.int32).reshape(num_cores, num_tile_entries)
+                fmt_flat_all.extend(per_core_fmt_flat[core_idx])
+            fmt_np = np.array(fmt_flat_all, dtype=np.uint32).view(np.int32).reshape(num_cores, fmt_entries_total)
             fmt_torch = torch.from_numpy(fmt_np)
-            fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_tile_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, fmt_entries_total * 4], ttnn.ShardOrientation.ROW_MAJOR)
             fmt_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec
             )
             fmt_tensor = ttnn.from_torch(
-                fmt_torch.view(torch.uint8).reshape(num_cores, num_tile_entries * 4),
+                fmt_torch.view(torch.uint8).reshape(num_cores, fmt_entries_total * 4),
                 dtype=ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
@@ -1660,6 +1693,47 @@ class MoeRoutedExpertOp:
             # Keep tensors alive — L1 buffers must persist for kernel lifetime
             params["_meta_tensor"] = meta_tensor
             params["_fmt_tensor"] = fmt_tensor
+
+            if num_experts > 1:
+                # F1b: upload per-expert byte-offset table (one uint32 per expert, replicated)
+                base_addr = int(ct0.data.buffer_address())
+                offsets_u32 = np.array([int(ct.data.buffer_address()) - base_addr for ct in cts], dtype=np.uint32)
+                assert offsets_u32[0] == 0, "First expert offset must be 0 (base address = expert[0])"
+                offsets_bytes = offsets_u32.view(np.uint8)  # (num_experts * 4,)
+                offsets_np = np.tile(offsets_bytes, (num_cores, 1))  # (num_cores, num_experts*4)
+                offsets_torch = torch.from_numpy(offsets_np.astype(np.int8)).view(torch.uint8)
+                offsets_shard_spec = ttnn.ShardSpec(
+                    compute_cores, [1, num_experts * 4], ttnn.ShardOrientation.ROW_MAJOR
+                )
+                offsets_mem_config = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, offsets_shard_spec
+                )
+                offsets_tensor = ttnn.from_torch(
+                    offsets_torch,
+                    dtype=ttnn.uint8,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=offsets_mem_config,
+                )
+
+                # Allocate scratch cell (1 uint32 per core) for NCRISC→TRISC expert_idx handoff
+                scratch_shard_spec = ttnn.ShardSpec(compute_cores, [1, 4], ttnn.ShardOrientation.ROW_MAJOR)
+                scratch_mem_config = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, scratch_shard_spec
+                )
+                scratch_torch = torch.zeros(num_cores, 4, dtype=torch.uint8)
+                scratch_tensor = ttnn.from_torch(
+                    scratch_torch,
+                    dtype=ttnn.uint8,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=scratch_mem_config,
+                )
+
+                params["expert_offsets_l1_addr"] = offsets_tensor.buffer_address()
+                params["expert_idx_scratch_l1_addr"] = scratch_tensor.buffer_address()
+                params["_offsets_tensor"] = offsets_tensor
+                params["_scratch_tensor"] = scratch_tensor
 
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
@@ -1775,6 +1849,13 @@ class MoeRoutedExpertOp:
             ("down_proj_meta_l1_addr", ctx.down_proj_params.get("meta_l1_addr", 0)),
             ("down_proj_cb_in1_size_bytes", ctx.down_proj_params["in1_total_size"]),
             ("down_proj_noc_max_page_size", ctx.down_proj_params.get("noc_max_page_size", 0)),
+            # F1b multi-expert routing: expert offset table and scratch cell (0 = disabled / legacy)
+            ("gate_proj_expert_offsets_l1_addr", ctx.gate_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("gate_proj_expert_idx_scratch_l1_addr", ctx.gate_proj_params.get("expert_idx_scratch_l1_addr", 0)),
+            ("up_proj_expert_offsets_l1_addr", ctx.up_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("up_proj_expert_idx_scratch_l1_addr", ctx.up_proj_params.get("expert_idx_scratch_l1_addr", 0)),
+            ("down_proj_expert_offsets_l1_addr", ctx.down_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("down_proj_expert_idx_scratch_l1_addr", ctx.down_proj_params.get("expert_idx_scratch_l1_addr", 0)),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -1964,6 +2045,13 @@ class MoeRoutedExpertOp:
             ("gate_proj_fmt_l1_addr", ctx.gate_proj_params.get("fmt_l1_addr", 0)),
             ("up_proj_fmt_l1_addr", ctx.up_proj_params.get("fmt_l1_addr", 0)),
             ("down_proj_fmt_l1_addr", ctx.down_proj_params.get("fmt_l1_addr", 0)),
+            # F1b multi-expert routing: expert offset table and scratch cell (0 = disabled / legacy)
+            ("gate_proj_expert_offsets_l1_addr", ctx.gate_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("gate_proj_expert_idx_scratch_l1_addr", ctx.gate_proj_params.get("expert_idx_scratch_l1_addr", 0)),
+            ("up_proj_expert_offsets_l1_addr", ctx.up_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("up_proj_expert_idx_scratch_l1_addr", ctx.up_proj_params.get("expert_idx_scratch_l1_addr", 0)),
+            ("down_proj_expert_offsets_l1_addr", ctx.down_proj_params.get("expert_offsets_l1_addr", 0)),
+            ("down_proj_expert_idx_scratch_l1_addr", ctx.down_proj_params.get("expert_idx_scratch_l1_addr", 0)),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -4913,11 +5001,14 @@ class MoeOp:
                 ctx.gate_output_indices_tensor,
             ]
         for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
-            backing = getattr(wt, "data", None)
-            if backing is not None:
-                io_tensors += [backing, wt.assignment]
-            else:
-                io_tensors += [wt]
+            # F1b: wt may be a list[CT] (multi-expert) — add all experts' tensors
+            wt_list = wt if isinstance(wt, list) else [wt]
+            for wt_single in wt_list:
+                backing = getattr(wt_single, "data", None)
+                if backing is not None:
+                    io_tensors += [backing, wt_single.assignment]
+                else:
+                    io_tensors += [wt_single]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [

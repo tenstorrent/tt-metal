@@ -166,7 +166,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 #else
             // Compressed path: variable-size tiles from DRAM; meta_l1_addr holds per-subblock
-            // byte counts; expert offset baked into in1_tensor_addr by host.
+            // byte counts. F1b: expert_offsets_l1_addr != 0 enables dynamic per-expert routing.
             using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmulCompressed::ReaderCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
                 get_named_compile_time_arg_val("gate_proj_cb_out"),
@@ -188,7 +188,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
                 get_named_compile_time_arg_val("gate_proj_cb_index"),
                 get_named_compile_time_arg_val("gate_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("use_hardcoded_expert_index"),
+                get_named_compile_time_arg_val("gate_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // up_proj DRAM Streaming Matmul (reader) — shares CB with gate_proj
@@ -232,7 +234,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
                 get_named_compile_time_arg_val("up_proj_cb_index"),
                 get_named_compile_time_arg_val("up_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("use_hardcoded_expert_index"),
+                get_named_compile_time_arg_val("up_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // Eltwise Mul (reader — no-op)
@@ -292,7 +296,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
                 get_named_compile_time_arg_val("down_proj_cb_index"),
                 get_named_compile_time_arg_val("down_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("use_hardcoded_expert_index"),
+                get_named_compile_time_arg_val("down_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // Eltwise Add (reader — no-op)
@@ -847,7 +853,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_per_core_n"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("gate_proj_fmt_l1_addr"),
-                1>;  // fuse_silu=1
+                1,  // fuse_silu=1
+                get_named_compile_time_arg_val("gate_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // up_proj DRAM Streaming Matmul (compute) — shares CB with gate_proj
@@ -872,7 +879,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_per_core_n"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("up_proj_fmt_l1_addr"),
-                0>;  // fuse_silu=0
+                0,  // fuse_silu=0
+                get_named_compile_time_arg_val("up_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // Eltwise Mul (compute)
@@ -917,7 +925,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_per_core_n"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("down_proj_fmt_l1_addr"),
-                0>;  // fuse_silu=0
+                0,  // fuse_silu=0
+                get_named_compile_time_arg_val("down_proj_expert_idx_scratch_l1_addr")>;
 #endif
 
             // Eltwise Add (compute)
