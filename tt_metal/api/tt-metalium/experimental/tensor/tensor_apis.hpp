@@ -70,6 +70,23 @@ void enqueue_write_mesh_tensor(
     distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
 // ======================================================================================
+//                    Unit Tensor enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& queue,
+    const MeshTensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region = std::nullopt,
+    bool blocking = true);
+
+void enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    MeshTensor& device_tensor,
+    const std::optional<BufferRegion>& region = std::nullopt);
+
+// ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 

@@ -107,4 +107,35 @@ void enqueue_write_mesh_tensor(
         host_tensor.tensor_topology());
 }
 
+// ======================================================================================
+//                    Unit Tensor enqueue_read/write_mesh_tensor
+// ======================================================================================
+
+void enqueue_read_mesh_tensor(
+    distributed::MeshCommandQueue& queue,
+    const MeshTensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region,
+    bool blocking) {
+    TT_FATAL(queue.device()->num_devices() == 1, "enqueue_read_mesh_tensor only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(dst)
+            .region(region)};
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer_invariant_breaking(), blocking);
+}
+
+void enqueue_write_mesh_tensor(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    MeshTensor& device_tensor,
+    const std::optional<BufferRegion>& region) {
+    TT_FATAL(queue.device()->num_devices() == 1, "enqueue_write_mesh_tensor only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(const_cast<std::byte*>(src))
+            .region(region)};
+    queue.enqueue_write_shards(device_tensor.mesh_buffer_invariant_breaking(), shard_data_transfers, false);
+}
+
 }  // namespace tt::tt_metal
