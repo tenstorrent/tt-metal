@@ -50,13 +50,13 @@ def _resolve_checkpoint_path(checkpoint_file: str) -> str:
     if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
         raise ValueError("checkpoint_file is not in the predefined safelist")
 
-    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
-    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
-    if not checkpoint_path.startswith(base_dir + os.sep):
+    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, checkpoint_file))
+    if not my_path.startswith(BASE_DIRECTORY):
         raise ValueError("checkpoint path escapes checkpoint_dir")
-    if not os.path.isfile(checkpoint_path):
-        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
-    return checkpoint_path
+    if not os.path.isfile(my_path):
+        raise FileNotFoundError(f"checkpoint not found: {my_path}")
+    return my_path
 
 
 def _validate_benchmark_options(options: BenchmarkOptions) -> None:

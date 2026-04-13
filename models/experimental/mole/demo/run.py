@@ -160,14 +160,14 @@ def resolve_checkpoint_path(checkpoint_file: str) -> str:
     if checkpoint_file not in ALLOWED_CHECKPOINT_FILES:
         raise ValueError("checkpoint_file is not in the predefined safelist")
 
-    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
-    checkpoint_path = os.path.abspath(os.path.join(base_dir, checkpoint_file))
-    if not checkpoint_path.startswith(base_dir + os.sep):
+    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, checkpoint_file))
+    if not my_path.startswith(BASE_DIRECTORY):
         raise ValueError("checkpoint path escapes checkpoint base directory")
 
-    if not os.path.isfile(checkpoint_path):
-        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
-    return checkpoint_path
+    if not os.path.isfile(my_path):
+        raise FileNotFoundError(f"checkpoint not found: {my_path}")
+    return my_path
 
 
 def _resolve_checkpoint_path(checkpoint_file: str) -> str:
@@ -175,24 +175,22 @@ def _resolve_checkpoint_path(checkpoint_file: str) -> str:
 
 
 def _resolve_dataset_csv_path(dataset_dir: str | Path, dataset_file: str | None) -> Path:
-    base_dir = os.path.abspath(CHECKPOINT_BASE_DIR)
+    BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
     requested_dir = os.path.abspath(os.path.expanduser(str(dataset_dir)))
-    if requested_dir != base_dir:
+    if requested_dir != BASE_DIRECTORY:
         raise ValueError("dataset_dir must be /demo_checkpoints")
-    if not os.path.isdir(base_dir):
-        raise FileNotFoundError(f"dataset directory not found: {base_dir}")
+    if not os.path.isdir(BASE_DIRECTORY):
+        raise FileNotFoundError(f"dataset directory not found: {BASE_DIRECTORY}")
 
-    if dataset_file is not None:
-        if dataset_file not in ALLOWED_DATASET_FILES:
-            raise ValueError("dataset_file is not in the predefined safelist")
-        csv_path = Path(os.path.abspath(os.path.join(base_dir, dataset_file)))
-        if not str(csv_path).startswith(base_dir + os.sep):
-            raise ValueError("dataset path escapes dataset base directory")
-        if not csv_path.exists():
-            raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
-        return csv_path
+    selected_dataset = dataset_file if dataset_file is not None else "ETTh1.csv"
+    if selected_dataset not in ALLOWED_DATASET_FILES:
+        raise ValueError("dataset_file is not in the predefined safelist")
 
-    csv_path = Path(os.path.join(base_dir, "ETTh1.csv"))
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, selected_dataset))
+    if not my_path.startswith(BASE_DIRECTORY):
+        raise ValueError("dataset path escapes dataset base directory")
+
+    csv_path = Path(my_path)
     if csv_path.exists():
         return csv_path
     raise FileNotFoundError(f"dataset CSV not found: {csv_path}")
