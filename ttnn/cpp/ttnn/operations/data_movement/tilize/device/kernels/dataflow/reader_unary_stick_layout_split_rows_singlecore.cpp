@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto src_tensor_args = TensorAccessorArgs<1>();
 
-    const auto s = decltype(TensorAccessor(src_tensor_args, src_addr)){src_tensor_args, src_addr, stick_size};
+    const auto s = TensorAccessor(src_tensor_args, src_addr);
 
     uint64_t base_src_noc_addr[tile_height];
 

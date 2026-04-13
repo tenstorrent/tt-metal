@@ -110,9 +110,9 @@ void kernel_main() {
     const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
     const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
 
-    const auto input_addr_gtor = decltype(TensorAccessor(ctas.input_args, input_buffer_address)){ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes};
-    const auto index_addr_gtor = decltype(TensorAccessor(ctas.index_args, index_buffer_address)){ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes};
-    const auto source_addr_gtor = decltype(TensorAccessor(ctas.source_args, source_buffer_address)){ctas.source_args, source_buffer_address, ctas.source_stick_size_bytes};
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address);
+    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address);
+    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address);
 
     using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
     using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;

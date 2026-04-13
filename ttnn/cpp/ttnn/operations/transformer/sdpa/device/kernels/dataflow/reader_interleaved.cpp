@@ -225,12 +225,12 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const auto q_reader = decltype(TensorAccessor(q_args, q_addr)){q_args, q_addr, q_tile_bytes};
-    const auto k_reader = decltype(TensorAccessor(k_args, k_addr)){k_args, k_addr, k_tile_bytes};
-    const auto v_reader = decltype(TensorAccessor(v_args, v_addr)){v_args, v_addr, v_tile_bytes};
-    const auto mask_reader = decltype(TensorAccessor(mask_args, mask_addr)){mask_args, mask_addr, mask_tile_bytes};
-    const auto attention_sink_reader = decltype(TensorAccessor(attention_sink_args, attention_sink_addr)){attention_sink_args, attention_sink_addr, attention_sink_tile_bytes};
-    const auto chunk_start_idx_reader = decltype(TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr)){chunk_start_idx_args, chunk_start_idx_addr, 4};
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
+    const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
 
     constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
 

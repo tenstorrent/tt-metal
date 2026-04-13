@@ -34,7 +34,7 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    const auto s0 = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, tile_bytes};
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise

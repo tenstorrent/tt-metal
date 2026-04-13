@@ -27,8 +27,8 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = decltype(TensorAccessor(input_args, input_buffer_src_addr)){input_args, input_buffer_src_addr, input_page_size};
-    const auto weights = decltype(TensorAccessor(weights_args, weight_buffer_src_addr)){weights_args, weight_buffer_src_addr, weight_stick_size};
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t tile_height = 32;

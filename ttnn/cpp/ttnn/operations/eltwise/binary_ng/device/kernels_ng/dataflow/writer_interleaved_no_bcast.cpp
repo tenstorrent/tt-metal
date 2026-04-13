@@ -32,7 +32,7 @@ void kernel_main() {
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, dst_tile_bytes};
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 #endif
 
 #if !DST_SHARDED

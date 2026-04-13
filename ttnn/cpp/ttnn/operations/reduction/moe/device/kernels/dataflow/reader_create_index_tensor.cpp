@@ -59,15 +59,15 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes_input = get_tile_size(cb_id_in0);
 
-    const auto s0 = decltype(TensorAccessor(s0_args, src_addr)){s0_args, src_addr, tile_bytes_input};
+    const auto s0 = TensorAccessor(s0_args, src_addr);
 
     constexpr uint32_t tile_bytes_topk = get_tile_size(cb_topk_mask);
 
-    const auto s1 = decltype(TensorAccessor(s1_args, topk_addr)){s1_args, topk_addr, tile_bytes_topk};
+    const auto s1 = TensorAccessor(s1_args, topk_addr);
 
     constexpr uint32_t tile_bytes_expert = get_tile_size(cb_expert_mask);
 
-    const auto s2 = decltype(TensorAccessor(s2_args, expert_addr)){s2_args, expert_addr, tile_bytes_expert};
+    const auto s2 = TensorAccessor(s2_args, expert_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);

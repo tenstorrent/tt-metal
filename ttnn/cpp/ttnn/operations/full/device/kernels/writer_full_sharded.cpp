@@ -52,7 +52,7 @@ void kernel_main() {
 
     cb_push_back(cb_value, 1);
 
-    const auto dst_accessor = decltype(TensorAccessor(dst_args, output_addr)){dst_args, output_addr, aligned_page_size};
+    const auto dst_accessor = TensorAccessor(dst_args, output_addr);
 
     cb_wait_front(cb_value, 1);
 

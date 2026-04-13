@@ -29,8 +29,8 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    const auto s0 = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, in0_tile_bytes};
-    const auto s1 = decltype(TensorAccessor(src1_args, src1_addr)){src1_args, src1_addr, in1_tile_bytes};
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;

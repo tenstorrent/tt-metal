@@ -38,7 +38,7 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, unpadded_X_size};
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t stick_id = 0;
 

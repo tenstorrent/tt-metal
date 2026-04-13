@@ -133,14 +133,14 @@ void kernel_main() {
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
     constexpr uint32_t q_heads_per_k = NH / NHK;
 
-    const auto q_reader = decltype(TensorAccessor(q_args, q_addr)){q_args, q_addr, q_tile_bytes};
-    const auto local_k_reader = decltype(TensorAccessor(k_args, k_addr)){k_args, k_addr, k_tile_bytes};
-    const auto local_v_reader = decltype(TensorAccessor(v_args, v_addr)){v_args, v_addr, v_tile_bytes};
-    const auto gathered_k_reader = decltype(TensorAccessor(gathered_k_args, gathered_k_addr)){gathered_k_args, gathered_k_addr, k_tile_bytes};
-    const auto gathered_v_reader = decltype(TensorAccessor(gathered_v_args, gathered_v_addr)){gathered_v_args, gathered_v_addr, v_tile_bytes};
-    const auto joint_q_reader = decltype(TensorAccessor(joint_q_args, joint_q_addr)){joint_q_args, joint_q_addr, q_tile_bytes};
-    const auto joint_k_reader = decltype(TensorAccessor(joint_k_args, joint_k_addr)){joint_k_args, joint_k_addr, k_tile_bytes};
-    const auto joint_v_reader = decltype(TensorAccessor(joint_v_args, joint_v_addr)){joint_v_args, joint_v_addr, v_tile_bytes};
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto local_k_reader = TensorAccessor(k_args, k_addr);
+    const auto local_v_reader = TensorAccessor(v_args, v_addr);
+    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
+    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
+    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
+    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
     const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);

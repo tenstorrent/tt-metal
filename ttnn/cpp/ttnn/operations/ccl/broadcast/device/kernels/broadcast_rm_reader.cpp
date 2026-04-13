@@ -54,7 +54,7 @@ void kernel_main() {
             .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
         constexpr auto tensor0_args = TensorAccessorArgs<7>();
-        auto tensor0_addrgen = decltype(TensorAccessor(tensor0_args, tensor_address0)){tensor0_args, tensor_address0, row_size};
+        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 #endif
 
         uint32_t row_id = row_id_start;
