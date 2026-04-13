@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_binary_(tile_idx);
         }
         tile_idx++;
-        remaining_tiles -= params.NUM_TILES_IN_BLOCK;
+        remaining_tiles -= std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
     }
 
     // Signal math completion
