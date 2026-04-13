@@ -16,6 +16,9 @@
 
 namespace tt::tt_metal {
 
+// Validates that the physical shard shape is aligned to tile dimensions for sharded TILE layouts.
+// Returns std::nullopt if the configuration is valid, or an error message string if
+// the shard shape's height/width are not multiples of the tile height/width.
 std::optional<std::string> get_shard_align_error(
     const MemoryConfig& memory_config, const Layout& layout, const Tile& tile = Tile{});
 
