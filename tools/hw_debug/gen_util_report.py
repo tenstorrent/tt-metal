@@ -27,6 +27,7 @@ Examples:
 """
 import argparse
 import os
+import signal
 import sys
 import subprocess
 import glob
@@ -42,14 +43,39 @@ def _profiler_subprocess_env():
     return env
 
 
-# Run tracy with specified options
+_GRACEFUL_SHUTDOWN_SECS = 15
+
+
 def run_profile_command(command, output_dir, subdir, profile_options, *, timeout=None):
+    """Run tracy with specified options.
+
+    When *timeout* is set the child is first sent SIGTERM so it can release
+    device locks, then SIGKILL only as a last resort.
+    """
     full_output_path = os.path.join(output_dir, subdir)
     profile_cmd = (
         [sys.executable, "-m", "tracy", "-v", "-r", "-p", "-o", full_output_path] + profile_options + ["-m", command]
     )
 
-    subprocess.run(profile_cmd, check=True, env=_profiler_subprocess_env(), timeout=timeout)
+    if timeout is None:
+        subprocess.run(profile_cmd, check=True, env=_profiler_subprocess_env())
+        return full_output_path
+
+    proc = subprocess.Popen(profile_cmd, env=_profiler_subprocess_env())
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=_GRACEFUL_SHUTDOWN_SECS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise
+
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, profile_cmd)
+
     return full_output_path
 
 

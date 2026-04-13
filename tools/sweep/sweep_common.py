@@ -25,7 +25,7 @@ SEQLEN_PRESETS: dict[str, tuple[str, int]] = {
     "1k": ("input_data_long_1k.json", 2048),
     "2k": ("input_data_long_2k.json", 4096),
     "4k": ("input_data_long_4k.json", 8192),
-    "8k": ("input_data_long_8k.json", 8192),
+    "8k": ("input_data_long_8k.json", 16384),
     "16k": ("input_data_long_16k.json", 32768),
     "32k": ("input_data_long_32k.json", 65536),
     "64k": ("input_data_long_64k.json", 131072),
