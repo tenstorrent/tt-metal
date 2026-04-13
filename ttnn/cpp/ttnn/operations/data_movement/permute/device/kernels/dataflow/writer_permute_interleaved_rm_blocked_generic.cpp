@@ -47,7 +47,7 @@ void kernel_main() {
     const uint32_t end_block = get_arg_val<uint32_t>(2);
 
     // Interleaved address configuration for the destination
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_tensor_page_size};
 
     // Input shape, permutation, and destination strides
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args

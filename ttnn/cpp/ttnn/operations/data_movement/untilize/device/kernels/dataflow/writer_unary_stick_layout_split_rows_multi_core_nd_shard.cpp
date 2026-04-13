@@ -31,9 +31,9 @@ void kernel_main() {
     constexpr uint32_t output_tensor_height = get_compile_time_arg_val(14);
 
     constexpr auto dst_args = TensorAccessorArgs<15>();
-    const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
+    const auto accessor_dst = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_stick_size};
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-    const auto accessor_src = TensorAccessor(src0_args, src0_addr);
+    const auto accessor_src = decltype(TensorAccessor(src0_args, src0_addr)){src0_args, src0_addr, input_single_tile_size};
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,

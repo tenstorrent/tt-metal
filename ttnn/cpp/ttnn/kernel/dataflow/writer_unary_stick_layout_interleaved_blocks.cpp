@@ -62,7 +62,7 @@ void kernel_main() {
                       : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, output_row_size};
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {

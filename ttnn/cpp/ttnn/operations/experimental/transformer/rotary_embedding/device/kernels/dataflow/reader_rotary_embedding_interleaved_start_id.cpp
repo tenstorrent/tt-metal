@@ -30,13 +30,13 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, input_tile_bytes};
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const auto s1 = TensorAccessor(cos_args, cos_addr);
+    const auto s1 = decltype(TensorAccessor(cos_args, cos_addr)){cos_args, cos_addr, cos_tile_bytes};
 
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const auto s2 = TensorAccessor(sin_args, sin_addr);
+    const auto s2 = decltype(TensorAccessor(sin_args, sin_addr)){sin_args, sin_addr, sin_tile_bytes};
 
     // Fill tile with zeros
     const uint32_t scalar_tile_bytes = get_tile_size(scalar_cb_id);

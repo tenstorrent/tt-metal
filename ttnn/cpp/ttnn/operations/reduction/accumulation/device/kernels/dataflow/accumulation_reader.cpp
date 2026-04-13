@@ -33,7 +33,7 @@ void kernel_main() {
     const uint32_t ublock_size_bytes = get_tile_size(CB_IN);
     const uint32_t input_tile_bytes = ublock_size_bytes;
 
-    const auto input_addrg = TensorAccessor(input_addrg_args, input_base_addr);
+    const auto input_addrg = decltype(TensorAccessor(input_addrg_args, input_base_addr)){input_addrg_args, input_base_addr, input_tile_bytes};
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {

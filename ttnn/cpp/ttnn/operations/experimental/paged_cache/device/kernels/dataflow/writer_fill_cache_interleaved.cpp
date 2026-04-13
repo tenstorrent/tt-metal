@@ -64,7 +64,7 @@ void kernel_main() {
     if constexpr (use_batch_idx_tensor) {
         uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
 
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
+        const auto batch_idx_gen = decltype(TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr)){batch_idx_tensor_args, batch_idx_tensor_addr, batch_idx_stick_size};
         cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
         uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
         uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
@@ -80,9 +80,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    const auto out_gen = TensorAccessor(s0_args, dst_addr);
+    const auto out_gen = decltype(TensorAccessor(s0_args, dst_addr)){s0_args, dst_addr, tile_bytes};
 
-    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
+    const auto page_table_gen = decltype(TensorAccessor(page_table_args, page_table_addr)){page_table_args, page_table_addr, page_table_stick_size};
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
     uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);

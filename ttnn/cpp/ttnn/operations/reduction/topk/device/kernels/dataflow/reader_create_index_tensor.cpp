@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr auto indices_args = TensorAccessorArgs<inout_tensor_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(3);
     constexpr uint32_t indices_tile_bytes = get_tile_size(cb_intermed_index);
-    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
+    const auto indices_accessor = decltype(TensorAccessor(indices_args, src_indices_addr)){indices_args, src_indices_addr, indices_tile_bytes};
 #endif  // not GENERATE_INDICES
 
     // Constants
@@ -36,7 +36,7 @@ void kernel_main() {
 
     // Tensor accessor
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto inout_tensor_accessor = TensorAccessor(inout_tensor_args, src_addr);
+    const auto inout_tensor_accessor = decltype(TensorAccessor(inout_tensor_args, src_addr)){inout_tensor_args, src_addr, tile_bytes};
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

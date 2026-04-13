@@ -70,7 +70,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
+        const auto gamma = decltype(TensorAccessor(gamma_args, gamma_addr)){gamma_args, gamma_addr, gamma_tile_bytes};
 
         cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
@@ -84,7 +84,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-        const auto beta = TensorAccessor(beta_args, beta_addr);
+        const auto beta = decltype(TensorAccessor(beta_args, beta_addr)){beta_args, beta_addr, beta_tile_bytes};
 
         cb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {

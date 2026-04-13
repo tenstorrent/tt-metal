@@ -27,7 +27,7 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_out0(cb_id_out0);
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, tile_bytes};
 
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {

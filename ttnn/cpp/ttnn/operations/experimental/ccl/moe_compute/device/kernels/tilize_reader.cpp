@@ -413,15 +413,15 @@ void kernel_main() {
         TensorAccessorArgs<expert_activation_output_args.next_compile_time_args_offset()>();
 
     // TensorAccessors
-    const auto input_tensor_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto input_tensor_addr_gen = decltype(TensorAccessor(input_args, input_tensor_address)){input_args, input_tensor_address, input_page_size};
     // indices not used by reader
     // scores not used by reader
-    const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
+    const auto mapping_tensor_addr_gen = decltype(TensorAccessor(mapping_args, mapping_tensor_address)){mapping_args, mapping_tensor_address, mapping_page_size};
     const auto per_expert_total_tokens_output_tensor_addr_gen =
         TensorAccessor(per_expert_total_tokens_output_args, per_expert_total_tokens_output_tensor_address);
     const auto expert_activation_output_tensor_addr_gen =
         TensorAccessor(expert_activation_output_args, expert_activation_output_address);
-    const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address);
+    const auto e_t_output_tensor_addr_gen = decltype(TensorAccessor(e_t_output_args, e_t_output_address)){e_t_output_args, e_t_output_address, e_t_output_page_size};
 
     // Constants
     constexpr uint32_t one_page = 1;

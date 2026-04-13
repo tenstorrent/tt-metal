@@ -26,7 +26,7 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, page_size};
 
     uint32_t i_stick = start_id;
 
