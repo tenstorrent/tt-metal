@@ -1126,6 +1126,45 @@ solve_for_many_groupings_to_psd_heterogeneous(
 }
 }  // namespace tt::tt_fabric
 
+bool PhysicalGroupingDescriptor::can_map_to_psd(
+    const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    // Build a multiset of (tray_id, asic_location) slots available in the PSD.
+    std::map<std::pair<uint32_t, uint32_t>, size_t> psd_slot_counts;
+    for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
+        uint32_t tray = *desc.tray_id;
+        uint32_t loc = *desc.asic_location;
+        if (tray > 0 && loc <= 8) {
+            psd_slot_counts[{tray, loc}]++;
+        }
+    }
+
+    // Count how many ASICs the grouping needs per (tray, location) slot.
+    std::map<std::pair<uint32_t, uint32_t>, size_t> required_slot_counts;
+    for (uint32_t node_id : grouping_info.adjacency_graph.get_nodes()) {
+        if (node_id >= grouping_info.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping_info.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        uint32_t tray = *item.tray_id;
+        uint32_t loc = *item.asic_location;
+        if (tray == 0 || loc > 8) {
+            continue;
+        }
+        required_slot_counts[{tray, loc}]++;
+    }
+
+    for (const auto& [slot, needed] : required_slot_counts) {
+        auto it = psd_slot_counts.find(slot);
+        if (it == psd_slot_counts.end() || it->second < needed) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in_psd(
     const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     std::vector<std::string> errors;

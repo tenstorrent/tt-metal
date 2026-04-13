@@ -118,6 +118,13 @@ public:
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
+    // Lightweight feasibility check: can the flattened mesh's (tray_id, asic_location) requirements
+    // be satisfied by the PSD? Avoids full graph isomorphism — only checks that the PSD has enough
+    // physical ASICs matching each required (tray, location) slot. Used during build_flattened_adjacency_mesh
+    // to quickly prune impossible combinations before the full solver is invoked.
+    static bool can_map_to_psd(
+        const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
