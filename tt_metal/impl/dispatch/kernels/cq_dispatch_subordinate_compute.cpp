@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
-#define DISPATCH_KERNEL 1
-#include "tools/profiler/kernel_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
 #include "hostdev/dev_msgs.h"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
@@ -37,6 +34,12 @@ void kernel_main() {
     volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
+    // Clear stale TERMINATE from previous run so the monitor loop actually runs.
+    // dispatch_s will set TERMINATE when this program ends.
+    if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
+        realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    }
+
     // Main loop: runs until dispatch_s signals terminate
     while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
         // Loop over all streams we're monitoring
@@ -47,8 +50,6 @@ void kernel_main() {
 
             uint32_t current_count = *stream_reg;
             if (current_count != last_counts[i]) {
-                DeviceZoneScopedN("Count_changed");
-                // Stream count changed - record the event
                 last_counts[i] = current_count;
                 record_realtime_timestamp(realtime_profiler_mailbox, false);
             }

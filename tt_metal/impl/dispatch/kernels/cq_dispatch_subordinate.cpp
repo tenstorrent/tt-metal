@@ -166,7 +166,6 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
-        record_realtime_timestamp(realtime_profiler_mailbox, false);
     }
     WAYPOINT("WCD");
 }
@@ -374,26 +373,28 @@ void kernel_main() {
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        record_realtime_timestamp(realtime_profiler_mailbox, true);
+        set_program_id(realtime_profiler_mailbox);
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         switch (cmd->base.cmd_id) {
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
-                record_realtime_timestamp(realtime_profiler_mailbox, true);
-                set_program_id(realtime_profiler_mailbox);
-                process_go_signal_mcast_cmd();
-                record_realtime_timestamp(realtime_profiler_mailbox, false);
-                break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
-            case CQ_DISPATCH_CMD_WAIT:
-                record_realtime_timestamp(realtime_profiler_mailbox, true);
-                set_program_id(realtime_profiler_mailbox);
-                process_dispatch_s_wait_cmd();
-                record_realtime_timestamp(realtime_profiler_mailbox, false);
+            case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
+                if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
+                    uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
+                        realtime_profiler_mailbox->realtime_profiler_core_noc_xy,
+                        realtime_profiler_mailbox->realtime_profiler_mailbox_addr);
+                    dispatch_s_noc_inline_dw_write(
+                        realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
+                }
+                done = true;
                 break;
-            case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
             default:
                 DPRINT << "dispatcher_s invalid command" << ENDL();
                 DEVICE_PRINT("dispatcher_s invalid command\n");
@@ -416,19 +417,6 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-
-    // Send TERMINATE to the profiler kernel AFTER the loop and page
-    // confirmation. The gap between the last signal_realtime_profiler_and_switch
-    // and this point gives BRISC time to process the final PUSH before we
-    // overwrite the mailbox state with TERMINATE.
-    realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
-    if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
-        uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
-            realtime_profiler_mailbox->realtime_profiler_core_noc_xy,
-            realtime_profiler_mailbox->realtime_profiler_mailbox_addr);
-        dispatch_s_noc_inline_dw_write(
-            realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
-    }
 #ifdef COMPILE_FOR_IDLE_ERISC
     // Wait for all transactions to complete, to avoid hitting the asserts in
     // idle_erisck.cc if there are outstanding transactions. These barriers

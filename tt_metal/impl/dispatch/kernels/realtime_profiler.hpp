@@ -8,9 +8,10 @@
 #include "risc_common.h"
 #include "hostdev/dev_msgs.h"
 
-// Wall clock register indices
+// Wall clock register indices — registers are 8 bytes apart (0x1F0, 0x1F8),
+// so the uint32_t array stride is 2, not 1.
 constexpr uint32_t WALL_CLOCK_LOW_INDEX = 0;
-constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 1;
+constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
 
 // Sync marker ID - used to identify sync packets in real-time profiler stream
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
@@ -81,12 +82,14 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* mailb
 
 // Set the program ID in both start and end timestamps of the appropriate ping-pong buffer.
 // Pops the program ID from the FIFO and sets it in the appropriate buffer.
-// If the FIFO is empty, sets the ID to zero.
+// If the FIFO is empty, the buffer retains its previous ID.
 // Reads mailbox state to determine which buffer to use (opposite of what's being pushed).
 FORCE_INLINE
 void set_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
     uint32_t id = 0;
-    program_id_fifo_pop(mailbox, &id);
+    if (!program_id_fifo_pop(mailbox, &id)) {
+        return;  // FIFO empty — keep whatever ID is already in the buffer
+    }
 
     // Determine buffer from mailbox state: write to buffer NOT being pushed
     // PUSH_B means real-time profiler is pushing B, so write to A
