@@ -189,7 +189,7 @@ void compile_one(
     size_t src_index,
     const std::string& temp_obj) {
     std::vector<std::string> args;
-    args.push_back(gpp);
+    append_tokenized(args, gpp);
     args.push_back("-" + target.compiler_opt_level);
     append_tokenized(args, target.cflags);
     append_tokenized(args, target.includes);
@@ -220,7 +220,7 @@ void link_one(
     const std::string& out_dir,
     const std::vector<std::string>& link_obj_paths) {
     std::vector<std::string> args;
-    args.push_back(gpp);
+    append_tokenized(args, gpp);
     args.push_back("-" + target.linker_opt_level);
 
     std::vector<std::string> link_deps = {target.linker_script};
