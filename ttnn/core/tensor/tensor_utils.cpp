@@ -129,7 +129,7 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
     // we must compute a new spec for the requested scheme rather than blindly reusing.
     if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
         input_tensor.memory_config().memory_layout() == output_memory_config.memory_layout()) {
-        return output_memory_config.with_shard_spec(input_tensor.shard_spec().value());
+        return output_memory_config.with_shard_spec(input_tensor.shard_spec());
     }
 
     TT_FATAL(
