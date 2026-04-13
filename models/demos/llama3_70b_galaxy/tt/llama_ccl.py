@@ -1213,7 +1213,7 @@ class TT_CCL:
         Fused AllGather + MatMul for prefill using all_gather_minimal_matmul_async.
 
         """
-        topology = ttnn.Topology.Ring
+        topology = self.model_config.get("CCL_TOPOLOGY", ttnn.Topology.Ring)
         force_transpose = True
 
         B = input_tensor_mesh.shape[1]
