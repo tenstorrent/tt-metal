@@ -10,6 +10,7 @@
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn {
 
@@ -40,21 +41,29 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        // Use ttnn::sum instead of moreh_sum for the divisor computation.
-        // moreh_sum produces incorrect results for small tensors (e.g. shape [5])
-        // due to a tile-padding interaction bug.
-        Tensor divisor_computed = ttnn::sum(step1_result, std::nullopt, false, memory_config);
-        // Write back into the caller-provided divisor_tensor so the backward pass can read it.
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
-        // But use the correctly computed value for step2.
-        std::optional<Tensor> divisor_opt = divisor_computed;
+        // Compute divisor on host to avoid moreh_sum tile-padding bugs.
+        Tensor step1_host = step1_result.cpu().to_layout(Layout::ROW_MAJOR);
+        auto step1_vec = step1_host.to_vector<float>();
+        float divisor_val = 0.0f;
+        for (size_t i = 0; i < step1_result.logical_shape().volume(); ++i) {
+            divisor_val += step1_vec[i];
+        }
+        // Build a host tensor matching divisor_tensor's spec and write it into the
+        // existing device buffer so the backward pass (which holds its own reference
+        // to this tensor) sees the correct value.
+        auto divisor_host = Tensor::from_vector(
+            std::vector<float>{divisor_val},
+            TensorSpec(
+                divisor_tensor.value().logical_shape(),
+                TensorLayout(divisor_tensor.value().dtype(), PageConfig(Layout::TILE), MemoryConfig{})));
+        tt::tt_metal::copy_to_device(divisor_host, const_cast<Tensor&>(divisor_tensor.value()));
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
             target_tensor,
             reduction,
             weight_tensor,
-            divisor_opt,
+            divisor_tensor,
             output_tensor,
             ignore_index,
             memory_config,
