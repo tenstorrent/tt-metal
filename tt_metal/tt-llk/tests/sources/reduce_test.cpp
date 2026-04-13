@@ -88,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         int remaining_tiles = params.INPUT_TILE_CNT;
-        while (remaining_tiles)
+        while (remaining_tiles != 0)
         {
             int tiles_to_dest = std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -152,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     int remaining_tiles = params.OUTPUT_TILE_CNT;
-    while (remaining_tiles)
+    while (remaining_tiles != 0)
     {
         int tiles_from_dest = std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
         _llk_packer_wait_for_math_done_();
