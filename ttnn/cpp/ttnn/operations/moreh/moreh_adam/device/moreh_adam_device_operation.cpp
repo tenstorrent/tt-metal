@@ -140,7 +140,7 @@ ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t m
         step.value_or(0),
         amsgrad.value_or(false),
         memory_config.value_or(param_in.memory_config()),
-        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{
         param_in,

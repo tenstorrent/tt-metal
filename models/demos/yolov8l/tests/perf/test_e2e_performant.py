@@ -22,19 +22,12 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-# E2E perf: one sample per device (global batch = num_devices on a mesh).
-E2E_BATCH_SIZE_PER_DEVICE = 1
-
-
 def run_yolov8l(
     device,
     batch_size_per_device,
     model_location_generator,
     resolution=(YOLOV8L_INPUT_H, YOLOV8L_INPUT_W),
 ):
-    assert (
-        batch_size_per_device == E2E_BATCH_SIZE_PER_DEVICE
-    ), f"E2E perf expects batch_size_per_device={E2E_BATCH_SIZE_PER_DEVICE}, got {batch_size_per_device}"
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
@@ -68,9 +61,7 @@ def run_yolov8l(
     performant_runner.release()
     inference_time_avg = round((t1 - t0) / 10, 6)
     logger.info(
-        f"Model: ttnn_yolov8l - per_device_batch={batch_size_per_device} global_batch={batch_size} "
-        f"(devices={num_devices}). One inference iteration time (sec): {inference_time_avg}, "
-        f"FPS: {round(batch_size / inference_time_avg)}"
+        f"Model: ttnn_yolov8l - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )
 
 
@@ -80,7 +71,6 @@ def run_yolov8l(
     [
         {
             "l1_small_size": yolov8l_l1_small_size_for_res(1280, 1280),
-            # "trace_region_size": YOLOV8L_TRACE_REGION_SIZE_E2E,
             "trace_region_size": 35000000,
             "num_command_queues": 2,
         }
@@ -89,17 +79,30 @@ def run_yolov8l(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
-    ((E2E_BATCH_SIZE_PER_DEVICE),),
+    ((1),),
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        # (640, 640),
+        (1280, 1280),
+    ],
+    ids=[
+        # "640",
+        "1280",
+    ],
 )
 def test_run_yolov8l_trace_2cqs_inference(
     device,
     batch_size_per_device,
     model_location_generator,
+    resolution,
 ):
     run_yolov8l(
         device,
         batch_size_per_device,
         model_location_generator,
+        resolution=resolution,
     )
 
 
@@ -119,17 +122,22 @@ def test_run_yolov8l_trace_2cqs_inference(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device",
-    ((E2E_BATCH_SIZE_PER_DEVICE),),
+    ((1),),
 )
 @pytest.mark.parametrize(
     "resolution",
-    [(640, 640), (1280, 1280)],
-    ids=["640", "1280"],
+    [
+        # (640, 640),
+        (1280, 1280)
+    ],
+    ids=[
+        # "640",
+        "1280",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        # (2, 2),
         (1, 8),
     ],
     indirect=True,

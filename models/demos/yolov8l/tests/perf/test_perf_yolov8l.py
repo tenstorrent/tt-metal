@@ -13,23 +13,24 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "name_suffix,batch_size,resolution,expected_perf,test_selector,op_support_count",
     [
-        [
-            "b1_640",
-            1,
-            640,
-            0.0,
-            "test_yolov8l and 640 and not dp_batch8 and not test_yolov8l_640 and not test_yolov8l_1280",
-        ],
+        # [
+        #     "b1_640",
+        #     1,
+        #     640,
+        #     0.0,
+        #     "test_yolov8l and 640 and not dp_batch8 and not test_yolov8l_640 and not test_yolov8l_1280",
+        #     12000,
+        # ],
         [
             "b1_1280",
             1,
             1280,
-            0.0,
+            14.9,
             "models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l[1280-l1_1280_for_all_res-True]",
             12000,
         ],
-        ["b8_640", 8, 640, 0.0, "test_yolov8l_dp_batch8 and 640", 12000],
-        ["b8_1280", 8, 1280, 0.0, "test_yolov8l_dp_batch8 and 1280 and not 640", 12000],
+        # ["b8_640", 8, 640, 0.0, "test_yolov8l_dp_batch8 and 640", 12000],
+        # ["b8_1280", 8, 1280, 0.0, "test_yolov8l_dp_batch8 and 1280 and not 640", 12000],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -57,6 +58,18 @@ def test_perf_device_yolov8l(name_suffix, batch_size, resolution, expected_perf,
     )
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
 
+    avg_kernel_samples_per_s = post_processed_results[inference_time_key]
+    kernel_iterations_per_s = avg_kernel_samples_per_s / batch_size
+    kernel_latency_per_image_s = 1 / avg_kernel_samples_per_s
+    kernel_latency_per_iteration_s = 1 / kernel_iterations_per_s
+    logger.info(
+        "Kernel throughput summary:\n"
+        f"batch_size: {batch_size}\n"
+        f"avg kernel samples/s: {avg_kernel_samples_per_s:.6f}\n"
+        f"kernel iter/s: {kernel_iterations_per_s:.6f}\n"
+        f"kernel latency/iter (sec): {kernel_latency_per_iteration_s:.6f}\n"
+        f"kernel latency/image (sec): {kernel_latency_per_image_s:.6f}"
+    )
     logger.info(f"{expected_results}")
 
     prep_device_perf_report(

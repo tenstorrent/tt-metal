@@ -215,3 +215,13 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintBuiltinTypes) {
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", ttsl::make_span(messages));
 }
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintStringTypes) {
+    std::vector<std::string_view> messages = {
+        "Sample string: {0,s}\n"sv,
+        "Compile time string: {0,s}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", ttsl::make_span(messages));
+}

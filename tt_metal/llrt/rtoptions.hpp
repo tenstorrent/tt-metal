@@ -345,6 +345,9 @@ class RunTimeOptions {
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
 
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -427,6 +430,8 @@ public:
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
+
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -629,7 +634,7 @@ public:
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 

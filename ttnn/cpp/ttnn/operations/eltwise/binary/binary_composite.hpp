@@ -138,13 +138,25 @@ Tensor fmod(
 Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor remainder(
     const Tensor& input,
     float scalar,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor lcm(

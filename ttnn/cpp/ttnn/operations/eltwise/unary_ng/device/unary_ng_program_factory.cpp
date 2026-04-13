@@ -42,7 +42,6 @@ void pack_first_op_scalars(
         return;
     }
     switch (op.type()) {
-        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::MISH: packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype); break;
         case UnaryOpType::WHERE_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
@@ -64,7 +63,7 @@ void pack_first_op_scalars(
     }
 }
 
-bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::HARDSHRINK || t == UnaryOpType::LOGIT; }
+bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
@@ -399,10 +398,9 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
             auto df = datatype_to_dataformat_converter(t.dtype());
             uint32_t ts = tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
-            // TODO: Support non-tile-aligned shard sizes for ROW_MAJOR (#39785)
-            TT_FATAL(
+            TT_ASSERT(
                 shard_bytes % ts == 0,
-                "Shard size in bytes ({}) must be a multiple of tile size ({})",
+                "ROW_MAJOR shard size in bytes ({}) must be a multiple of CB page size ({})",
                 shard_bytes,
                 ts);
             return shard_bytes / ts;
@@ -418,12 +416,12 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
 
     const auto& all_device_cores = operation_attributes.worker_grid;
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     const uint32_t src0_cb_index = CBIndex::c_0;
     const uint32_t tmp0_cb_index = CBIndex::c_1;
     if (operation_attributes.preserve_fp32_precision) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tmp0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     const bool math_approx_mode = false;
@@ -503,7 +501,7 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
         compute_path,
         all_device_cores,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = operation_attributes.bfp8_pack_precise,
