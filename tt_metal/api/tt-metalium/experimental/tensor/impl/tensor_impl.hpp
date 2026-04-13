@@ -5,10 +5,24 @@
 #pragma once
 
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/host_buffer.hpp>
+
 #include <tt_stl/span.hpp>
 #include <vector>
 
 namespace tt::tt_metal::tensor_impl {
+
+// ======================================================================================
+//                           Data reader, writer, and initializers
+// ======================================================================================
+
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
+
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
 // Converts logical data into physical data based on tensor spec
 // - Logical data: Flat container of row major data corresponding to some ND logical shape

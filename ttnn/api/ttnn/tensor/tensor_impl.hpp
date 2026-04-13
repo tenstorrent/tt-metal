@@ -55,11 +55,6 @@ std::vector<T> convert_layout_tile_to_row_major(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
-    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
-
-HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
-
 MeshTensor allocate_mesh_tensor(
     const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology);
 

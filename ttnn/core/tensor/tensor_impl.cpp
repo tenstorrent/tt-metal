@@ -58,25 +58,6 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     return os;
 }
 
-std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
-    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
-    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
-
-    distributed::DeviceLocalBufferConfig device_local_buffer_config{
-        .page_size = tensor_spec.compute_page_size_bytes(),
-        .buffer_type = memory_config.buffer_type(),
-        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
-    };
-
-    // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
-    // This is required for the time being, as TTNN has rich multi-device sharding implementation.
-    const distributed::ReplicatedBufferConfig replicated_buffer_config{
-        .size = tensor_spec.compute_packed_buffer_size_bytes(),
-    };
-
-    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
-}
-
 MeshTensor allocate_mesh_tensor(
     const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology) {
     using namespace tt::tt_metal;
@@ -532,22 +513,6 @@ std::string to_string(const Tensor& tensor) {
 // ======================================================================================
 //                                      .to_host()
 // ======================================================================================
-
-HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
-    const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    switch (tensor_spec.data_type()) {
-        case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
-        case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
-        case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
-        case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
-        case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-        case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
-        case DataType::INVALID: TT_THROW("Invalid data type");
-    }
-    TT_THROW("Unreachable");
-}
 
 HostTensor enqueue_read_mesh_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
