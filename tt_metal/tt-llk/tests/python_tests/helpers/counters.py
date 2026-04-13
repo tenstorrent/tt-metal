@@ -15,10 +15,10 @@ from .test_config import TestConfig
 # ============================================================================
 
 # Derive all constants from TestConfig (single source of truth)
-COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 108 config slots
+COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS  # 137 config slots
 COUNTER_DATA_WORD_COUNT = (
     TestConfig._PERF_COUNTERS_DATA_WORDS
-)  # 172 data words (86 * 2)
+)  # 274 data words (137 * 2)
 PERF_COUNTERS_STARTER_MASK = 0x3  # 2 bits for thread ID 0-3
 PERF_COUNTERS_STOPPER_MASK = 0x3
 
