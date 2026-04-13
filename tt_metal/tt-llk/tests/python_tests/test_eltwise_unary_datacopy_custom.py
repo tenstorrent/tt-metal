@@ -23,7 +23,10 @@ from helpers.utils import passed_test
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
 )
-def test_unary_datacopy_custom(formats, dest_acc, workers_tensix_coordinates):
+def test_unary_datacopy_custom(
+    formats,
+    dest_acc,
+):
     input_dimensions = [32, 32]
     num_faces = 4
     tile_cnt = 1
@@ -62,7 +65,7 @@ def test_unary_datacopy_custom(formats, dest_acc, workers_tensix_coordinates):
         unpack_to_dest=False,
     )
 
-    outcome = configuration.run(workers_tensix_coordinates)
+    outcome = configuration.run()
     res_from_L1 = outcome.result
 
     assert len(res_from_L1) == len(golden_tensor)
