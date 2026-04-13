@@ -125,7 +125,7 @@ def setup_reduce_to_all_test(mesh_device):
 
 
 def verify_output(output_tensor, submesh_device, ref_output):
-    """Verify output matches reference on ALL devices."""
+    """Verify output matches reference on ALL devices AND all devices are identical."""
     output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
 
     num_devices = submesh_device.shape[0] * submesh_device.shape[1]
@@ -134,6 +134,8 @@ def verify_output(output_tensor, submesh_device, ref_output):
     ref_flat = ref_output.flatten()
 
     all_match = True
+
+    # 1) Check each device against the golden reference
     for device_idx in range(num_devices):
         output_device = output_torch[device_idx].flatten()
         match = torch.allclose(output_device, ref_flat, rtol=rtol, atol=atol)
@@ -149,7 +151,27 @@ def verify_output(output_tensor, submesh_device, ref_output):
             logger.warning(f"  got[:8]   = {output_device[:8]}")
             all_match = False
         else:
-            logger.info(f"Device ({row},{col}) idx={device_idx}: OK")
+            logger.info(f"Device ({row},{col}) idx={device_idx}: OK vs golden")
+
+    # 2) Cross-device consistency: all devices must produce identical results.
+    device0_output = output_torch[0].flatten()
+    for device_idx in range(1, num_devices):
+        output_device = output_torch[device_idx].flatten()
+        if not torch.equal(device0_output, output_device):
+            diff = torch.abs(device0_output - output_device)
+            nonzero_mask = diff > 0
+            num_mismatched = nonzero_mask.sum().item()
+            row = device_idx // submesh_device.shape[1]
+            col = device_idx % submesh_device.shape[1]
+            logger.warning(
+                f"Device (0,0) vs ({row},{col}): NOT identical — "
+                f"{num_mismatched} elements differ, max_diff={diff.max():.6f}"
+            )
+            all_match = False
+        else:
+            row = device_idx // submesh_device.shape[1]
+            col = device_idx % submesh_device.shape[1]
+            logger.info(f"Device (0,0) vs ({row},{col}): identical")
 
     return all_match
 
