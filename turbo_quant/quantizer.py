@@ -46,8 +46,8 @@ class TurboQuantMSE:
               - indices: uint8 tensor of shape [..., head_dim] with centroid indices
               - norms: float tensor of shape [..., 1] with L2 norms
         """
-        # Rotate
-        y = x @ self.rotation  # [..., head_dim]
+        # Rotate (skip if input is already in rotated space)
+        y = x if getattr(self, "_skip_rotation", False) else x @ self.rotation
 
         # Compute and store norms
         norms = y.norm(dim=-1, keepdim=True)  # [..., 1]
