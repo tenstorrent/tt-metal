@@ -211,7 +211,7 @@ Tensor pad(
     }
 
     auto output =
-        Tensor(tensor_impl::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
+        Tensor(tt::tt_metal::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -224,7 +224,7 @@ Tensor unpad(
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for unpadding");
-    auto output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
+    auto output = Tensor(tt::tt_metal::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -242,7 +242,7 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for pad_to_tile conversion");
-    auto output = Tensor(tensor_impl::pad_to_tile(input_tensor.host_tensor(), pad_value));
+    auto output = Tensor(tt::tt_metal::pad_to_tile(input_tensor.host_tensor(), pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -251,7 +251,7 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for unpad_from_tile conversion");
-    auto output = Tensor(tensor_impl::unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
+    auto output = Tensor(tt::tt_metal::unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

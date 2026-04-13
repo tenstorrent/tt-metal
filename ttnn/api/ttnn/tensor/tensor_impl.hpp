@@ -29,24 +29,6 @@ namespace tt::tt_metal::tensor_impl {
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
-//                                  .pad() and .unpad()
-// ======================================================================================
-HostTensor pad(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_padded_shape,
-    const tt::tt_metal::Shape& input_tensor_start,
-    float pad_value);
-
-HostTensor pad_to_tile(const HostTensor& tensor, float pad_value);
-
-HostTensor unpad(
-    const HostTensor& tensor,
-    const tt::tt_metal::Shape& output_tensor_start,
-    const tt::tt_metal::Shape& output_tensor_end);
-
-HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape);
-
-// ======================================================================================
 //                                  .view()
 // ======================================================================================
 
