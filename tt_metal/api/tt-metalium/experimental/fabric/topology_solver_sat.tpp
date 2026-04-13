@@ -801,11 +801,27 @@ inline bool topology_mapping_env_selects_sat(const char* v) {
 
 inline bool topology_mapping_use_sat_engine() { return topology_mapping_env_selects_sat(std::getenv("TT_TOPOLOGY_SOLVER_ENGINE")); }
 
-inline bool topology_mapping_should_use_sat_engine(TopologyMappingSolverEngine engine) {
+inline bool topology_mapping_should_use_sat_engine(TopologyMappingSolverEngine engine, size_t n_target, size_t n_global) {
     switch (engine) {
         case TopologyMappingSolverEngine::Sat: return true;
         case TopologyMappingSolverEngine::Dfs: return false;
-        case TopologyMappingSolverEngine::Auto: return topology_mapping_use_sat_engine();
+        case TopologyMappingSolverEngine::Auto: {
+            const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+            if (env != nullptr && env[0] != '\0') {
+                std::string s(env);
+                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (s == "sat" || s == "1" || s == "true" || s == "yes") {
+                    return true;
+                }
+                if (s == "dfs" || s == "0" || s == "false" || s == "no") {
+                    return false;
+                }
+            }
+            // Size-based heuristic: SAT encoding has fixed overhead per call that dominates on small
+            // problems; DFS is faster there. For large problems SAT's clause propagation wins.
+            static constexpr size_t kAutoSatMinAssignmentVars = 512;
+            return (n_target * n_global) >= kAutoSatMinAssignmentVars;
+        }
     }
     return false;
 }
