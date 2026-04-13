@@ -58,13 +58,6 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     return os;
 }
 
-MeshTensor allocate_mesh_tensor(
-    const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology) {
-    using namespace tt::tt_metal;
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(&device, tensor_spec);
-    return MeshTensor(mesh_buffer, tensor_spec, std::move(topology));
-}
-
 HostTensor pad_bfloat8_b(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -554,7 +547,7 @@ MeshTensor enqueue_write_mesh_tensor(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
+    auto result = MeshTensor::allocate_on_device(mesh_device, *tensor_spec, host_tensor.tensor_topology());
     tt::tt_metal::tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, result);
     return result;
 }
@@ -701,7 +694,7 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_me
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &host_tensor.tensor_spec();
 
-    auto result = allocate_mesh_tensor(*tensor_spec, mesh_device, host_tensor.tensor_topology());
+    auto result = MeshTensor::allocate_on_device(mesh_device, *tensor_spec, host_tensor.tensor_topology());
     auto coords = tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, result);
     return {std::move(result), std::move(coords)};
 }

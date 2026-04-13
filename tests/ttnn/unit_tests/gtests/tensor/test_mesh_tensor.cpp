@@ -703,7 +703,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, host_tensor.tensor_topology());
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
     tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
@@ -727,7 +727,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_RejectsPartialCoverage) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, TensorTopology{});
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
     EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor));
 }
 
@@ -763,7 +763,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, TensorTopology{});
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
 
     auto written_coords =
         tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
