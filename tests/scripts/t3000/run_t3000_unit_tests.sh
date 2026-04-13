@@ -97,7 +97,7 @@ run_t3000_ttnn_tests() {
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
   ./build/test/ttnn/unit_tests_ttnn
-  ./build/test/ttnn/unit_tests_ttnn_tensor
+  timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
