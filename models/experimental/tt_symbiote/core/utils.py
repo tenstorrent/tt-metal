@@ -127,17 +127,13 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def flat_map_bypass(func, data):
-    """Fast single-level map for bypass path. No recursion, no ABC imports.
-
-    Only handles flat dicts, tuples, and lists — does NOT recurse into nested
-    structures. Safe for decoder layer args/kwargs which are always flat.
-    """
+    """Fast recursive map for bypass path. No ABC imports, concrete type checks only."""
     if isinstance(data, dict):
-        return {k: func(v) for k, v in data.items()}
+        return {k: flat_map_bypass(func, v) for k, v in data.items()}
     elif isinstance(data, tuple):
-        return tuple(func(x) for x in data)
+        return tuple(flat_map_bypass(func, x) for x in data)
     elif isinstance(data, list):
-        return [func(x) for x in data]
+        return [flat_map_bypass(func, x) for x in data]
     return func(data)
 
 
