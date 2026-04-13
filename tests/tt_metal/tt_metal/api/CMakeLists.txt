@@ -51,16 +51,10 @@ target_include_directories(
     unit_tests_per_core_allocation
     BEFORE
     PRIVATE
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
 )
-target_link_libraries(
-    unit_tests_per_core_allocation
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
 target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)
 set_target_properties(
     unit_tests_per_core_allocation
