@@ -27,9 +27,6 @@ constexpr uint32_t num_streams_to_monitor = NUM_STREAMS_TO_MONITOR;
 void kernel_main() {
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
 
-    // Array to track last seen count for each stream
-    uint32_t last_counts[num_streams_to_monitor] = {0};
-
     // Pointer to real-time profiler config for reading terminate flag
     volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
@@ -40,9 +37,18 @@ void kernel_main() {
         realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
     }
 
+    // Snapshot current stream counts so we don't trigger on stale values
+    // left over from a previous run.
+    uint32_t last_counts[num_streams_to_monitor];
+    for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
+        uint32_t stream_id = first_stream_index + i;
+        volatile uint32_t* stream_reg =
+            (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+        last_counts[i] = *stream_reg;
+    }
+
     // Main loop: runs until dispatch_s signals terminate
     while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
-        // Loop over all streams we're monitoring
         for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
             uint32_t stream_id = first_stream_index + i;
             volatile uint32_t* stream_reg =

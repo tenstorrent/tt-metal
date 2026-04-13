@@ -97,15 +97,29 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     }
 
     if (record.end_timestamp < record.start_timestamp) {
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Skipping zone with end < start: program_id={}, chip_id={}, "
-            "start_timestamp={}, end_timestamp={} (delta={})",
-            record.program_id,
-            record.chip_id,
-            record.start_timestamp,
-            record.end_timestamp,
-            static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp));
+        auto delta = static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp);
+        constexpr int64_t kStartupRaceThreshold = -100000;
+        if (delta > kStartupRaceThreshold) {
+            // Small negative delta from deterministic startup race: compute kernel
+            // detects dispatch_d's stream-register clearing before dispatch_s records
+            // the first start timestamp. Benign — silently skip.
+            log_debug(
+                tt::LogMetal,
+                "[Real-time profiler] Skipping startup zone with end < start: "
+                "program_id={}, delta={}",
+                record.program_id,
+                delta);
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Skipping zone with end < start: program_id={}, chip_id={}, "
+                "start_timestamp={}, end_timestamp={} (delta={})",
+                record.program_id,
+                record.chip_id,
+                record.start_timestamp,
+                record.end_timestamp,
+                delta);
+        }
         return;
     }
 
