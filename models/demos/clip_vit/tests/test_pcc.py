@@ -7,7 +7,7 @@ import copy
 import torch
 
 import ttnn
-from models.demos.clip_vit.tests.pcc.conftest import PCC_BATCH_SIZE, opt_pcc_check, pcc_check
+from models.demos.clip_vit.tests.conftest import PCC_BATCH_SIZE, opt_pcc_check, pcc_check
 
 # ---- Base model imports ----
 from models.demos.clip_vit.tt.tt_clip_model import TtCLIPModel

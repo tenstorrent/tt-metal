@@ -91,15 +91,22 @@ def build_vision_encoder_configs(config, device, batch):
     per_core_N_hidden = dim_t_x  # 3  (768/32/8)
     per_core_N_mlp = dim_t_x * 4  # 12 (3072/32/8)
     per_core_N_qkv = 3 * dim_t // core_grid.x  # 9  (2304/32/8)
+    per_core_N_qkv_fused = 3 * dim_t_x  # 3*3 = 9 tiles wide per core
 
     # --- Subblock calculations ---
     fc1_sub_h, fc1_sub_w = _get_optimal_subblock(per_core_M, per_core_N_mlp)
     fc2_sub_h, fc2_sub_w = _get_optimal_subblock(per_core_M, per_core_N_hidden)
     qkv_sub_h, qkv_sub_w = _get_optimal_subblock(per_core_M, per_core_N_qkv)
     out_sub_h, out_sub_w = _get_optimal_subblock(per_core_M, per_core_N_hidden)
+    qkv_fused_sub_h, qkv_fused_sub_w = _get_optimal_subblock(per_core_M, per_core_N_qkv_fused)
 
     # --- Memory configs ---
     memory_configs = {
+        "qkv_output": _make_block_sharded_memcfg(
+            core_grid,
+            per_core_M * TILE,
+            per_core_N_qkv_fused * TILE,  # 9*32 = 288 cols per core
+        ),
         # Hidden-sized block shard [batch×seqL_padded, 768]
         "hidden": _make_block_sharded_memcfg(
             core_grid,
@@ -122,6 +129,16 @@ def build_vision_encoder_configs(config, device, batch):
 
     # --- Program configs ---
     program_configs = {
+        "qkv_fused": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=dim_t_x,
+            out_subblock_h=qkv_fused_sub_h,
+            out_subblock_w=qkv_fused_sub_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N_qkv_fused,
+            transpose_mcast=False,
+            fused_activation=None,
+        ),
         "layer_norm": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=dim_t_x,
@@ -366,28 +383,48 @@ class TtCLIPVisionMLP:
 
 class TtCLIPVisionAttention:
     def __init__(self, config, parameters, device, memory_configs, program_configs, dtype=ttnn.bfloat8_b):
-        self.dtype = dtype
-        self.num_heads = config.num_attention_heads
-        self.embed_dim = config.hidden_size
-        self.head_dim = config.hidden_size // self.num_heads
+        self.num_heads = config.num_attention_heads  # 12
+        self.embed_dim = config.hidden_size  # 768
+        self.head_dim = config.hidden_size // self.num_heads  # 64
         self.scale = 1.0 / (self.head_dim**0.5)
         self.memory_configs = memory_configs
         self.program_configs = program_configs
 
-        self.q_proj_weight = ttnn.from_torch(
-            parameters.q_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.q_proj_bias = ttnn.from_torch(parameters.q_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        # Fuse Q/K/V weights along the output dimension
+        # Each is [hidden, hidden], fused is [hidden, 3*hidden]
+        qkv_weight = torch.cat(
+            [
+                parameters.q_proj.weight.T,
+                parameters.k_proj.weight.T,
+                parameters.v_proj.weight.T,
+            ],
+            dim=-1,
+        )  # [768, 2304]
 
-        self.k_proj_weight = ttnn.from_torch(
-            parameters.k_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.k_proj_bias = ttnn.from_torch(parameters.k_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        qkv_bias = torch.cat(
+            [
+                parameters.q_proj.bias,
+                parameters.k_proj.bias,
+                parameters.v_proj.bias,
+            ],
+            dim=-1,
+        )  # [2304]
 
-        self.v_proj_weight = ttnn.from_torch(
-            parameters.v_proj.weight.T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        self.qkv_weight = ttnn.from_torch(
+            qkv_weight,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.v_proj_bias = ttnn.from_torch(parameters.v_proj.bias, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.qkv_bias = ttnn.from_torch(
+            qkv_bias,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         self.out_proj_weight = ttnn.from_torch(
             parameters.out_proj.weight.T,
             dtype=dtype,
@@ -405,63 +442,37 @@ class TtCLIPVisionAttention:
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        q_weight = ttnn.to_memory_config(self.q_proj_weight, ttnn.L1_MEMORY_CONFIG)
-        q_bias = ttnn.to_memory_config(self.q_proj_bias, ttnn.L1_MEMORY_CONFIG)
-        k_weight = ttnn.to_memory_config(self.k_proj_weight, ttnn.L1_MEMORY_CONFIG)
-        k_bias = ttnn.to_memory_config(self.k_proj_bias, ttnn.L1_MEMORY_CONFIG)
-        v_weight = ttnn.to_memory_config(self.v_proj_weight, ttnn.L1_MEMORY_CONFIG)
-        v_bias = ttnn.to_memory_config(self.v_proj_bias, ttnn.L1_MEMORY_CONFIG)
+        qkv_weight = ttnn.to_memory_config(self.qkv_weight, ttnn.L1_MEMORY_CONFIG)
+        qkv_bias = ttnn.to_memory_config(self.qkv_bias, ttnn.L1_MEMORY_CONFIG)
 
-        query = ttnn.linear(
+        # Single fused matmul: [batch*seq, 768] -> [batch*seq, 2304]
+        # Output is block-sharded with width 3× the hidden config
+        fused = ttnn.linear(
             hidden_states,
-            q_weight,
-            bias=q_bias,
-            memory_config=self.memory_configs["hidden"],
-            dtype=self.dtype,
-            program_config=self.program_configs["qkv_proj"],
-            compute_kernel_config=self.program_configs["compute_kernel"],
-        )
-        key = ttnn.linear(
-            hidden_states,
-            k_weight,
-            bias=k_bias,
-            memory_config=self.memory_configs["hidden"],
-            dtype=self.dtype,
-            program_config=self.program_configs["qkv_proj"],
-            compute_kernel_config=self.program_configs["compute_kernel"],
-        )
-
-        value = ttnn.linear(
-            hidden_states,
-            v_weight,
-            bias=v_bias,
-            memory_config=self.memory_configs["hidden"],
-            dtype=self.dtype,
-            program_config=self.program_configs["qkv_proj"],
-            compute_kernel_config=self.program_configs["compute_kernel"],
+            qkv_weight,
+            bias=qkv_bias,
+            memory_config=self.memory_configs["qkv_output"],  # needs to be 3×hidden wide
+            dtype=ttnn.bfloat8_b,
+            program_config=self.program_configs["qkv_fused"],  # needs per_core_N = 3*dim_t_x
         )
 
         ttnn.deallocate(hidden_states)
-        ttnn.deallocate(q_weight)
-        ttnn.deallocate(q_bias)
-        ttnn.deallocate(k_weight)
-        ttnn.deallocate(k_bias)
-        ttnn.deallocate(v_weight)
-        ttnn.deallocate(v_bias)
+        ttnn.deallocate(qkv_weight)
+        ttnn.deallocate(qkv_bias)
 
-        query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG)
-        key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG)
-        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+        # Reshard to interleaved — the flexible path for split_query_key_value_and_split_heads
+        fused = ttnn.to_memory_config(fused, ttnn.L1_MEMORY_CONFIG)
 
-        query = ttnn.reshape(query, (batch_size, seq_len, self.num_heads, self.head_dim))
-        query = ttnn.permute(query, (0, 2, 1, 3))
+        # Split fused into Q, K, V in multi-head format in one op
+        # Returns [batch, num_heads, seq, head_dim] for each
+        query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
+            fused,
+            num_heads=self.num_heads,
+            transpose_key=False,
+        )
+        ttnn.deallocate(fused)
 
-        key = ttnn.reshape(key, (batch_size, seq_len, self.num_heads, self.head_dim))
-        key = ttnn.permute(key, (0, 2, 1, 3))
-
-        value = ttnn.reshape(value, (batch_size, seq_len, self.num_heads, self.head_dim))
-        value = ttnn.permute(value, (0, 2, 1, 3))
-
+        # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -477,8 +488,11 @@ class TtCLIPVisionAttention:
         ttnn.deallocate(key)
         ttnn.deallocate(value)
 
+        # Reshape back to [batch, seq, embed_dim]
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_len, self.embed_dim))
+
+        # Reshard to block-sharded for out_proj
         attn_output = ttnn.to_memory_config(attn_output, self.memory_configs["hidden"])
 
         out_weight = ttnn.to_memory_config(self.out_proj_weight, ttnn.L1_MEMORY_CONFIG)
@@ -489,9 +503,8 @@ class TtCLIPVisionAttention:
             out_weight,
             bias=out_bias,
             memory_config=self.memory_configs["hidden"],
-            dtype=self.dtype,
+            dtype=ttnn.bfloat8_b,
             program_config=self.program_configs["out_proj"],
-            compute_kernel_config=self.program_configs["compute_kernel"],
         )
 
         ttnn.deallocate(attn_output)

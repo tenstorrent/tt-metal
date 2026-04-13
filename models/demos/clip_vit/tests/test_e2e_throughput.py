@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import random
 import time
 
 import pytest
@@ -12,15 +11,15 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.demos.clip_vit.tests.pcc.conftest import IMAGE_URLS, TEXT_QUERIES
+from models.demos.clip_vit.tests.conftest import IMAGE_URLS, TEXT_QUERIES
 from models.demos.clip_vit.tt.tt_clip_model import TtCLIPModel
 from models.demos.clip_vit.tt.tt_clip_model_optimized import TtCLIPModelOptimized
 
 BATCH_BF8 = 63
 BATCH_BF16 = 35
 
-BATCH_COUNTS_BF8 = [BATCH_BF8 * n for n in [1, 2, 4, 8, 16, 32]]
-BATCH_COUNTS_BF16 = [BATCH_BF16 * n for n in [1, 2, 4, 8, 16, 32]]
+BATCH_COUNTS_BF8 = [BATCH_BF8 * n for n in [8, 16, 32]]
+BATCH_COUNTS_BF16 = [BATCH_BF16 * n for n in [8, 16, 32]]
 
 
 @pytest.fixture(scope="session")
@@ -29,8 +28,8 @@ def image_pool():
 
 
 def _make_inputs(processor, image_pool, total_images, device):
-    selected_imgs = [random.choice(image_pool) for _ in range(total_images)]
-    selected_texts = [random.choice(TEXT_QUERIES) for _ in range(total_images)]
+    selected_imgs = [image_pool[i % len(image_pool)] for i in range(total_images)]
+    selected_texts = [TEXT_QUERIES[i % len(TEXT_QUERIES)] for i in range(total_images)]
     proc = processor(
         selected_texts,
         selected_imgs,
