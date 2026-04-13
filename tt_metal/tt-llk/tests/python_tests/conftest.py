@@ -251,6 +251,34 @@ def pytest_addoption(parser):
         help="Path to folder where stimuli should be loaded from",
     )
 
+    parser.addoption(
+        "--enable-perf-counters",
+        action="store_true",
+        default=False,
+        help="Enable hardware performance counter collection during perf tests",
+    )
+
+    parser.addoption(
+        "--dump-raw-counters",
+        action="store_true",
+        default=False,
+        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-raw-metrics",
+        action="store_true",
+        default=False,
+        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
+    )
+
+    parser.addoption(
+        "--dump-csv-counters",
+        action="store_true",
+        default=False,
+        help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -675,115 +703,6 @@ def pytest_sessionfinish(session):
             process_coverage_run_artefacts()
 
     _stop_exalens_server()
-
-
-# Define the possible custom command line options
-def pytest_addoption(parser):
-    parser.addoption(
-        "--run-simulator", action="store_true", help="Run tests using the simulator."
-    )
-    parser.addoption(
-        "--port",
-        action="store",
-        type=int,
-        default=5555,
-        help="Integer number of the server port.",
-    )
-    parser.addoption(
-        "--reset-simulator-per-test",
-        action="store_true",
-        default=False,
-        help="Restart the tt-exalens server after each test. "
-        "Only effective with --run-simulator.",
-    )
-
-    parser.addoption(
-        "--coverage",
-        action="store_true",
-        help="Enables coverage *.info file generation for every test variant run",
-    )
-
-    parser.addoption(
-        "--compile-producer",
-        action="store_true",
-        help="Only compile *.elf(s) for every test variant selected and store them on path specified",
-    )
-
-    parser.addoption(
-        "--compile-consumer",
-        action="store_true",
-        help="Consume pre-compiled *.elf(s) for every test variant selected, from pre-specified path, and execute specified variants",
-    )
-
-    parser.addoption(
-        "--detailed-artefacts",
-        action="store_true",
-        help="Insert few more compilation flags to produce binary artefacts suitable for debugging",
-    )
-
-    parser.addoption(
-        "--skip-codegen",
-        action="store_true",
-        default=False,
-        help="Skip C++ code generation for fused tests and use existing files",
-    )
-
-    parser.addoption(
-        "--no-debug-symbols",
-        action="store_true",
-        default=False,
-        help="Compile without debug symbols (-g flag) to save disk space",
-    )
-
-    parser.addoption(
-        "--logging-level",
-        action="store",
-        default=None,
-        help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "
-        "Overrides LOGURU_LEVEL env var. Default: INFO",
-    )
-
-    parser.addoption(
-        "--speed-of-light",
-        action="store_true",
-        default=False,
-        help="Should tests be compiled with everything runtime, converted to compile-time",
-    )
-
-    parser.addoption(
-        "--test-order-file",
-        action="store",
-        default=None,
-        help="Path to file containing ordered list of tests to run",
-    )
-
-    parser.addoption(
-        "--enable-perf-counters",
-        action="store_true",
-        default=False,
-        help="Enable hardware performance counter collection during perf tests",
-    )
-
-    parser.addoption(
-        "--dump-raw-counters",
-        action="store_true",
-        default=False,
-        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
-    )
-
-    parser.addoption(
-        "--dump-raw-metrics",
-        action="store_true",
-        default=False,
-        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
-    )
-
-    parser.addoption(
-        "--dump-csv-counters",
-        action="store_true",
-        default=False,
-        help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
-    )
 
 
 # Skip decorators for specific architectures
