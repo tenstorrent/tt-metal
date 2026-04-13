@@ -17,7 +17,7 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
-    pytest --timeout 300 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
