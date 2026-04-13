@@ -84,40 +84,15 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Compute kernel -- group 1
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
-
+    // Compute kernel (eltwise_sfpu.cpp reads num_tiles via get_arg_val, i.e. runtime args)
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_group_1;
-    compute_desc.compile_time_args = compute_kernel_args_group_1;
+    compute_desc.core_ranges = all_cores;
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
-
-    // Second compute kernel for the remainder core group (different tile count)
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        KernelDescriptor compute_desc_2;
-        compute_desc_2.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
-        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = compute_kernel_args_group_2;
-        compute_desc_2.config = ComputeConfigDescriptor{
-            .math_fidelity = MathFidelity::HiFi4,
-            .math_approx_mode = false,
-        };
-        desc.kernels.push_back(std::move(compute_desc_2));
-    }
 
     // Runtime args per core
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -136,6 +111,8 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
 
         writer_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core});
 
         num_tiles_written += num_tiles_per_core;
     }
