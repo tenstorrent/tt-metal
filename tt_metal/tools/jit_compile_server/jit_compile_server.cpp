@@ -5,13 +5,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -25,8 +23,18 @@
 
 // Remote JIT compile server
 //
-// WARNING: Experimental feature with security implications. Do not use in production.
-// WARNING: The server can execute arbitrary code.  Make sure not to expose the RPC endpoint to untrusted clients.
+// WARNING: Experimental feature — do not expose to untrusted networks or clients.
+//
+// Security posture (consistent with Metal's MPI-based transport model):
+//  - Authentication: none.  The server trusts any client that can reach the endpoint.
+//    Default bind is localhost; set TT_METAL_JIT_SERVER_ENDPOINT to widen.
+//  - Encryption: none (Cap'n Proto over plain TCP).  Use SSH tunneling or a VPN if the
+//    link crosses an untrusted network.
+//  - Command execution: the server's purpose is to run the compiler the client specifies,
+//    so the client inherently has code-execution capability.  Shell injection is mitigated
+//    by using posix_spawn with explicit argument vectors instead of system().
+//  - Path traversal: client-supplied path components (kernel_name, target_name, obj names,
+//    generated file names) are validated to reject absolute paths and ".." components.
 //
 // TODO 1:
 // The compile/link logic below currently duplicates the core of
@@ -62,13 +70,29 @@ std::atomic<bool> g_keep_running{true};
 std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
-// SECURITY: binds to all interfaces by default. Any host on the network can reach this
-// server and trigger arbitrary compilation (i.e., arbitrary code execution). Restrict to
-// localhost or use a firewall in shared environments.
-constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
+// Binds to localhost by default — only local processes can reach the server.
+// Set TT_METAL_JIT_SERVER_ENDPOINT=0.0.0.0:9876 (or a specific interface) to accept
+// remote connections.  In that case, restrict access with a firewall or SSH tunnel.
+constexpr const char* kDefaultEndpoint = "localhost:9876";
 constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
 std::string g_server_cache_root = kDefaultServerCacheRoot;
+
+// Reject paths that could escape the cache root: absolute paths, ".." components, or
+// empty strings.  Throws on violation.
+void validate_safe_relative_path(const std::string& path, const char* field_name) {
+    if (path.empty()) {
+        throw std::runtime_error(fmt::format("Empty {} is not allowed", field_name));
+    }
+    if (path[0] == '/') {
+        throw std::runtime_error(fmt::format("Absolute {} is not allowed: {}", field_name, path));
+    }
+    for (const auto& component : fs::path(path)) {
+        if (component == "..") {
+            throw std::runtime_error(fmt::format("{} must not contain '..' components: {}", field_name, path));
+        }
+    }
+}
 
 std::string normalize_cache_root(std::string cache_root) {
     if (cache_root.empty()) {
@@ -80,10 +104,8 @@ std::string normalize_cache_root(std::string cache_root) {
     return cache_root;
 }
 
-// SECURITY: kernel_name is client-supplied and used verbatim in path construction.
-// A malicious client could use "../" segments to escape the cache subtree.
-// Currently acceptable because this is a trusted internal tool; if the server is ever
-// exposed to untrusted clients, validate that kernel_name is a safe relative path.
+// All client-supplied path components (kernel_name, target_name, obj names, generated file
+// names) are validated by validate_safe_relative_path() before reaching these helpers.
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
     return (fs::path(g_server_cache_root) / std::to_string(build_key) / "kernels" / kernel_name).string() + "/";
 }
@@ -142,78 +164,87 @@ bool need_link(const std::string& out_dir, const std::string& target_name) {
     return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-std::string with_trailing_space(std::string_view segment) {
-    if (segment.empty()) {
-        return {};
+std::string format_args(const std::vector<std::string>& args) {
+    std::string result;
+    for (const auto& a : args) {
+        if (!result.empty()) {
+            result += ' ';
+        }
+        result += a;
     }
-    std::string normalized(segment);
-    if (!std::isspace(static_cast<unsigned char>(normalized.back()))) {
-        normalized.push_back(' ');
-    }
-    return normalized;
+    return result;
 }
 
-// SECURITY: constructs a shell command from client-supplied strings (gpp, cflags, defines,
-// includes, srcs, objs). A malicious client can inject arbitrary shell commands via any of
-// these fields. This is equivalent to remote code execution by design — the server's
-// purpose is to run the compiler on behalf of the client.
+void append_tokenized(std::vector<std::string>& args, const std::string& flags) {
+    auto tokens = tt::jit_build::utils::tokenize_flags(flags);
+    args.insert(args.end(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
+}
+
+// Uses posix_spawn with an explicit argument vector — no shell interpretation of
+// client-supplied fields.
 void compile_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj) {
-    std::string cmd = fmt::format("cd {} && {} ", out_dir, gpp);
-    cmd += fmt::format("-{} ", target.compiler_opt_level);
-    cmd += with_trailing_space(target.cflags);
-    cmd += with_trailing_space(target.includes);
+    std::vector<std::string> args;
+    args.push_back(gpp);
+    args.push_back("-" + target.compiler_opt_level);
+    append_tokenized(args, target.cflags);
+    append_tokenized(args, target.includes);
 
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, target.srcs[src_index], temp_d_path);
-    cmd += with_trailing_space(target.defines);
+    args.push_back("-c");
+    args.push_back("-o");
+    args.push_back(obj_temp_path);
+    args.push_back(target.srcs[src_index]);
+    args.push_back("-MF");
+    args.push_back(temp_d_path);
+    append_tokenized(args, target.defines);
 
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
-        build_failure(target.target_name, "compile", cmd, log_file.path());
+    if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
+        build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
     tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);
 }
 
-// SECURITY: same shell injection exposure as compile_one — lflags, extra_link_objs,
-// linker_script, and weakened_firmware_name are all client-supplied and interpolated
-// into the shell command without escaping.
 void link_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
-    const std::string& link_objs_str) {
-    std::string cmd = fmt::format("cd {} && {} ", out_dir, gpp);
-    cmd += fmt::format("-{} ", target.linker_opt_level);
+    const std::vector<std::string>& link_obj_paths) {
+    std::vector<std::string> args;
+    args.push_back(gpp);
+    args.push_back("-" + target.linker_opt_level);
 
     std::vector<std::string> link_deps = {target.linker_script};
     if (!target.weakened_firmware_name.empty()) {
         link_deps.push_back(target.weakened_firmware_name);
         if (!target.firmware_is_kernel_object) {
-            cmd += "-Wl,--just-symbols=";
+            args.push_back("-Wl,--just-symbols=" + target.weakened_firmware_name);
+        } else {
+            args.push_back(target.weakened_firmware_name);
         }
-        cmd += target.weakened_firmware_name + " ";
     }
 
-    cmd += with_trailing_space(target.lflags);
-    cmd += with_trailing_space(target.extra_link_objs);
-    cmd += with_trailing_space(link_objs_str);
+    append_tokenized(args, target.lflags);
+    append_tokenized(args, target.extra_link_objs);
+    args.insert(args.end(), link_obj_paths.begin(), link_obj_paths.end());
     std::string elf_name = out_dir + target.target_name + ".elf";
     tt::jit_build::utils::FileRenamer elf_file(elf_name);
-    cmd += "-o " + elf_file.path();
+    args.push_back("-o");
+    args.push_back(elf_file.path());
 
     tt::jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
-        build_failure(target.target_name, "link", cmd, log_file.path());
+    if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
+        build_failure(target.target_name, "link", format_args(args), log_file.path());
     }
 
     tt::jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
@@ -290,7 +321,8 @@ void build_target(
     }
 
     if (recompiled > 0 || needs_link) {
-        std::string link_objs_str;
+        std::vector<std::string> link_obj_paths;
+        link_obj_paths.reserve(num_objs);
         for (size_t i = 0; i < num_objs; ++i) {
             std::string temp_path = out_dir + temp_objs[i];
             if (!compiled[i]) {
@@ -300,9 +332,9 @@ void build_target(
                     fs::copy_file(out_dir + target.objs[i], temp_path, fs::copy_options::overwrite_existing);
                 }
             }
-            link_objs_str += temp_path + " ";
+            link_obj_paths.push_back(std::move(temp_path));
         }
-        link_one(gpp, target, out_dir, link_objs_str);
+        link_one(gpp, target, out_dir, link_obj_paths);
     }
 
     for (size_t i = 0; i < num_objs; ++i) {
@@ -329,6 +361,17 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
     int outstanding = g_outstanding_compiles.fetch_add(1) + 1;
 
     try {
+        validate_safe_relative_path(request.kernel_name, "kernel_name");
+        for (const auto& target : request.targets) {
+            validate_safe_relative_path(target.target_name, "target_name");
+            for (const auto& obj : target.objs) {
+                validate_safe_relative_path(obj, "obj");
+            }
+        }
+        for (const auto& file : request.generated_files) {
+            validate_safe_relative_path(file.name, "generated_file name");
+        }
+
         log_info(
             tt::LogMetal,
             "compile {}: targets={} genfiles={} outstanding={}",
@@ -337,9 +380,6 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             request.generated_files.size(),
             outstanding);
 
-        // SECURITY: file.name is client-supplied. While fs::path join handles separators,
-        // a name like "../../foo" could still write outside the cache. Acceptable for a
-        // trusted client; validate if the server is ever exposed to untrusted input.
         if (!request.generated_files.empty()) {
             const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
             fs::create_directories(genfiles_dir);
