@@ -265,6 +265,9 @@ def _bfp4_block_aware_compare(
     return is_valid
 
 
+_RECORD_TEST_ORDER: bool = False
+
+
 def passed_test(
     golden_tensor,
     res_tensor,
@@ -311,7 +314,7 @@ def passed_test(
 
     is_within_tolerance = torch.all(is_valid)
 
-    if print_errors:
+    if print_errors and not _RECORD_TEST_ORDER:
         try:
             if not is_within_tolerance:
                 diff_indices = torch.where(~is_valid)[0]
