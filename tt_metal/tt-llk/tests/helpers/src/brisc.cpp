@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "boot.h"
+#ifdef PERF_COUNTERS_COMPILED
+#include "counters.h"
+#endif
 
 #ifdef LLK_BOOT_MODE_BRISC
 
@@ -118,6 +121,10 @@ int main()
 
                 device_setup();
                 clear_trisc_soft_reset();
+
+#ifdef PERF_COUNTERS_COMPILED
+                llk_perf::configure_and_arm_from_brisc();
+#endif
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);

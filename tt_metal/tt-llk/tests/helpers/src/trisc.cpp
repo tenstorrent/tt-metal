@@ -13,6 +13,10 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
+#ifdef PERF_COUNTERS_COMPILED
+#include "counters.h"
+#endif
+#line 16
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
@@ -82,11 +86,15 @@ int main(void)
     ckernel::reset_dest_offset_id();
 #endif
 
+#ifdef PERF_COUNTERS_COMPILED
+    llk_perf::start_perf_counters(0);
+#endif
+
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
-
+#line 90
     {
         ZONE_SCOPED("KERNEL")
 
@@ -98,6 +106,10 @@ int main(void)
 
         ckernel::tensix_sync();
     }
+
+#ifdef PERF_COUNTERS_COMPILED
+    llk_perf::stop_perf_counters(0);
+#endif
 
     *mailbox = ckernel::KERNEL_COMPLETE;
 }
