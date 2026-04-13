@@ -330,7 +330,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(**self.get_default_resolution())
+        self.warmup_buffers(height=target_height, width=target_width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -339,11 +339,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         else:
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
-
-    def get_default_resolution(self):
-        if self.mesh_device.shape.mesh_size() >= 32:
-            return {"height": 720, "width": 1280}
-        return {"height": 480, "width": 832}
 
     def warmup_buffers(self, height, width):
         self.run_single_prompt(
