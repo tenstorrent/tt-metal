@@ -78,44 +78,6 @@ class TTNNBailingMoeV2Model(TTNNModule):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        cache_position = kwargs.get("cache_position")
-
-        # Convert cache_position to a TTNN int32 device tensor *before* it
-        # reaches the traced TTNNBailingMoEDecoderLayer.
-        #
-        # TTNNBailingMoEDecoderLayer has _bypass_tensor_wrapping=True (child of
-        # an untraced TTNNModule), so its module_run uses fast_unwrap_to_device
-        # as the kwarg transform.  That function passes plain torch.Tensors
-        # through unchanged, so a CPU cache_position would never be allocated as
-        # a pre-allocated trace-buffer in _capture_trace.  Instead it would be
-        # baked verbatim into trace_func_kwargs, and _get_cur_pos_device_tensor
-        # would call ttnn.from_torch *inside* begin_trace_capture — permanently
-        # baking the KV-write position from the capture step into the trace.
-        # Every subsequent replay would then write to the same KV slot, producing
-        # identical logits → repeating / garbled tokens.
-        #
-        # By converting here (outside any trace boundary) the value is a
-        # ttnn.Tensor when it hits _capture_trace, gets properly pre-allocated as
-        # a device trace buffer, and _copy_kwargs_to_trace_buffer updates it via
-        # ttnn.copy before each execute_trace replay.
-        if cache_position is not None and not isinstance(cache_position, ttnn.Tensor):
-            if hasattr(cache_position, "ttnn_tensor") and cache_position.ttnn_tensor is not None:
-                cache_position = cache_position.ttnn_tensor
-            else:
-                cp_torch = (
-                    cache_position.cpu().to(torch.int32)
-                    if isinstance(cache_position, torch.Tensor)
-                    else torch.tensor(cache_position, dtype=torch.int32)
-                )
-                cache_position = ttnn.from_torch(
-                    cp_torch.flatten(),
-                    device=ttnn_object.device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_object.device),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
@@ -233,7 +195,6 @@ class TTNNBailingMoeV2Model(TTNNModule):
                     output_router_logits=output_router_logits,
                     use_cache=use_cache,
                     position_embeddings=position_embeddings,
-                    cache_position=cache_position,
                 )
             hidden_states = layer_outputs[0]
 
@@ -293,7 +254,6 @@ class TTNNBailingMoeV2Model(TTNNModule):
                         output_router_logits=output_router_logits,
                         use_cache=use_cache,
                         position_embeddings=position_embeddings,
-                        cache_position=cache_position,
                     )
                 if mtp_hidden_states is None:
                     mtp_hidden_states = []
