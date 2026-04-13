@@ -62,8 +62,8 @@ enum class SfpuType : std::uint32_t
     rsqrt,
     relu,
     lrelu,
-    relumin,
-    relumax,
+    relu_min,
+    relu_max,
     stochround,
     typecast,
     add,
@@ -150,6 +150,8 @@ private:
     ReluType mode           = ReluType::NO_RELU;
     std::uint32_t threshold = 0;
 };
+
+constexpr std::uint32_t SFPU_ITERATIONS = 8; // Number of iterations to unroll for SFPU loops
 
 } // namespace ckernel
 
