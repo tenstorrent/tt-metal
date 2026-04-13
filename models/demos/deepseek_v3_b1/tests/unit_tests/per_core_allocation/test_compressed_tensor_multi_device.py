@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for CompressedTensor multi-device (mesh) support."""
@@ -135,6 +135,7 @@ def test_lockstep_per_device_data_independence(mesh_device):
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 def test_lockstep_different_assignment_per_device(mesh_device):
     """Different data per device should result in different assignments."""
+    num_devices = mesh_device.get_num_devices()
     torch.manual_seed(42)
     # Device 0: large values (bfp8), Device 1: moderate values (bfp4 or bfp2)
     dev0_data = torch.randn(128, 128) * 100.0
@@ -156,6 +157,7 @@ def test_lockstep_different_assignment_per_device(mesh_device):
     # Verify the full assignment covers all devices
     full_assign = ct.get_assignment()
     tiles_h_per_dev = ct._per_device_tiles_h
+    tiles_w = ct.tiles_w
     dev0_assign = full_assign[:tiles_h_per_dev, :]
     dev1_assign = full_assign[tiles_h_per_dev:, :]
     # Assignments should differ because data magnitudes differ
@@ -301,6 +303,7 @@ def test_per_core_tensors_allocated_per_device(mesh_device):
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 def test_lockstep_mixed_formats_per_device(mesh_device):
     """Each device gets different data patterns → different format mixes."""
+    num_devices = mesh_device.get_num_devices()
     torch.manual_seed(42)
     # Device 0: mostly bfp4 (moderate values)
     # Device 1: mix of bfp4 and bfp2 (varying values)
