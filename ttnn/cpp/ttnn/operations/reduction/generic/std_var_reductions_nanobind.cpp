@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "welford_reductions_nanobind.hpp"
+#include "std_var_reductions_nanobind.hpp"
 
 #include <optional>
 

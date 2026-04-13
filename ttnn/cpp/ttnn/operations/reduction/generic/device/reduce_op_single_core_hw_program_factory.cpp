@@ -28,6 +28,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
+
+    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
+    // scaler twice internally (once per dimension). Here we compensate with
+    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
+    // must not reach this code path. Instead negative scalers are handled via the two-step
+    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
     TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
     float scaler = std::sqrt(operation_attributes.scaler);
 

@@ -80,12 +80,53 @@ void kernel_main() {
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
 
-        // When scaling, DST must be acquired/released per tile because
-        // the FPU mul and SFPU welford use incompatible pipeline configs
-        // and the reverse transition (SFPU->FPU) requires a full DST
-        // cycle to reset pipeline state.
-        // Without scaling, copy_tile and welford (both SFPU-compatible)
-        // can share a single DST window for the entire loop.
+        // Process one tile-column along H while keeping a single running Welford state.
+        // Welford's running accumulators (mean in LREG4, M2 in LREG5)
+        // live in SFPU local registers (LREGs), which are separate
+        // from the DST register file.  This means the Welford state survives
+        // across tile_regs_release/acquire cycles -- only DST contents are
+        // affected by the handshake, not the SFPU accumulators.
+        //
+        // DST/tile_regs flow:
+        // - tile_regs_acquire() gives the MATH thread ownership of the DST tile registers.
+        // - tile_regs_commit() -- MATH signals it is done writing DST.
+        // - tile_regs_wait() lets the PACK thread safely see those DST tiles.
+        // - tile_regs_release() releases the PACK side of DST ownership.
+        // - do_scale path mixes two incompatible operation types each iteration:
+        //   1. mul_tiles_bcast_scalar  -- an FPU operation
+        //   2. welford_update          -- an SFPU operation
+        //   In this path, we do a full acquire/commit/wait/release on non-final iterations
+        //   even though nothing is packed. That handshake is used to leave the scalar-mul
+        //   configuration in a clean, fully closed state before the next iteration reconfigures
+        //   the compute engines for another scaled input.
+        // - In the !do_scale path, only SFPU-compatible operations are used
+        //   (copy_tile + welford_update), so no configuration conflict exists
+        //   and the entire loop can run in a single DST window (one acquire
+        //   before the loop, one commit after the last tile).
+        //   Only the final iteration needs to expose result tiles to PACK.
+        //
+        // Init/init_short flow:
+        // - welford_init() is the full Welford setup. It programs the Welford SFPU path and
+        //   clears any previous running mean/M2 state, so it must be done once before the loop,
+        //   not inside the loop.
+        // - mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar) is a lightweight reconfigure
+        //   for "multiply input tile by scalar tile".
+        // - After that mul init, Welford still expects the copy/datacopy-style setup,
+        //   so copy_tile_to_dst_init_short(cb_in) is called to switch the settings back. This
+        //   is fragile, since Welford isn't actually doing the copy operation here.
+        //   This will be investigated in issue #41983.
+        // - In the !do_scale path we just copy the input tile directly into input_dst.
+        //
+        // Per iteration:
+        // - For all non-last H tiles, welford_update(input_dst, start_N, ...) consumes the full
+        //   tile and updates the running mean/M2 using start_N as the global element offset.
+        // - For the last H tile, welford_update_rows(..., last_tile_rows, ...) ignores padded
+        //   rows so only valid elements participate in the statistics.
+        // - welford_finalize_to_row(mean_dst, scale_idx, ...) converts M2 into variance and
+        //   writes final mean/variance tiles into DST.
+        // - If is_std, sqrt_tile() turns variance into standard deviation in place.
+        // - start_N advances by one tile height each iteration so Welford sees the correct
+        //   element count / divisor progression across the whole H reduction.
         if constexpr (!do_scale) {
             copy_tile_to_dst_init_short(cb_in);
             tile_regs_acquire();
@@ -101,10 +142,11 @@ void kernel_main() {
                 tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-                // Reconfigure pipeline from FPU back to SFPU for welford.
-                // While it's confusing to use copy_tile_to_dst_init_short here,
-                // since no copy is done afterwards, there is no welford_init_short
-                // function or some other generic way to reset the pipeline state.
+                // Reconfigure the compute setup from scalar-multiply mode back to the
+                // SFPU state that Welford expects.
+                // copy_tile_to_dst_init_short is used here not for copying, but because
+                // mul_tiles_bcast_scalar_init_short changed the UNPACK+MATH configuration.
+                // This is fragile and will be investigated in issue #41983.
                 copy_tile_to_dst_init_short(cb_in);
             } else {
                 copy_tile(cb_in, 0, input_dst);
@@ -114,8 +156,12 @@ void kernel_main() {
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
                 if constexpr (do_scale) {
-                    // No-op PACK cycle: resets pipeline state for the
-                    // next iteration's FPU mul_tiles_bcast_scalar.
+                    // Even on non-final iterations we must complete the full DST handshake here.
+                    // We are not producing a packed output tile yet; this commit/wait/release is
+                    // only to fully close out the current DST and compute-engine state after
+                    // mul_tiles_bcast_scalar, before the next iteration reconfigures UNPACK+MATH
+                    // for another scaled input. Without this handshake, the next iteration can
+                    // inherit stale DST or UNPACK+MATH configuration.
                     tile_regs_commit();
                     tile_regs_wait();
                     tile_regs_release();

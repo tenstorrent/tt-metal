@@ -11,7 +11,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_nanobind.hpp"
-#include "ttnn/operations/reduction/generic/welford_reductions_nanobind.hpp"
+#include "ttnn/operations/reduction/generic/std_var_reductions_nanobind.hpp"
 #include "ttnn/operations/reduction/argmax/argmax_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod_nanobind.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum_nanobind.hpp"
