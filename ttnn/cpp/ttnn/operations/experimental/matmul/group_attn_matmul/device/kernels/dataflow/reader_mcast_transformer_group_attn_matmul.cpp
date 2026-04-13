@@ -80,7 +80,7 @@ void kernel_main() {
 
 #ifndef IN1_SHARDED
     constexpr auto in1_args = TensorAccessorArgs<3>();
-    const auto s1 = TensorAccessor(in1_args, src1_addr);
+    const auto s1 = decltype(TensorAccessor(in1_args, src1_addr)){in1_args, src1_addr, in1_tile_bytes};
 #endif
 
     // Mcast setup
