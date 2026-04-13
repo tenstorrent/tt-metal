@@ -310,6 +310,35 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
         )
     )
 
+    @staticmethod
+    def pack_o_proj_weights_tp4_shuffled(o_proj_weights: torch.Tensor) -> torch.Tensor:
+        """Pack full-mesh o_proj weights for ``tp_dim=(1, 0)`` plus ``shuffle_q_a`` layout.
+
+        Input ``o_proj_weights`` has global shape ``(16384, 7168)``.  Each mesh device's
+        ``(8192, 1792)`` slice is packed with
+        :meth:`QAB_KVA_PROJ_SingleDeviceOverlapSpec.shuffle_q_a` to ``(4096, 3584)`` and
+        written to the sub-rectangle that :func:`~weights.overlap.packing.overlap_tensors`
+        reads for that device when ``raw_tensor_shape=(8192, 14336)`` and ``tp_dim=(1, 0)``.
+        """
+        if tuple(o_proj_weights.shape) != (16384, 7168):
+            raise ValueError(
+                f"pack_o_proj_weights_tp4_shuffled expects shape (16384, 7168), got {tuple(o_proj_weights.shape)}"
+            )
+        shuffle = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.shuffle_q_a
+        out = torch.empty((8192, 14336), dtype=o_proj_weights.dtype, device=o_proj_weights.device)
+        for mesh_row in range(4):
+            for mesh_col in range(2):
+                block = o_proj_weights[
+                    8192 * mesh_col : 8192 * (mesh_col + 1),
+                    1792 * mesh_row : 1792 * (mesh_row + 1),
+                ]
+                packed = shuffle(block)
+                out[
+                    4096 * mesh_col : 4096 * (mesh_col + 1),
+                    3584 * mesh_row : 3584 * (mesh_row + 1),
+                ] = packed
+        return out
+
     def fusion_group_spec(self) -> FusionGroupSpec:
         """Build the ``o_proj_gate_mm_norms`` :class:`FusionGroupSpec` from this config."""
         return _build_fusion_group_spec(

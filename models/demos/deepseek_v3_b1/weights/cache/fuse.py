@@ -85,9 +85,8 @@ def create_overlapped_tensor(
         ``(fused_tensor, views)`` where ``views`` maps logical name to
         :class:`OverlappedTensor`.
     """
-    lanes: list[list[OverlapEntry]] = []
+    entries: list[OverlapEntry] = []
     for region in spec.regions:
-        lane: list[OverlapEntry] = []
         for st in region.subtensors:
             tensor = preprocessed.get(st.name)
             if tensor is None:
@@ -95,16 +94,15 @@ def create_overlapped_tensor(
                     f"preprocessed missing {st.name!r} for FusionGroupSpec {spec.name!r} "
                     f"(available keys: {sorted(preprocessed.keys())})"
                 )
-            lane.append(
+            entries.append(
                 OverlapEntry(
                     st.name,
                     tensor,
                     replace(st, raw_tensor_shape=tuple(tensor.shape)),
                 )
             )
-        lanes.append(lane)
 
-    views = overlap_tensors(lanes, device, move_to_device=move_to_device)
+    views = overlap_tensors(entries, device, move_to_device=move_to_device)
     _validate_views_match_spec(spec, views)
     fused = next(iter(views.values())).fused_tensor
     return fused, views
