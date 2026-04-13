@@ -379,6 +379,37 @@ class WhisperGenerator:
         """Invalidate cross-attention cache for new generation."""
         self.cross_attn_cache_valid = False
 
+    def _release_captured_traces_before_new_generation(self):
+        """
+        Release any active prefill or decode traces before this ``generate()`` allocates for the encoder.
+
+        A decode trace left installed after a previous ``generate()`` (e.g. demo batch N) keeps a
+        hardware trace active; allocating new encoder buffers on the next ``generate()`` (batch N+1)
+        can trigger ``Allocating device buffers is unsafe due to the existence of an active trace``
+        and corrupt device state. Releasing trace IDs here restores a safe allocator state without
+        clearing per-size staging tensors (unlike ``_release_decoder_trace`` used for full cleanup).
+        """
+        released_any = False
+        for trace_key in list(self.trace_id_prefill_decoder.keys()):
+            if self.trace_id_prefill_decoder[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key])
+                self.trace_id_prefill_decoder[trace_key] = None
+                self.trace_input_prefill_decoder[trace_key] = None
+                self.trace_output_prefill_decoder[trace_key] = None
+                released_any = True
+
+        for trace_key in list(self.trace_id_decode.keys()):
+            if self.trace_id_decode[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
+                self.trace_id_decode[trace_key] = None
+                released_any = True
+
+        if released_any:
+            self.op_event = None
+            self.write_event = None
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("Released active decoder traces before new generation (safe encoder allocation)")
+
     def _run_encoder_traced_or_eager(self, trace_key, input_embeds):
         """
         Run Transformer encoder: replay a captured trace when (trace_key, seq_len) matches,
@@ -748,6 +779,10 @@ class WhisperGenerator:
 
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
+
+        # Previous generate() may have left a decode (or prefill) trace installed; release before
+        # encoder path allocates new buffers for this batch.
+        self._release_captured_traces_before_new_generation()
 
         # Process input features
         all_input_features = []
