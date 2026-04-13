@@ -1130,7 +1130,7 @@ bool PhysicalGroupingDescriptor::can_map_to_psd(
     const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     // Build a multiset of (tray_id, asic_location) slots available in the PSD.
     std::map<std::pair<uint32_t, uint32_t>, size_t> psd_slot_counts;
-    for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
+    for (const auto& [_, desc] : physical_system_descriptor.get_asic_descriptors()) {
         uint32_t tray = *desc.tray_id;
         uint32_t loc = *desc.asic_location;
         if (tray > 0 && loc <= 8) {
