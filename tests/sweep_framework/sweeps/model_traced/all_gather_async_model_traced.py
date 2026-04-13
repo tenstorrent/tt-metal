@@ -560,7 +560,7 @@ def run(
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,
-                            persistent_output_buffer if persistent_output_buffer else None,
+                            persistent_output_buffer,  # None is valid (optional persistent buffer)
                             dim,
                             ccl_semaphore_handles[i],
                             num_links=num_links,

@@ -332,7 +332,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             if dt == ttnn.uint32:
                 return torch.int64
         except Exception:
-            pass
+            pass  # dtype access may fail for host-side or freed tensors
         return None
 
     def _to_torch_safe(t):
@@ -361,5 +361,5 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
             # Single device tensor - direct conversion
             return _to_torch_safe(ttnn_tensor)
     except Exception:
-        # Fallback: try direct conversion (for host tensors or edge cases)
+        # Fallback: direct conversion for host tensors or when device() is unavailable
         return _to_torch_safe(ttnn_tensor)

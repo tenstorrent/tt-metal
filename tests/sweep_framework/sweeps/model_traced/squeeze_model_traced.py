@@ -83,12 +83,14 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # Resolve output_memory_config before build_op_kwargs so it sees the final value
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
+
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
-
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

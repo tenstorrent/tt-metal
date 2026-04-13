@@ -25,7 +25,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import extract_named_tensor_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -89,9 +89,8 @@ def mesh_device_fixture():
 
 
 # CI sets TT_METAL_OPERATION_TIMEOUT_SECONDS=5 for hang detection.
-# paged_fused_update_cache operates on large KV cache tensors (1024-2048 pages)
-# which need more time, especially on multi-device setups.
-_prev_op_timeout = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
+# paged_fused_update_cache needs extra time for large KV cache tensors (1024-2048 pages),
+# especially on multi-device setups.
 os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "60"
 
 
@@ -248,8 +247,6 @@ def run(
     #                 MaxSeqLen = MaxBlocksPerSeq * BlockSize
     max_num_blocks = shape_a[0]   # cache dim 0
     block_size = shape_a[2]       # cache dim 2
-    num_users = shape_b[1] if shape_b and len(shape_b) > 1 else 1
-
     update_idxs_tensor_ttnn = None
     uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
     if uit_info and uit_info.get("shape"):

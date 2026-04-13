@@ -291,7 +291,7 @@ def run(
         try:
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
-            pass
+            pass  # math_fidelity attr may not exist on all config types
     pcc_threshold = 0.98 if is_lofi else 0.99
     pcc = check_with_pcc(torch_output_golden, output_tensor, pcc_threshold)
 

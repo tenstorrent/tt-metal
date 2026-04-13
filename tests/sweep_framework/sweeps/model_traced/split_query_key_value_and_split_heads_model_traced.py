@@ -170,7 +170,7 @@ def run(
                 try:
                     input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
                 except Exception:
-                    pass
+                    pass  # to_memory_config may fail for incompatible shard specs; keep DRAM
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 

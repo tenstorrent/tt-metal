@@ -7,7 +7,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import (
-    check_with_pcc,
     check_with_pcc_without_tensor_printout,
     start_measuring_time,
     stop_measuring_time,

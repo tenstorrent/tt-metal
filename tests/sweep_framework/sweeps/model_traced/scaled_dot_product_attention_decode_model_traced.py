@@ -114,7 +114,6 @@ def run(
         shape_q = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
         # Use traced K/V shapes from kwargs if available (V2 format stores them separately)
         traced_b_shape = kwargs.get("input_b_shape")
-        traced_c_shape = kwargs.get("input_c_shape")
         if traced_b_shape is not None:
             shape_k = tuple(traced_b_shape) if isinstance(traced_b_shape, (list, tuple)) else traced_b_shape
         else:

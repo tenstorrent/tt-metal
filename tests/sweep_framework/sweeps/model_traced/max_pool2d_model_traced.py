@@ -94,7 +94,6 @@ def run(
     torch.manual_seed(0)
 
     # V2 loader uses input_tensor_* naming for this op; fall back to named params
-    input_a_shape = kwargs.get("input_tensor_shape", input_a_shape)
     input_a_dtype = kwargs.get("input_tensor_dtype", input_a_dtype)
     input_a_layout = kwargs.get("input_tensor_layout", input_a_layout)
     input_a_memory_config = kwargs.get("input_tensor_memory_config", input_a_memory_config)
