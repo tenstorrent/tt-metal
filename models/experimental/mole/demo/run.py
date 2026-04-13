@@ -54,6 +54,8 @@ ALLOWED_CHECKPOINT_FILES = {
     "etth1_RMLP_mole_sl336_pl96_td4_lr0.005_hd0.2_sd2021_MoLE_RMLP_ETTh1_ftM_sl336_ll336_pl96_dm512_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_DemoMatrix_0_32_4_f_mask_0.5_0.005_sd2021_hd0.2/checkpoint.pth",
 }
 ALLOWED_DATASET_FILES = {"ETTh1.csv"}
+DATASET_FILE = "ETTh1.csv"
+DATASET_PATH = "/demo_checkpoints/ETTh1.csv"
 
 
 @dataclass(frozen=True)
@@ -174,19 +176,15 @@ def _resolve_checkpoint_path(checkpoint_file: str) -> str:
     return resolve_checkpoint_path(checkpoint_file)
 
 
-def _resolve_dataset_csv_path(dataset_dir: str | Path, dataset_file: str | None) -> Path:
+def _resolve_dataset_csv_path() -> Path:
     BASE_DIRECTORY = os.path.abspath(CHECKPOINT_BASE_DIR)
-    requested_dir = os.path.abspath(os.path.expanduser(str(dataset_dir)))
-    if requested_dir != BASE_DIRECTORY:
-        raise ValueError("dataset_dir must be /demo_checkpoints")
     if not os.path.isdir(BASE_DIRECTORY):
         raise FileNotFoundError(f"dataset directory not found: {BASE_DIRECTORY}")
 
-    selected_dataset = dataset_file if dataset_file is not None else "ETTh1.csv"
-    if selected_dataset not in ALLOWED_DATASET_FILES:
+    if DATASET_FILE not in ALLOWED_DATASET_FILES:
         raise ValueError("dataset_file is not in the predefined safelist")
 
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, selected_dataset))
+    my_path = os.path.abspath(DATASET_PATH)
     if not my_path.startswith(BASE_DIRECTORY):
         raise ValueError("dataset path escapes dataset base directory")
 
@@ -280,7 +278,8 @@ def create_local_dataset_loaders(
     freq: str,
 ) -> tuple[dict[str, DataLoader], int, str]:
     """Load a local CSV dataset and create evaluation dataloaders."""
-    dataset_csv_path = _resolve_dataset_csv_path(dataset_dir, dataset_file)
+    _ = dataset_dir, dataset_file
+    dataset_csv_path = _resolve_dataset_csv_path()
     values, marks = _load_local_csv(dataset_csv_path, freq)
 
     row_count = values.shape[0]
