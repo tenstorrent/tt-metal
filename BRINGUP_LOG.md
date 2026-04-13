@@ -122,7 +122,9 @@ python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
     --text "Hello, this is a test of the text to speech system." \
     --ref-audio /path/to/reference.wav \
     --ref-text "Reference audio transcript" \
-    --output /tmp/output.wav
+    --output /tmp/output.wav \
+    --seed 42 \
+    --use-2cq
 
 # Run pytest tests
 pytest models/demos/qwen3_tts/tests/test_ttnn_blocks.py -v

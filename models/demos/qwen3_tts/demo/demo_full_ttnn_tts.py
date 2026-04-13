@@ -24,7 +24,9 @@ Usage:
         --text "Hello, how are you today?" \
         --ref-audio /path/to/reference.wav \
         --ref-text "Reference audio transcript" \
-        --output /tmp/ttnn_tts_output.wav
+        --output /tmp/ttnn_tts_output.wav \
+        --seed 42 \
+        --use-2cq
 """
 
 import argparse
