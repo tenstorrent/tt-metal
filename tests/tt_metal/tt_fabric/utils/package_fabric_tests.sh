@@ -146,7 +146,7 @@ JIT_INCLUDE_DIRS=(
     "tt_metal/hw/firmware/src"
     "tt_metal/hw/toolchain"
     "tt_metal/hw/lib"
-    "tt_metal/third_party/tt_llk"
+    "tt_metal/tt-llk"
     "tt_metal/hostdevcommon"
     "tt_metal/api"
     "tt_metal/fabric"
