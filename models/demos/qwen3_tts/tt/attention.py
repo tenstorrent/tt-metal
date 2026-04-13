@@ -154,9 +154,11 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        # HiFi4 + fp32 accumulation for float32 attention matmuls
+        # HiFi3 + fp32 accumulation for float32 attention matmuls (Wormhole: HiFi4 + fp32 acc has a
+        # known accuracy issue; see compute_kernel_config warning and tech_reports/
+        # AdvancedPerformanceOptimizationsForModels — prefer HiFi3 for fp32 accumulation on WH.)
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
