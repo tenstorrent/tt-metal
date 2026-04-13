@@ -17,7 +17,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_b1.weights.cache import (
     SourceTensorSelection,
     TensorTarget,
 )
-from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
+from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, OverlappedTensor, overlap_tensors
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
+    build_sram_down_overlap,
     mlp_routed_dense_stacked_torch_for_cache,
     moe_routed_expert_torch_for_cache,
     preprocess_gate_up,
@@ -191,6 +192,23 @@ class MoERoutedExpertWeights:
 
 
 @dataclass
+class SramExpertSlots:
+    """Fixed SRAM (L1) slots for hot routed experts.
+
+    Each slot holds gate/up/down weights in the same layout as the shared expert.
+    Slots are allocated at weight preparation time and remain static during inference.
+    """
+
+    num_slots: int
+    slot_experts: list[int]  # slot i → global expert index loaded
+    gate_proj: list[OverlappedTensor]  # one per slot
+    up_proj: list[OverlappedTensor]  # one per slot
+    down_proj: list[OverlappedTensor]  # views into down_fused
+    down_fused: ttnn.Tensor  # shared fused buffer for all down slots
+    gate_up_fused: list[ttnn.Tensor]  # underlying fused buffers per slot (for L1 pinning)
+
+
+@dataclass
 class DeepSeekV3DenseLayerWeights:
     """Weights for a dense layer (0..first_k_dense_replace-1).
 
@@ -260,6 +278,9 @@ class DeepSeekV3MoELayerWeights:
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
+
+    # Optional SRAM (L1) hot expert slots
+    sram_slots: SramExpertSlots | None = None
 
 
 @dataclass
@@ -1317,6 +1338,159 @@ def prepare_routed_expert_weights(
         )
 
 
+def _build_sram_gate_up(
+    gate_preprocessed: torch.Tensor,
+    up_preprocessed: torch.Tensor,
+    device,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> tuple[OverlappedTensor, OverlappedTensor, ttnn.Tensor]:
+    """Build a single SRAM slot's gate/up fused buffer.
+
+    Returns ``(gate_ov, up_ov, fused_tensor)``.
+    """
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    gate_up_dict = overlap_tensors(
+        [
+            [
+                OverlapEntry(
+                    "gate_proj",
+                    gate_preprocessed,
+                    replace(
+                        cfg.gate_shard_spec,
+                        raw_tensor_shape=tuple(gate_preprocessed.shape),
+                        dtype=dtype,
+                        logical_tensor_shape=cfg.gate_proj_shape,
+                    ),
+                ),
+            ],
+            [
+                OverlapEntry(
+                    "up_proj",
+                    up_preprocessed,
+                    replace(
+                        cfg.up_shard_spec,
+                        raw_tensor_shape=tuple(up_preprocessed.shape),
+                        dtype=dtype,
+                        logical_tensor_shape=cfg.up_proj_shape,
+                    ),
+                ),
+            ],
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+    gate_ov = gate_up_dict["gate_proj"]
+    up_ov = gate_up_dict["up_proj"]
+    return gate_ov, up_ov, gate_ov.fused_tensor
+
+
+def prepare_sram_slots(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    initial_expert_indices: list[int],
+    *,
+    move_to_device: bool = False,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+) -> SramExpertSlots:
+    """Allocate SRAM slots and populate with initial routed expert weights.
+
+    Each slot's gate/up uses the same L1 layout as the shared expert
+    (``GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC``).  All slots' down_proj
+    are packed into a single overlap buffer on the 112 matmul cores
+    (``DOWN_PROJ_SINGLE_DEVICE_SPEC``).
+
+    Args:
+        device: Device or mesh device.
+        state_dict: HuggingFace state dict with expert weights.
+        layer_idx: Decoder layer index.
+        initial_expert_indices: Global expert indices to load into each slot.
+        move_to_device: Whether to place tensors on device.
+        dtype: Weight dtype (default bfloat4_b).
+
+    Returns:
+        Populated :class:`SramExpertSlots`.
+    """
+    _, moe_tp = _tp_factors(device)
+    assert moe_tp > 1, "SRAM slots require TP > 1 (multi-device mesh)"
+    mesh_rows = device.shape[0] if device.get_num_devices() > 1 else 1
+    mesh_cols = device.shape[1] if device.get_num_devices() > 1 else 1
+    mesh_shape = (mesh_rows, mesh_cols)
+    num_slots = len(initial_expert_indices)
+
+    logger.info(
+        "Preparing {} SRAM slots for layer {} (experts: {})",
+        num_slots,
+        layer_idx,
+        initial_expert_indices,
+    )
+    t0 = time.perf_counter()
+
+    gate_proj_list: list[OverlappedTensor] = []
+    up_proj_list: list[OverlappedTensor] = []
+    gate_up_fused_list: list[ttnn.Tensor] = []
+    down_preprocessed: list[torch.Tensor] = []
+
+    for slot_idx, expert_idx in enumerate(initial_expert_indices):
+        assert 0 <= expert_idx < NUM_ROUTED_EXPERTS, f"Expert index {expert_idx} out of range [0, {NUM_ROUTED_EXPERTS})"
+        # Load and transpose expert weights (HF stores as (out_features, in_features))
+        gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
+        up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
+        down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
+
+        gate_w = state_dict[gate_key].T.contiguous()  # (7168, 2048)
+        up_w = state_dict[up_key].T.contiguous()  # (7168, 2048)
+        down_w = state_dict[down_key].T.contiguous()  # (2048, 7168)
+
+        # Gate/Up: same pipeline as shared expert
+        preprocessed = preprocess_gate_up(gate_w, up_w, moe_tp, mesh_rows, mesh_cols)
+        gate_pre = preprocessed["shared_gate_proj"]
+        up_pre = preprocessed["shared_up_proj"]
+
+        gate_ov, up_ov, gu_fused = _build_sram_gate_up(
+            gate_pre,
+            up_pre,
+            device,
+            dtype=dtype,
+            move_to_device=move_to_device,
+        )
+        gate_proj_list.append(gate_ov)
+        up_proj_list.append(up_ov)
+        gate_up_fused_list.append(gu_fused)
+
+        # Down: same pipeline as shared expert
+        down_pre = shared_down_torch_for_cache(down_w, moe_tp, mesh_shape)
+        down_preprocessed.append(down_pre)
+
+        logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
+
+    # Pack all down_proj into a single overlap buffer
+    down_views, down_fused = build_sram_down_overlap(
+        down_preprocessed,
+        device,
+        dtype=dtype,
+        move_to_device=move_to_device,
+    )
+
+    logger.info(
+        "SRAM slots for layer {} done in {:.3f}s ({} slots)",
+        layer_idx,
+        time.perf_counter() - t0,
+        num_slots,
+    )
+    return SramExpertSlots(
+        num_slots=num_slots,
+        slot_experts=list(initial_expert_indices),
+        gate_proj=gate_proj_list,
+        up_proj=up_proj_list,
+        down_proj=down_views,
+        down_fused=down_fused,
+        gate_up_fused=gate_up_fused_list,
+    )
+
+
 def prepare_dense_layer_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1376,11 +1550,17 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
+    num_sram_slots: int = 0,
+    initial_sram_experts: list[int] | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
     ``bspm_dir``, when provided, must be the model-specific BSPM subdirectory
     (e.g. ``results/deepseek-r1-0528``), not the results root.
+
+    When ``num_sram_slots > 0``, SRAM (L1) slots are allocated and populated
+    with the experts listed in ``initial_sram_experts``.  DRAM copies remain
+    unchanged.  Requires multi-device (TP > 1).
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1410,6 +1590,24 @@ def prepare_moe_layer_weights(
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
+
+    sram_slots = None
+    if num_sram_slots > 0:
+        if initial_sram_experts is None:
+            raise ValueError("initial_sram_experts must be provided when num_sram_slots > 0")
+        if len(initial_sram_experts) != num_sram_slots:
+            raise ValueError(
+                f"initial_sram_experts length ({len(initial_sram_experts)}) "
+                f"must match num_sram_slots ({num_sram_slots})"
+            )
+        sram_slots = prepare_sram_slots(
+            device,
+            state_dict,
+            layer_idx,
+            initial_sram_experts,
+            move_to_device=move_to_device,
+        )
+
     result = DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -1429,6 +1627,7 @@ def prepare_moe_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_slots=sram_slots,
     )
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result

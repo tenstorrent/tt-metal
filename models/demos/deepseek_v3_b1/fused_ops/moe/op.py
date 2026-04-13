@@ -123,6 +123,13 @@ class MoeContext:
     # CB reconfig
     reconfig_moe_cbs: bool = False
 
+    # SRAM (L1) hot expert slots (None when no SRAM experts configured)
+    sram_slots: Any = None
+
+    # Expert frequency tracking (None when disabled)
+    expert_freq_tensor: Any = None
+    freq_window_size: int = 0  # 0 = full uint32 range
+
 
 @dataclass
 class _MoeRoutedExpertContext:
@@ -1693,6 +1700,12 @@ class MoeRoutedExpertOp:
             ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
             ("mul_cb_scalar", ctx.mul_cb_scalar),
             ("mul_scalar_index_offset", mesh_chip_id if ctx.enable_routing else 0),
+            # Expert frequency tracking
+            (
+                "expert_freq_l1_addr",
+                ctx.expert_freq_tensor.buffer_address() if ctx.expert_freq_tensor is not None else 0,
+            ),
+            ("freq_window_size", ctx.freq_window_size),
             # Mul writer
             ("mul_cb_out", ctx.mul_cb_out),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -4453,6 +4466,9 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        sram_slots=None,
+        expert_freq_tensor=None,
+        freq_window_size=0,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -4594,6 +4610,9 @@ class MoeOp:
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
+            sram_slots=sram_slots,
+            expert_freq_tensor=expert_freq_tensor,
+            freq_window_size=freq_window_size,
         )
 
         # Shared descriptors (populated by _build_descriptors)
@@ -4733,6 +4752,12 @@ class MoeOp:
             io_tensors += [ctx.bcast_input_tensor]
         if ctx.bcast_intermediate_tensor is not None:
             io_tensors += [ctx.bcast_intermediate_tensor]
+        if ctx.sram_slots is not None:
+            # Pin SRAM expert fused buffers (gate_up per slot + shared down buffer)
+            io_tensors += ctx.sram_slots.gate_up_fused
+            io_tensors += [ctx.sram_slots.down_fused]
+        if ctx.expert_freq_tensor is not None:
+            io_tensors += [ctx.expert_freq_tensor]
         return io_tensors
 
     def _build_kernel_defines(self):
@@ -4865,6 +4890,9 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # Expert frequency tracking
+        expert_freq_tensor=None,
+        freq_window_size=0,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4939,6 +4967,8 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            expert_freq_tensor=expert_freq_tensor,
+            freq_window_size=freq_window_size,
         )
 
         # ==================================================================

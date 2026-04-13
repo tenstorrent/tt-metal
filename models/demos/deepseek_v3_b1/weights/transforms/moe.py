@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -309,3 +310,51 @@ def create_moe_routed_expert_tensors(
         return tensors
 
     return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
+
+
+def build_sram_down_overlap(
+    down_tensors: list[torch.Tensor],
+    device,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> tuple[list[OverlappedTensor], ttnn.Tensor]:
+    """Pack N SRAM expert down_proj tensors into a single L1 overlap buffer.
+
+    Each tensor must be the output of :func:`shared_down_torch_for_cache`
+    (TP-concatenated, ready for overlap packing).
+
+    Returns:
+        ``(views, fused_tensor)`` — per-slot :class:`OverlappedTensor` views
+        and the underlying fused buffer.
+    """
+    dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
+    matmul_core_grid = dp_spec.build_matmul_core_grid()
+
+    is_multi_device = device.get_num_devices() > 1
+    tp_dim: tuple[int | None, int | None] = (0, 1) if is_multi_device else (None, None)
+
+    entries = [
+        OverlapEntry(
+            f"sram_down_{i}",
+            t,
+            OverlappedTensorSpec(
+                core_range_set=matmul_core_grid,
+                raw_tensor_shape=tuple(t.shape),
+                dtype=dtype,
+                sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                tp_dim=tp_dim,
+            ),
+        )
+        for i, t in enumerate(down_tensors)
+    ]
+
+    result = overlap_tensors(
+        [entries],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+    views = [result[f"sram_down_{i}"] for i in range(len(down_tensors))]
+    fused = views[0].fused_tensor
+    return views, fused
