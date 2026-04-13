@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+#ifdef ARCH_BLACKHOLE
+
 // clang-format off
 /**
  * Configures the packer for block-contiguous packing of tiny tiles.
@@ -30,11 +32,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_block_contiguous_init(uint32_t ocb) {
-#ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_block_contiguous_mop_config(ocb)));
-#endif
-}
+ALWI void pack_block_contiguous_init(uint32_t ocb) { PACK((llk_pack_block_contiguous_mop_config(ocb))); }
 
 // clang-format off
 /**
@@ -62,9 +60,9 @@ ALWI void pack_block_contiguous_init(uint32_t ocb) {
  */
 // clang-format on
 ALWI void pack_block_contiguous(uint32_t ifrom_dst, uint32_t ocb, uint32_t num_tiles) {
-#ifdef ARCH_BLACKHOLE
     PACK((llk_pack_block_contiguous<DST_ACCUM_MODE>(ifrom_dst, ocb, num_tiles)));
-#endif
 }
+
+#endif
 
 }  // namespace ckernel
