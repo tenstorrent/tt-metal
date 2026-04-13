@@ -5,13 +5,12 @@
 """
 Compare conditional-generation inference perf: legacy KV prefill (token-by-token) vs batched prefill.
 
-Uses ``run_demo_whisper_for_conditional_generation_inference`` with identical inputs; only
-``use_batched_decoder_prefill`` differs. Logs the same metrics as ``demo.py`` perf checks
-(``prefill_time_to_token``, ``decode_t/s``, ``decode_t/s/u``).
+Runs four repeats per mode, then logs one summary line per mode with mean metrics.
 """
 
 import math
 import os
+import statistics
 
 import pytest
 from loguru import logger
@@ -30,14 +29,17 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
 # Match demo.py device selection for conditional generation
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
+NUM_BENCHMARK_REPEATS = 4
+
 
 @pytest.mark.parametrize(
     "input_path",
     (["models/demos/audio/whisper/demo/dataset/conditional_generation"],),
 )
 @pytest.mark.parametrize("model_repo", ("distil-whisper/distil-large-v3",))
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [2])
 @pytest.mark.parametrize("num_inputs", [2])
+@pytest.mark.parametrize("prompt", ["Glossary: medal podium, levee."])
 @pytest.mark.parametrize(
     "mesh_device",
     [available_devices]
@@ -56,11 +58,12 @@ def test_conditional_generation_inference_prefill_modes_benchmark(
     model_repo,
     batch_size_per_device,
     num_inputs,
+    prompt,
 ):
     """
-    Run the same audio pipeline twice: stacked single-step KV prefill vs one batched prefill forward.
+    Mean over ``NUM_BENCHMARK_REPEATS`` runs per mode: batched vs incremental KV prefill.
 
-    ``num_inputs`` must be >= 2 so the demo's averaged TTFT excludes one warmup batch (see demo loop).
+    ``num_inputs`` must be >= 2 so averaged TTFT excludes one warmup batch (see demo loop).
     """
     generation_params = GenerationParams(
         temperatures=0.0,
@@ -78,44 +81,60 @@ def test_conditional_generation_inference_prefill_modes_benchmark(
         generation_params=generation_params,
         language="English",
         task="transcribe",
-        prompt=None,
+        prompt=prompt,
         batch_size_per_device=batch_size_per_device,
         stream=False,
         run_both_batch_sizes=False,
     )
 
-    ttft_batched, decode_tpu_batched = run_demo_whisper_for_conditional_generation_inference(
-        **common_kwargs,
-        use_batched_decoder_prefill=True,
-    )
-    metrics_batched = format_conditional_generation_inference_perf_metrics(
-        mesh_device, batch_size_per_device, ttft_batched, decode_tpu_batched
-    )
-    logger.info(
-        "[batched KV prefill] prefill_time_to_token={:.6f}s decode_t/s={:.3f} decode_t/s/u={:.3f} — {}",
-        metrics_batched["prefill_time_to_token"],
-        metrics_batched["decode_t/s"],
-        metrics_batched["decode_t/s/u"],
-        metrics_batched,
-    )
+    batched_runs = []
+    incremental_runs = []
 
-    ttft_incr, decode_tpu_incr = run_demo_whisper_for_conditional_generation_inference(
-        **common_kwargs,
-        use_batched_decoder_prefill=False,
-    )
-    metrics_incremental = format_conditional_generation_inference_perf_metrics(
-        mesh_device, batch_size_per_device, ttft_incr, decode_tpu_incr
-    )
-    logger.info(
-        "[incremental KV prefill] prefill_time_to_token={:.6f}s decode_t/s={:.3f} decode_t/s/u={:.3f} — {}",
-        metrics_incremental["prefill_time_to_token"],
-        metrics_incremental["decode_t/s"],
-        metrics_incremental["decode_t/s/u"],
-        metrics_incremental,
-    )
+    for _ in range(NUM_BENCHMARK_REPEATS):
+        logger.info("Running batched prefill benchmark")
+        ttft_batched, decode_tpu_batched = run_demo_whisper_for_conditional_generation_inference(
+            **common_kwargs,
+            use_batched_decoder_prefill=True,
+        )
+        batched_runs.append(
+            format_conditional_generation_inference_perf_metrics(
+                mesh_device, batch_size_per_device, ttft_batched, decode_tpu_batched
+            )
+        )
+        logger.info("Finished batched prefill benchmark")
+        logger.info("Running incremental prefill benchmark")
+        ttft_incr, decode_tpu_incr = run_demo_whisper_for_conditional_generation_inference(
+            **common_kwargs,
+            use_batched_decoder_prefill=False,
+        )
+        incremental_runs.append(
+            format_conditional_generation_inference_perf_metrics(
+                mesh_device, batch_size_per_device, ttft_incr, decode_tpu_incr
+            )
+        )
+        logger.info("Finished incremental prefill benchmark")
+    keys = ("prefill_time_to_token", "decode_t/s", "decode_t/s/u")
+    for m in batched_runs + incremental_runs:
+        for k in keys:
+            assert math.isfinite(m[k])
 
-    # Sanity: finite timings from both runs
-    for m in (metrics_batched, metrics_incremental):
-        assert math.isfinite(m["prefill_time_to_token"])
-        assert math.isfinite(m["decode_t/s"])
-        assert math.isfinite(m["decode_t/s/u"])
+    def _mean(runs, key):
+        return statistics.mean(m[key] for m in runs)
+
+    mean_batched = {k: _mean(batched_runs, k) for k in keys}
+    mean_incremental = {k: _mean(incremental_runs, k) for k in keys}
+
+    prompt_label = "no_prompt" if prompt is None else "with_prompt"
+    logger.info(
+        "[prefill benchmark | {} | mean of {} runs]\n"
+        "  [batched KV prefill]     prefill_time_to_token={:.6f}s  decode_t/s={:.3f}  decode_t/s/u={:.3f}\n"
+        "  [incremental KV prefill] prefill_time_to_token={:.6f}s  decode_t/s={:.3f}  decode_t/s/u={:.3f}",
+        prompt_label,
+        NUM_BENCHMARK_REPEATS,
+        mean_batched["prefill_time_to_token"],
+        mean_batched["decode_t/s"],
+        mean_batched["decode_t/s/u"],
+        mean_incremental["prefill_time_to_token"],
+        mean_incremental["decode_t/s"],
+        mean_incremental["decode_t/s/u"],
+    )
