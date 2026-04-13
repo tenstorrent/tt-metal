@@ -11,7 +11,7 @@ namespace ttnn::operations::examples {
 using namespace tt;
 using namespace tt::tt_metal;
 
-ProgramDescriptor ExampleDeviceOperation::create_descriptor(
+ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {

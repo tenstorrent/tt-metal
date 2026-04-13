@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -56,12 +57,33 @@ struct ExampleDeviceOperation {
     // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
     // be std::vector<std::optional<Tensor>>
 
-    // Returns a declarative ProgramDescriptor. The framework handles program
-    // construction, caching, and runtime argument patching automatically.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    // -------------------------------------------------------------------------
+    // Descriptor-based program factories
+    //
+    // Each factory returns a ProgramDescriptor. The framework handles program
+    // construction, caching, and runtime argument patching automatically --
+    // no shared_variables_t or override_runtime_arguments needed.
+    // -------------------------------------------------------------------------
+
+    // Single-core: pins work to core {0,0}
+    struct SingleCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // Multi-core: distributes tiles across all available cores
+    struct MultiCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<SingleCore, MultiCore>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Validate the operation when it creates a program. Also called on cache hit by default.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -75,31 +97,6 @@ struct ExampleDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args.
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // -------------------------------------------------------------------------
-    // Multi-variant programs (advanced)
-    //
-    // When an operation needs different program strategies (e.g. work
-    // distribution that depends on input size), define named structs with
-    // create_descriptor and put them in a variant:
-    //
-    //   struct SmallInput {
-    //       static tt::tt_metal::ProgramDescriptor create_descriptor(
-    //           const operation_attributes_t&,
-    //           const tensor_args_t&,
-    //           tensor_return_value_t&);
-    //   };
-    //   struct LargeInput {
-    //       static tt::tt_metal::ProgramDescriptor create_descriptor(
-    //           const operation_attributes_t&,
-    //           const tensor_args_t&,
-    //           tensor_return_value_t&);
-    //   };
-    //   using program_factory_t = std::variant<SmallInput, LargeInput>;
-    //
-    //   static program_factory_t select_program_factory(
-    //       const operation_attributes_t&, const tensor_args_t&);
-    // -------------------------------------------------------------------------
 };
 
 }  // namespace ttnn::operations::examples
