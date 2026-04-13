@@ -199,7 +199,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         padded_patch_size_bytes,
         patch_size_bytes,
         vol2col_rm_pages);
-    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
+    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
         tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);

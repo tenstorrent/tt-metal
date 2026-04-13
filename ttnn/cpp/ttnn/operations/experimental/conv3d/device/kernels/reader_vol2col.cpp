@@ -93,8 +93,8 @@ struct ChunkWriter {
         }
     }
 
-    // Call after writing one patch to write_addr. Returns true if more patches remain.
-    // Callers that need to restore NOC state after a push should check the return value.
+    // Call after writing one patch to write_addr.
+    // Returns true when a chunk was pushed and a new one reserved — caller must restore NOC packet state.
     bool advance() {
         if constexpr (patch_pad_bytes > 0) {
             write_addr += patch_pad_bytes;
@@ -126,10 +126,10 @@ struct ChunkWriter {
                 remaining -= chunk_size;
             }
             while (remaining > 0) {
-                chunk_size = remaining < chunk_max ? remaining : chunk_max;
-                cb_reserve_back(cb_id, chunk_size);
-                cb_push_back(cb_id, chunk_size);
-                remaining -= chunk_size;
+                const uint32_t cur = remaining < chunk_max ? remaining : chunk_max;
+                cb_reserve_back(cb_id, cur);
+                cb_push_back(cb_id, cur);
+                remaining -= cur;
             }
         }
     }
@@ -165,7 +165,7 @@ void vol2col_shard_to_cb(
             const uint32_t t_local = t_base + kt;
             for (uint32_t kh = 0; kh < kH; kh++) {
                 const uint32_t h_local = h_base + kh;
-                uint32_t shard_offset =
+                const uint32_t shard_offset =
                     (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_base) * C_in_block_bytes;
                 noc_async_read_one_packet_with_state(shard_l1_base + shard_offset, chunk.write_addr);
                 chunk.write_addr += kW_bytes;
@@ -502,26 +502,18 @@ void kernel_main() {
                                         }
 
                                         // Vol2col for this (t, h) across all w
-                                        {
-                                            vol2col_shard_to_cb<
-                                                kT,
-                                                kH,
-                                                kW,
-                                                C_in_block_bytes,
-                                                H_shard_max_W_shard_max,
-                                                W_shard_max,
-                                                stride_w,
-                                                cb_vol2col,
-                                                padded_page_bytes,
-                                                patch_pad_bytes>(
-                                                shard_l1_base,
-                                                shard_noc_base,
-                                                t_base,
-                                                h_base,
-                                                w_block,
-                                                w_block_end,
-                                                chunk);
-                                        }
+                                        vol2col_shard_to_cb<
+                                            kT,
+                                            kH,
+                                            kW,
+                                            C_in_block_bytes,
+                                            H_shard_max_W_shard_max,
+                                            W_shard_max,
+                                            stride_w,
+                                            cb_vol2col,
+                                            padded_page_bytes,
+                                            patch_pad_bytes>(
+                                            shard_l1_base, shard_noc_base, t_base, h_base, w_block, w_block_end, chunk);
                                     }
                                 }
                                 chunk.flush();
