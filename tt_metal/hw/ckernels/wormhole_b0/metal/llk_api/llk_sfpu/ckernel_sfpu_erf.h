@@ -55,13 +55,8 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = piecewise_rational_eval<
-            ERF_NUM_DEGREE,
-            ERF_DEN_DEGREE,
-            ERF_NUM_SEGMENTS,
-            ERF_LUT_SIZE,
-            true,
-            APPROXIMATION_MODE>(ERF_LUT, x);
+        sfpi::vFloat result =
+            piecewise_rational_eval<ERF_NUM_DEGREE, ERF_DEN_DEGREE, ERF_NUM_SEGMENTS, ERF_LUT_SIZE, true>(ERF_LUT, x);
         // Clamp: erf(x) = sign(x) for |x| > 10 (uses odd symmetry)
         sfpi::vFloat ax = sfpi::setsgn(x, 0);
         v_if(ax > 10.0f) {
