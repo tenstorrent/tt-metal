@@ -17,8 +17,6 @@ from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_itera
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
 from models.common.utility_functions import comp_pcc
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from tracy import signpost
 
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
@@ -934,52 +932,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-def _run_op_with_trace(num_iters, op_func, mesh_device, profiler, profile_name="moe-compute"):
-    # compile run:
-    logger.info("Compiling model")
-    outputs = op_func()
-    ttnn.synchronize_device(mesh_device)
-
-    logger.info("Capturing Warmup")
-
-    logger.info(f"Capturing Warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    outputs = op_func()
-    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    logger.info("Warmup done")
-
-    logger.info(f"Capturing Trace for {num_iters} iterations")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    all_outputs = []
-    for _ in range(num_iters):
-        outputs = op_func()
-        all_outputs.append(outputs)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-
-    logger.info("Starting Trace perf test...")
-    profiler.start(f"{profile_name}-trace-warmup")
-    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id_warmup)
-    ttnn.synchronize_device(mesh_device)
-    profiler.end(f"{profile_name}-trace-warmup")
-
-    signpost("start")
-    profiler.start(f"{profile_name}-trace")
-    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
-    profiler.end(f"{profile_name}-trace")
-    signpost("stop")
-
-    time_taken = profiler.get_duration(f"{profile_name}-trace") - profiler.get_duration(f"{profile_name}-trace-warmup")
-    time_taken_us = time_taken / num_iters * 1000000
-    logger.info(f"Time taken e2e: {time_taken_us:.2f} us")
-
-    return all_outputs, time_taken_us
-
-
 # Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
 @pytest.mark.skipif(
     not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
@@ -1025,8 +977,8 @@ def _run_op_with_trace(num_iters, op_func, mesh_device, profiler, profile_name="
 @pytest.mark.parametrize("experts_per_device", [2, 3, 4])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations, measure_perf",
-    [(1, 1, 5, True), (8, 5, 3, False)],
+    "selected_experts_k, num_layers, num_iterations",
+    [(1, 1, 5), (8, 5, 3)],
     ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
@@ -1043,7 +995,6 @@ def test_moe_compute(
     selected_experts_k,
     num_layers,
     num_iterations,
-    measure_perf,
     N,
     hidden_size,
     output_height_shard_dim,
@@ -1087,7 +1038,7 @@ def test_moe_compute(
     logger.info(f"  hidden_size: {hidden_size}")
     logger.info(f"  dtype: {dtype}")
     logger.info(f"  num_iterations: {num_iterations}")
-    logger.info(f"  measure_perf: {measure_perf}, enable_trace: {enable_trace}")
+    logger.info(f"  enable_trace: {enable_trace}")
 
     #########################################
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
@@ -1368,7 +1319,7 @@ def test_moe_compute(
     ]
 
     #########################################
-    # HELPER FUNCTIONS FOR PERFORMANCE MEASUREMENT
+    # HELPER FUNCTIONS
     #########################################
 
     def prepare_layer_inputs(layer_id):
@@ -1412,7 +1363,7 @@ def test_moe_compute(
         return (dram_per_expert, dram_activation, dram_e_t, dram_matmul, combine)
 
     def run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id):
-        """Core moe_compute operation - used for performance measurement"""
+        """Core moe_compute operation"""
         return ttnn.experimental.moe_compute(
             tt_sparse_buffer,
             tt_expert_indices,
@@ -1428,45 +1379,6 @@ def test_moe_compute(
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
         )
-
-    def run_op_perf():
-        """Performance-optimized version that runs multiple iterations but only saves last output"""
-        last_outputs_by_layer = []
-
-        # Pre-allocate all inputs in L1
-        prepared_inputs = []
-        for layer_id in range(num_layers):
-            inputs = prepare_layer_inputs(layer_id)
-            prepared_inputs.append(inputs)
-
-        # Run multiple iterations, only keep last one
-        for iter_idx in range(num_iterations):
-            layer_outputs = []
-            for layer_id in range(num_layers):
-                tt_sparse_buffer, tt_expert_indices, tt_expert_scores = prepared_inputs[layer_id]
-                outputs = run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id)
-
-                # Only save outputs on last iteration
-                if iter_idx == num_iterations - 1:
-                    layer_outputs.append(outputs)
-
-            # Update last outputs
-            if iter_idx == num_iterations - 1:
-                last_outputs_by_layer = layer_outputs
-
-        # Clean up inputs and convert outputs to DRAM
-        final_outputs = []
-        for layer_id in range(num_layers):
-            # Deallocate inputs
-            tt_sparse_buffer, tt_expert_indices, tt_expert_scores = prepared_inputs[layer_id]
-            deallocate_layer_inputs(tt_sparse_buffer, tt_expert_indices, tt_expert_scores)
-
-            # Convert outputs to DRAM
-            if last_outputs_by_layer:
-                dram_outputs = convert_outputs_to_dram(last_outputs_by_layer[layer_id])
-                final_outputs.append(dram_outputs)
-
-        return final_outputs
 
     #########################################
     # RUN OP
@@ -1493,21 +1405,9 @@ def test_moe_compute(
 
     logger.info(f"\n========== Running op ==========")
 
-    # Initialize profiler based on test parameters
-    profiler = None
-    if measure_perf and enable_trace:
-        logger.info("Running in performance measurement mode")
-        profiler = BenchmarkProfiler()
-
     moe_compute_outputs = []
-    avg_latency_us = None
 
-    if profiler is not None:
-        # Use profiler for trace performance measurement with run_op_perf
-        all_outputs, avg_latency_us = _run_op_with_trace(num_iterations, run_op_perf, mesh_device, profiler)
-        moe_compute_outputs = all_outputs
-    elif enable_trace:
-        # Regular trace execution without profiling
+    if enable_trace:
         # Compile the op
         for i in range(num_iterations):
             run_op()
@@ -1630,31 +1530,6 @@ def test_moe_compute(
             " to the double buffer scheme"
         )
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
-
-    # Report performance results if in perf mode
-    if avg_latency_us is not None:
-        logger.info("\n========== Performance Results ==========")
-        logger.info(f"Test Configuration:")
-        logger.info(f"  Mesh shape: {mesh_shape}")
-        logger.info(f"  Total experts: {experts}")
-        logger.info(f"  Selected experts (k): {selected_experts_k}")
-        logger.info(f"  Tokens per device: {tokens_per_device}")
-        logger.info(f"  Hidden size: {hidden_size}")
-        logger.info(f"  N (intermediate size): {N}")
-        logger.info(f"  Trace enabled: {enable_trace}")
-        logger.info(f"  Number of iterations: {num_iterations}")
-        logger.info(f"\nPerformance:")
-        logger.info(f"  Average E2E latency: {avg_latency_us:.2f} us")
-
-        # Calculate throughput if possible
-        total_tokens = (
-            tokens_per_device * mesh_shape[cluster_axis]
-            if cluster_axis is not None
-            else tokens_per_device * num_devices
-        )
-        tokens_per_second = (total_tokens * 1000000.0) / avg_latency_us
-        logger.info(f"  Throughput: {tokens_per_second:.2f} tokens/second")
-        logger.info("==========================================\n")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
