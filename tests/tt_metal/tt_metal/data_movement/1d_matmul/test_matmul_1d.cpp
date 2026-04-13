@@ -293,9 +293,8 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
             print_vector(unpack_vector<bfloat16, uint32_t>(golden_in1_read_output));
             log_info(tt::LogTest, "Output vector");
             print_vector(unpack_vector<bfloat16, uint32_t>(in1_read_output));
-            11
 
-                return is_equal;
+            return is_equal;
         }
         golden_in1_read_output.clear();
     }
