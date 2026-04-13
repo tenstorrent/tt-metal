@@ -922,6 +922,7 @@ def test_qwen_omni(mesh_device):
 
     processor = Qwen3OmniMoeProcessor.from_pretrained(MODEL_PATH)
 
+    # Multimodal: cough.wav is **input** audio (what the model should "hear"), not a defect in TTS output.
     conversation = [
         {
             "role": "user",
