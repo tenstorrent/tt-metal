@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit test for the DRAMZeroFill micro op.
+
+Allocates a DRAM tensor with the exact KV cache NdShardSpec configuration,
+runs the zero-fill kernel, reads the result back to host, and verifies that
+every element is zero.
+"""
+
+import time
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+
+KVPE_DIM = 576
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("max_seq_len", [1024 * 32, 1024 * 64, 1024 * 128])
+@pytest.mark.parametrize("num_users", [1, 32, 64])
+@pytest.mark.requires_grid_size((12, 10))
+def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> None:
+    """Zero-fill a KV-cache-shaped DRAM tensor and verify all zeros."""
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires 8 devices (4x2 mesh)")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    # Poison DRAM with random data so that a no-op kernel can't pass by luck.
+    mesh_rows = submesh.shape[0]
+    per_device_seq = max_seq_len // mesh_rows
+    poison = ttnn.from_torch(
+        torch.randn(num_users, 1, per_device_seq, KVPE_DIM),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+    ttnn.deallocate(poison, force=True)
+
+    # Warmup (includes kernel compilation)
+    t0 = time.perf_counter()
+    warmup_tensor = DRAMZeroFill.allocate_kv_cache_on_device(
+        submesh, num_users=num_users, max_seq_len=max_seq_len, kvpe_dim=KVPE_DIM
+    )
+    ttnn.synchronize_device(submesh)
+    warmup_ms = (time.perf_counter() - t0) * 1000.0
+    ttnn.deallocate(warmup_tensor, force=True)
+
+    # Real run (cached kernel)
+    t0 = time.perf_counter()
+    output_tensor = DRAMZeroFill.allocate_kv_cache_on_device(
+        submesh, num_users=num_users, max_seq_len=max_seq_len, kvpe_dim=KVPE_DIM
+    )
+    ttnn.synchronize_device(submesh)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    print(
+        f"\nDRAMZeroFill  num_users={num_users}  max_seq_len={max_seq_len}  shape={list(output_tensor.shape)}"
+        f"  warmup={warmup_ms:.2f} ms  run={elapsed_ms:.2f} ms"
+    )
+
+    result = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    expected = torch.zeros_like(result)
+    assert torch.equal(result, expected), (
+        f"Non-zero values found: max abs = {result.abs().max().item()}, "
+        f"non-zero count = {result.count_nonzero().item()} / {result.numel()}"
+    )
