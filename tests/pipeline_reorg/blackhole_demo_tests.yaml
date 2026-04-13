@@ -328,7 +328,7 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
   model-name: stable_diffusion_xl
-  
+
 - name: llama3-8b performance batch-32
   cmd: HF_MODEL=models/tt_transformers/model_params/Meta-Llama-3-8B TT_CACHE_PATH=models/tt_transformers/model_params/Meta-Llama-3-8B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
