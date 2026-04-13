@@ -338,6 +338,9 @@ def main():
     if use_ddp and batch_size % dp_size != 0:
         raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({dp_size})")
 
+    if use_tp and args.save_every > 0:
+        raise ValueError("Checkpointing (--save_every) is not supported with tensor parallelism (--tp > 1)")
+
     if use_ddp or use_tp:
         validate_mesh_graph_descriptor(mesh_shape)
 
