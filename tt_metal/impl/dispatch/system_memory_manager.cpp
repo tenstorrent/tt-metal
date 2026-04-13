@@ -124,6 +124,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         this->channel_offset = 0;
         this->cq_to_event.resize(num_hw_cqs, 0);
         this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
+        this->cq_to_quiesced.resize(num_hw_cqs);
         const uint32_t alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
@@ -240,6 +241,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             this->get_issue_queue_size(cq_id));
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
+        this->cq_to_quiesced.emplace_back(false);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
                                                                    sizeof(DispatchSettings::prefetch_q_entry_type);
@@ -330,6 +332,14 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
     uint32_t last_completed_event = this->cq_to_last_completed_event[cq_id];
     cq_to_event_locks[cq_id].unlock();
     return last_completed_event;
+}
+
+void SystemMemoryManager::set_quiesced(uint8_t cq_id, bool val) {
+    this->cq_to_quiesced[cq_id].store(val, std::memory_order_release);
+}
+
+bool SystemMemoryManager::is_quiesced(uint8_t cq_id) const {
+    return this->cq_to_quiesced[cq_id].load(std::memory_order_acquire);
 }
 
 void SystemMemoryManager::reset(const uint8_t cq_id) {

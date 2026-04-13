@@ -41,6 +41,9 @@ public:
 
     uint32_t get_current_event(uint8_t cq_id);
 
+    void set_quiesced(uint8_t cq_id, bool val);
+    bool is_quiesced(uint8_t cq_id) const;
+
     void reset(uint8_t cq_id);
 
     void set_issue_queue_size(uint8_t cq_id, uint32_t issue_queue_size);
@@ -120,6 +123,10 @@ private:
     uint32_t channel_offset = 0;
     std::vector<uint32_t> cq_to_event;
     std::vector<uint32_t> cq_to_last_completed_event;
+    // Set to true by finish_and_reset_in_use() after quiesce; cleared when new work is enqueued.
+    // Allows EventSynchronize() to return immediately for stale tensor-destructor events that
+    // predate the quiesce, without the UINT32_MAX sentinel bleeding into the next workload cycle.
+    std::vector<std::atomic<bool>> cq_to_quiesced;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<umd::Writer> prefetch_q_writers;

@@ -672,7 +672,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
-        log_trace(
+        log_info(
             LogMetal,
             "Submesh {} instantiated with {} devices",
             submesh->pimpl_->id(),
@@ -896,19 +896,19 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             }
         }
 
-        log_trace(LogMetal, "[close_impl] clearing mesh_command_queues_");
+        log_info(LogMetal, "[close_impl] clearing mesh_command_queues_");
         mesh_command_queues_.clear();
-        log_trace(LogMetal, "[close_impl] mesh_command_queues_ cleared, signaling is_initialized=false");
+        log_info(LogMetal, "[close_impl] mesh_command_queues_ cleared, signaling is_initialized=false");
         // Signal the device as closed BEFORE freeing allocator state.  Any concurrent
         // MeshBuffer::deallocate() racing with teardown will now see is_initialized()==false
         // and take the safe "device already closed" path instead of touching the (now-freed)
         // sub_device_manager_tracker_ allocators.  See race analysis: Finding B.1.
         is_internal_state_initialized = false;
-        log_trace(LogMetal, "[close_impl] resetting sub_device_manager_tracker_");
+        log_info(LogMetal, "[close_impl] resetting sub_device_manager_tracker_");
         sub_device_manager_tracker_.reset();
-        log_trace(LogMetal, "[close_impl] resetting scoped_devices_ (triggers ScopedDevices dtor -> close_devices)");
+        log_info(LogMetal, "[close_impl] resetting scoped_devices_ (triggers ScopedDevices dtor -> close_devices)");
         scoped_devices_.reset();
-        log_trace(LogMetal, "[close_impl] scoped_devices_.reset() returned");
+        log_info(LogMetal, "[close_impl] scoped_devices_.reset() returned");
         parent_mesh_.reset();
         if (distributed_context_) {
             distributed_context_.reset();
@@ -920,9 +920,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
-        log_trace(LogMetal, "[close_impl] calling MetalContext::destroy_instance");
+        log_info(LogMetal, "[close_impl] calling MetalContext::destroy_instance");
         MetalContext::destroy_instance(false, context_id_);
-        log_trace(LogMetal, "[close_impl] MetalContext::destroy_instance returned");
+        log_info(LogMetal, "[close_impl] MetalContext::destroy_instance returned");
         destroy_metal_context_instance_on_close_ = false;
     }
 

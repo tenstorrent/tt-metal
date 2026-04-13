@@ -119,13 +119,13 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    log_trace(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() start");
+    log_info(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() start");
     terminate_command_queues();
-    log_trace(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() returned, calling wait_for_dispatch_cores()");
+    log_info(tt::LogMetal, "[dispatch_teardown] terminate_command_queues() returned, calling wait_for_dispatch_cores()");
     wait_for_dispatch_cores();
-    log_trace(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores() returned, calling process_termination_signals()");
+    log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores() returned, calling process_termination_signals()");
     process_termination_signals();
-    log_trace(tt::LogMetal, "[dispatch_teardown] process_termination_signals() returned");
+    log_info(tt::LogMetal, "[dispatch_teardown] process_termination_signals() returned");
 
     devices_.clear();
     initialized_ = false;
@@ -246,7 +246,7 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         }
 
         auto dispatch_cores = get_virtual_dispatch_cores(dev->id());
-        log_trace(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} num_cores={}", dev->id(), dispatch_cores.size());
+        log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} num_cores={}", dev->id(), dispatch_cores.size());
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
@@ -260,7 +260,7 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
                 dev->id(),
                 e.what());
         }
-        log_trace(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} done", dev->id());
+        log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} done", dev->id());
     }
 }
 

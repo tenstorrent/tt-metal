@@ -260,11 +260,22 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
 }
 
+void FDMeshCommandQueue::mark_in_use() {
+    if (!in_use_) {
+        // Transitioning from idle (post-quiesce) to active: clear the quiesced flag so
+        // that EventSynchronize() for new events properly waits on hardware completion.
+        for (auto* device : mesh_device_->get_devices()) {
+            device->sysmem_manager().set_quiesced(id_, false);
+        }
+    }
+    mark_in_use();
+}
+
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    log_trace(LogMetal, "[enqueue_mesh_workload] cq={} acquiring lock (blocking={})", id_, blocking);
+    log_info(LogMetal, "[enqueue_mesh_workload] cq={} acquiring lock (blocking={})", id_, blocking);
     auto lock = lock_api_function_();
-    log_trace(LogMetal, "[enqueue_mesh_workload] cq={} lock acquired", id_);
-    in_use_ = true;
+    log_info(LogMetal, "[enqueue_mesh_workload] cq={} lock acquired", id_);
+    mark_in_use();
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
@@ -459,7 +470,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
     }
-    log_trace(LogMetal, "[enqueue_mesh_workload] cq={} done (blocking={})", id_, blocking);
+    log_info(LogMetal, "[enqueue_mesh_workload] cq={} done (blocking={})", id_, blocking);
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
@@ -475,7 +486,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         return;
     }
 
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->impl().get_device(address.device_coord);
@@ -515,7 +526,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         return;
     }
 
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     IDevice* device = mesh_device_->impl().get_device(address.device_coord);
@@ -550,9 +561,9 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
         return;
     }
 
-    log_trace(LogMetal, "[finish_nolock] cq={} enqueuing record_event_to_host", id_);
+    log_info(LogMetal, "[finish_nolock] cq={} enqueuing record_event_to_host", id_);
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
-    log_trace(
+    log_info(
         LogMetal,
         "[finish_nolock] cq={} event={} enqueued, blocking on cv (num_outstanding={})",
         id_,
@@ -562,7 +573,7 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(
         lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
-    log_trace(LogMetal, "[finish_nolock] cq={} cv_wait returned (num_outstanding={})", id_, num_outstanding_reads_.load());
+    log_info(LogMetal, "[finish_nolock] cq={} cv_wait returned (num_outstanding={})", id_, num_outstanding_reads_.load());
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
@@ -607,7 +618,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
@@ -640,7 +651,7 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
@@ -732,7 +743,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
 
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
     auto& sysmem_manager = this->reference_sysmem_manager();
@@ -760,9 +771,9 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         dispatch_thread_pool_->enqueue(
             [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
     });
-    log_trace(LogMetal, "[enqueue_record_event_helper] about to dispatch_thread_pool_->wait() notify_host={}", notify_host);
+    log_info(LogMetal, "[enqueue_record_event_helper] about to dispatch_thread_pool_->wait() notify_host={}", notify_host);
     dispatch_thread_pool_->wait();
-    log_trace(LogMetal, "[enqueue_record_event_helper] dispatch_thread_pool_->wait() returned notify_host={}", notify_host);
+    log_info(LogMetal, "[enqueue_record_event_helper] dispatch_thread_pool_->wait() returned notify_host={}", notify_host);
     return event;
 }
 
@@ -801,7 +812,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
-    in_use_ = true;
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
@@ -915,7 +926,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 }
 
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
-    log_trace(
+    log_info(
         LogMetal,
         "[read_completion_queue_event] cq={} waiting for event={}",
         id_,
@@ -929,9 +940,9 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         uint16_t channel = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
                                .get_cluster()
                                .get_assigned_channel_for_device(device->id());
-        log_trace(LogMetal, "[read_completion_queue_event] cq={} calling completion_queue_wait_front device={}", id_, device->id());
+        log_info(LogMetal, "[read_completion_queue_event] cq={} calling completion_queue_wait_front device={}", id_, device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
-        log_trace(LogMetal, "[read_completion_queue_event] cq={} completion_queue_wait_front returned device={}", id_, device->id());
+        log_info(LogMetal, "[read_completion_queue_event] cq={} completion_queue_wait_front returned device={}", id_, device->id());
 
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor,
@@ -972,7 +983,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-    in_use_ = true;
+    mark_in_use();
     for (auto* device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
@@ -1145,7 +1156,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
-    in_use_ = true;
+    mark_in_use();
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
@@ -1299,7 +1310,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
-            log_trace(
+            log_info(
                 LogMetal,
                 "[wait_for_completion] cq={} sub_device[{}] expected_workers={} reset_launch_msg_state={}",
                 id_,
@@ -1308,7 +1319,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 reset_launch_msg_state);
         }
         for (auto* device : mesh_device_->get_devices()) {
-            log_trace(
+            log_info(
                 LogMetal,
                 "[wait_for_completion] calling reset_worker_dispatch_state_on_device device={}",
                 device->id());
@@ -1319,7 +1330,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
                 reset_launch_msg_state);
-            log_trace(
+            log_info(
                 LogMetal,
                 "[wait_for_completion] reset_worker_dispatch_state_on_device returned device={}",
                 device->id());
@@ -1336,9 +1347,9 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
                 std::mem_fn(&LaunchMessageRingBufferState::reset));
         }
-        log_trace(LogMetal, "[wait_for_completion] cq={} calling finish()", id_);
+        log_info(LogMetal, "[wait_for_completion] cq={} calling finish()", id_);
         finish();
-        log_trace(LogMetal, "[wait_for_completion] cq={} finish() returned", id_);
+        log_info(LogMetal, "[wait_for_completion] cq={} finish() returned", id_);
     }
 }
 
@@ -1357,20 +1368,12 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         }
         finish_nolock({});
 
-        // finish_nolock() causes the completion thread to write last_completed_event=0
-        // (for the event=0 flush it just processed). Restore UINT32_MAX so that any
-        // subsequent EventSynchronize() calls on live MeshBuffers — e.g. from tensor
-        // destructors running after quiesce — immediately return rather than spinning
-        // forever on "last_completed_event >= N" with N > 0.
-        //
-        // This is safe: finish_nolock() drained all in-flight completions, so the
-        // completion thread is now idle and will not update last_completed_event again
-        // until a new event is enqueued (which requires in_use_ = true first, and we
-        // hold the API lock here so no concurrent enqueue can happen).
+        // Mark every device's CQ as quiesced so that EventSynchronize() calls from
+        // tensor destructors (which may fire after quiesce resets the event counters)
+        // return immediately instead of spinning forever.  The flag is cleared the
+        // first time new work is enqueued (see enqueue_mesh_workload et al.).
         for (auto* device : mesh_device_->get_devices()) {
-            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
-            device->sysmem_manager().set_current_and_last_completed_event(
-                id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
+            device->sysmem_manager().set_quiesced(id_, true);
         }
 
         in_use_ = false;

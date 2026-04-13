@@ -39,8 +39,14 @@ void EventSynchronize(const MeshEvent& event) {
         auto& sysmem = physical_device->sysmem_manager();
         const auto cq_id = event.mesh_cq_id();
         const auto target_id = event.id();
-        ttsl::nice_spin_until(
-            [&sysmem, cq_id, target_id] { return sysmem.get_last_completed_event(cq_id) >= target_id; });
+        // If the device has been quiesced since this event was recorded, all in-flight
+        // events are implicitly complete (finish_and_reset_in_use drained the CQ).
+        if (sysmem.is_quiesced(cq_id)) {
+            continue;
+        }
+        ttsl::nice_spin_until([&sysmem, cq_id, target_id] {
+            return sysmem.is_quiesced(cq_id) || sysmem.get_last_completed_event(cq_id) >= target_id;
+        });
     }
 }
 
