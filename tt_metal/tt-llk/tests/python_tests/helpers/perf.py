@@ -322,13 +322,6 @@ def combine_perf_reports():
             ).reset_index(drop=True)
             output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
             combined_regular.to_csv(output_regular, index=False)
-            if dfs_regular:
-                combined_regular = pd.concat(dfs_regular, ignore_index=True)
-                combined_regular = combined_regular.sort_values(
-                    by=combined_regular.columns.tolist()
-                ).reset_index(drop=True)
-                output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
-                combined_regular.to_csv(output_regular, index=False)
 
         if post_files:
             dfs_post = []
@@ -349,16 +342,6 @@ def combine_perf_reports():
             ).reset_index(drop=True)
             output_post = os.path.join(temp_output_dir, f"{base_name}.post.csv")
             combined_post.to_csv(output_post, index=False)
-
-        for file in regular_files:
-            Path(file).unlink()
-            if dfs_post:
-                combined_post = pd.concat(dfs_post, ignore_index=True)
-                combined_post = combined_post.sort_values(
-                    by=combined_post.columns.tolist()
-                ).reset_index(drop=True)
-                output_post = os.path.join(temp_output_dir, f"{base_name}.post.csv")
-                combined_post.to_csv(output_post, index=False)
 
         if counter_files:
             dfs_counters = []
