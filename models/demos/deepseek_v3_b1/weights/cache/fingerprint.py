@@ -80,7 +80,6 @@ def _canonical_compressed_tensor_target(target: CompressedTensorTarget) -> dict:
         "K": target.K,
         "N_padded": target.N_padded,
         "num_banks": target.num_banks,
-        "max_shard_bytes": target.max_shard_bytes,
         "bspm_variant": target.bspm_variant,
         "bspm_budget": float(target.bspm_budget),
         "transform_version": target.transform_version,

@@ -141,22 +141,15 @@ def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: 
         return
 
     if isinstance(first, CompressedTensor):
-        # CompressedTensor path: stride is variable-size (packed bytes), not tile-formula.
-        # Deduce expected stride from the gap between first two experts.
+        # CompressedTensor path: experts may have different natural shard sizes (no
+        # cross-expert uniform padding), so strides are not required to be uniform.
+        # Only check that addresses are strictly increasing (no overlaps or reordering).
         addrs = [t.buffer_address() for t in tensors]
-        stride = addrs[1] - addrs[0]
-        if stride <= 0:
-            raise AssertionError(
-                f"{name} expert DRAM addresses not strictly increasing: addrs={addrs}. "
-                "Experts may overlap or be placed out-of-order."
-            )
-        for i in range(len(tensors)):
-            expected = addrs[0] + i * stride
-            actual = addrs[i]
-            if actual != expected:
+        for i in range(1, len(addrs)):
+            if addrs[i] <= addrs[i - 1]:
                 raise AssertionError(
-                    f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
-                    f"expected buffer_address {expected}, got {actual} (deduced stride {stride} bytes per expert). "
+                    f"{name} CompressedTensor expert DRAM addresses not strictly increasing: "
+                    f"addrs[{i-1}]={addrs[i-1]}, addrs[{i}]={addrs[i]}. "
                     "Allocate all experts of one projection in one batch before the next projection."
                 )
         return
@@ -1003,37 +996,6 @@ def _shuffle_dram_assignment(assignment: np.ndarray, num_banks: int) -> np.ndarr
     return shuffle_dram_assignment(assignment, num_banks)
 
 
-def _compute_bspm_max_shard_bytes(
-    assignments: list[np.ndarray],
-    K: int,
-    N_padded: int,
-    num_banks: int,
-    tile_w: int = 32,
-) -> int:
-    """Return the maximum DRAM shard size (bytes) across a list of BSPM assignments.
-
-    Enforces uniform expert sizes so DRAMStreamingMatmul's fixed-stride expert
-    indexing (base_addr + expert_idx * stride_bytes) addresses correctly.
-
-    Tile byte sizes: 0=bfp8: 1088 B, 1=bfp4: 576 B, 2=bfp2: 320 B, 3=bfp0: 0 B
-    """
-    tile_bytes = np.array([1088, 576, 320, 0], dtype=np.int64)
-    tiles_per_bank_col = (N_padded // tile_w) // num_banks
-
-    max_shard = 0
-    for assignment in assignments:
-        tile_sizes = tile_bytes[assignment]
-        for b in range(num_banks):
-            col_start = b * tiles_per_bank_col
-            col_end = (b + 1) * tiles_per_bank_col
-            shard_bytes = int(tile_sizes[:, col_start:col_end].sum())
-            if shard_bytes > max_shard:
-                max_shard = shard_bytes
-
-    dram_align = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    return ((max_shard + dram_align - 1) // dram_align) * dram_align
-
-
 def prepare_moe_routed_experts_bspm(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1072,15 +1034,12 @@ def prepare_moe_routed_experts_bspm(
         all_assignments = [
             bspm_data["codes"][e, proj_idx].reshape(tiles_h, tiles_w_count) for e in range(num_routed_experts)
         ]
-        max_shard_bytes = _compute_bspm_max_shard_bytes(all_assignments, K, N_padded, num_banks, tile_w)
-        logger.debug("  proj_idx={}: uniform DRAM shard = {} B", proj_idx, max_shard_bytes)
 
         tgt = CompressedTensorTarget(
             name=proj_name,
             K=K,
             N_padded=N_padded,
             num_banks=num_banks,
-            max_shard_bytes=max_shard_bytes,
             bspm_variant=bspm_variant,
             bspm_budget=bspm_budget,
         )

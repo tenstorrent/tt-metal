@@ -284,10 +284,10 @@ class CompressedTensor:
             memory_config: ttnn.MemoryConfig (must be sharded).
             assignment_memory_config: Optional separate memory config for assignment tensor.
             tile_hw: Tile dimension (default 32).
-            min_shard_bytes: Minimum packed bytes per DRAM shard. When allocating multiple
-                experts, pass the same value (the maximum shard size across all experts) to
-                guarantee uniform DRAM strides. Required for DRAMStreamingMatmul's
-                base_addr + expert_idx * stride_bytes indexing to address experts correctly.
+            min_shard_bytes: Minimum packed bytes per DRAM shard. Defaults to 0 (use natural
+                per-expert shard size). Pass a non-zero value only when testing a specific
+                shard size. Routing kernels that need uniform expert strides are responsible
+                for enforcing this externally via a per-expert offset table.
 
         Returns:
             CompressedTensor with the BSPM-driven precision assignment.

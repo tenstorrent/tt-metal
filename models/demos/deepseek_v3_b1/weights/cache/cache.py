@@ -304,7 +304,7 @@ class TensorCache:
             objects/{id[:2]}/{id}/
                 tiles.bin        — compact packed tile bytes, logical row-major order
                 assignment.npy   — (tiles_h, tiles_w) int8 tile format codes
-                metadata.json    — K, N_padded, num_banks, max_shard_bytes, …
+                metadata.json    — K, N_padded, num_banks, …
                 manifest.json    — fingerprint + logical_name
         """
         from models.demos.deepseek_v3_b1.compressed_tensor.compact_io import pack_compact_tiles
@@ -330,7 +330,6 @@ class TensorCache:
             "K": target.K,
             "N_padded": target.N_padded,
             "num_banks": target.num_banks,
-            "max_shard_bytes": target.max_shard_bytes,
             "tiles_h": tiles_h,
             "tiles_w": tiles_w,
             "compact_bytes": len(compact_bytes),
@@ -380,7 +379,6 @@ class TensorCache:
             assignment_shuffled,
             device=device,
             memory_config=mem_config,
-            min_shard_bytes=target.max_shard_bytes,
         )
 
     def get_or_create(
@@ -529,7 +527,6 @@ class EphemeralTensorCache:
                 assignment_shuffled,
                 device=device_for_ct,
                 memory_config=mem_config,
-                min_shard_bytes=target.max_shard_bytes,
             )
 
         if isinstance(target, TensorTarget):

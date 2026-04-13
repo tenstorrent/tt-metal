@@ -722,7 +722,6 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
         TensorCache,
     )
     from models.demos.deepseek_v3_b1.weights.cache.fingerprint import compute_artifact_id
-    from models.demos.deepseek_v3_b1.weights.prepare import _compute_bspm_max_shard_bytes
 
     tile_w = 32
     M, K, N = 1, 256, 256
@@ -743,8 +742,6 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
     torch.manual_seed(0)
     w_logical = torch.randn(K, N_padded).float().numpy()
 
-    max_shard_bytes = _compute_bspm_max_shard_bytes([assignment_logical], K, N_padded, num_banks, tile_w)
-
     cache_ctx = CacheContext(
         schema_version=1,
         hf_model_id="test_model",
@@ -756,7 +753,6 @@ def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
         K=K,
         N_padded=N_padded,
         num_banks=num_banks,
-        max_shard_bytes=max_shard_bytes,
         bspm_variant="B",
         bspm_budget=3.5,
     )

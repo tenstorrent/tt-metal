@@ -98,10 +98,12 @@ class FusionGroupSpec:
 class CompressedTensorTarget:
     """Specification for a cached BSPM CompressedTensor artifact (one expert, one projection).
 
-    All fields participate in the fingerprint hash.  ``max_shard_bytes`` is the
-    uniform DRAM shard size for the whole projection (computed once across all
-    experts in the layer) so that on-device DRAM strides are consistent.
+    All fields participate in the fingerprint hash.
     ``num_banks`` is ``device.dram_grid_size().x``.
+
+    Each expert is stored with its own natural DRAM shard size (no cross-expert
+    uniform padding).  Routing kernels that need per-expert DRAM offsets must use
+    the absolute-address approach (F1 style), not a fixed stride.
     """
 
     kind: Literal["compressed_tensor"] = "compressed_tensor"
@@ -109,10 +111,9 @@ class CompressedTensorTarget:
     K: int = 0  # weight inner dimension (rows in logical K×N layout)
     N_padded: int = 0  # padded weight outer dimension (multiple of num_banks * tile_hw)
     num_banks: int = 0  # DRAM bank count (device.dram_grid_size().x)
-    max_shard_bytes: int = 0  # uniform shard size across experts for this projection
     bspm_variant: str = "B"  # allocation variant letter
     bspm_budget: float = 3.5  # bits-per-element budget
-    transform_version: int = 0  # bump when DRAM-shuffle or packing logic changes
+    transform_version: int = 1  # bumped: removed cross-expert max_shard_bytes enforcement
 
 
 @dataclass
