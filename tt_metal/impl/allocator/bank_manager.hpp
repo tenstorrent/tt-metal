@@ -100,7 +100,8 @@ public:
         bool bottom_up,
         const CoreRangeSet& compute_grid,
         std::optional<uint32_t> num_shards,
-        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0},
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
 
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
@@ -135,6 +136,11 @@ public:
     DeviceAddr get_high_water_mark() const;
     DeviceAddr get_allocation_high_water_mark() const;
     DeviceAddr get_deletion_high_water_mark() const;
+
+    // Cross-allocator mirroring: mark a region as allocated/deallocated in a specific sub-allocator.
+    // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
+    void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
+    void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address);
 
     // AllocatorState Methods
     // Extracts the state of the given allocator.
@@ -213,9 +219,12 @@ private:
         AllocatorDependencies::AllocatorID allocator_id);
 
     // Compute available address ranges for the given allocator and request, after subtracting merged neighbor
-    // allocations
+    // allocations and any additional occupied ranges (e.g., from device-level allocators at mesh level)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> compute_available_addresses(
-        AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
+        AllocatorDependencies::AllocatorID allocator_id,
+        DeviceAddr size_per_bank,
+        DeviceAddr address_limit,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
 };
 
 }  // namespace tt::tt_metal

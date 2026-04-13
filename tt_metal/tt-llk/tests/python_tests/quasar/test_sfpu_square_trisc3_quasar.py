@@ -42,18 +42,20 @@ from test_sfpu_square_quasar import (
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_square_combinations(
+    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
         SFPU_SQUARE_FORMATS
     ),
 )
-def test_sfpu_square_trisc3_quasar(formats_dest_acc_implied_math_input_dims):
+def test_sfpu_square_trisc3_quasar(
+    formats_dest_acc_sync_implied_math_dims,
+):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
+    (formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions) = (
+        formats_dest_acc_sync_implied_math_dims[0]
     )
 
     torch.manual_seed(42)
@@ -95,7 +97,7 @@ def test_sfpu_square_trisc3_quasar(formats_dest_acc_implied_math_input_dims):
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
