@@ -125,11 +125,19 @@ source python_env/bin/activate
 ```
 
 ### Basic Usage (uses included Jim reference voice)
+
+Recommended defaults for reproducible sampling and overlapped host/device work (two command queues):
+
+- `--seed N` — `torch.manual_seed` before codec generation (reproducible sampling, fair A/B).
+- `--use-2cq` — H2D on CQ1 overlapped with Metal trace on CQ0 (see `tech_reports/AdvancedPerformanceOptimizationsForModels`); ignored if trace is disabled.
+
 ```bash
 python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
     --text "Hello, this is a test of text to speech." \
     --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav \
-    --ref-text "Jason, can we take a look at the review slides"
+    --ref-text "Jason, can we take a look at the review slides" \
+    --seed 42 \
+    --use-2cq
 ```
 
 ### Full Options
@@ -142,7 +150,9 @@ python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
     --max-tokens 256 \
     --language english \
     --trim-frames 30 \
-    --auto-trim-bleed
+    --auto-trim-bleed \
+    --seed 42 \
+    --use-2cq
 ```
 
 ### CPU Reference (for comparison)

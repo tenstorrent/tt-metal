@@ -98,8 +98,8 @@ For a 100-frame generation:
 
 ### Usage
 ```bash
-# With KV cache (default - faster)
-python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --text "Hello" --ref-audio ref.wav --ref-text "Text"
+# With KV cache (default - faster); --seed / --use-2cq recommended for reproducibility and CQ overlap
+python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --text "Hello" --ref-audio ref.wav --ref-text "Text" --seed 42 --use-2cq
 
 # Without KV cache (for comparison)
 python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --text "Hello" --ref-audio ref.wav --ref-text "Text" --no-kv-cache
