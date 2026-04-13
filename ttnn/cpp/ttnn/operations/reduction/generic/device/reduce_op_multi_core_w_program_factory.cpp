@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "reduce_op_dfb_helpers.hpp"
 #include <cmath>
 
 namespace ttnn::prim {
@@ -44,7 +45,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     tt_metal::IDevice* device = a.device();
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size{2, 1};  // = device->compute_with_storage_grid_size();
+    log_info(
+        tt::LogOp, "grid size {} cwsgs {}\n", device->compute_with_storage_grid_size(), compute_with_storage_grid_size);
     auto num_rows = NC * Ht;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -58,10 +61,11 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
     }
+    log_info(tt::LogOp, "grid size {} num_cores {}\n", device->compute_with_storage_grid_size(), num_cores);
 
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
-    uint32_t dfb_output = 0;
+    reduction_helpers::BufferIds dfb_ids;
 
     if (is_quasar) {
         namespace dfb = tt_metal::experimental::dfb;
@@ -102,10 +106,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             .tile = output.tensor_spec().tile(),
         };
 
-        dfb::CreateDataflowBuffer(program, all_cores, dfb_input_config);
-        dfb::CreateDataflowBuffer(program, all_cores, dfb_scaler_config);
-        dfb_output = dfb::CreateDataflowBuffer(program, all_cores, dfb_output_config);
-
         if (operation_attributes.negate) {
             dfb::DataflowBufferConfig dfb_acc_config = {
                 .entry_size = dst_single_tile_size,
@@ -131,8 +131,18 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .tile = output.tensor_spec().tile(),
             };
 
-            dfb::CreateDataflowBuffer(program, all_cores, dfb_acc_config);
-            dfb::CreateDataflowBuffer(program, all_cores, dfb_ineg_config);
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program,
+                all_cores,
+                dfb_input_config,
+                dfb_scaler_config,
+                dfb_output_config,
+                true,
+                dfb_acc_config,
+                dfb_ineg_config);
+        } else {
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program, all_cores, dfb_input_config, dfb_scaler_config, dfb_output_config);
         }
     } else {
         uint32_t src0_cb_index = 0;
@@ -177,7 +187,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
 
-    uint32_t writer_output_id = is_quasar ? dfb_output : (uint32_t)tt::CBIndex::c_3;
+    uint32_t writer_output_id = is_quasar ? dfb_ids.output : (uint32_t)tt::CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {writer_output_id};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
@@ -201,7 +211,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     if (is_quasar) {
         namespace qsr = tt_metal::experimental::quasar;
-        namespace dfb = tt_metal::experimental::dfb;
 
         reader_kernel_id = qsr::CreateKernel(
             program,
@@ -229,17 +238,13 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .compile_args = compute_kernel_args_group_1,
                 .defines = reduce_defines});
 
-        dfb::BindDataflowBufferToProducerConsumerKernels(program, 0, reader_kernel_id, compute_kernel_id_group_1);
-        dfb::BindDataflowBufferToProducerConsumerKernels(program, 1, reader_kernel_id, compute_kernel_id_group_1);
-        dfb::BindDataflowBufferToProducerConsumerKernels(
-            program, dfb_output, compute_kernel_id_group_1, writer_kernel_id);
-
-        if (operation_attributes.negate) {
-            dfb::BindDataflowBufferToProducerConsumerKernels(
-                program, 3, compute_kernel_id_group_1, compute_kernel_id_group_1);
-            dfb::BindDataflowBufferToProducerConsumerKernels(
-                program, 4, compute_kernel_id_group_1, compute_kernel_id_group_1);
-        }
+        reduction_helpers::bind_reduction_kernels(
+            program,
+            dfb_ids,
+            reader_kernel_id,
+            compute_kernel_id_group_1,
+            writer_kernel_id,
+            operation_attributes.negate);
 
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_kernel_args_group_2 = {
@@ -259,17 +264,13 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                     .compile_args = compute_kernel_args_group_2,
                     .defines = reduce_defines});
 
-            dfb::BindDataflowBufferToProducerConsumerKernels(program, 0, reader_kernel_id, compute_kernel_id_group_2);
-            dfb::BindDataflowBufferToProducerConsumerKernels(program, 1, reader_kernel_id, compute_kernel_id_group_2);
-            dfb::BindDataflowBufferToProducerConsumerKernels(
-                program, dfb_output, compute_kernel_id_group_2, writer_kernel_id);
-
-            if (operation_attributes.negate) {
-                dfb::BindDataflowBufferToProducerConsumerKernels(
-                    program, 3, compute_kernel_id_group_2, compute_kernel_id_group_2);
-                dfb::BindDataflowBufferToProducerConsumerKernels(
-                    program, 4, compute_kernel_id_group_2, compute_kernel_id_group_2);
-            }
+            reduction_helpers::bind_reduction_kernels(
+                program,
+                dfb_ids,
+                reader_kernel_id,
+                compute_kernel_id_group_2,
+                writer_kernel_id,
+                operation_attributes.negate);
         }
     } else {
         reader_kernel_id = tt_metal::CreateKernel(

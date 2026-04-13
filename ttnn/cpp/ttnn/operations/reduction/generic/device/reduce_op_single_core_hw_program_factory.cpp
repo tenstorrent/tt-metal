@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "reduce_op_dfb_helpers.hpp"
 #include <cmath>
 
 namespace ttnn::prim {
@@ -63,7 +64,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
-    uint32_t dfb_output = 0;
+    reduction_helpers::BufferIds dfb_ids;
 
     if (is_quasar) {
         namespace dfb = tt_metal::experimental::dfb;
@@ -104,10 +105,6 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .tile = output.tensor_spec().tile(),
         };
 
-        dfb::CreateDataflowBuffer(program, core, dfb_input_config);
-        dfb::CreateDataflowBuffer(program, core, dfb_scaler_config);
-        dfb_output = dfb::CreateDataflowBuffer(program, core, dfb_output_config);
-
         if (operation_attributes.negate) {
             dfb::DataflowBufferConfig dfb_acc_config = {
                 .entry_size = dst_single_tile_size,
@@ -133,8 +130,18 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
                 .tile = output.tensor_spec().tile(),
             };
 
-            dfb::CreateDataflowBuffer(program, core, dfb_acc_config);
-            dfb::CreateDataflowBuffer(program, core, dfb_ineg_config);
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program,
+                core,
+                dfb_input_config,
+                dfb_scaler_config,
+                dfb_output_config,
+                true,
+                dfb_acc_config,
+                dfb_ineg_config);
+        } else {
+            dfb_ids = reduction_helpers::create_reduction_buffers(
+                program, core, dfb_input_config, dfb_scaler_config, dfb_output_config);
         }
     } else {
         uint32_t src0_cb_index = 0;
@@ -177,7 +184,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    uint32_t writer_output_id = is_quasar ? dfb_output : (uint32_t)tt::CBIndex::c_3;
+    uint32_t writer_output_id = is_quasar ? dfb_ids.output : (uint32_t)tt::CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {writer_output_id};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
@@ -225,15 +232,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
                 .compile_args = compute_kernel_args,
                 .defines = reduce_defines});
 
-        namespace dfb = tt_metal::experimental::dfb;
-        dfb::BindDataflowBufferToProducerConsumerKernels(program, 0, reader_kernel_id, compute_kernel_id);
-        dfb::BindDataflowBufferToProducerConsumerKernels(program, 1, reader_kernel_id, compute_kernel_id);
-        dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_output, compute_kernel_id, writer_kernel_id);
-
-        if (operation_attributes.negate) {
-            dfb::BindDataflowBufferToProducerConsumerKernels(program, 3, compute_kernel_id, compute_kernel_id);
-            dfb::BindDataflowBufferToProducerConsumerKernels(program, 4, compute_kernel_id, compute_kernel_id);
-        }
+        reduction_helpers::bind_reduction_kernels(
+            program, dfb_ids, reader_kernel_id, compute_kernel_id, writer_kernel_id, operation_attributes.negate);
     } else {
         reader_kernel_id = tt_metal::CreateKernel(
             program,
