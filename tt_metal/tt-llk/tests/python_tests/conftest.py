@@ -311,15 +311,6 @@ def pytest_configure(config):
         or TestConfig.DUMP_RAW_METRICS
         or TestConfig.DUMP_CSV_COUNTERS
     )
-    compile_producer = config.getoption("--compile-producer", default=False)
-    compile_consumer = config.getoption("--compile-consumer", default=False)
-    TestConfig.setup_mode(compile_consumer, compile_producer)
-
-    with_coverage = config.getoption("--coverage", default=False)
-    detailed_artefacts = config.getoption("--detailed-artefacts", default=False)
-    no_debug_symbols = config.getoption("--no-debug-symbols", default=False)
-    speed_of_light = config.getoption("--speed-of-light", default=False)
-
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         config.getoption("--coverage", default=False),
