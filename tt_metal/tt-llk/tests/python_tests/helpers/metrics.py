@@ -108,7 +108,6 @@ def _compute_single(df: pd.DataFrame) -> dict:
     # ── Reference cycles per bank ──
     fpu_cycles = _avg_cycles(df, "FPU")
     instrn_cycles = _avg_cycles(df, "INSTRN_THREAD")
-    unpack_cycles = _avg_cycles(df, "TDMA_UNPACK")
     pack_cycles = _avg_cycles(df, "TDMA_PACK")
 
     # ── Compute Utilization (FPU bank) ──
@@ -158,7 +157,6 @@ def _compute_single(df: pd.DataFrame) -> dict:
 
     # ── Math Pipeline Stalls (TDMA_UNPACK bank only — same bank, reliable) ──
     math_available = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_AVAILABLE")
-    math_started = _avg_count(df, "TDMA_UNPACK", "MATH_INSTRN_STARTED")
     fidelity_stalls = _avg_count(df, "TDMA_UNPACK", "FIDELITY_PHASE_STALLS")
     math_not_blocked = _avg_count(df, "TDMA_UNPACK", "MATH_NOT_BLOCKED_BY_SRC")
 
