@@ -4,6 +4,7 @@
 
 #include "unary_ng_device_operation.hpp"
 
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary_ng/common/unary_ng_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -424,7 +425,10 @@ UnaryNgDeviceOperation::ProgramFactory::cached_program_t UnaryNgDeviceOperation:
         unpack_to_dest_mode[tmp0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const bool math_approx_mode = false;
+    const bool math_approx_mode = std::all_of(
+        ops_chain.begin(), ops_chain.end(), [](const auto& u) {
+            return ttnn::operations::unary::utils::get_op_approx_mode(u.type());
+        });
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
     CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(

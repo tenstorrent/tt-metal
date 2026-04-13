@@ -822,6 +822,7 @@ std::map<std::string, std::string> get_defines_impl(
 
 bool get_op_approx_mode(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::SILU: return true;
         default: return false;
     }
 }
