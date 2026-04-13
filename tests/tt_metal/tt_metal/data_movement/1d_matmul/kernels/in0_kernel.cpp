@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "barrier_sync.hpp"
 
 void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(0);
@@ -18,6 +19,14 @@ void kernel_main() {
     uint32_t l1_base_address = get_arg_val<uint32_t>(0);        // sender: source of in0 data
     uint32_t mcast_size_bytes = get_arg_val<uint32_t>(1);       // sender: bytes to multicast
     uint32_t in0_mcast_output_addr = get_arg_val<uint32_t>(2);  // all cores: multicast dest
+    // Barrier synchronization args
+    uint32_t barrier_sem_id = get_arg_val<uint32_t>(3);
+    uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);
+    uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
+    uint32_t num_cores = get_arg_val<uint32_t>(6);
+    uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);
+
+    barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);
 
     uint32_t sender_sem_addr = get_semaphore(sender_sem_id);
     uint32_t sender_valid_sem_addr = get_semaphore(sender_valid_sem_id);
@@ -40,11 +49,18 @@ void kernel_main() {
         noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
         noc_semaphore_set(sender_sem_ptr, 0);
 
-        noc_async_write_multicast_loopback_src(
-            l1_base_address, dst_data_mcast_addr, mcast_size_bytes, num_cores_c_dim, true);
+        if constexpr (num_cores_c_dim > 1) {
+            noc_async_write_multicast_loopback_src(
+                l1_base_address, dst_data_mcast_addr, mcast_size_bytes, num_cores_c_dim, true);
 
-        noc_semaphore_set_multicast_loopback_src(
-            sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+            noc_semaphore_set_multicast_loopback_src(
+                sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+        } else {
+            uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], in0_mcast_output_addr);
+            noc_async_write(l1_base_address, local_dest_addr, mcast_size_bytes);
+            noc_async_write_barrier();
+            noc_semaphore_set(receiver_sem_ptr, 1);
+        }
     } else {
         noc_semaphore_inc(sender_sem_noc_addr, 1);
     }
