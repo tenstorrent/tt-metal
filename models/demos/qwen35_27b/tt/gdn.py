@@ -623,6 +623,84 @@ class TtGatedDeltaNet(LightweightModule):
             ttnn.deallocate(self._prefill_rec_states_f32)
             self._prefill_rec_states_f32 = None
 
+    def _forward_prefill_sequential(self, x):
+        """GDN prefill via sequential per-token decode (high-quality fallback).
+
+        Feeds each token through the decode path one at a time, producing
+        numerically identical results to sequential decode. Slower than batched
+        prefill but avoids the compound PCC degradation across 48 GDN layers.
+
+        Input:  [1, 1, seq_len, dim]
+        Output: [1, 1, seq_len, dim]
+        """
+        # Ensure 4D input
+        if len(x.shape) == 3:
+            x = ttnn.reshape(x, (1, 1, x.shape[1], x.shape[2]))
+        seq_len = x.shape[2]
+        dim = x.shape[3]
+
+        # Save original decode-sized state so we can restore after prefill
+        orig_batch_size = self.batch_size
+        orig_conv_states = self.conv_states
+        orig_rec_states = self.rec_states
+        orig_fused_output = self.fused_output
+        orig_rec_output = self.rec_output
+
+        # Switch to B=1 for sequential prefill
+        self.batch_size = 1
+        self.conv_states = None
+        self.rec_states = None
+        self.fused_output = None
+        self.rec_output = None
+        self.reset_state()
+
+        # Process each token through the decode path
+        outputs = []
+        for t in range(seq_len):
+            # Slice single token: [1, 1, 1, dim]
+            x_t = ttnn.slice(x, (0, 0, t, 0), (1, 1, t + 1, dim))
+            # Reshape to decode format: [1, 1, dim] (B=1)
+            x_t = ttnn.reshape(x_t, (1, 1, dim))
+
+            # Run through fused decode path (updates conv/rec states in place)
+            out_t = self._forward_decode_fused(x_t)
+            # out_t: [1, 1, 1, dim] after all-reduce
+
+            outputs.append(out_t)
+
+        # Save B=1 prefill states for later replication to batch decode slots
+        if not hasattr(self, "_prefill_conv_states") or self._prefill_conv_states is None:
+            self._init_prefill_states()
+        for i in range(self.conv_kernel_size):
+            ttnn.copy(self.conv_states[i], self._prefill_conv_states[i])
+        ttnn.copy(self.rec_states, self._prefill_rec_states)
+
+        # Clean up B=1 decode buffers
+        for cs in self.conv_states:
+            ttnn.deallocate(cs)
+        ttnn.deallocate(self.rec_states)
+        if self.fused_output is not None:
+            ttnn.deallocate(self.fused_output)
+        if self.rec_output is not None:
+            ttnn.deallocate(self.rec_output)
+
+        # Restore original decode-sized state
+        self.batch_size = orig_batch_size
+        self.conv_states = orig_conv_states
+        self.rec_states = orig_rec_states
+        self.fused_output = orig_fused_output
+        self.rec_output = orig_rec_output
+
+        # Concatenate along sequence dimension: [1, 1, seq_len, dim]
+        if len(outputs) > 1:
+            result = ttnn.concat(outputs, dim=2)
+            for o in outputs:
+                ttnn.deallocate(o)
+        else:
+            result = outputs[0]
+
+        return ttnn.reshape(result, (1, 1, seq_len, dim))
+
     def forward_prefill(self, x, current_pos):
         """GDN prefill: batched projections + conv1d, sequential recurrence with B=1.
 
@@ -633,6 +711,9 @@ class TtGatedDeltaNet(LightweightModule):
         sequence using batched ops. Only the recurrence loop runs per-token.
         Output projection is batched for the full sequence.
         """
+        if _os.environ.get("USE_SEQUENTIAL_PREFILL"):
+            return self._forward_prefill_sequential(x)
+
         tw = self.tw
         Nk_TP = self.Nk_TP
         Nv_TP = self.Nv_TP
