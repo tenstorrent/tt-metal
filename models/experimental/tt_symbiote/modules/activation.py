@@ -191,13 +191,29 @@ class TTNNSnakeBeta(TTNNModule):
 
     @staticmethod
     def _snake_beta_chunk_t() -> int:
-        """Max time length per SnakeBeta kernel to cap FP32 activation DRAM (code2wav BCT can be 100k+)."""
-        raw = os.environ.get("TT_SYMBIOTE_SNAKEBETA_CHUNK_T", "4096")
+        """Preferred time length per SnakeBeta slice along ``T`` (see also ``_snake_beta_t_slice_max``)."""
+        raw = os.environ.get("TT_SYMBIOTE_SNAKEBETA_CHUNK_T", "128")
         try:
             v = int(raw)
         except ValueError:
-            v = 4096
-        return max(512, v)
+            v = 128
+        return max(64, v)
+
+    @staticmethod
+    def _snake_beta_t_slice_max() -> int:
+        """Hard ceiling on **any** single SnakeBeta forward along ``T`` (short path or one concat leaf).
+
+        Previously, ``t_len <= chunk_t`` used one kernel for e.g. ``T=400`` while ``chunk_t=512``, which
+        allocates like a 400‑wide chunk and OOMs under fragmentation — **same math** as chunked mode,
+        but one giant buffer.  Default **128** keeps per‑kernel activations small; raise only with DRAM
+        headroom.  ``TT_SYMBIOTE_SNAKEBETA_T_SLICE_MAX``.
+        """
+        raw = os.environ.get("TT_SYMBIOTE_SNAKEBETA_T_SLICE_MAX", "128")
+        try:
+            v = int(raw)
+        except ValueError:
+            v = 128
+        return max(32, v)
 
     def _forward_fp32_core(
         self,
@@ -205,17 +221,32 @@ class TTNNSnakeBeta(TTNNModule):
         alpha_exp: ttnn.Tensor,
         reciprocal_beta: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """``x + 1/b * sin^2(x*exp(alpha))`` in FP32; frees intermediate tensors before return."""
+        """``x + 1/b * sin^2(x*exp(alpha))`` in FP32.
+
+        Drop each intermediate as soon as the next op is done — keeping four full-size FP32 temps
+        until ``add`` peaks DRAM and fails when banks are fragmented.
+        """
         x_times_alpha = ttnn.multiply(input_fp32, alpha_exp)
         sin_result = ttnn.sin(x_times_alpha)
+        try:
+            ttnn.deallocate(x_times_alpha)
+        except Exception:
+            pass
         sin_squared = ttnn.pow(sin_result, 2.0)
+        try:
+            ttnn.deallocate(sin_result)
+        except Exception:
+            pass
         scaled_sin = ttnn.multiply(reciprocal_beta, sin_squared)
+        try:
+            ttnn.deallocate(sin_squared)
+        except Exception:
+            pass
         result = ttnn.add(input_fp32, scaled_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for t in (x_times_alpha, sin_result, sin_squared, scaled_sin):
-            try:
-                ttnn.deallocate(t)
-            except Exception:
-                pass
+        try:
+            ttnn.deallocate(scaled_sin)
+        except Exception:
+            pass
         return result
 
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -229,6 +260,8 @@ class TTNNSnakeBeta(TTNNModule):
         b, c, t_len = shape
 
         chunk_t = self._snake_beta_chunk_t()
+        t_slice_max = self._snake_beta_t_slice_max()
+        step_t = min(chunk_t, t_slice_max)
         # Broadcast helpers (small): shared across time chunks.
         alpha_expanded = ttnn.unsqueeze(self.alpha, 0)
         alpha_expanded = ttnn.unsqueeze(alpha_expanded, -1)
@@ -249,7 +282,7 @@ class TTNNSnakeBeta(TTNNModule):
         except Exception:
             pass
 
-        if t_len <= chunk_t:
+        if t_len <= t_slice_max:
             if out_dtype != ttnn.float32:
                 input_fp32 = ttnn.typecast(input_tensor, ttnn.float32)
             else:
@@ -271,14 +304,10 @@ class TTNNSnakeBeta(TTNNModule):
                 pass
             return result
 
-        # Long sequences: chunk along T, then stitch. Device-side ``ttnn.concat`` over many chunks keeps
-        # every chunk tensor alive until concat completes and allocates a full-length output — peak DRAM
-        # can OOM on long code2wav streams (e.g. T~5e5). Stitch on host with ``torch.cat`` (same dtypes as
-        # the per-chunk TTNN outputs), deallocate each chunk TTNN tensor, then one ``from_torch`` upload —
-        # numerically identical to a single device concat, lower peak device memory.
+        # Long sequences: chunk along T, then pairwise tree concat (``_stitch_bct_along_t_tree``).
         out_chunks = []
-        for t0 in range(0, t_len, chunk_t):
-            t1 = min(t0 + chunk_t, t_len)
+        for t0 in range(0, t_len, step_t):
+            t1 = min(t0 + step_t, t_len)
             sl = ttnn.slice(input_tensor, (0, 0, t0), (b, c, t1))
             if out_dtype != ttnn.float32:
                 sl_fp32 = ttnn.typecast(sl, ttnn.float32)
@@ -290,21 +319,12 @@ class TTNNSnakeBeta(TTNNModule):
             else:
                 out_chunks.append(res_fp32)
 
-        torch_parts = []
-        mesh_dev = self.device
-        for ch in out_chunks:
-            torch_parts.append(_ttnn_mesh_to_torch_one_replica(ch, mesh_dev))
-            try:
-                ttnn.deallocate(ch)
-            except Exception:
-                pass
-        merged_torch = torch.cat(torch_parts, dim=2)
         try:
             ttnn.deallocate(alpha_exp)
             ttnn.deallocate(reciprocal_beta)
         except Exception:
             pass
-        return _upload_bct_replicated(merged_torch, mesh_dev)
+        return _stitch_bct_along_t_tree(out_chunks)
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
@@ -364,6 +384,39 @@ def _upload_bct_replicated(x_t: torch.Tensor, mesh_device):
         device=mesh_device,
         mesh_mapper=mesh_mapper,
     )
+
+
+def _stitch_bct_along_t_tree(chunks: list) -> ttnn.Tensor:
+    """Concatenate rank-3 ``[B,C,T]`` tensors along time (dim=2) with pairwise tree merges.
+
+    Frees each pair after merge so we do not hold all chunks until one N-way ``concat`` completes, and
+    we avoid ``torch.cat`` + one giant ``from_torch`` (fragmented DRAM).
+    """
+    if not chunks:
+        raise ValueError("_stitch_bct_along_t_tree: empty chunk list")
+    level = list(chunks)
+    while len(level) > 1:
+        nxt = []
+        i = 0
+        while i < len(level):
+            if i + 1 < len(level):
+                merged = ttnn.concat(
+                    [level[i], level[i + 1]],
+                    dim=2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for t in (level[i], level[i + 1]):
+                    try:
+                        ttnn.deallocate(t)
+                    except Exception:
+                        pass
+                nxt.append(merged)
+                i += 2
+            else:
+                nxt.append(level[i])
+                i += 1
+        level = nxt
+    return level[0]
 
 
 def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:

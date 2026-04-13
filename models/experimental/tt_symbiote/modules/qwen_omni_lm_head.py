@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import os
+
+import torch
 from torch import nn
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -14,6 +17,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 
 
 def _lm_head_logits_dtensor_config(mesh_device):
@@ -27,14 +31,34 @@ def _lm_head_logits_dtensor_config(mesh_device):
     )
 
 
+def _thinker_lm_head_chunk_seq() -> int:
+    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
+
+    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
+    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
+    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
+    to talker ``codec_head`` / code_predictor heads).
+    """
+    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
+    try:
+        v = int(raw)
+    except ValueError:
+        v = 8
+    return max(1, v)
+
+
 class TTNNQwenOmniThinkerLmHead(TTNNModule):
     """
     Final logits projection for the thinker.
 
     Final RMSNorm output may be **width-sharded** on a multi-device mesh; this layer
     all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
-    then runs ``ttnn.linear`` with replicated weights. Readback uses a replicated mesh config that
-    slices dim 0 after compose so ``torch.argmax`` / generation see ``[batch, seq, vocab]``.
+    then runs ``ttnn.linear`` with replicated weights on **sequence chunks**, reads each logits chunk
+    to host, and **concatenates on CPU** into the final ``[batch, seq, vocab]`` tensor.
+
+    Full prefill logits do not fit device DRAM (~1.7 GiB+); re-uploading them with ``from_torch`` OOMs,
+    so the merged result stays **host ``torch``** (wrapped as :class:`TorchTTNNTensor` by symbiote).
+    Sampling / ``argmax`` run on CPU tensors as in typical HF flows.
     """
 
     @classmethod
@@ -123,9 +147,34 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
         while len(input_shape) < 4:
             input_shape.insert(1, 1)
         x = ttnn.reshape(x, input_shape)
-        tt_output = ttnn.linear(x, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
-        return tt_output
+        b, _, s_total, h_dim = (int(input_shape[0]), int(input_shape[1]), int(input_shape[2]), int(input_shape[3]))
+        chunk_seq = _thinker_lm_head_chunk_seq()
+        mesh_dev = self.device
+
+        # Chunk along sequence, run ``linear`` on device, **read each logits chunk to host** and free
+        # it before the next chunk.  Device-side ``ttnn.concat`` to stitch logits reintroduces large
+        # contiguous DRAM allocations that still fail under severe fragmentation (~512 KiB holes).
+        out_torch_parts = []
+        for s0 in range(0, s_total, chunk_seq):
+            s1 = min(s0 + chunk_seq, s_total)
+            x_chunk = ttnn.slice(x, (0, 0, s0, 0), (b, 1, s1, h_dim))
+            y_chunk = ttnn.linear(x_chunk, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out_torch_parts.append(_ttnn_mesh_to_torch_one_replica(y_chunk, mesh_dev))
+            try:
+                ttnn.deallocate(y_chunk)
+            except Exception:
+                pass
+
+        try:
+            ttnn.deallocate(x)
+        except Exception:
+            pass
+
+        merged_torch = torch.cat(out_torch_parts, dim=2)
+        merged_torch = merged_torch.reshape(input_tensor_shape[:-1] + [self.out_features]).contiguous()
+        # Do not ``ttnn.from_torch(merged_torch)``: full-sequence logits exceed available DRAM
+        # (multi‑GiB).  Symbiote wraps the host tensor as ``TorchTTNNTensor`` in ``post_process``.
+        return merged_torch
 
 
 def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:

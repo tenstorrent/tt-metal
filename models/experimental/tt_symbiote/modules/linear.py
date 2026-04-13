@@ -15,6 +15,7 @@ from models.experimental.tt_symbiote.core.module import (
     DeviceArch,
 )
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import tree_map
 
 
@@ -80,8 +81,54 @@ class TTNNLinear(TTNNModule):
             ttnn.deallocate(self.tt_bias)
         super().deallocate_weights_impl()
 
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Mesh unwrap can concat last-dim shards into ``out_features * num_devices``; clamp to ``out_features``.
+
+        Needed so downstream PyTorch ops (e.g. residual ``+`` in HF encoder layers) see ``[..., out_features]``.
+        Same pattern as :class:`TTNNQwen3OmniMoeAudioEncoderConvOutLinear` / vision MLP readback.
+        """
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def _materialize_one_replica(e):
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            h = int(self.out_features)
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            if pt.shape[-1] > h:
+                pt = pt[..., :h]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        return tree_map(_materialize_one_replica, output_tensors)
+
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
+        if isinstance(input_tensor, TorchTTNNTensor):
+            input_tensor = input_tensor.to_ttnn
+
+        # Mesh: LayerNorm / prior ops often emit last-dim column-sharded activations (``H / num_devices``)
+        # while ``ttnn.linear`` + full-width ``tt_weight`` expect full ``in_features`` on the last dim.
+        if self.device is not None and self.device.get_num_devices() > 1:
+            w_in = int(input_tensor.shape[-1])
+            n = int(self.device.get_num_devices())
+            if w_in * n == int(self.in_features) and w_in != int(self.in_features):
+                if input_tensor.layout != ttnn.TILE_LAYOUT:
+                    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                input_tensor = ttnn.all_gather(
+                    input_tensor,
+                    dim=-1,
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                )
+
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -92,6 +139,15 @@ class TTNNLinear(TTNNModule):
         tt_output = ttnn.linear(input_tensor, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
         return tt_output
+
+
+@trace_enabled
+class TTNNQwen3OmniMoeAudioEncoderConvOutLinear(TTNNLinear):
+    """HF ``Qwen3OmniMoeAudioEncoder.conv_out``: large flattened conv features → ``d_model``.
+
+    Uses :meth:`TTNNLinear.forward` mesh all-gather when the flattened conv width is column-sharded, and
+    :meth:`TTNNLinear.set_output_tensors_config_impl` for host readback (same as other plain linears).
+    """
 
 
 class TTNNLinearInputShardedWeightSharded(TTNNLinear):
