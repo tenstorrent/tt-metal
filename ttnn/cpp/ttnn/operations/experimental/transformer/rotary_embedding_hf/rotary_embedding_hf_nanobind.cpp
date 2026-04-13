@@ -3,17 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_hf_nanobind.hpp"
-#include "rotary_embedding_hf.hpp"
+
+#include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-namespace nb = nanobind;
+#include "ttnn-nanobind/bind_function.hpp"
+#include "rotary_embedding_hf.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 void bind_rotary_embedding_hf(nb::module_& mod) {
-    auto doc = R"doc(
+    ttnn::bind_function<"rotary_embedding_hf", "ttnn.experimental.">(
+        mod,
+        R"doc(
         Applies HuggingFace-style rotary position embedding to input tensor.
 
         This operation supports both prefill and decode modes:
@@ -26,9 +30,9 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
             input_tensor (ttnn.Tensor): Input tensor to apply rotation to
             cos_cache (ttnn.Tensor): Precomputed cosine values
             sin_cache (ttnn.Tensor): Precomputed sine values
-            is_decode (bool): Whether to use decode mode (default: False)
 
         Keyword Args:
+            is_decode (bool): Whether to use decode mode (default: False)
             memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for output tensor
             compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): Compute kernel configuration
 
@@ -47,20 +51,15 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
             >>> cos = ttnn.from_torch(torch.randn(1, 32, 1, 64), device=device)
             >>> sin = ttnn.from_torch(torch.randn(1, 32, 1, 64), device=device)
             >>> output = ttnn.experimental.rotary_embedding_hf(input, cos, sin, is_decode=True)
-    )doc";
-
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::experimental::rotary_embedding_hf,
-        doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("cos_cache"),
-            nb::arg("sin_cache"),
-            nb::arg("is_decode") = false,
-            nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt});
+    )doc",
+        &ttnn::experimental::rotary_embedding_hf,
+        nb::arg("input_tensor"),
+        nb::arg("cos_cache"),
+        nb::arg("sin_cache"),
+        nb::kw_only(),
+        nb::arg("is_decode") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

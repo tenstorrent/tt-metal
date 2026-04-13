@@ -4,26 +4,19 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
-
-struct RotaryEmbeddingHf {
-    static tt::tt_metal::Tensor invoke(
-        const tt::tt_metal::Tensor& input_tensor,
-        const tt::tt_metal::Tensor& cos_cache,
-        const tt::tt_metal::Tensor& sin_cache,
-        const bool is_decode,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::transformer
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental {
 
-constexpr auto rotary_embedding_hf = ttnn::register_operation<
-    "ttnn::experimental::rotary_embedding_hf",
-    ttnn::operations::experimental::transformer::RotaryEmbeddingHf>();
+ttnn::Tensor rotary_embedding_hf(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    bool is_decode,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -210,7 +210,11 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.rotary_embedding_hf(
-        input_tensor, cos_cache_tensor, sin_cache_tensor, is_decode, memory_config=output_memory_config
+        input_tensor,
+        cos_cache_tensor,
+        sin_cache_tensor,
+        is_decode=is_decode,
+        memory_config=output_memory_config,
     )
     e2e_perf = stop_measuring_time(start_time)
 
