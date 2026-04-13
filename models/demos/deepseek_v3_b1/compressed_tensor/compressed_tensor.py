@@ -493,9 +493,13 @@ class CompressedTensor:
             shard_raw_sizes.append(shard_bytes)
             tile_mant_bits.extend(mant_list)
 
-        max_shard_bytes = _align(max(shard_raw_sizes), _get_alignment(memory_config.buffer_type))
+        alignment = _get_alignment(memory_config.buffer_type)
+        max_shard_bytes = _align(max(shard_raw_sizes), alignment)
         if self._min_shard_bytes > max_shard_bytes:
             max_shard_bytes = self._min_shard_bytes
+        # Floor at one alignment page: fully-zero experts have 0 packed data bytes
+        # but ttnn requires a non-zero shard size in the WIDTH_SHARDED memory config.
+        max_shard_bytes = max(max_shard_bytes, alignment)
         data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config)
         corrected_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
 
