@@ -398,7 +398,7 @@ def test_sampling_topk_topp_distribution():
     ), "Top-1 token should be sampled more often than the average of the bottom half"
 
 
-def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temperature: float, final_core_idx: int):
+def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, num_internal_iterations: int):
     """
     Run the top-K sampling kernel (k>1 path) on a single device with rigged
     scores: 32 random vocabulary positions are set to distinct high values so
@@ -512,6 +512,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
         rand_output_tensor=ttnn_rand_output,
         final_core_coord=final_core,
         final_mesh_coord=None,
+        num_internal_iterations=num_internal_iterations,
     )
 
     output_torch = ttnn.to_torch(ttnn_result)
@@ -542,16 +543,16 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
 
 
 @pytest.mark.parametrize(
-    "seed, final_core_idx, p, temperature",
+    "seed, final_core_idx, p, temperature, num_internal_iterations",
     [
-        (2005, 100, 0.95, 0.6),
-        (17, 0, 0.995, 0.4),
-        (1337, 50, 1.0, 0.8),
-        (4242, 73, 0.1, 0.6),
+        (2005, 100, 0.95, 0.6, 100),
+        (17, 0, 0.995, 0.4, 1),
+        (1337, 50, 1.0, 0.8, 1),
+        (4242, 73, 0.1, 0.6, 1),
     ],ids = ["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx):
+def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx, num_internal_iterations):
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
@@ -560,7 +561,7 @@ def test_sampling_topk_single_device(device, seed, p, temperature, final_core_id
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
     _run_sampling_topk_single_device(
-        device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx
+        device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx, num_internal_iterations=num_internal_iterations
     )
 
 

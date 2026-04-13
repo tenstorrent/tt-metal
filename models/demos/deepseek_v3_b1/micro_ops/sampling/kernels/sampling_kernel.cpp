@@ -42,7 +42,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_mesh_local_send_slot_offset"),
         get_named_compile_time_arg_val("sampling_sender_idx"),
         0,
-        0,
+        0xFFFFFFFF,
         0,
         0xFFFFFFFF,
         0,
@@ -143,6 +143,8 @@ void kernel_main() {
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
             sampling_op;
 
+    uint32_t num_internal_iterations = get_named_compile_time_arg_val("sampling_num_internal_iterations");
+
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
     if constexpr (SamplingComputeCTArgs::topk_k == 32) {
@@ -154,6 +156,9 @@ void kernel_main() {
         deepseek_compute_kernel_hw_startup<true>(SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_out_cb);
     }
 
-    sampling_op(args);
+    sampling_op.set_seed(get_named_compile_time_arg_val("sampling_seed"));
+    for (uint32_t i = 0; i < num_internal_iterations; ++i) {
+        sampling_op(args);
+    }
 #endif
 }

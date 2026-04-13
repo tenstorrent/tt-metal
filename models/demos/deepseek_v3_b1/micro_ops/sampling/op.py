@@ -118,6 +118,7 @@ class SamplingOp:
         scores_scratch_tensor=None,
         indices_scratch_tensor=None,
         mesh_axis: str = "x",
+        num_internal_iterations: int = 1,
     ):
         """
         Execute sampling.
@@ -166,7 +167,7 @@ class SamplingOp:
                 else:
                     if scores_scratch_tensor is None or indices_scratch_tensor is None:
                         raise ValueError("scores_scratch_tensor and indices_scratch_tensor are required in mesh mode for k>1")
-                    return SamplingOp._op_mesh_rx2_axis_x_topk(
+                    return SamplingOp._op_mesh_topk(
                         scores_tensor=scores_tensor,
                         indices_tensor=indices_tensor,
                         output_index_tensor=output_index_tensor,
@@ -182,6 +183,7 @@ class SamplingOp:
                         scores_scratch_tensor=scores_scratch_tensor,
                         indices_scratch_tensor=indices_scratch_tensor,
                         mesh_axis=mesh_axis,
+                        num_internal_iterations=num_internal_iterations,
                     )
         elif k == 1:
             return SamplingOp._op_single_device(
@@ -203,6 +205,7 @@ class SamplingOp:
                 rand_output_tensor=rand_output_tensor,
                 final_core_coord=final_core_coord,
                 final_mesh_coord=final_mesh_coord,
+                num_internal_iterations=num_internal_iterations,
             )
         else:
             raise ValueError(f"k must be >= 1, got {k}")
@@ -399,6 +402,7 @@ class SamplingOp:
         rand_output_tensor=None,
         final_core_coord=None,
         final_mesh_coord=None,
+        num_internal_iterations: int = 1,
     ):
         """
         Single-device top-K sampling path (k > 1).
@@ -536,6 +540,7 @@ class SamplingOp:
             ("sampling_mesh_stage_indices_cb", 0xFFFFFFFF),
             ("sampling_scores_scratch_stage2_offset", 0),
             ("sampling_indices_scratch_stage2_offset", 0),
+            ("sampling_num_internal_iterations", num_internal_iterations),
         ]
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
@@ -564,6 +569,7 @@ class SamplingOp:
             ("sampling_stage1_num_input_tiles", 0),
             ("sampling_stage2_row_elements", 0),
             ("sampling_stage2_num_input_tiles", 0),
+            ("sampling_num_internal_iterations", num_internal_iterations),
         ]
         brisc_named_compile_time_args = [
             ("sampling_winner_page_bytes", winner_page_bytes),
@@ -576,6 +582,7 @@ class SamplingOp:
             ("sampling_topk_scores_stride", topk_scores_stride),
             ("sampling_mesh_mode", 0),
             ("sampling_stage2_receiver", 0),
+            ("sampling_num_internal_iterations", num_internal_iterations),
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
@@ -793,7 +800,7 @@ class SamplingOp:
         return output_index_tensor
 
     @staticmethod
-    def _op_mesh_rx2_axis_x_topk(
+    def _op_mesh_topk(
         scores_tensor,
         indices_tensor,
         output_index_tensor,
@@ -809,6 +816,7 @@ class SamplingOp:
         scores_scratch_tensor,
         indices_scratch_tensor,
         mesh_axis: str,
+        num_internal_iterations: int,
     ):
         """
         Mesh (R,2) top-K sampling path (k > 1).
@@ -997,6 +1005,7 @@ class SamplingOp:
                     ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb if k == 32 else 0xFFFFFFFF),
                     ("sampling_scores_scratch_stage2_offset", stage2_scores_scratch_offset),
                     ("sampling_indices_scratch_stage2_offset", stage2_indices_scratch_offset),
+                    ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
                 trisc_named_compile_time_args = [
                     ("sampling_softmax_in_cb", softmax_in_cb if is_final_mesh_device else 0),
@@ -1025,6 +1034,7 @@ class SamplingOp:
                     ("sampling_stage1_num_input_tiles", stage1_mesh_tiles),
                     ("sampling_stage2_row_elements", stage2_num_slots * k),
                     ("sampling_stage2_num_input_tiles", stage2_mesh_tiles),
+                    ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
                 rand_output_addr = 0
                 if rand_per_device is not None and is_final_mesh_device:
@@ -1040,6 +1050,7 @@ class SamplingOp:
                     ("sampling_topk_scores_stride", topk_scores_stride),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage2_receiver", 1 if is_stage2_receiver else 0),
+                    ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
 
                 per_core_brisc_runtime_args = []

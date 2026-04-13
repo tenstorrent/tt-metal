@@ -373,15 +373,15 @@ inline void softmax_mul_block_bcast_cols(
     cb_pop_front(in0_cb, num_tiles);
 }
 
-void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
+void generate_rand_tile(const uint32_t cb_id) {
     init_sfpu(cb_id, cb_id);
     uint32_t rand_scale = 0;
     const float one_f = 1.0f;
     std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));
     uint32_t rand_from = 0;
-    if (seed != 0) {
-        rand_tile_init(seed);
-    }
+    // if (seed != 0xFFFFFFFF) {
+    //     rand_tile_init(seed);
+    // }
     cb_reserve_back(cb_id, 1);
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
@@ -633,7 +633,7 @@ struct TopKSampling {
         uint32_t MeshLocalSendSlotOffset,
         uint32_t SenderIdx,
         uint32_t SocketMode = 0,
-        uint32_t SocketCBId = 0,
+        uint32_t SocketCBId = 0xFFFFFFFF,
         uint32_t SocketPageSizeBytes = 0,
         uint32_t ScoresCBId = 0xFFFFFFFF,
         uint32_t ScoresNumPages = 0,
@@ -715,7 +715,7 @@ struct TopKSampling {
         uint32_t SocketMode = 0,
         uint32_t SocketCBId = 0,
         uint32_t SocketPageSizeBytes = 0,
-        uint32_t TopK = 1,
+        uint32_t TopK = 32,
         uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
         uint32_t RandCBId = 0xFFFFFFFF,
         uint32_t WinnerCBId = 0xFFFFFFFF,
@@ -750,7 +750,7 @@ struct TopKSampling {
         uint32_t TempCBId,
         uint32_t RandCBId = 0xFFFFFFFF,
         uint32_t Seed = 520,
-        uint32_t TopK = 1,
+        uint32_t TopK = 32,
         uint32_t MeshMode = 0,
         uint32_t Stage1Receiver = 0,
         uint32_t Stage2Receiver = 0,
@@ -844,6 +844,14 @@ struct TopKSampling {
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
+
+        void set_seed(uint32_t seed = 0xFFFFFFFF) {
+            #if defined(COMPILE_FOR_TRISC)
+            if (seed != 0xFFFFFFFF) {
+                rand_tile_init(seed);
+            }
+            #endif
+        }
 
     private:
 #if defined(COMPILE_FOR_NCRISC)
@@ -1598,7 +1606,7 @@ struct TopKSampling {
                 softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
 
                 if constexpr (CTArgs::topk_k > 1) {
-                    generate_rand_tile(CTArgs::rand_cb, CTArgs::seed);
+                    generate_rand_tile(CTArgs::rand_cb);
                 }
             }
 #endif
