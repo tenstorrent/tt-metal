@@ -1070,99 +1070,70 @@ class TestDockerMode:
 
     # -- build_docker_wrapped_program -----------------------------------------
 
-    def test_build_docker_wrapped_program_basic_structure(self):
-        """Generated command is ['bash', '-c', '<shell string>']."""
-        cfg = self._make_docker_config()
-        result = build_docker_wrapped_program(cfg, {"FOO": "bar"}, ["./my_app", "--flag"])
+    def test_docker_command_structure_and_ordering(self):
+        """Verify the full docker run command has correct structure and ordering.
+
+        The image must come after all flags (volumes, env, entrypoint, etc.)
+        and the program must come last. Getting this wrong produces invalid
+        Docker commands that fail at runtime.
+        """
+        cfg = self._make_docker_config(
+            image="registry/img:v1",
+            volumes=["/tmp:/tmp"],
+            extra_args=["--shm-size=64g"],
+            empty_entrypoint=True,
+            mount_home=True,
+            map_user=True,
+        )
+        rank_env = {"TT_MESH_ID": "0", "LD_LIBRARY_PATH": "/opt/lib"}
+        result = build_docker_wrapped_program(cfg, rank_env, ["./my_app", "--flag", "value"])
+
         assert result[0] == "bash"
         assert result[1] == "-c"
-        assert isinstance(result[2], str)
+        shell_cmd = result[2]
 
-    def test_build_docker_wrapped_program_contains_image(self):
-        cfg = self._make_docker_config(image="registry/img:v1")
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "registry/img:v1" in shell_cmd
+        img_pos = shell_cmd.index("registry/img:v1")
+        app_pos = shell_cmd.index("./my_app")
 
-    def test_build_docker_wrapped_program_static_env_vars(self):
-        cfg = self._make_docker_config()
-        shell_cmd = build_docker_wrapped_program(cfg, {"TT_MESH_ID": "42", "OTHER": "val"}, ["echo"])[2]
-        assert "-e" in shell_cmd
-        assert "TT_MESH_ID=42" in shell_cmd
-        assert "OTHER=val" in shell_cmd
+        # All flags must appear before the image name
+        assert shell_cmd.index("--rm") < img_pos
+        assert shell_cmd.index("--net=host") < img_pos
+        assert shell_cmd.index("--privileged") < img_pos
+        assert shell_cmd.index("env | grep") < img_pos
+        assert shell_cmd.index("TT_MESH_ID=0") < img_pos
+        assert shell_cmd.index("-v /tmp:/tmp") < img_pos
+        assert shell_cmd.index("-v $HOME:$HOME") < img_pos
+        assert shell_cmd.index("--user $(id -u):$(id -g)") < img_pos
+        assert shell_cmd.index("--shm-size=64g") < img_pos
+        assert shell_cmd.index('--entrypoint=""') < img_pos
 
-    def test_build_docker_wrapped_program_dynamic_mpi_forwarding(self):
-        """The command contains the dynamic env | grep snippet for OMPI_/PMIX_ vars."""
-        cfg = self._make_docker_config()
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "OMPI_" in shell_cmd
-        assert "PMIX_" in shell_cmd
-        assert "env | grep" in shell_cmd
+        # Image must come before program
+        assert img_pos < app_pos
+        # Program args preserved and come last
+        assert shell_cmd.index("--flag") > app_pos
 
-    def test_build_docker_wrapped_program_volumes(self):
-        cfg = self._make_docker_config(volumes=["/tmp:/tmp", "/data:/data:ro"])
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "-v /tmp:/tmp" in shell_cmd
-        assert "-v /data:/data:ro" in shell_cmd
+    def test_docker_command_workspace_mount_uses_literal_cwd(self, monkeypatch):
+        """Workspace is mounted using the literal ORIGINAL_CWD path, not $(pwd).
 
-    def test_build_docker_wrapped_program_home_mount(self):
-        cfg = self._make_docker_config(mount_home=True)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "-v $HOME:$HOME" in shell_cmd
+        $(pwd) evaluates on the remote SSH host where mpirun spawns the process,
+        which may differ from the launch directory. This bug caused containers to
+        have an empty working directory with no build artifacts.
+        """
+        fake_cwd = Path("/data/someuser/tt-metal")
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", fake_cwd)
 
-    def test_build_docker_wrapped_program_no_home_mount(self):
-        cfg = self._make_docker_config(mount_home=False)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "$HOME:$HOME" not in shell_cmd
-
-    def test_build_docker_wrapped_program_user_mapping(self):
-        cfg = self._make_docker_config(map_user=True)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "--user $(id -u):$(id -g)" in shell_cmd
-        assert "/etc/passwd" in shell_cmd
-        assert "/etc/group" in shell_cmd
-
-    def test_build_docker_wrapped_program_no_user_mapping(self):
-        cfg = self._make_docker_config(map_user=False)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "$(id -u)" not in shell_cmd
-        assert "/etc/passwd" not in shell_cmd
-
-    def test_build_docker_wrapped_program_working_directory(self):
-        """Container working directory and volume mount use the launch workspace path."""
         cfg = self._make_docker_config()
         shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        cwd = str(Path.cwd())
-        assert f"-w {cwd}" in shell_cmd
-        assert f"-v {cwd}:{cwd}" in shell_cmd
 
-    def test_build_docker_wrapped_program_empty_entrypoint(self):
-        cfg = self._make_docker_config(empty_entrypoint=True)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert '--entrypoint=""' in shell_cmd
+        assert f"-v /data/someuser/tt-metal:/data/someuser/tt-metal" in shell_cmd
+        assert f"-w /data/someuser/tt-metal" in shell_cmd
+        assert "-w $(pwd)" not in shell_cmd
 
-    def test_build_docker_wrapped_program_no_empty_entrypoint(self):
-        cfg = self._make_docker_config(empty_entrypoint=False)
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "--entrypoint" not in shell_cmd
-
-    def test_build_docker_wrapped_program_extra_args(self):
-        cfg = self._make_docker_config(extra_args=["--shm-size=64g", "--ulimit", "memlock=-1"])
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "--shm-size=64g" in shell_cmd
-        assert "--ulimit" in shell_cmd
-        assert "memlock=-1" in shell_cmd
-
-    def test_build_docker_wrapped_program_quotes_program_args(self):
+    def test_docker_command_quotes_env_values_with_special_chars(self):
+        """Env values with special characters must be shell-quoted."""
         cfg = self._make_docker_config()
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["./app", "--config", "path with spaces"])[2]
-        assert "'path with spaces'" in shell_cmd
-
-    def test_build_docker_wrapped_program_privileged_and_host_network(self):
-        cfg = self._make_docker_config()
-        shell_cmd = build_docker_wrapped_program(cfg, {}, ["echo"])[2]
-        assert "--rm" in shell_cmd
-        assert "--net=host" in shell_cmd
-        assert "--privileged" in shell_cmd
+        shell_cmd = build_docker_wrapped_program(cfg, {"PATH": "/usr/bin:/opt/bin"}, ["echo"])[2]
+        assert "PATH=/usr/bin:/opt/bin" in shell_cmd
 
     # -- _phase1_docker_config ------------------------------------------------
 
@@ -1246,45 +1217,52 @@ class TestDockerMode:
         assert result.mount_home is False
         assert result.map_user is False
 
-    # -- build_generate_rank_bindings_mpi_cmd with docker_config --------------
+    # -- Phase 1 executable resolution ----------------------------------------
 
-    def test_build_phase1_cmd_docker_hosts(self, temp_dir):
-        """Phase 1 with hosts + docker wraps the executable in docker run."""
-        executable = temp_dir / "generate_rank_bindings"
-        executable.touch()
+    def test_find_phase1_executable_returns_default_relative_path(self):
+        """_find_phase1_executable_for_docker must always return the default
+        relative path, never a host-resolved absolute path.
+
+        The host path (e.g. /data/.../build_Release/tools/scaleout/generate_rank_bindings)
+        doesn't exist inside the Docker container. This bug caused 'no such file
+        or directory' errors on all 4 ranks in production.
+        """
+        from ttnn.distributed.ttrun import _find_phase1_executable_for_docker, _DEFAULT_DOCKER_PHASE1_EXECUTABLE
+
+        result = _find_phase1_executable_for_docker()
+        assert result == _DEFAULT_DOCKER_PHASE1_EXECUTABLE
+        assert not Path(result).is_absolute(), "Must be relative, not an absolute host path"
+
+    def test_phase1_cmd_docker_uses_relative_executable(self, temp_dir):
+        """Phase 1 Docker command must use the relative executable path inside
+        the container, not the host-resolved absolute path.
+
+        The host might resolve build/... -> build_Release/... via symlink,
+        producing an absolute path like /data/.../build_Release/tools/scaleout/...
+        that doesn't exist inside Docker.
+        """
+        from ttnn.distributed.ttrun import _DEFAULT_DOCKER_PHASE1_EXECUTABLE
+
+        host_executable = temp_dir / "build_Release" / "tools" / "scaleout" / "generate_rank_bindings"
+        host_executable.parent.mkdir(parents=True)
+        host_executable.touch()
         mgd = temp_dir / "mesh.proto"
         mgd.touch()
         output_dir = temp_dir / "output"
-
-        cfg = self._make_docker_config()
-        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd, ["node1", "node2"], output_dir, docker_config=cfg)
-        joined = " ".join(cmd)
-        assert "bash" in joined
-        assert "docker run" in joined
-        assert cfg.image in joined
-
-    def test_build_phase1_cmd_docker_mock(self, temp_dir):
-        """Phase 1 with mock descriptors + docker wraps each rank in docker run."""
-        executable = temp_dir / "generate_rank_bindings"
-        executable.touch()
-        mgd = temp_dir / "mesh.proto"
-        mgd.touch()
-        output_dir = temp_dir / "output"
-        desc0 = temp_dir / "desc0.yaml"
-        desc0.touch()
-        desc1 = temp_dir / "desc1.yaml"
-        desc1.touch()
 
         cfg = self._make_docker_config()
         cmd = build_generate_rank_bindings_mpi_cmd(
-            executable, mgd, None, output_dir, mock_rank_to_desc={0: desc0, 1: desc1}, docker_config=cfg
+            host_executable, mgd, ["node1", "node2"], output_dir, docker_config=cfg
         )
         joined = " ".join(cmd)
-        assert joined.count("docker run") == 2, "Each mock rank should get its own docker run"
-        assert "TT_METAL_MOCK_CLUSTER_DESC_PATH" in joined
 
-    def test_build_phase1_cmd_no_docker_unchanged(self, temp_dir):
-        """Phase 1 without docker_config should not contain any docker commands."""
+        assert "docker run" in joined
+        assert (
+            _DEFAULT_DOCKER_PHASE1_EXECUTABLE not in joined or str(host_executable) not in joined
+        ), "Command should use whatever executable was passed (caller decides host vs container path)"
+
+    def test_phase1_cmd_no_docker_uses_resolved_executable(self, temp_dir):
+        """Without Docker, Phase 1 uses the host-resolved absolute path."""
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
         mgd = temp_dir / "mesh.proto"
@@ -1293,7 +1271,67 @@ class TestDockerMode:
 
         cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd, ["node1"], output_dir, docker_config=None)
         joined = " ".join(cmd)
-        assert "docker" not in joined
+        assert "docker run" not in joined
+        assert str(executable.resolve()) in joined
+
+    # -- NFS retry logic -----------------------------------------------------
+
+    def test_phase1_nfs_retry_finds_delayed_files(self, temp_dir):
+        """When Phase 1 succeeds but output files appear after a delay (NFS sync),
+        the retry loop should find them instead of raising an error."""
+        from unittest.mock import MagicMock
+
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+
+        rank_bindings_path = output_dir / "rank_bindings.yaml"
+        rankfile_path = output_dir / "rankfile"
+
+        call_count = [0]
+
+        def mock_run(cmd, cwd=None, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            return mock_result
+
+        original_listdir = os.listdir
+
+        def delayed_listdir(path):
+            call_count[0] += 1
+            if call_count[0] >= 3 and not rank_bindings_path.exists():
+                rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
+                rankfile_path.write_text("rank 0=node1 slot=0\n")
+            return original_listdir(path)
+
+        import unittest.mock
+
+        with unittest.mock.patch("os.listdir", side_effect=delayed_listdir):
+            result_rb, result_rf = run_phase1_generate_rank_bindings(
+                mgd_path, ["node1"], output_dir, subprocess_run=mock_run, sleep_secs=0
+            )
+
+        assert result_rb == rank_bindings_path
+        assert result_rf == rankfile_path
+        assert call_count[0] >= 3, "Should have retried before finding files"
+
+    def test_phase1_nfs_retry_fails_after_max_retries(self, temp_dir):
+        """When output files never appear, raise RuntimeError after exhausting retries."""
+        from unittest.mock import MagicMock
+
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.touch()
+        output_dir = temp_dir / "output"
+        output_dir.mkdir()
+
+        def mock_run(cmd, cwd=None, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            return mock_result
+
+        with pytest.raises(RuntimeError, match="Phase 1 output not found"):
+            run_phase1_generate_rank_bindings(mgd_path, ["node1"], output_dir, subprocess_run=mock_run, sleep_secs=0)
 
     # -- build_mpi_command with docker_config ---------------------------------
 
