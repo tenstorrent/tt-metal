@@ -1147,7 +1147,7 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
 }
 
 TEST(MultiHost, TestDual4x8ZDirectionFallbackControlPlaneInit) {
-    // Dual 4x8 galaxies (c02u08, c03u02) - Z-only connections between them.
+    // Dual 4x8 galaxies (SP4 bh-glx-d04u08, bh-glx-d05u08) - Z-only connections between them.
     // MGD has no assign_z_direction; fallback to Z when NESW runs out.
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         GTEST_SKIP() << "Requires UBB galaxy (dual 4x8 cluster)";
