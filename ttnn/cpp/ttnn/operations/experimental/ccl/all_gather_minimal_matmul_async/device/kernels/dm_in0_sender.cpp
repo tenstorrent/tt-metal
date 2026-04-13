@@ -137,7 +137,8 @@ void kernel_main() {
     // Always create tuple of output accessors (size = N_chunks) - addresses from common args
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
-    auto outputs_tuple = make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start);
+    auto outputs_tuple =
+        make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;

@@ -15,9 +15,11 @@ template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
     const std::tuple<Args...>& args_tuple,
     uint32_t address_rt_arg_index_start,
+    uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(
-        TensorAccessor(std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes))...);
+    return std::make_tuple(decltype(TensorAccessor(
+        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes)))(
+        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
 }
 }  // namespace detail
 
@@ -27,9 +29,9 @@ auto make_tensor_accessor_tuple_impl(
  */
 template <typename... Args>
 auto make_tensor_accessor_tuple_uniform_page_size(
-    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start) {
+    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
     return detail::make_tensor_accessor_tuple_impl(
-        args_tuple, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+        args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
