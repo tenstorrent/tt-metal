@@ -74,15 +74,22 @@ class SamplingOp:
         topk_values, topk_positions = torch.topk(scores_f32, k=actual_k, sorted=True)
         topk_indices = indices_i64[topk_positions]
 
-        probs = torch.softmax(topk_values / temperature, dim=-1)
+        scaled = (topk_values.to(torch.bfloat16) * torch.tensor(1.0 / temperature, dtype=torch.bfloat16)).float()
+        probs = torch.softmax(scaled, dim=-1)
 
         cum_probs = torch.cumsum(probs, dim=-1)
+        logger.debug(f"Cumulative probabilities: {cum_probs}")
         num_kept = int((cum_probs < p).sum().item()) + 1
         num_kept = max(1, min(num_kept, actual_k))
+
+        logger.debug(f"Number of kept tokens: {num_kept}")
 
         kept_probs = probs[:num_kept]
         kept_indices = topk_indices[:num_kept]
         kept_probs = kept_probs / kept_probs.sum()
+
+        logger.debug(f"Kept probabilities: {kept_probs}")
+        logger.debug(f"Kept indices: {kept_indices}")
 
         if rand_value is not None:
             rand_val = rand_value
