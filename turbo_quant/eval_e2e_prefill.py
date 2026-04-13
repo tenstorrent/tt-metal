@@ -288,6 +288,7 @@ def main():
             max_seq_len=model_args.max_seq_len,
             bits=args.bits,
             seed=args.seed,
+            memory_efficient=False,  # Use standard paged SDPA (fused TQ SDPA not yet built)
         )
         for _ in tt_model.layers
     ]
