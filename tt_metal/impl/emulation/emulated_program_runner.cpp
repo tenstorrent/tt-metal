@@ -26,7 +26,15 @@
 #include <future>
 #include <thread>
 #include <unordered_map>
+#include <algorithm>
 #include <vector>
+
+#ifndef TT_EMULE_CXX_COMPILER
+#error "TT_EMULE_CXX_COMPILER must be defined by CMake"
+#endif
+#ifndef TT_EMULE_CXX_STANDARD
+#error "TT_EMULE_CXX_STANDARD must be defined by CMake"
+#endif
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -407,7 +415,7 @@ std::function<void()> jit_compile_kernel(
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
     std::ostringstream cmd;
-    cmd << "g++ -std=c++17 -fPIC -shared -O3 -march=native"
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
@@ -429,7 +437,7 @@ std::function<void()> jit_compile_kernel(
     int rc = std::system(full_cmd.c_str());
     if (rc != 0) {
         throw std::runtime_error(
-            "jit_compile_kernel: g++ failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path);
+            "jit_compile_kernel: compiler failed (exit " + std::to_string(rc) + ") for kernel: " + kernel_src_path);
     }
 
     // 8. dlopen
@@ -610,12 +618,19 @@ static void collect_kernels(
                 if (fd < 0) {
                     throw std::runtime_error("execute_program_emulated: mkstemps failed");
                 }
-                std::string content = ksrc.source_;
-                ssize_t written = ::write(fd, content.c_str(), content.size());
-                ::close(fd);
-                if (written < 0) {
-                    throw std::runtime_error("execute_program_emulated: write failed");
+                const std::string& content = ksrc.source_;
+                const char* buf = content.c_str();
+                size_t remaining = content.size();
+                while (remaining > 0) {
+                    ssize_t written = ::write(fd, buf, remaining);
+                    if (written < 0) {
+                        ::close(fd);
+                        throw std::runtime_error("execute_program_emulated: write failed");
+                    }
+                    buf += written;
+                    remaining -= written;
                 }
+                ::close(fd);
                 src_path = tmpf;
                 inline_src_temps.push_back(src_path);
             }
@@ -675,11 +690,20 @@ static void collect_kernels(
             for (auto v : compile_args) {
                 cache_key += ":" + std::to_string(v);
             }
-            for (const auto& [k, v] : named_compile_args) {
-                cache_key += ":N" + k + "=" + std::to_string(v);
+            {
+                std::vector<std::pair<std::string, uint32_t>> sorted_named(
+                    named_compile_args.begin(), named_compile_args.end());
+                std::sort(sorted_named.begin(), sorted_named.end());
+                for (const auto& [k, v] : sorted_named) {
+                    cache_key += ":N" + k + "=" + std::to_string(v);
+                }
             }
-            for (const auto& [k, v] : defines) {
-                cache_key += ":" + k + "=" + v;
+            {
+                std::vector<std::pair<std::string, std::string>> sorted_defs(defines.begin(), defines.end());
+                std::sort(sorted_defs.begin(), sorted_defs.end());
+                for (const auto& [k, v] : sorted_defs) {
+                    cache_key += ":" + k + "=" + v;
+                }
             }
 
             // Check cache: in-memory → disk → defer for compilation
@@ -734,10 +758,13 @@ static void jit_compile_pending(
 
         for (auto& [key, dc] : deferred_compiles) {
             std::string cache_path = disk_cache_so_path(key);
+            std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid());
             futures.emplace_back(
-                key, std::async(std::launch::async, [&dc, cache_path]() {
-                    return jit_compile_kernel(
-                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc, cache_path);
+                key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
+                    auto fn = jit_compile_kernel(
+                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc, tmp_path);
+                    std::filesystem::rename(tmp_path, cache_path);
+                    return fn;
                 }));
         }
 
@@ -767,10 +794,11 @@ static void jit_compile_pending(
 // ---------------------------------------------------------------------------
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
-    // Not mutex-protected — safe because emulation runs in slow dispatch mode.
+    static std::mutex g_core_map_mutex;
     static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
         g_core_map_cache;
 
+    std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
     if (!core_map && sw_emu) {
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
@@ -895,24 +923,37 @@ static void launch_cores(
     uint8_t* dram_data,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
     std::vector<std::thread> core_threads;
+    std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
-    for (auto& cs : core_setups) {
-        core_threads.emplace_back([&cs, dram_data, core_map_ptr]() {
-            try {
-                auto* core = cs.core;
-                uint8_t* l1_data = core->l1_data();
-                tt_emule::CBSyncState* cb_array = core->cb_sync_array();
-                uint8_t px = cs.phys_x;
-                uint8_t py = cs.phys_y;
+    for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
+        core_threads.emplace_back(
+            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx]]() {
+                try {
+                    auto* core = cs.core;
+                    uint8_t* l1_data = core->l1_data();
+                    tt_emule::CBSyncState* cb_array = core->cb_sync_array();
+                    uint8_t px = cs.phys_x;
+                    uint8_t py = cs.phys_y;
 
-                std::vector<std::thread> threads;
-                uint32_t lx = cs.logical_core.x;
-                uint32_t ly = cs.logical_core.y;
-                uint32_t kernel_idx = 0;
-                for (auto& ki : *cs.ki_list) {
-                    uint32_t kidx = kernel_idx++;
-                    threads.emplace_back(
-                        [&ki, core, l1_data, dram_data, cb_array, core_map_ptr, px, py, lx, ly, kidx]() {
+                    std::vector<std::thread> threads;
+                    std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
+                    uint32_t lx = cs.logical_core.x;
+                    uint32_t ly = cs.logical_core.y;
+                    uint32_t kernel_idx = 0;
+                    for (auto& ki : *cs.ki_list) {
+                        uint32_t kidx = kernel_idx++;
+                        threads.emplace_back([&ki,
+                                              core,
+                                              l1_data,
+                                              dram_data,
+                                              cb_array,
+                                              core_map_ptr,
+                                              px,
+                                              py,
+                                              lx,
+                                              ly,
+                                              kidx,
+                                              &kep = kernel_exceptions[kidx]]() {
                             __rt_args = ki.rt_args;
                             __common_rt_args = ki.common_rt_args;
                             __emule_bridge_l1 = l1_data;
@@ -941,16 +982,8 @@ static void launch_cores(
 
                             try {
                                 ki.fn();
-                            } catch (const std::exception& e) {
-                                fprintf(
-                                    stderr, "EMULE ERROR: kernel[%u] on (%u,%u) threw: %s\n", kidx, lx, ly, e.what());
                             } catch (...) {
-                                fprintf(
-                                    stderr,
-                                    "EMULE ERROR: kernel[%u] on (%u,%u) threw unknown exception\n",
-                                    kidx,
-                                    lx,
-                                    ly);
+                                kep = std::current_exception();
                             }
 
                             __core = nullptr;
@@ -959,30 +992,43 @@ static void launch_cores(
                             __emule_cbs = nullptr;
                             __emule_core_map = nullptr;
                         });
-                }
+                    }
 
-                for (auto& t : threads) {
-                    t.join();
+                    for (auto& t : threads) {
+                        t.join();
+                    }
+
+                    // Rethrow first kernel exception
+                    for (size_t i = 0; i < kernel_exceptions.size(); ++i) {
+                        if (kernel_exceptions[i]) {
+                            try {
+                                std::rethrow_exception(kernel_exceptions[i]);
+                            } catch (const std::exception& e) {
+                                std::throw_with_nested(std::runtime_error(
+                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
+                                    std::to_string(ly) + ") failed"));
+                            } catch (...) {
+                                throw std::runtime_error(
+                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
+                                    std::to_string(ly) + ") threw unknown exception");
+                            }
+                        }
+                    }
+                } catch (...) {
+                    core_ep = std::current_exception();
                 }
-            } catch (const std::exception& e) {
-                fprintf(
-                    stderr,
-                    "EMULE ERROR: core thread (%zu,%zu) exception: %s\n",
-                    cs.logical_core.x,
-                    cs.logical_core.y,
-                    e.what());
-            } catch (...) {
-                fprintf(
-                    stderr,
-                    "EMULE ERROR: core thread (%zu,%zu) unknown exception\n",
-                    cs.logical_core.x,
-                    cs.logical_core.y);
-            }
-        });
+            });
     }
 
     for (auto& t : core_threads) {
         t.join();
+    }
+
+    // Rethrow first core exception
+    for (size_t i = 0; i < core_exceptions.size(); ++i) {
+        if (core_exceptions[i]) {
+            std::rethrow_exception(core_exceptions[i]);
+        }
     }
 }
 

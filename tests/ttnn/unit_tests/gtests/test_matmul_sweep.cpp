@@ -7,7 +7,6 @@
 #include <cmath>
 #include <cstdint>
 #include <array>
-#include <future>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -23,6 +22,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 #include "impl/emulation/emulated_run_stats.hpp"
@@ -41,27 +41,11 @@ std::ostream& operator<<(std::ostream& os, const MatmulShape& s) { return os << 
 class MatmulSweepFixture : public ttnn::TTNNFixtureWithSuiteDevice<MatmulSweepFixture>,
                            public ::testing::WithParamInterface<MatmulShape> {};
 
-// Compute per-test timeout in seconds based on shape dimensions
-static int compute_timeout(uint32_t M, uint32_t K, uint32_t N) {
-    uint32_t max_dim = std::max({M, K, N});
-    if (max_dim <= 128) {
-        return 30;
-    }
-    if (max_dim <= 512) {
-        return 60;
-    }
-    if (max_dim <= 1024) {
-        return 120;
-    }
-    return 300;
-}
-
 TEST_P(MatmulSweepFixture, MatmulSweep) {
     auto [M, K, N] = GetParam();
     auto& device = *device_;
 
     uint32_t out_tiles = (M / 32) * (N / 32);
-    int timeout_sec = compute_timeout(M, K, N);
 
     // A = ones(1,1,M,K), B = ones(1,1,K,N)
     // C = A * B => every element = K
@@ -72,18 +56,11 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
     const auto a_tensor = ttnn::ones(ttnn::Shape(a_dims), DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto b_tensor = ttnn::ones(ttnn::Shape(b_dims), DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
 
-    // Run matmul with timeout
+    // Run matmul directly — std::async timeout doesn't work here because
+    // the future destructor blocks until the task completes, making the
+    // "timeout" path hang indefinitely.
     auto t_start = std::chrono::steady_clock::now();
-
-    auto future =
-        std::async(std::launch::async, [&]() { return ttnn::operations::matmul::matmul(a_tensor, b_tensor); });
-
-    auto timeout = std::chrono::seconds(timeout_sec);
-    if (future.wait_for(timeout) == std::future_status::timeout) {
-        FAIL() << "Matmul " << M << "x" << K << "x" << N << " timed out after " << timeout_sec << "s";
-        return;
-    }
-    auto c_tensor = future.get();
+    auto c_tensor = ttnn::operations::matmul::matmul(a_tensor, b_tensor);
 
     auto t_end = std::chrono::steady_clock::now();
     double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
@@ -115,6 +92,29 @@ TEST_P(MatmulSweepFixture, MatmulSweep) {
         << (pass ? "PASS" : "FAIL") << " | " << std::setw(8) << std::fixed << std::setprecision(1) << elapsed_ms
         << " | " << kernels_str << " |";
     std::cout << row.str() << std::endl;
+
+    if (!pass) {
+        // Dump first mismatches for debugging flaky failures
+        auto c_host = ttnn::from_device(c_tensor);
+        auto e_host = ttnn::from_device(expected);
+        auto c_buf = tt::tt_metal::host_buffer::get_as<::bfloat16>(c_host);
+        auto e_buf = tt::tt_metal::host_buffer::get_as<::bfloat16>(e_host);
+        uint32_t total = c_buf.size();
+        int printed = 0;
+        for (uint32_t i = 0; i < total && printed < 20; i++) {
+            float cv = static_cast<float>(c_buf[i]);
+            float ev = static_cast<float>(e_buf[i]);
+            if (std::abs(cv - ev) > atol + rtol * std::abs(ev)) {
+                uint32_t row = i / N, col = i % N;
+                fprintf(
+                    stderr, "  MISMATCH [%u,%u] (flat %u/%u): got %.4f expected %.4f\n", row, col, i, total, cv, ev);
+                printed++;
+            }
+        }
+        if (printed == 0) {
+            fprintf(stderr, "  allclose=false but no element exceeds tolerance?!\n");
+        }
+    }
 
     EXPECT_TRUE(pass) << "Matmul " << M << "x" << K << "x" << N << " result mismatch (expected all " << expected_val
                       << ")";

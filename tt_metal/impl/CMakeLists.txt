@@ -135,6 +135,8 @@ if(TT_METAL_USE_EMULE)
             TT_EMULE_JIT_INCLUDE_DIR="${_EMULE_JIT_DIR}"
             TT_EMULE_INCLUDE_DIR="${_EMULE_INC_DIR}"
             TT_EMULE_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            TT_EMULE_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+            TT_EMULE_CXX_STANDARD="${CMAKE_CXX_STANDARD}"
     )
     target_link_libraries(
         impl
