@@ -87,12 +87,12 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    const auto s0 = decltype(TensorAccessor(input_args, input_addr)){input_args, input_addr, in0_tile_bytes};
-    const auto s1 = decltype(TensorAccessor(other_args, other_addr)){other_args, other_addr, in1_tile_bytes};
+    const auto s0 = TensorAccessor(input_args, input_addr);
+    const auto s1 = TensorAccessor(other_args, other_addr);
 
 #ifdef FUSE_BIAS
     const uint32_t in4_tile_bytes = get_tile_size(cb_id_in4);
-    const auto s_bias = decltype(TensorAccessor(bias_args, bias_addr)){bias_args, bias_addr, in4_tile_bytes};
+    const auto s_bias = TensorAccessor(bias_args, bias_addr);
 #endif
 
     // mask

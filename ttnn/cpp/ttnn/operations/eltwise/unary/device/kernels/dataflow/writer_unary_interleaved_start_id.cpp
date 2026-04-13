@@ -28,7 +28,7 @@ void kernel_main() {
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = decltype(TensorAccessor(dst_args, dst_addr)){dst_args, dst_addr, page_bytes};
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;

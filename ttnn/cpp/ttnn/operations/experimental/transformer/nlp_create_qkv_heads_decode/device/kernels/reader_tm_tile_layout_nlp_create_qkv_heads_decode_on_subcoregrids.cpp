@@ -38,7 +38,7 @@ void kernel_main() {
     uint32_t device_batch_offset = 0;
 
     if constexpr (use_batch_offset) {
-        const auto addrg = decltype(TensorAccessor(index_args, batch_offset_tensor_addr)){index_args, batch_offset_tensor_addr, index_stick_size};
+        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr);
         cb_reserve_back(cb_batch_offset_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
         // Read the batch offset 1 page to read

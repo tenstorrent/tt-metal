@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(2);
 
-    const auto output_accessor = decltype(TensorAccessor(output_args, output_addr)){output_args, output_addr, tile_bytes};
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
 
     constexpr uint32_t head_stride = num_tile_rows * head_dim_tiles;
 

@@ -28,7 +28,7 @@ void kernel_main() {
 
     constexpr uint32_t page_size = get_compile_time_arg_val(4);
     constexpr auto src_args = TensorAccessorArgs<5>();
-    const auto s = decltype(TensorAccessor(src_args, src_addr)){src_args, src_addr, page_size};
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

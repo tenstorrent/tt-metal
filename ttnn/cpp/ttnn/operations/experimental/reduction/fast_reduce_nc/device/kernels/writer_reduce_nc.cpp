@@ -27,7 +27,7 @@ void kernel_main() {
 
     uint32_t output_tile_bytes = get_tile_size(cb_id_out);
 
-    auto tensor_accessor = decltype(TensorAccessor(tensor_args, output_addr)){tensor_args, output_addr, output_tile_bytes};
+    auto tensor_accessor = TensorAccessor(tensor_args, output_addr);
 
     // For each shard, start at the index of the first shard to be reduced (same
     // index as output), then increment by the appropriate increment (based on
