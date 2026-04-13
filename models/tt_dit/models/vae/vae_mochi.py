@@ -379,17 +379,18 @@ class ResBlock(Module):
         logger.info(f"[DUMP] {name}: shape={list(t.shape)} mean={t.mean():.6f} std={t.std():.6f}")
 
     def _all_gather_hw(self, x_rm, N, T, H, W, C):
-        """All-gather on H and W axes using tile-padded spatial dimensions.
+        """All-gather on H and W axes using dim=1 (non-tile dim) to avoid
+        tile-padding interleaving.
 
-        All-gather requires each device's extent on the gather dim to be a
-        multiple of 32 (TILE_SIZE).  Per-device H or W may not satisfy this
-        (e.g. H=30, W=27).  Gathering on H or W directly would interleave
-        tile-padding zeros between devices' valid data.
+        For a 4D TILE tensor (A, B, H, W), only dim[-2] and dim[-1] are tile
+        dimensions.  Gathering on a tile dim with non-tile-aligned per-device
+        size interleaves each device's tile padding with the next device's
+        data.  Gathering on dim=1 (a non-tile dim) avoids this entirely —
+        each device's tile structure is preserved and simply stacked.
 
-        Strategy: reshape so H (or W) is in the tile-row dim (dim[-2]) and use
-        tilize_with_zero_padding to pad it to the next tile boundary.  After
-        all-gather, reshape to (batch, factor, H_pad, ...) and slice out the
-        padding rows to recover (batch, H*factor, ...).
+        Phase 1 (H-gather): keep (N*T, H, W, C), gather dim=1 → H grows.
+        Phase 2 (W-gather): permute to (N*T, W, H_full, C), gather dim=1
+                            → W grows, then permute back.
 
         Args:
             x_rm: (N*T, H, W, C) in ROW_MAJOR layout (local per-device data).
@@ -398,72 +399,42 @@ class ResBlock(Module):
         """
         h_factor = self.parallel_config.h_parallel.factor
         w_factor = self.parallel_config.w_parallel.factor
-        H_full = H * h_factor
-        W_full = W * w_factor
 
         if h_factor > 1:
-            # Phase 1: H-gather.
-            # Shape as (N*T, 1, H, W*C) so H is the tile-row dim.
-            # tilize_with_zero_padding pads H → H_pad = ceil_32(H).
-            wc = W * C
-            assert wc % 32 == 0, f"W*C={wc} must be a multiple of 32; W={W}, C={C}"
-            x_flat = ttnn.reshape(x_rm, [N * T, 1, H, wc])
+            # Phase 1: H-gather on dim=1 (non-tile dim).
+            x_tiled = ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
             ttnn.deallocate(x_rm)
-            x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
-            ttnn.deallocate(x_flat)
-            # Ensure bf16 for memory-efficient all-gather (GroupNorm may output
-            # f32 intermediates; casting here halves the gathered tensor size).
             if x_tiled.dtype != ttnn.bfloat16:
                 x_tiled = ttnn.typecast(x_tiled, ttnn.bfloat16)
-            H_pad = x_tiled.shape[2]  # ceil_32(H), may equal H
             x_tiled = vae_all_gather(
                 self.ccl_manager,
                 x_tiled,
                 cluster_axis=self.parallel_config.h_parallel.mesh_axis,
-                dim=2,
+                dim=1,
                 reshape=False,
             )
             x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tiled)
-            if H_pad != H:
-                # Strip tile-padding rows from each device's chunk
-                x_rm = ttnn.reshape(x_rm, [N * T, h_factor, H_pad, W, C])
-                x_rm = ttnn.slice(x_rm, [0, 0, 0, 0, 0], [N * T, h_factor, H, W, C])
-                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W, C])
-            else:
-                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W, C])
+            # x_rm is now (N*T, H*h_factor, W, C)
 
         if w_factor > 1:
-            # Phase 2: W-gather.
-            # Flatten W*C into dim=3 (always tile-aligned since C%32==0).
-            # tilize_with_zero_padding pads nt_h (dim=2) if needed; padding
-            # rows are at the end (not interleaved) and sliced off after gather.
-            nt_h = N * T * H_full
-            per_device_wc = W * C
-            assert per_device_wc % 32 == 0, f"W*C={per_device_wc} must be a multiple of 32; W={W}, C={C}"
-            x_flat = ttnn.reshape(x_rm, [1, 1, nt_h, per_device_wc])
+            # Phase 2: W-gather — permute W into dim=1 (non-tile dim),
+            # gather, then permute back.
+            x_rm = ttnn.permute(x_rm, (0, 2, 1, 3))  # (N*T, W, H_full, C)
+            x_tiled = ttnn.to_layout(x_rm, ttnn.TILE_LAYOUT)
             ttnn.deallocate(x_rm)
-            x_tiled = ttnn.tilize_with_zero_padding(x_flat, use_multicore=True)
-            ttnn.deallocate(x_flat)
             if x_tiled.dtype != ttnn.bfloat16:
                 x_tiled = ttnn.typecast(x_tiled, ttnn.bfloat16)
-            nt_h_pad = x_tiled.shape[2]  # ceil_32(nt_h), may equal nt_h
             x_tiled = vae_all_gather(
                 self.ccl_manager,
                 x_tiled,
                 cluster_axis=self.parallel_config.w_parallel.mesh_axis,
-                dim=3,
+                dim=1,
                 reshape=False,
             )
             x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_tiled)
-            if nt_h_pad != nt_h:
-                # Strip tile-padding rows from the end
-                x_rm = ttnn.reshape(x_rm, [nt_h_pad, W_full, C])
-                x_rm = ttnn.slice(x_rm, [0, 0, 0], [nt_h, W_full, C])
-                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
-            else:
-                x_rm = ttnn.reshape(x_rm, [N * T, H_full, W_full, C])
+            x_rm = ttnn.permute(x_rm, (0, 2, 1, 3))  # (N*T, H_full, W*w_factor, C)
 
         return x_rm
 
@@ -524,13 +495,17 @@ class ResBlock(Module):
         where the per-device T differs).
         """
         Ht = batch_size * ((HW + 31) // 32)
-        grid_x = norm.core_grid.x
         nvc = norm.num_virtual_cols
-        for gy in range(norm.core_grid.y, 0, -1):
-            nvr = (grid_x // nvc) * gy
-            if nvr <= Ht and Ht % nvr == 0:
-                return ttnn.CoreGrid(x=grid_x, y=gy)
-        return ttnn.CoreGrid(x=grid_x, y=1)
+        # Try (grid_x, grid_y) combinations from largest to smallest.
+        # Reducing grid_x is needed when no grid_y works for the max grid_x
+        # (e.g. grid_x=12, nvc=4 → nvr=3*gy, but Ht not divisible by 3).
+        for gx in range(norm.core_grid.x, nvc - 1, -1):
+            for gy in range(norm.core_grid.y, 0, -1):
+                nvr = (gx // nvc) * gy
+                if nvr > 0 and nvr <= Ht and Ht % nvr == 0:
+                    return ttnn.CoreGrid(x=gx, y=gy)
+        # Ultimate fallback: nvr=1 (always divides Ht).
+        return ttnn.CoreGrid(x=nvc, y=1)
 
     @staticmethod
     def _min_valid_norm_batch(norm, HW):
@@ -540,21 +515,21 @@ class ResBlock(Module):
         a grid where nvr actually divides Ht = batch_size * ceil(HW/32).
         """
         hw_tiles = (HW + 31) // 32
-        grid_x = norm.core_grid.x
         nvc = norm.num_virtual_cols
         for bs in range(1, hw_tiles + 1):
             Ht = bs * hw_tiles
-            for gy in range(norm.core_grid.y, 0, -1):
-                nvr = (grid_x // nvc) * gy
-                if nvr <= Ht and Ht % nvr == 0:
-                    return bs
+            for gx in range(norm.core_grid.x, nvc - 1, -1):
+                for gy in range(norm.core_grid.y, 0, -1):
+                    nvr = (gx // nvc) * gy
+                    if nvr > 0 and nvr <= Ht and Ht % nvr == 0:
+                        return bs
         return 1
 
     def _run_norm(self, norm, x_tiled, batch_size, HW, num_out_blocks, dump_dir=None, dump_tag=None):
         """Run GroupNorm with auto-validated core_grid."""
         original_grid = norm.core_grid
         valid_grid = self._valid_norm_grid(norm, batch_size, HW)
-        if valid_grid.y != original_grid.y:
+        if valid_grid.x != original_grid.x or valid_grid.y != original_grid.y:
             norm.core_grid = valid_grid
         Ht = batch_size * ((HW + 31) // 32)
         logger.info(
@@ -568,7 +543,7 @@ class ResBlock(Module):
             torch.save(t, os.path.join(dump_dir, f"{dump_tag}_pre_norm.pt"))
             logger.info(f"[DUMP] {dump_tag}_pre_norm: shape={list(t.shape)} mean={t.mean():.6f} std={t.std():.6f}")
         x_tiled = norm(x_tiled, num_out_blocks)
-        if norm.core_grid is not original_grid:
+        if norm.core_grid.x != original_grid.x or norm.core_grid.y != original_grid.y:
             norm.core_grid = original_grid
         return x_tiled
 
@@ -609,7 +584,11 @@ class ResBlock(Module):
 
         x_tiled = ttnn.tilize_with_zero_padding(x_tiled, use_multicore=True)
 
-        HW = norm_h * norm_w
+        # Use padded HW from the tilized tensor shape for num_out_blocks lookup,
+        # matching the non-spatial path which uses x_tiled.shape[2].  For C=768
+        # logical HW=2000 pads to 2016; the map has an entry for 2000 (→2) but
+        # the non-spatial fallback for 2016 gives 3.
+        HW = x_tiled.shape[2]
         num_out_blocks = self.num_out_blocks_map.get(C, {}).get(
             HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
         )
@@ -702,11 +681,36 @@ class ResBlock(Module):
         if num_chunks == 1:
             # No chunking needed — original path
             logger.info(f"[GATHER] Non-chunked path: C={C} NT={NT} gathered_bytes={gathered_bytes/1e9:.3f}GB")
+
             x_gathered = self._all_gather_hw(x_4d, N, T, H, W, C)
+
+            # Dump gathered tensor for cross-topology comparison
+            valid_h = logical_h if logical_h > 0 else H_full
+            valid_w = logical_w if logical_w > 0 else W_full
+            gathered_valid = (N, T, valid_h, valid_w, C)
+            tag = "01" if norm is self.norm1 else "03"
+            self._dump_tensor(
+                f"{tag}_gathered",
+                ttnn.reshape(x_gathered, [N, T, H_full, W_full, C]),
+                dump_dir,
+                gathered_valid,
+                is_gathered=True,
+            )
+
             x_normed = self._norm_silu_spatial_chunk(
                 x_gathered, norm, NT, H_full, W_full, C, logical_h, logical_w, dump_dir=dump_dir
             )
             x_normed = ttnn.reshape(x_normed, [N, T, H_full, W_full, C])
+
+            # Dump post-norm pre-partition for comparison
+            self._dump_tensor(
+                f"{tag}_normed",
+                x_normed,
+                dump_dir,
+                gathered_valid,
+                is_gathered=True,
+            )
+
             return self._partition_hw(x_normed, N, T, H, W, C)
 
         logger.info(
@@ -715,16 +719,23 @@ class ResBlock(Module):
         )
 
         partitioned_chunks = []
-        for start in range(0, NT, chunk_nt):
+        for chunk_idx, start in enumerate(range(0, NT, chunk_nt)):
             end = min(start + chunk_nt, NT)
             bs = end - start
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx}/{num_chunks} start={start} end={end} bs={bs}")
             # Slice this chunk from the per-device data.
             # reallocate ensures the slice is an independent buffer — without it,
             # the slice may share x_4d's buffer, and _all_gather_hw's internal
             # deallocate would free x_4d, corrupting subsequent chunks.
             x_chunk = ttnn.reallocate(x_4d[start:end, :, :, :])
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} slice+reallocate done")
+            ttnn.synchronize_device(x_chunk.device())
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} slice+reallocate sync OK")
             # Gather spatial dims for this chunk
             x_chunk = self._all_gather_hw(x_chunk, 1, bs, H, W, C)
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} all_gather_hw done")
+            ttnn.synchronize_device(x_chunk.device())
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} all_gather_hw sync OK")
 
             x_chunk = self._norm_silu_spatial_chunk(
                 x_chunk,
@@ -736,6 +747,8 @@ class ResBlock(Module):
                 logical_h,
                 logical_w,
             )
+
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} norm done")
 
             # Partition back to per-device spatial size (mesh_partition only, no neighbor_pad)
             x_chunk = ttnn.reshape(x_chunk, [1, bs, H_full, W_full, C])
@@ -754,6 +767,7 @@ class ResBlock(Module):
                     memory_config=x_chunk.memory_config(),
                 )
             x_chunk = ttnn.squeeze(x_chunk, 0)  # remove N dim → (bs, H, W, C)
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition done")
             partitioned_chunks.append(x_chunk)
 
         # Deallocate the original input now that all chunks are processed
@@ -767,9 +781,12 @@ class ResBlock(Module):
         else:
             x_partitioned = partitioned_chunks[0]
 
+        logger.info(f"[CHUNK_LOOP] C={C} all chunks done, concat+neighbor_pad starting")
+
         # Neighbor pad once on the full result
         x_partitioned = ttnn.reshape(x_partitioned, [T, H, W, C])
         if h_factor > 1:
+            logger.info(f"[CHUNK_LOOP] C={C} neighbor_pad H starting")
             x_partitioned = vae_neighbor_pad(
                 self.ccl_manager,
                 x_partitioned,
@@ -779,7 +796,9 @@ class ResBlock(Module):
                 padding_right=1,
                 padding_mode="replicate",
             )
+            logger.info(f"[CHUNK_LOOP] C={C} neighbor_pad H done")
         if w_factor > 1:
+            logger.info(f"[CHUNK_LOOP] C={C} neighbor_pad W starting")
             x_partitioned = vae_neighbor_pad(
                 self.ccl_manager,
                 x_partitioned,
@@ -789,18 +808,24 @@ class ResBlock(Module):
                 padding_right=1,
                 padding_mode="replicate",
             )
+            logger.info(f"[CHUNK_LOOP] C={C} neighbor_pad W done")
         x_partitioned = ttnn.unsqueeze(x_partitioned, 0)  # Restore N dim → (1, T, H+pad, W+pad, C)
 
         return x_partitioned
 
+    _resblock_call_count = 0
+
     def forward(
         self, x_NTHWC: ttnn.Tensor, logical_h: int = 0, logical_w: int = 0, dump_dir: str | None = None
     ) -> ttnn.Tensor:
+        ResBlock._resblock_call_count += 1
+        call_id = ResBlock._resblock_call_count
         shapes = self.get_tensor_shapes(x_NTHWC)
         N, T, H, W, C = shapes
         h_factor = self.parallel_config.h_parallel.factor
         w_factor = self.parallel_config.w_parallel.factor
         is_spatial_parallel = h_factor > 1 or w_factor > 1
+        logger.info(f"[RESBLOCK] call={call_id} C={C} T={T} H={H} W={W} spatial={is_spatial_parallel}")
 
         # Valid (unpadded) spatial dims for dump slicing
         valid_h = logical_h if logical_h > 0 else H * h_factor
@@ -824,9 +849,11 @@ class ResBlock(Module):
             H_full = H * h_factor
             W_full = W * w_factor
             # T-chunked gather → norm → silu → partition (+ neighbor_pad)
+            logger.info(f"[RESBLOCK] call={call_id} C={C} starting conv1 gather_norm_partition")
             x_NTHWC = self._gather_norm_partition(
                 x_4d, self.norm1, N, T, H, W, C, logical_h, logical_w, dump_dir=dump_dir
             )
+            logger.info(f"[RESBLOCK] call={call_id} C={C} conv1 gather_norm_partition done")
             self._dump_tensor("01_post_norm1_silu", x_NTHWC, dump_dir, valid, is_gathered=False)
         else:
             x_tiled_NTHWC = self.reshape_tilize(x_NTHWC, shapes)
@@ -866,9 +893,11 @@ class ResBlock(Module):
             x_conv1_4d = ttnn.reshape(x_conv1_NTHWC, [N * T, H, W, C])
             ttnn.deallocate(x_conv1_NTHWC)
             x_conv1_4d = ttnn.reallocate(x_conv1_4d)
+            logger.info(f"[RESBLOCK] call={call_id} C={C} starting conv2 gather_norm_partition")
             x_NTHWC = self._gather_norm_partition(
                 x_conv1_4d, self.norm2, N, T, H, W, C, logical_h, logical_w, dump_dir=dump_dir
             )
+            logger.info(f"[RESBLOCK] call={call_id} C={C} conv2 gather_norm_partition done")
             self._dump_tensor("03_post_norm2_silu", x_NTHWC, dump_dir, valid, is_gathered=False)
         else:
             x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
@@ -1006,24 +1035,45 @@ class CausalUpsampleBlock(Module):
         # Step 1: Temporal expansion
         # (B, T, H, W, texp, sexp_h*sexp_w*C_out)
         x = ttnn.reshape(x_NTHWC, [B, T, H, W, texp, sexp2_C])
+        logger.info(f"[D2S_DEBUG] step1 reshape done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step1 reshape sync OK")
         # Move texp before H,W: (B, T, texp, H, W, sexp_h*sexp_w*C_out)
         x = ttnn.permute(x, [0, 1, 4, 2, 3, 5])
+        logger.info(f"[D2S_DEBUG] step1 permute done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step1 permute sync OK")
         # Merge T*texp
         x = ttnn.reshape(x, [B, T * texp, H, W, sexp2_C])
+        logger.info(f"[D2S_DEBUG] step1 merge done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step1 merge sync OK")
 
         # Step 2: H spatial expansion
         # (B, T*texp, H, W, sexp_h, sexp_w*C_out)
         x = ttnn.reshape(x, [B, T * texp, H, W, sexp, sexp * C_out])
+        logger.info(f"[D2S_DEBUG] step2 reshape done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step2 reshape sync OK")
         # Move sexp_h before W: (B, T*texp, H, sexp_h, W, sexp_w*C_out)
         x = ttnn.permute(x, [0, 1, 2, 4, 3, 5])
+        logger.info(f"[D2S_DEBUG] step2 permute done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step2 permute sync OK")
         # Merge H*sexp_h
         x = ttnn.reshape(x, [B, T * texp, H * sexp, W, sexp * C_out])
+        logger.info(f"[D2S_DEBUG] step2 merge done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step2 merge sync OK")
 
         # Step 3: W spatial expansion — just reshape (no permute needed)
         # In the current layout, the last dim is sexp_w * C_out.
         # Splitting this as (W*sexp_w, C_out) is a valid reshape because the
         # flat memory order is identical: w*(sexp*C_out) + s_w*C_out + c.
         x = ttnn.reshape(x, [B, T * texp, H * sexp, W * sexp, C_out])
+        logger.info(f"[D2S_DEBUG] step3 reshape done: {x.shape}")
+        ttnn.synchronize_device(x.device())
+        logger.info("[D2S_DEBUG] step3 reshape sync OK")
 
         if texp > 1 and self.temporal_offset > 0 and self.parallel_config.time_parallel.factor == 1:
             # Only slice when all temporal data is on each device.
@@ -1059,7 +1109,13 @@ class CausalUpsampleBlock(Module):
         for i, block in enumerate(self.resnets):
             x_NTHWC = block(x_NTHWC, logical_h, logical_w)
         x_NTHWO = self.proj(x_NTHWC)
+        logger.info(f"[UPSAMPLE_DEBUG] proj done: C={C} shape={x_NTHWO.shape}")
+        ttnn.synchronize_device(x_NTHWO.device())
+        logger.info(f"[UPSAMPLE_DEBUG] proj sync OK: C={C}")
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
+        logger.info(f"[UPSAMPLE_DEBUG] depth_to_spacetime done: C={C} shape={x_NTHWC.shape}")
+        ttnn.synchronize_device(x_NTHWC.device())
+        logger.info(f"[UPSAMPLE_DEBUG] depth_to_spacetime sync OK: C={C}")
         ttnn.deallocate(x_NTHWO)
         x_NTHWC = self.reshard_output(x_NTHWC)
         return x_NTHWC

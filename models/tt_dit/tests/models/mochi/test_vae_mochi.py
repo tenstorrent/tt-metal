@@ -64,26 +64,6 @@ def get_shard_dims(parallel_config):
     return dims
 
 
-# Custom pytest mark for shared VAE device configuration
-def vae_device_config(func):
-    """Decorator to apply standard VAE device configuration to tests"""
-    func = pytest.mark.parametrize(
-        "mesh_device",
-        [
-            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "T3K_2D": (2, 4), "TG": (8, 4)}.get(
-                os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-            )
-        ],
-        indirect=True,
-    )(func)
-    func = pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}],
-        indirect=True,
-    )(func)
-    return func
-
-
 class Conv3d1x1(nn.Conv3d):
     def __init__(self, in_channels, out_channels, bias=True):
         super().__init__(in_channels, out_channels, kernel_size=(1, 1, 1), bias=bias)
@@ -113,8 +93,30 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     ],
     ids=["large_latent"],
 )
-@vae_device_config
-def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds, num_links):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 
@@ -212,13 +214,28 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
     ],
 )
 @pytest.mark.parametrize(
-    "num_links",
+    "mesh_device, num_links",
     [
-        pytest.param(4, id="4links"),
-        pytest.param(1, id="1link"),
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
     ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
 )
-@vae_device_config
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links):
     """Test complete forward pass of TtResBlock."""
     block_args = resblock_args.copy()
@@ -316,10 +333,28 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     ],
 )
 @pytest.mark.parametrize(
-    "num_links",
-    [pytest.param(1, id="1link")],
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
 )
-@vae_device_config
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
 def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_padded, reset_seeds, num_links):
     """Test resblock with decoder-actual dimensions that exercise W unpadding on 2D mesh.
 
@@ -530,13 +565,28 @@ def create_random_causalupsampleblock_models(
     ids=["l768", "l512", "l256", "s768", "s512", "s256"],
 )
 @pytest.mark.parametrize(
-    "num_links",
+    "mesh_device, num_links",
     [
-        pytest.param(4, id="4links"),
-        pytest.param(1, id="1link"),
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
     ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
 )
-@vae_device_config
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
 def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
@@ -786,13 +836,28 @@ def load_dit(
     ],
 )
 @pytest.mark.parametrize(
-    "num_links",
+    "mesh_device, num_links",
     [
-        pytest.param(4, id="4links"),
-        pytest.param(1, id="1link"),
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
     ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
 )
-@vae_device_config
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
 def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
