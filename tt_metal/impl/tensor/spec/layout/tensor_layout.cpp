@@ -99,9 +99,6 @@ void validate_alignment(const TensorLayout& tensor_layout) {
     page_config.validate_alignment(alignment, dtype, memory_config);
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 std::optional<std::string> get_shard_align_error(
     const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
     if (memory_config.is_sharded() && layout == Layout::TILE) {
@@ -122,13 +119,20 @@ std::optional<std::string> get_shard_align_error(
     return std::nullopt;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, const Tile& tile) {
+    return !CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config, layout, tile).has_value();
+}
+
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
     initialize_alignment();
     CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
 
-    auto shard_align_error = get_shard_align_error(memory_config_, get_layout(), get_tile());
+    auto shard_align_error = CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config_, get_layout(), get_tile());
     TT_FATAL(!shard_align_error.has_value(), "{}", shard_align_error);
 }
 

@@ -44,9 +44,6 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
     supported_layout();
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
@@ -127,13 +124,20 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
     return std::nullopt;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+bool can_shape_fits_shard_grid(const TensorLayout& tensor_layout, const Shape& logical_shape) {
+    return !CMAKE_UNIQUE_NAMESPACE::get_shape_fits_shard_grid_error(tensor_layout, logical_shape).has_value();
+}
+
 TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
     cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
     cached_logical_2d_shape_(tensor_layout_.compute_logical_2d_shape(logical_shape_)),
     cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {
-    auto shard_grid_fit_error = get_shape_fits_shard_grid_error(tensor_layout_, logical_shape_);
+    auto shard_grid_fit_error = CMAKE_UNIQUE_NAMESPACE::get_shape_fits_shard_grid_error(tensor_layout_, logical_shape_);
     TT_FATAL(!shard_grid_fit_error.has_value(), "{}", shard_grid_fit_error);
     CMAKE_UNIQUE_NAMESPACE::validate_dtype_and_layout(data_type(), layout());
     populate_sharding_specs();

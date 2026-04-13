@@ -27,14 +27,14 @@ TensorLayout compute_input_tensor_layout(
     auto default_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
 
     // Check if we can create tensor layout with the given memory config and layout.
-    if (get_shard_align_error(memory_config, layout, optional_tile.value_or(Tile{})).has_value()) {
+    if (!can_shard_align(memory_config, layout, optional_tile.value_or(Tile{}))) {
         return default_tensor_layout;
     }
 
     TensorLayout src_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
     // Check if we can create tensor spec with the given tensor shape and tensor layout.
-    if (get_shape_fits_shard_grid_error(src_tensor_layout, tensor_shape).has_value()) {
+    if (!can_shape_fits_shard_grid(src_tensor_layout, tensor_shape)) {
         return default_tensor_layout;
     }
     return src_tensor_layout;
