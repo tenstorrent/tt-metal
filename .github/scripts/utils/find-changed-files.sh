@@ -29,22 +29,6 @@ LLK_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 
-# Classify a single file path against LLK-specific patterns.
-# Called both for direct in-tree files and for files inside the submodule.
-classify_llk_file() {
-    local FILE="$1"
-    case "$FILE" in
-        tt_llk_wormhole_b0/**|tt_llk_blackhole/**|common/**)
-            LLK_ENGINE_CHANGED=true ;;
-        tt_llk_quasar/**)
-            LLK_QUASAR_CHANGED=true ;;
-        tests/**/perf/**|tests/**/*perf*)
-            LLK_PERF_CHANGED=true
-            LLK_TESTS_CHANGED=true ;;
-        tests/**)
-            LLK_TESTS_CHANGED=true ;;
-    esac
-}
 
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -68,6 +52,9 @@ while IFS= read -r FILE; do
             ANY_CODE_CHANGED=true
             ;;
         # LLK-specific patterns — must come before the generic tt_metal/** catch-all.
+        tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
+            LLK_CI_CHANGED=true
+            ;;
         tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/tt-llk/common/**)
             LLK_ENGINE_CHANGED=true
             ;;
