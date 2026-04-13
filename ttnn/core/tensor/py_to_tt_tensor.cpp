@@ -24,13 +24,18 @@ TensorLayout compute_input_tensor_layout(
     const MemoryConfig& memory_config,
     const Layout& layout,
     const std::optional<Tile>& optional_tile) {
-    TensorLayout src_tensor_layout =
-        get_shard_align_error(memory_config, layout, optional_tile.value_or(Tile{})).has_value()
-            ? TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{})
-            : TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+    auto default_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
 
+    // Check if we can create tensor layout with the given memory config and layout.
+    if (get_shard_align_error(memory_config, layout, optional_tile.value_or(Tile{})).has_value()) {
+        return default_tensor_layout;
+    }
+
+    TensorLayout src_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
+    // Check if we can create tensor spec with the given tensor shape and tensor layout.
     if (get_shape_fits_shard_grid_error(src_tensor_layout, tensor_shape).has_value()) {
-        src_tensor_layout = src_tensor_layout.with_memory_config(MemoryConfig{});
+        return default_tensor_layout;
     }
     return src_tensor_layout;
 }
