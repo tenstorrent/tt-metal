@@ -10,7 +10,7 @@ from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer, RunMode
+from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
 
 class GroupedQueryAttention(AbstractModuleBase):
@@ -22,6 +22,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
+        use_tp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -32,34 +33,71 @@ class GroupedQueryAttention(AbstractModuleBase):
             )
 
         self.embedding_size = embedding_size
-        self.num_heads = num_heads
-        self.num_groups = num_groups
         self.dropout_prob = dropout
         self.rope_params = rope_params
 
+        # Compute concat_kv_dim using GLOBAL head counts (before TP division)
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        self.q_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.kv_linear = LinearLayer(
-            embedding_size,
-            concat_kv_dim,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
-        self.out_linear = LinearLayer(
-            embedding_size,
-            embedding_size,
-            bias_linears,
-            weight_init=ttml.init.normal(0.0, 0.02),
-            bias_init=ttml.init.zeros(),
-        )
+        # Store LOCAL head/group counts (divided by tp_size when TP is active)
+        if use_tp:
+            tp_size = ttml.current_mesh_or_raise().axis_size("tp")
+            self.num_heads = num_heads // tp_size
+            self.num_groups = num_groups // tp_size
+        else:
+            self.num_heads = num_heads
+            self.num_groups = num_groups
+
+        if use_tp:
+            self.q_linear = ColumnParallelLinear(
+                embedding_size,
+                embedding_size,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.kv_linear = ColumnParallelLinear(
+                embedding_size,
+                concat_kv_dim,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.out_linear = RowParallelLinear(
+                embedding_size,
+                embedding_size,
+                has_bias=bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.q_linear = LinearLayer(
+                embedding_size,
+                embedding_size,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
+            self.kv_linear = LinearLayer(
+                embedding_size,
+                concat_kv_dim,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
+            self.out_linear = LinearLayer(
+                embedding_size,
+                embedding_size,
+                bias_linears,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                bias_init=ttml.init.zeros(),
+            )
 
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         q = self.q_linear(input)

@@ -9,10 +9,10 @@ from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
+from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer, ColumnParallelLinear
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
-from .transformer import LlamaBlock, RMSNormLayer
+from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,7 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
+    use_tp: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -71,6 +72,27 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
+        if self.use_tp:
+            mesh = ttml.current_mesh_or_raise()
+            tp_size = mesh.axis_size("tp")
+            if self.num_attention_heads % tp_size != 0:
+                raise ValueError(
+                    "Number of attention heads must be divisible by TP size. "
+                    f"num_attention_heads={self.num_attention_heads}, tp_size={tp_size}"
+                )
+            if self.num_key_value_heads % tp_size != 0:
+                raise ValueError(
+                    "Number of key/value heads must be divisible by TP size. "
+                    f"num_key_value_heads={self.num_key_value_heads}, tp_size={tp_size}"
+                )
+            intermediate_size = self.intermediate_size
+            if intermediate_size is None:
+                intermediate_size = compute_swiglu_intermediate_size(self.hidden_size)
+            if intermediate_size % tp_size != 0:
+                raise ValueError(
+                    "Intermediate size must be divisible by TP size. "
+                    f"intermediate_size={intermediate_size}, tp_size={tp_size}"
+                )
 
 
 class Llama(AbstractModuleBase):
@@ -79,12 +101,28 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        self.fc = LinearLayer(
-            config.hidden_size,
-            config.vocab_size,
-            False,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+        if config.use_tp and config.weight_tying == ttml.models.WeightTyingType.Enabled:
+            raise ValueError(
+                "Weight tying is not supported with tensor parallelism (use_tp=True). "
+                "Set weight_tying=WeightTyingType.Disabled when using TP."
+            )
+
+        if config.use_tp:
+            self.fc = ColumnParallelLinear(
+                config.hidden_size,
+                config.vocab_size,
+                has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                gather_output=True,
+                axis_name="tp",
+            )
+        else:
+            self.fc = LinearLayer(
+                config.hidden_size,
+                config.vocab_size,
+                False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(
@@ -124,6 +162,7 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    use_tp=config.use_tp,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
