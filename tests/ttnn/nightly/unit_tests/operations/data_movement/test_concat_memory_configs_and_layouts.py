@@ -22,8 +22,6 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
-torch.manual_seed(42)
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -633,3 +633,67 @@ class TestBlockShardedSweep:
 
         result = ttnn.to_torch(ttnn.concat(tt_inputs, dim=dim, memory_config=out_mem))
         assert_equal(expected, result)
+
+
+def test_manual_block_rm(device):
+    """Height concat of 3 block-sharded tensors on a 2x2 grid.
+
+    Each input is (2, 64) = 2 rows x 64 cols.
+    With a 2x2 grid, block shard shape is (1, 32) per core.
+    After height concat (dim=2), output is (6, 64) with shard (3, 32).
+    Expected output rows: 1s, 0s, 3s (interleaved across cores).
+    """
+    dim = 2
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})  # 2 X 2
+    shape = [1, 1, 2, 64]
+    shard_shape = (1, 32)  # H / 2 , W / 2
+
+    a = torch.ones(shape, dtype=torch.bfloat16)
+    b = torch.zeros(shape, dtype=torch.bfloat16)
+    c = torch.ones(shape, dtype=torch.bfloat16) * 3
+
+    # output should be  11111....00000....33333
+    expected = torch.cat([a, b, c], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid)
+    tt_b = to_block_sharded(b, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid)
+    tt_c = to_block_sharded(c, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid)
+
+    # expected output shape is (6, 64); block-sharded over 2X2 grid: shard shape is 6/2 , 64/2
+    out_shard = (3, 32)
+
+    out_mem = make_block_sharded_config(out_shard, grid)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+    print("manual_block_test RM PASSED")
+
+
+def test_manual_block_tiled(device):
+    """Height concat of 3 block-sharded TILE tensors on a 2x2 grid.
+
+    Each input is (64, 64) in the last two dims — tile-aligned.
+    With a 2x2 grid, block shard shape is (32, 32) per core.
+    After height concat (dim=2), output is (192, 64) with shard (96, 32).
+    """
+    dim = 2
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shape = [1, 1, 64, 64]
+    shard_shape = (32, 32)
+
+    a = torch.ones(shape, dtype=torch.bfloat16)
+    b = torch.zeros(shape, dtype=torch.bfloat16)
+    c = torch.ones(shape, dtype=torch.bfloat16) * 3
+
+    expected = torch.cat([a, b, c], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.TILE_LAYOUT, shard_shape, grid)
+    tt_b = to_block_sharded(b, device, ttnn.TILE_LAYOUT, shard_shape, grid)
+    tt_c = to_block_sharded(c, device, ttnn.TILE_LAYOUT, shard_shape, grid)
+
+    out_shard = (96, 32)
+    out_mem = make_block_sharded_config(out_shard, grid)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+    print("manual_block_test TILE PASSED")
