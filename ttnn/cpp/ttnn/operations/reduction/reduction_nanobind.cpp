@@ -30,7 +30,7 @@ void py_module(nb::module_& mod) {
 
     // Generic reductions
     detail::bind_generic_reductions(mod);
-    detail::bind_welford_reductions(mod);
+    detail::bind_std_var_reductions(mod);
 
     // Special reductions
     detail::bind_reduction_argmax_operation(mod);

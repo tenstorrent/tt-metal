@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::reduction::detail {
 
-static std::string get_welford_reduction_doc(const char* op_name, const char* qualified_name) {
+static std::string get_std_var_reduction_doc(const char* op_name, const char* qualified_name) {
     return fmt::format(
         R"doc(
         Computes the {0} of the input tensor :attr:`input_tensor` along the specified dimension(s) :attr:`dim`.
@@ -65,8 +65,8 @@ static std::string get_welford_reduction_doc(const char* op_name, const char* qu
         qualified_name);
 }
 
-void bind_welford_reductions(nb::module_& mod) {
-    const auto std_doc = get_welford_reduction_doc("std", "ttnn.std");
+void bind_std_var_reductions(nb::module_& mod) {
+    const auto std_doc = get_std_var_reduction_doc("std", "ttnn.std");
     ttnn::bind_function<"std">(
         mod,
         std_doc.c_str(),
@@ -82,7 +82,7 @@ void bind_welford_reductions(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("use_legacy") = false);
 
-    const auto var_doc = get_welford_reduction_doc("var", "ttnn.var");
+    const auto var_doc = get_std_var_reduction_doc("var", "ttnn.var");
     ttnn::bind_function<"var">(
         mod,
         var_doc.c_str(),

@@ -9,5 +9,5 @@
 namespace ttnn::operations::reduction::detail {
 
 namespace nb = nanobind;
-void bind_welford_reductions(nb::module_& mod);
+void bind_std_var_reductions(nb::module_& mod);
 }  // namespace ttnn::operations::reduction::detail
