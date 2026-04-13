@@ -33,7 +33,7 @@ jobs:
     name: "\U0001F916 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}"
     timeout-minutes: 240
     runs-on: tt-ubuntu-2204-xlarge-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || 'ccache-kernel-redis-test' }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image }}
       env:
