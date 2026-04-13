@@ -910,8 +910,8 @@ struct TopKSampling {
             const uint64_t dst_sem_noc_addr =
                 final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
 
-            noc_async_write(local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_size);
-            noc_async_write(local_indices_addr, final_noc_base | dst_indices_l1_addr, CTArgs::topk_indices_size);
+            noc_async_write_one_packet<true, true>(local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_size);
+            noc_async_write_one_packet<true, true>(local_indices_addr, final_noc_base | dst_indices_l1_addr, CTArgs::topk_indices_size);
             noc_semaphore_inc(dst_sem_noc_addr, 1);
             noc_async_posted_writes_flushed();
             noc_async_atomic_barrier();
@@ -1218,26 +1218,10 @@ struct TopKSampling {
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
-                    if constexpr (IsFinalCore) {
-                        auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                            get_read_ptr(CTArgs::topk_out_scores_cb));
-                        auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            get_read_ptr(CTArgs::topk_out_indices_cb));
-                        auto out_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_scores_l1);
-                        auto out_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_indices_l1);
-                        // DPRINT << "Sender idx: " << CTArgs::sender_idx << ENDL();
-                        // for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
-                        //     DPRINT << "llk_scores[" << i << "] = " << BF16(llk_scores[i]) << ENDL();
-                        //     DPRINT << "llk_indices[" << i << "] = " << llk_indices[i] << ENDL();
-                        //     out_scores[i] = llk_scores[i];
-                        //     out_indices[i] = llk_indices[i];
-                        // }
-                    } else {
-                        phase1_send_topk_to_final(
-                            get_read_ptr(CTArgs::topk_out_scores_cb),
-                            get_read_ptr(CTArgs::topk_out_indices_cb),
-                            dst_scores_l1, dst_indices_l1, args.final_noc_x, args.final_noc_y);
-                    }
+                    phase1_send_topk_to_final(
+                        get_read_ptr(CTArgs::topk_out_scores_cb),
+                        get_read_ptr(CTArgs::topk_out_indices_cb),
+                        dst_scores_l1, dst_indices_l1, args.final_noc_x, args.final_noc_y);
 
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
@@ -1271,7 +1255,11 @@ struct TopKSampling {
             if constexpr (IsFinalCore) {
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
-                wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
+                while (*recv_sem_ptr != CTArgs::expected_remote_incs + 1) {
+                    invalidate_l1_cache();
+                    DPRINT << "Recv semaphore value: " << *recv_sem_ptr << ENDL();
+                }
+                wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
 
                 const uint32_t winner_addr = get_write_ptr(CTArgs::winner_cb_id);
                 auto global_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(winner_addr);
@@ -1369,9 +1357,8 @@ struct TopKSampling {
 
                     // Signal BRISC to send via fabric (sends from winner CB directly).
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
-                        auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                            get_semaphore(CTArgs::local_ready_semaphore_id));
-                        noc_semaphore_set(local_ready_sem_ptr, 1);
+                        cb_reserve_back(CTArgs::winner_cb_id, 1);
+                        cb_push_back(CTArgs::winner_cb_id, 1);
                     }
 
                     if constexpr (CTArgs::stage2_receiver) {
@@ -1470,14 +1457,11 @@ struct TopKSampling {
             if constexpr (IsFinalCore) {
                 if constexpr (IsMeshSenderCore) {
                     // Mesh sender: wait for NCRISC to finish, then send via fabric
-                    auto local_ready_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
-                    noc_semaphore_wait(local_ready_sem_ptr, 1);
-                    noc_semaphore_set(local_ready_sem_ptr, 0);
-
+                    cb_wait_front(CTArgs::winner_cb_id, 1);
                     const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                     const uint32_t winner_addr = get_write_ptr(CTArgs::winner_cb_id);
                     send_mesh_topk_via_fabric_brisc(args.final_noc_x, args.final_noc_y, winner_addr, metadata, arg_idx);
+                    cb_pop_front(CTArgs::winner_cb_id, 1);
                 } else {
                     // Top-P filtering + random categorical selection
                     if constexpr (CTArgs::topk_k > 1 && (!CTArgs::mesh_mode || CTArgs::stage2_receiver)) {

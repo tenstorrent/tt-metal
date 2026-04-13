@@ -16,6 +16,23 @@ struct Core {
     static constexpr bool is_mesh_sender_core = get_named_compile_time_arg_val("sampling_mesh_sender_core") == 1;
 };
 
+#if defined(COMPILE_FOR_NCRISC)
+FORCE_INLINE uint64_t get_safe_multicast_noc_addr(
+    uint32_t noc_x_start,
+    uint32_t noc_y_start,
+    uint32_t noc_x_end,
+    uint32_t noc_y_end,
+    uint32_t addr,
+    uint8_t noc = noc_index) {
+    if (noc == 0) {
+        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr, noc);
+    } else {
+        // For NOC 1, swap start and end coordinates
+        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr, noc);
+    }
+}
+#endif
+
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
     using SamplingReaderCTArgs = deepseek_b1_ops::TopKSampling::ReaderCTArgs<
@@ -79,7 +96,6 @@ void kernel_main() {
     deepseek_b1_ops::TopKSampling::
         Op<SamplingReaderCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
             sampling_op;
-    sampling_op(args);
 
 #elif defined(COMPILE_FOR_BRISC)
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
@@ -108,7 +124,6 @@ void kernel_main() {
     deepseek_b1_ops::TopKSampling::
         Op<SamplingWriterCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
             sampling_op;
-    sampling_op(args);
 
 #elif defined(COMPILE_FOR_TRISC)
     using SamplingComputeCTArgs = deepseek_b1_ops::TopKSampling::ComputeCTArgs<
@@ -143,7 +158,6 @@ void kernel_main() {
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
             sampling_op;
 
-    uint32_t num_internal_iterations = get_named_compile_time_arg_val("sampling_num_internal_iterations");
 
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
@@ -157,8 +171,39 @@ void kernel_main() {
     }
 
     sampling_op.set_seed(get_named_compile_time_arg_val("sampling_seed"));
+#endif
+
+    constexpr uint32_t num_internal_iterations = get_named_compile_time_arg_val("sampling_num_internal_iterations");
     for (uint32_t i = 0; i < num_internal_iterations; ++i) {
         sampling_op(args);
-    }
+#if defined(COMPILE_FOR_NCRISC)
+        // Single-device loop barrier: final core releases non-final cores for next iteration.
+        // This prevents receiver semaphore increments from later iterations racing ahead.
+        if constexpr (!SamplingReaderCTArgs::mesh_mode) {
+            const uint32_t local_ready_sem_addr =
+                get_semaphore(get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"));
+            auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_ready_sem_addr);
+            if constexpr (Core::is_final_core) {
+                constexpr uint32_t num_dests = get_named_compile_time_arg_val("sampling_loop_num_dests");
+                if constexpr (num_dests > 0) {
+                    constexpr uint32_t mcast_start_x = get_named_compile_time_arg_val("sampling_loop_mcast_start_x");
+                    constexpr uint32_t mcast_start_y = get_named_compile_time_arg_val("sampling_loop_mcast_start_y");
+                    constexpr uint32_t mcast_end_x = get_named_compile_time_arg_val("sampling_loop_mcast_end_x");
+                    constexpr uint32_t mcast_end_y = get_named_compile_time_arg_val("sampling_loop_mcast_end_y");
+                    const uint64_t mcast_noc_addr = get_safe_multicast_noc_addr(
+                        mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+                    const uint64_t mcast_sem_addr = mcast_noc_addr | local_ready_sem_addr;
+
+                    noc_semaphore_set(local_ready_sem_ptr, 1);
+                    noc_semaphore_set_multicast(local_ready_sem_addr, mcast_sem_addr, num_dests);
+                    noc_async_write_barrier();
+                    noc_semaphore_set(local_ready_sem_ptr, 0);
+                }
+            } else {
+                noc_semaphore_wait(local_ready_sem_ptr, 1);
+                noc_semaphore_set(local_ready_sem_ptr, 0);
+            }
+        }
 #endif
+    }
 }

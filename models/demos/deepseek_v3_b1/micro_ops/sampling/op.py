@@ -457,6 +457,23 @@ class SamplingOp:
             ), "Single-device sampling currently expects final_mesh_coord=(0, 0)"
 
         sender_cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
+        loop_mcast_bbox = all_cores.bounding_box()
+        loop_mcast_start_worker = scores_tensor.device().worker_core_from_logical_core(loop_mcast_bbox.start)
+        loop_mcast_end_worker = scores_tensor.device().worker_core_from_logical_core(loop_mcast_bbox.end)
+        loop_mcast_start_x = int(loop_mcast_start_worker.x)
+        loop_mcast_start_y = int(loop_mcast_start_worker.y)
+        loop_mcast_end_x = int(loop_mcast_end_worker.x)
+        loop_mcast_end_y = int(loop_mcast_end_worker.y)
+        loop_mcast_logical_width = int(loop_mcast_bbox.end.x) - int(loop_mcast_bbox.start.x) + 1
+        loop_mcast_logical_height = int(loop_mcast_bbox.end.y) - int(loop_mcast_bbox.start.y) + 1
+        loop_mcast_num_dests = loop_mcast_logical_width * loop_mcast_logical_height - 1
+        logger.info(
+            f"Loop mcast bbox logical start={loop_mcast_bbox.start}, end={loop_mcast_bbox.end}, "
+            f"worker start=({loop_mcast_start_x}, {loop_mcast_start_y}), "
+            f"worker end=({loop_mcast_end_x}, {loop_mcast_end_y}), "
+            f"logical_size={loop_mcast_logical_width}x{loop_mcast_logical_height}, num_dests={loop_mcast_num_dests}"
+        )
+
         assert any(
             core.x == final_core_coord.x and core.y == final_core_coord.y for core in sender_cores
         ), "final_core_coord must be in scores/indices shard grid"
@@ -478,6 +495,7 @@ class SamplingOp:
         topk_out_scores_cb = 13
         topk_out_indices_cb = 14
         semaphore_id = 0
+        local_ready_semaphore_id = 1
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32  # 2048 bytes per bf16 32x32 tile
         uint32_tile_size = 4 * 32 * 32  # 4096 bytes per uint32 32x32 tile
@@ -508,7 +526,7 @@ class SamplingOp:
             ("sampling_expected_remote_incs", expected_remote_incs),
             ("sampling_winner_cb", winner_cb),
             ("sampling_receiver_semaphore_id", semaphore_id),
-            ("sampling_local_ready_semaphore_id", 1),
+            ("sampling_local_ready_semaphore_id", local_ready_semaphore_id),
             ("sampling_mesh_mode", 0),
             ("sampling_stage1_sender", 0),
             ("sampling_stage1_receiver", 0),
@@ -540,8 +558,16 @@ class SamplingOp:
             ("sampling_mesh_stage_indices_cb", 0xFFFFFFFF),
             ("sampling_scores_scratch_stage2_offset", 0),
             ("sampling_indices_scratch_stage2_offset", 0),
+            ("sampling_loop_mcast_start_x", loop_mcast_start_x),
+            ("sampling_loop_mcast_start_y", loop_mcast_start_y),
+            ("sampling_loop_mcast_end_x", loop_mcast_end_x),
+            ("sampling_loop_mcast_end_y", loop_mcast_end_y),
+            ("sampling_loop_num_dests", loop_mcast_num_dests),
             ("sampling_num_internal_iterations", num_internal_iterations),
         ]
+
+        logger.info(f"num_dests {loop_mcast_num_dests}")
+        
         trisc_named_compile_time_args = [
             ("sampling_softmax_in_cb", softmax_in_cb),
             ("sampling_softmax_out_cb", softmax_out_cb),
@@ -775,6 +801,16 @@ class SamplingOp:
             initial_value=0,
         )
 
+        full_grid = scores_tensor.device().compute_with_storage_grid_size()
+        loop_mcast_bbox_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
+        )
+        local_ready_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=local_ready_semaphore_id,
+            core_ranges=loop_mcast_bbox_grid,
+            initial_value=0,
+        )
+
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
@@ -790,7 +826,7 @@ class SamplingOp:
                 rand_cb_descriptor,
             ]
             + topk_cbs,
-            semaphores=[receiver_semaphore_descriptor],
+            semaphores=[receiver_semaphore_descriptor, local_ready_semaphore_descriptor],
         )
 
         tensors = [scores_tensor, indices_tensor, output_index_tensor]
@@ -881,6 +917,7 @@ class SamplingOp:
         topk_out_indices_cb = 14
         semaphore_id = 0
         local_ready_semaphore_id = 1
+
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32
         uint32_tile_size = 4 * 32 * 32
@@ -1005,6 +1042,11 @@ class SamplingOp:
                     ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb if k == 32 else 0xFFFFFFFF),
                     ("sampling_scores_scratch_stage2_offset", stage2_scores_scratch_offset),
                     ("sampling_indices_scratch_stage2_offset", stage2_indices_scratch_offset),
+                    ("sampling_loop_mcast_start_x", 0),
+                    ("sampling_loop_mcast_start_y", 0),
+                    ("sampling_loop_mcast_end_x", 0),
+                    ("sampling_loop_mcast_end_y", 0),
+                    ("sampling_loop_num_dests", 0),
                     ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
                 trisc_named_compile_time_args = [
