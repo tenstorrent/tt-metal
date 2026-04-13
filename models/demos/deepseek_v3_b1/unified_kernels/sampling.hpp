@@ -405,6 +405,13 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
 
     cb_wait_front(in_scores_cb, num_input_tiles);
     cb_wait_front(in_indices_cb, num_input_tiles);
+    auto in0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in_scores_cb).fifo_rd_ptr << cb_addr_shift);
+    auto in1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(in_indices_cb).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < 160; ++i) {
+        UNPACK(DPRINT << "local scores[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
+        UNPACK(DPRINT << "local indices[" << i << "]: " << in1_ptr[i] << ENDL());
+    }
+    UNPACK(DPRINT << "--------------------------------" << ENDL());
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
@@ -482,6 +489,14 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
         FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
     UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(FACE_C_DIM)));
+    auto out0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(out_scores_cb).fifo_wr_ptr << cb_addr_shift);
+    auto out1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(out_indices_cb).fifo_wr_ptr << cb_addr_shift);
+    
+    for (uint32_t i = 0; i < 32; ++i) {
+        PACK(DPRINT << "Standard out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
+        PACK(DPRINT << "Standardout_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
+    }
+    PACK(DPRINT << "--------------------------------" << ENDL());
 
     cb_push_back(out_scores_cb, 1);
     cb_push_back(out_indices_cb, 1);
@@ -511,6 +526,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         UNPACK(DPRINT << "scores[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
         UNPACK(DPRINT << "indices[" << i << "]: " << in1_ptr[i] << ENDL());
     }
+    UNPACK(DPRINT << "--------------------------------" << ENDL());
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
@@ -586,8 +602,8 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     auto out0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(out_scores_cb).fifo_wr_ptr << cb_addr_shift);
     auto out1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(out_indices_cb).fifo_wr_ptr << cb_addr_shift);
     for (uint32_t i = 0; i < 32; ++i) {
-        PACK(DPRINT << "out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
-        PACK(DPRINT << "out_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
+        PACK(DPRINT << "Global out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
+        PACK(DPRINT << "Global out_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
     }
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
@@ -1448,6 +1464,13 @@ struct TopKSampling {
                     }
                     cb_push_back(CTArgs::softmax_in_cb, 1);
                 }
+            } else if constexpr (IsActiveCore && !IsFinalCore) {
+                constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
+                cb_reserve_back(CTArgs::topk_in_scores_cb, p2_tiles);
+                cb_push_back(CTArgs::topk_in_scores_cb, p2_tiles);
+
+                cb_reserve_back(CTArgs::topk_in_indices_cb, p2_tiles);
+                cb_push_back(CTArgs::topk_in_indices_cb, p2_tiles);
             }
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
@@ -1545,6 +1568,17 @@ struct TopKSampling {
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb>(
                     CTArgs::num_values, CTArgs::phase1_num_input_tiles);
+            }
+
+            // Non-final cores: consume dummy pages pushed by NCRISC to keep
+            // the topk_in CB write pointer synchronized with the final core.
+            if constexpr (IsActiveCore && !IsFinalCore && CTArgs::topk_k == 32) {
+                constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
+                cb_wait_front(CTArgs::topk_in_scores_cb, p2_tiles);
+                cb_pop_front(CTArgs::topk_in_scores_cb, p2_tiles);
+
+                cb_wait_front(CTArgs::topk_in_indices_cb, p2_tiles);
+                cb_pop_front(CTArgs::topk_in_indices_cb, p2_tiles);
             }
 
             // Phase 2: global merge via LLK (final core only, k==32)

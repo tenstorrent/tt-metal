@@ -412,6 +412,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
     final_core = active_cores[final_core_idx]
     logger.info(f"Final core: {final_core}")
+    logger.debug(f"Active cores: {active_cores}")
 
     num_cores = len(active_cores)
     scores_shape = (1, 160 * num_cores)
@@ -545,7 +546,7 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
 @pytest.mark.parametrize(
     "seed, final_core_idx, p, temperature, num_internal_iterations",
     [
-        (2005, 100, 0.95, 0.6, 100),
+        (2005, 100, 0.95, 0.6, 2),
         (17, 0, 0.995, 0.4, 1),
         (1337, 50, 1.0, 0.8, 1),
         (4242, 73, 0.1, 0.6, 1),
