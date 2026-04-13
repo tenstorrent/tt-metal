@@ -5,7 +5,6 @@
 import math
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -933,7 +932,7 @@ class Attention(LightweightModule):
                 x_11SH,
                 self.wqkv,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None, prefill_seq_len=seq_len),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
@@ -942,8 +941,8 @@ class Attention(LightweightModule):
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
-        qkv_ar_memcfg = self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL)
-        try:
+        if self.num_devices > 1:
+            qkv_ar_memcfg = self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL, prefill_seq_len=seq_len)
             xqkv_fused = tt_all_reduce(
                 xqkv_fused,
                 self.mesh_device,
@@ -952,19 +951,6 @@ class Attention(LightweightModule):
                 memory_config=qkv_ar_memcfg,
                 dtype=self.ccl_dtype,
             )
-        except RuntimeError as e:
-            if qkv_ar_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                logger.warning(f"QKV prefill all-reduce L1 path failed; falling back to DRAM. Reason: {e}")
-                xqkv_fused = tt_all_reduce(
-                    xqkv_fused,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.ccl_dtype,
-                )
-            else:
-                raise
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -980,35 +966,20 @@ class Attention(LightweightModule):
         ttnn.deallocate(x_11SH)
 
         # split qkv into heads
-        create_head_memcfg = self.args.get_attn_create_head_output_mem_config(Mode.PREFILL, None)
-        try:
-            (
-                q_heads_1QSD_pre_rot,
-                k_heads_1KSD_pre_rot,
-                v_heads_1VSD,
-            ) = ttnn.experimental.nlp_create_qkv_heads(
-                xqkv_fused,
-                num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_kv_heads,
-                transpose_k_heads=False,
-                memory_config=create_head_memcfg,
-            )
-        except RuntimeError as e:
-            if create_head_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                logger.warning(f"Prefill create_qkv_heads L1 path failed; falling back to DRAM. Reason: {e}")
-                (
-                    q_heads_1QSD_pre_rot,
-                    k_heads_1KSD_pre_rot,
-                    v_heads_1VSD,
-                ) = ttnn.experimental.nlp_create_qkv_heads(
-                    xqkv_fused,
-                    num_heads=self.n_local_heads,
-                    num_kv_heads=self.n_local_kv_heads,
-                    transpose_k_heads=False,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                raise
+        create_head_memcfg = self.args.get_attn_create_head_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=seq_len
+        )
+        (
+            q_heads_1QSD_pre_rot,
+            k_heads_1KSD_pre_rot,
+            v_heads_1VSD,
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=create_head_memcfg,
+        )
 
         norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
@@ -1127,10 +1098,12 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
             )
+            l1_prefill_seq_len = seq_len
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
             # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
             sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
+            l1_prefill_seq_len = sdpa_seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -1159,21 +1132,13 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
-        concat_heads_memcfg = self.args.get_attn_concat_heads_output_mem_config(Mode.PREFILL, None)
-        try:
-            attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-                attn_output_1QSD,
-                memory_config=concat_heads_memcfg,
-            )
-        except RuntimeError as e:
-            if concat_heads_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                logger.warning(f"Prefill concat_heads L1 path failed; falling back to DRAM. Reason: {e}")
-                attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-                    attn_output_1QSD,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                raise
+        concat_heads_memcfg = self.args.get_attn_concat_heads_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
+        )
+        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+            attn_output_1QSD,
+            memory_config=concat_heads_memcfg,
+        )
         ttnn.deallocate(attn_output_1QSD)
 
         # For batched prefill, reshape to concatenate batch dimension into sequence
@@ -1182,103 +1147,69 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device
+        # reshaping long sequence to matmul fit on device (chunks of 1024 along seq)
+        # Total seq must be divisible by 1024 (e.g. batched prefill: batch*seq_per_user can be 12800)
+        pad_to_1024 = seq_len
         if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
-
-        # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            ag_memcfg = self.args.get_attn_all_gather_output_mem_config(Mode.PREFILL, None)
-            try:
-                attn_output_11SH = ttnn.experimental.all_gather_async(
+            pad_to_1024 = ((seq_len + 1023) // 1024) * 1024
+            if pad_to_1024 != seq_len:
+                attn_output_11SH = ttnn.pad(
                     attn_output_11SH,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
-                    topology=self.ccl_topology,
-                    memory_config=ag_memcfg,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
+                    padding=((0, 0), (0, 0), (0, pad_to_1024 - seq_len), (0, 0)),
+                    value=0.0,
                 )
-            except RuntimeError as e:
-                if ag_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                    logger.warning(f"Prefill all_gather_async L1 path failed; falling back to DRAM. Reason: {e}")
-                    attn_output_11SH = ttnn.experimental.all_gather_async(
-                        attn_output_11SH,
-                        persistent_output_buffer=None,
-                        dim=3,
-                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                        num_links=1,
-                        topology=self.ccl_topology,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                        chunks_per_sync=10,
-                        num_workers_per_link=2,
-                        num_buffers_per_channel=2,
-                    )
-                else:
-                    raise
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, pad_to_1024 // 1024, 1024, -1])
 
-        wo_memcfg = self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None)
-        try:
-            output_11SH = ttnn.linear(
-                attn_output_11SH,
-                self.wo,
-                compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-                dtype=self.activation_dtype or ttnn.bfloat8_b,
-                memory_config=wo_memcfg,
-                program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
+        # Non fused All Gather Matmul (multi-device only; single-chip skips fabric CCL)
+        if self.use_fused_all_gather_matmul and self.num_devices > 1:
+            ag_memcfg = self.args.get_attn_all_gather_output_mem_config(
+                Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
             )
-        except RuntimeError as e:
-            if wo_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                logger.warning(f"Prefill WO linear L1 path failed; falling back to DRAM. Reason: {e}")
-                output_11SH = ttnn.linear(
-                    attn_output_11SH,
-                    self.wo,
-                    compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-                    dtype=self.activation_dtype or ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
-                )
-            else:
-                raise
+            attn_output_11SH = ttnn.experimental.all_gather_async(
+                attn_output_11SH,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ag_memcfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
+        wo_memcfg = self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len)
+        output_11SH = ttnn.linear(
+            attn_output_11SH,
+            self.wo,
+            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            memory_config=wo_memcfg,
+            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, pad_to_1024, None),
+        )
 
         if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, pad_to_1024, -1])
+            if pad_to_1024 != seq_len:
+                output_11SH = output_11SH[:, :, :seq_len, :]
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
-        if not self.use_fused_all_gather_matmul:
-            out_ar_memcfg = self.args.get_attn_all_reduce_output_mem_config(Mode.PREFILL)
-            try:
-                output_11SH = tt_all_reduce(
-                    output_11SH,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=0,
-                    dim=0 if self.TG else 3,
-                    topology=self.ccl_topology,
-                    memory_config=out_ar_memcfg,
-                    dtype=self.ccl_dtype,
-                )
-            except RuntimeError as e:
-                if out_ar_memcfg != ttnn.DRAM_MEMORY_CONFIG:
-                    logger.warning(f"Prefill output all-reduce L1 path failed; falling back to DRAM. Reason: {e}")
-                    output_11SH = tt_all_reduce(
-                        output_11SH,
-                        self.mesh_device,
-                        self.tt_ccl,
-                        cluster_axis=0,
-                        dim=0 if self.TG else 3,
-                        topology=self.ccl_topology,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        dtype=self.ccl_dtype,
-                    )
-                else:
-                    raise
+        # Attention output all-reduce (tt_all_reduce no-ops on 1×1 mesh; skip call on single device)
+        if not self.use_fused_all_gather_matmul and self.num_devices > 1:
+            out_ar_memcfg = self.args.get_attn_all_reduce_output_mem_config(
+                Mode.PREFILL, prefill_seq_len=l1_prefill_seq_len
+            )
+            output_11SH = tt_all_reduce(
+                output_11SH,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=0 if self.TG else 3,
+                topology=self.ccl_topology,
+                memory_config=out_ar_memcfg,
+                dtype=self.ccl_dtype,
+            )
 
         return output_11SH
 
