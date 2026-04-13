@@ -51,6 +51,8 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
         return std::nullopt;
     }
 
+    // Sharding checks use physical shape and physical shard shape
+    // TODO: Review and port to use logical shapes
     const auto physical_shape = tensor_layout.compute_physical_shape(logical_shape);
     const auto physical_height = physical_shape.height();
     const auto physical_width = physical_shape.width();
