@@ -42,6 +42,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -92,6 +93,10 @@ static constexpr uint32_t NUM_NOCS = 2;
 static constexpr uint32_t MAX_NUM_BANKS = 32;
 // Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
 static constexpr uint32_t EMULE_NUM_CBS = 32;
+// Emulation simplification: each worker is its own L1 bank.
+static constexpr uint32_t EMULE_NUM_L1_BANKS = 1;
+// Semaphore alignment in L1 (must match firmware layout).
+static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
 uint16_t dram_bank_to_noc_xy[NUM_NOCS][MAX_NUM_BANKS] = {};
 int32_t bank_to_dram_offset[MAX_NUM_BANKS] = {};
@@ -607,8 +612,6 @@ static void collect_kernels(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
     std::vector<std::string>& inline_src_temps) {
-    static constexpr uint32_t EMULE_SEM_ALIGN = 16;
-
     const uint32_t num_pct = MetalContext::instance().hal().get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < num_pct; ++pct) {
         auto& kernels = impl.get_kernels(pct);
@@ -647,16 +650,16 @@ static void collect_kernels(
             auto defines = kernel->defines();
 
             defines["NUM_DRAM_BANKS"] = std::to_string(num_dram_channels ? num_dram_channels : 1);
-            defines["NUM_L1_BANKS"] = "1";
-            defines["NUM_NOCS"] = "2";
-            defines["DRAM_ALIGNMENT"] = "32";
-            defines["L1_ALIGNMENT"] = "16";
+            defines["NUM_L1_BANKS"] = std::to_string(EMULE_NUM_L1_BANKS);
+            defines["NUM_NOCS"] = std::to_string(NUM_NOCS);
+            defines["DRAM_ALIGNMENT"] = std::to_string(hal::get_dram_alignment());
+            defines["L1_ALIGNMENT"] = std::to_string(hal::get_l1_alignment());
             defines["EMULE_WORKER_COL_MAP"] = worker_col_map_str;
             defines["EMULE_WORKER_ROW_MAP"] = worker_row_map_str;
             {
-                std::ostringstream sb;
-                sb << "0x" << std::hex << emule_sem_base;
-                defines["EMULE_SEM_BASE"] = sb.str();
+                char buf[12];  // "0x" + max 8 hex digits + null
+                std::snprintf(buf, sizeof(buf), "0x%x", emule_sem_base);
+                defines["EMULE_SEM_BASE"] = buf;
             }
             defines["EMULE_SEM_ALIGN"] = std::to_string(EMULE_SEM_ALIGN);
 
@@ -854,8 +857,6 @@ static void setup_core_state(
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
     std::vector<CoreSetup>& core_setups) {
-    static constexpr uint32_t EMULE_SEM_ALIGN = 16;
-
     for (auto& [logical_core, ki_list] : core_kernels) {
         tt_emule::Core* core = nullptr;
         uint8_t phys_x = 0, phys_y = 0;
