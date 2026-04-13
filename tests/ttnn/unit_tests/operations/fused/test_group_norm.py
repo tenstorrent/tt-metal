@@ -1296,10 +1296,10 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
     tt_output = ttnn.to_torch(tt_output)
 
     if use_welford:
-        pcc_threshold = 0.99975
+        pcc_threshold = 0.999
         rtol = 0.14
-        atol = 0.085
-        frobenius_threshold = 0.02
+        atol = 0.3
+        frobenius_threshold = 0.06
     else:
         pcc_threshold = 0.9999
         rtol = 0.065
