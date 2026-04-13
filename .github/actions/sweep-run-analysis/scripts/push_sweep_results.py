@@ -336,7 +336,9 @@ def push_results(
                         run_id, full_test_name, input_hash, op_name,
                         model_name, status, device_fw_duration_ns
                     )
-                    VALUES """ + ", ".join(values)
+                    VALUES """ + ", ".join(
+                    values
+                )
 
                 cur.execute(insert_query)
                 inserted += len(batch)
