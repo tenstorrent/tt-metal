@@ -45,6 +45,8 @@ void kernel_main() {
                                        : ((original_page_size_bytes % 4) == 0) ? 2
                                        : ((original_page_size_bytes % 2) == 0) ? 3
                                                                                : 4;
+    // Max write size after doublings, used for template parameter to enable fast path
+    constexpr uint32_t max_write_size = original_page_size_bytes << num_doublings;
 
     // Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this
     // core
@@ -88,7 +90,9 @@ void kernel_main() {
 
         experimental::CoreLocalMem<uint32_t> dst_mem(data_location);
         // Use TensorAccessor directly to avoid address truncation
-        noc.async_read(s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        // Template parameter preserves one-packet fast path for page-sized transfers
+        noc.async_read<experimental::Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+            s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
         noc.async_read_barrier();
         if constexpr (num_doublings != 0) {
@@ -121,7 +125,11 @@ void kernel_main() {
 
             experimental::CoreLocalMem<uint32_t> src_mem(data_location);
             // Use TensorAccessor directly to avoid address truncation
-            noc.async_write(
+            // Template parameter preserves one-packet fast path for writes up to max_write_size
+            noc.async_write<
+                experimental::Noc::TxnIdMode::DISABLED,
+                experimental::Noc::ResponseMode::NON_POSTED,
+                max_write_size>(
                 src_mem,
                 d,
                 to_write,

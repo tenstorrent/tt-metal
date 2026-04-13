@@ -41,9 +41,12 @@ void kernel_main() {
     volatile tt_l1_ptr int* addr_ptr;
 
     if (batch_id_size > 0) {
+        // Reserve CB space before reading into it
+        batch_cb.reserve_back(1);
         uint32_t l1_write_addr = batch_cb.get_write_ptr();
         noc.async_read(batchAddr, batch_cb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        batch_cb.push_back(1);
         addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
     }
     for (uint32_t i = 0; i < batch_id_size; i++) {
