@@ -607,7 +607,12 @@ void process_higher_layer_and_recurse(
                 }
 
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
-                    mgd_adjacency, pgd_grouping.adjacency_graph, {}, ConnectionValidationMode::STRICT, true);
+                    mgd_adjacency,
+                    pgd_grouping.adjacency_graph,
+                    {},
+                    ConnectionValidationMode::STRICT,
+                    true,
+                    TopologyMappingSolverEngine::Dfs);
 
                 if (mapping_result.success) {
                     matches.push_back(pgd_grouping);
@@ -753,7 +758,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     grouping_info.adjacency_graph,
                     constraints,
                     ConnectionValidationMode::STRICT,
-                    true);
+                    true,
+                    TopologyMappingSolverEngine::Dfs);
                 if (mapping_result.success) {
                     log_info(
                         tt::LogFabric,
@@ -1056,7 +1062,12 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
     return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+        grouping_info.adjacency_graph,
+        physical_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Dfs);
 }
 
 bool is_flattened(const GroupingInfo& grouping) {

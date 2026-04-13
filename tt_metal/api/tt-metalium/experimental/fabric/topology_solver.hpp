@@ -492,9 +492,10 @@ enum class ConnectionValidationMode {
 /**
  * @brief Search backend for solve_topology_mapping
  *
- * Use Dfs or Sat for explicit control (e.g. unit tests). Auto reads TT_TOPOLOGY_SOLVER_ENGINE (same strings as
- * topology_mapping_use_sat_engine); that variable is also parsed into RunTimeOptions at Metal startup for diagnostics
- * and tests that query MetalContext::rtoptions().
+ * Use Dfs or Sat for explicit control (e.g. unit tests). Auto uses a size-based heuristic: small problems
+ * (n_target * n_global < threshold) use DFS for minimal overhead, while large problems use SAT for
+ * superior search efficiency. The environment variable TT_TOPOLOGY_SOLVER_ENGINE can override Auto:
+ * set to "sat" to force SAT everywhere, or "dfs" to force DFS everywhere.
  */
 enum class TopologyMappingSolverEngine {
     Auto,
@@ -598,7 +599,8 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 
 namespace detail {
 
-bool topology_mapping_should_use_sat_engine(TopologyMappingSolverEngine engine);
+bool topology_mapping_should_use_sat_engine(
+    TopologyMappingSolverEngine engine, size_t n_target = 0, size_t n_global = 0);
 
 /**
  * @brief Indexed graph representation for efficient lookups
@@ -1107,11 +1109,12 @@ private:
 };
 
 /**
- * @brief If true, `solve_topology_mapping` uses the SAT hard backend when solver_engine is Auto.
+ * @brief If true, `solve_topology_mapping` uses the SAT backend when solver_engine is Auto.
  *
  * Controlled by environment variable `TT_TOPOLOGY_SOLVER_ENGINE` (case-insensitive):
- * `sat`, `1`, `true`, or `yes` enable SAT; unset or any other value selects DFS (default).
- * The same variable is recorded on RunTimeOptions at Metal initialization.
+ * `sat`, `1`, `true`, or `yes` force SAT for all problem sizes;
+ * `dfs`, `0`, `false`, or `no` force DFS for all problem sizes;
+ * unset uses a size-based heuristic (small problems → DFS, large problems → SAT).
  */
 inline bool topology_mapping_use_sat_engine();
 

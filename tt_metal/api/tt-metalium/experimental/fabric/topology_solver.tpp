@@ -1130,7 +1130,7 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
     MappingResult<TargetNode, GlobalNode> result;
-    if (topology_mapping_should_use_sat_engine(solver_engine)) {
+    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
         sat_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
         const auto& state = sat_engine.get_state();
