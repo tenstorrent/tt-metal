@@ -36,6 +36,6 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
+ALWI void softplus_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(softplus, sfpu::softplus_init, APPROX)); }
 
 }  // namespace ckernel

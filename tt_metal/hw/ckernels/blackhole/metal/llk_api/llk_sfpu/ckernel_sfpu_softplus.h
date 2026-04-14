@@ -17,7 +17,7 @@ constexpr uint32_t SEGMENT_DEGREES[] = {6, 8, 6, 4, 4, 5, 4, 4, 4, 13, 10, 1, 1,
 #endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
-
+#include "ckernel_sfpu_piecewise_rational.h"
 
 namespace ckernel::sfpu {
 
@@ -106,17 +106,36 @@ constexpr std::array<float, 241> SOFTPLUS_LUT = {{
 
 #endif
 
-// Boundary clamping: softplus(x) → 0 as x→-∞, softplus(x) → x as x→+∞
+// LUT range boundaries
+constexpr float SOFTPLUS_LUT_LO = -10.0f;
+constexpr float SOFTPLUS_LUT_HI = 10.0f;
+
+// Boundary clamping for arbitrary beta:
+//   x < LUT_LO  → softplus(x) ≈ exp(x) ≈ 0
+//   x > LUT_HI  → softplus(x) ≈ x
+//   otherwise    → LUT evaluation
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat x = beta * val;
     v_if(x < threshold) {
-        sfpi::dst_reg[0] = beta_reciprocal * piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, x);
+#ifdef INP_FLOAT32
+        sfpi::vFloat result =
+            piecewise_rational_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_DEN_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(
+                SOFTPLUS_LUT, x);
+#else
+        sfpi::vFloat result =
+            piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, x);
+#endif
+        // Upper clamp: softplus(x) ≈ x for x >> 0
+        v_if(x > SOFTPLUS_LUT_HI) { result = x; }
+        v_endif;
+        sfpi::dst_reg[0] = beta_reciprocal * result;
     }
     v_endif;
-    v_if(x < -10.0f) { sfpi::dst_reg[0] = 0.0f; }
+    // Lower clamp: softplus(x) ≈ 0 for x << 0
+    v_if(x < SOFTPLUS_LUT_LO) { sfpi::dst_reg[0] = 0.0f; }
     v_endif;
 }
 
@@ -133,6 +152,7 @@ inline void calculate_softplus(uint param0, uint param1, uint param2) {
 
 template <bool APPROXIMATION_MODE>
 void softplus_init() {
+    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
