@@ -60,17 +60,18 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_POLY_C8);
 
         // Tail: f(a) ≈ exp(-a) for a > 5
-#ifdef INP_FLOAT32
-        // FP32: 4-term Taylor series for ln(1+e) to avoid boundary discontinuity
+        sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
-            sfpi::vFloat e = _sfpu_exp_accurate_<false>(a * -1.0f);
+#ifdef INP_FLOAT32
+            // FP32: 4-term Taylor series for ln(1+e) to avoid boundary discontinuity
+            sfpi::vFloat e = _sfpu_exp_accurate_<false>(neg_a);
             sfpi::vFloat e2 = e * e;
             residual = e - e2 * 0.5f + e2 * e * 0.333333343f - e2 * e2 * 0.25f;
-        }
 #else
-        // BF16: exp(-a) alone is sufficient (boundary rounds to same bf16)
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = _sfpu_exp_21f_bf16_<false>(-a); }
+            // BF16: exp(-a) alone is sufficient (boundary rounds to same bf16)
+            residual = _sfpu_exp_21f_bf16_<false>(neg_a);
 #endif
+        }
         v_endif;
 
         // Reconstruct softplus(t):
