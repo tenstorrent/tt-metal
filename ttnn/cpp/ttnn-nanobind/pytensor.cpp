@@ -1496,6 +1496,17 @@ void pytensor_module(nb::module_& mod) {
 
                     topology = tt_tensor.tensor_topology()
             )doc")
+        .def(
+            "update_tensor_topology",
+            [](Tensor& self, const tt::tt_metal::TensorTopology& topology) { self.update_tensor_topology(topology); },
+            nb::arg("topology"),
+            R"doc(
+                Update the topology of the tensor.
+
+                .. code-block:: python
+
+                    tt_tensor.update_tensor_topology(new_topology)
+            )doc")
         .def_prop_rw(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
