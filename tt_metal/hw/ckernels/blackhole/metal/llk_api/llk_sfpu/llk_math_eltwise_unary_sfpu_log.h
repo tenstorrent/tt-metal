@@ -12,8 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_log_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>(
-        sfpu::log_init<APPROXIMATE, FAST_APPROX, is_fp32_dest_acc_en>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log>(sfpu::log_init<APPROXIMATE, FAST_APPROX, is_fp32_dest_acc_en>);
 }
 
 template <bool APPROXIMATE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
@@ -24,7 +23,7 @@ inline void llk_math_eltwise_unary_sfpu_log(uint dst_index, int vector_mode = (i
 
 template <bool APPROXIMATE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROXIMATE>(
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base>(
         sfpu::log_init<APPROXIMATE, FAST_APPROX, is_fp32_dest_acc_en>);
 }
 

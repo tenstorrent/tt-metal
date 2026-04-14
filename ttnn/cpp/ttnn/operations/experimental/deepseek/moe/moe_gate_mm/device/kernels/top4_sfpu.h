@@ -165,7 +165,7 @@ inline void _calculate_top4_() {
 }  // namespace sfpu
 
 inline void _llk_math_top4_tile_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROXIMATE=*/true>(ckernel::sfpu::_top4_configure_addrmod_);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top4_configure_addrmod_);
 }
 
 inline void _llk_math_top4_tile_(uint32_t dst_index) {

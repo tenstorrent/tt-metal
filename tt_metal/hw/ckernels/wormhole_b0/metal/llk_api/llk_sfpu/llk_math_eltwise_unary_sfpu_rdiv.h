@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_rdiv_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rdiv, APPROXIMATE>(sfpu::rdiv_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::rdiv>(sfpu::rdiv_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, bool fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS = 8>

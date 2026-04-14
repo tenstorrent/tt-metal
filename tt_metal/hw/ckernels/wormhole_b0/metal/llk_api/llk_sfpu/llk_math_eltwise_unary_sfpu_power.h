@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_power_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROXIMATE>(ckernel::sfpu::sfpu_unary_pow_init);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::power>(ckernel::sfpu::sfpu_unary_pow_init);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
@@ -24,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_power(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_power_iterative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::power>();
 }
 
 template <bool APPROXIMATE>

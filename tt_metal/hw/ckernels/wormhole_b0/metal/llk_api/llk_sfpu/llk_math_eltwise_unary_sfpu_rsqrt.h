@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>(sfpu::rsqrt_init<APPROXIMATE, legacy_compat>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt>(sfpu::rsqrt_init<APPROXIMATE, legacy_compat>);
 }
 
 template <bool APPROXIMATE, bool fp32_dest_acc_en, bool FAST_APPROX, bool legacy_compat>

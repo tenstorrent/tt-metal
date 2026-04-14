@@ -15,8 +15,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_lgamma_stirling_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lgamma, APPROXIMATE>(
-        sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::lgamma>(sfpu::lgamma_stirling_init<APPROXIMATE, is_fp32_dest_acc_en>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>

@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_expm1_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::expm1, APPROXIMATE>(sfpu::expm1_init<APPROXIMATE, is_fp32_dest_acc_en>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::expm1>(sfpu::expm1_init<APPROXIMATE, is_fp32_dest_acc_en>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>

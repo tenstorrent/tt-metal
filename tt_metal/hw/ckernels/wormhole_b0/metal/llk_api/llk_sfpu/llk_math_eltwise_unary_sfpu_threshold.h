@@ -11,7 +11,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_threshold_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::threshold>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>

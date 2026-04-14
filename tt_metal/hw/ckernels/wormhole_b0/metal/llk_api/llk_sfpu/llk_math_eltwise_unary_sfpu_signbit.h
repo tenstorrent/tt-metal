@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_signbit_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROXIMATE>(ckernel::sfpu::signbit_init);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit>(ckernel::sfpu::signbit_init);
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
@@ -23,7 +23,7 @@ inline void llk_math_eltwise_unary_sfpu_signbit(uint dst_index, int vector_mode 
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_signbit_int32_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROXIMATE>(ckernel::sfpu::signbit_int32_init);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::signbit>(ckernel::sfpu::signbit_int32_init);
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>

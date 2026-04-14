@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tanh_derivative_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tanh_derivative, APPROXIMATE>(sfpu::tanh_derivative_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::tanh_derivative>(sfpu::tanh_derivative_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE>

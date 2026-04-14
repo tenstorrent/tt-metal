@@ -19,7 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
