@@ -729,3 +729,31 @@ class TestTypecastNegativeCases:
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         with pytest.raises(RuntimeError):
             ttnn.typecast(tt_input, dtype=ttnn.bfloat4_b)
+
+    def test_bf16_tile_to_bfp8_rm_rejected(self, device):
+        """bf16 TILE -> bfp8_b RM should be rejected (bfp8 can't be RM output)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat8_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def test_bf16_tile_to_bfp4_rm_rejected(self, device):
+        """bf16 TILE -> bfp4_b RM should be rejected (bfp4 can't be RM output)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat4_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def test_fp32_tile_to_bfp8_rm_rejected(self, device):
+        """fp32 TILE -> bfp8_b RM should be rejected (bfp8 can't be RM output)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.float32)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat8_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def test_int32_tile_to_bfp8_rm_rejected(self, device):
+        """int32 TILE -> bfp8_b RM should be rejected (bfp8 can't be RM output)."""
+        torch_input = torch.randint(0, 100, [1, 1, 32, 32], dtype=torch.int)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat8_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
