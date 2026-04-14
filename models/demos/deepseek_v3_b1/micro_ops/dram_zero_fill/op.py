@@ -70,12 +70,23 @@ class DRAMZeroFill:
         """
         mesh_rows = device.shape[0]
         mesh_cols = device.shape[1]
+        if max_seq_len % mesh_rows != 0:
+            raise ValueError(
+                "max_seq_len must be divisible by mesh_rows for KV cache allocation: "
+                f"got max_seq_len={max_seq_len}, mesh_rows={mesh_rows}"
+            )
         per_device_seq = max_seq_len // mesh_rows
 
         if mesh_shape is None:
             mesh_shape = (mesh_rows, mesh_cols)
 
         program_config = FlashMLADecode.ProgramConfig(k_chunk_size=DEFAULT_K_CHUNK_SIZE, exp_approx_mode=False)
+        if per_device_seq % program_config.k_chunk_size != 0:
+            raise ValueError(
+                "Per-device sequence length must be divisible by k_chunk_size for KV cache allocation: "
+                f"got per_device_seq={per_device_seq}, k_chunk_size={program_config.k_chunk_size}, "
+                f"max_seq_len={max_seq_len}, mesh_rows={mesh_rows}"
+            )
         kv_nd_shard_spec = ttnn.NdShardSpec(
             shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
             grid=program_config.grid.optimal_dram_grid(),
@@ -114,7 +125,19 @@ class DRAMZeroFill:
         """
         page_size = TILE_32x32.get_tile_size(output_tensor.dtype)
 
+        device_grid = output_tensor.device().compute_with_storage_grid_size()
+        if device_grid.x < GRID_X or device_grid.y < GRID_Y:
+            raise ValueError(
+                "DRAMZeroFill requires at least a 12x10 compute grid: "
+                f"required=({GRID_X}, {GRID_Y}), actual=({device_grid.x}, {device_grid.y})"
+            )
+
         shape = output_tensor.shape
+        if shape[-2] % 32 != 0 or shape[-1] % 32 != 0:
+            raise ValueError(
+                "DRAMZeroFill requires the last two tensor dimensions to be multiples of 32: "
+                f"got shape={list(shape)}, shape[-2]={shape[-2]}, shape[-1]={shape[-1]}"
+            )
         tile_rows = shape[-2] // 32
         tile_cols = shape[-1] // 32
         batch_tiles = 1
