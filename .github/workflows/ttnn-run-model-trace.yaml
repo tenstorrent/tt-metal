@@ -91,8 +91,10 @@ jobs:
 
       - name: Derive arch from runner label
         id: derive
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
         run: |
-          RUNNER="${{ inputs.runner-label }}"
+          RUNNER="$RUNNER_LABEL"
           case "$RUNNER" in
             P100a|P150b|BH-LLMBox|BH-DeskBox|BH-LoudBox)
               ARCH="blackhole"
@@ -174,6 +176,7 @@ jobs:
           LOAD_DB: ${{ inputs.load-to-db }}
           EXTRA_ARGS: ${{ inputs.extra_args }}
           TIMEOUT: ${{ inputs.timeout-minutes }}
+          TT_METAL_SHA: ${{ github.sha }}
         run: |
           echo "::group::Trace Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
@@ -187,7 +190,7 @@ jobs:
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
           echo "│ Timeout:              $TIMEOUT minutes"
-          echo "│ tt-metal SHA:         ${{ github.sha }}"
+          echo "│ tt-metal SHA:         $TT_METAL_SHA"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
@@ -266,28 +269,30 @@ jobs:
             exit 0
           fi
 
-          python3 -c "
-          import json, os, textwrap
+          python3 - <<'PY'
+          import json
+          import os
+          import textwrap
 
-          master_json = os.environ['MASTER_JSON']
-          test_path = os.environ['TEST_PATH']
-          trace_uid = os.environ.get('TRACE_UID', 'unknown')
-          tt_metal_sha = os.environ['TT_METAL_SHA']
+          master_json = os.environ["MASTER_JSON"]
+          test_path = os.environ["TEST_PATH"]
+          trace_uid = os.environ.get("TRACE_UID", "unknown")
+          tt_metal_sha = os.environ["TT_METAL_SHA"]
 
           with open(master_json) as f:
               data = json.load(f)
 
-          ops = data.get('operations', {})
+          ops = data.get("operations", {})
           unique_ops = len(ops)
-          total_configs = sum(len(op.get('configurations', [])) for op in ops.values())
+          total_configs = sum(len(op.get("configurations", [])) for op in ops.values())
 
           # Get machine info from first execution entry
           machine_info = {}
           for op_data in ops.values():
-              for cfg in op_data.get('configurations', []):
-                  for exc in cfg.get('executions', []):
-                      if exc.get('machine_info'):
-                          mi = exc['machine_info']
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      if exc.get("machine_info"):
+                          mi = exc["machine_info"]
                           if isinstance(mi, list):
                               mi = mi[0]
                           machine_info = mi
@@ -297,28 +302,28 @@ jobs:
               if machine_info:
                   break
 
-          board = machine_info.get('board_type', 'unknown')
-          series = machine_info.get('device_series', 'unknown')
-          cards = machine_info.get('card_count', '?')
-          mesh = machine_info.get('mesh_device_shape', [])
+          board = machine_info.get("board_type", "unknown")
+          series = machine_info.get("device_series", "unknown")
+          cards = machine_info.get("card_count", "?")
+          mesh = machine_info.get("mesh_device_shape", [])
 
-          summary = textwrap.dedent(f'''
+          summary = textwrap.dedent(f"""
           ## Model Trace Results
 
           | Field | Value |
           |---|---|
-          | Test Path | \`{test_path}\` |
+          | Test Path | `{test_path}` |
           | Hardware | {board} / {series} (x{cards}) |
           | Mesh Shape | {mesh} |
           | Unique Operations | {unique_ops} |
           | Total Configurations | {total_configs} |
-          | Trace UID | \`{trace_uid}\` |
-          | tt-metal SHA | \`{tt_metal_sha}\` |
-          ''').lstrip()
+          | Trace UID | `{trace_uid}` |
+          | tt-metal SHA | `{tt_metal_sha}` |
+          """).lstrip()
 
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(summary)
-          "
+          PY
 
       - name: Upload master JSON
         if: always() && steps.trace.outcome == 'success'
@@ -387,6 +392,7 @@ jobs:
           BASE_REF: ${{ github.ref_name }}
           TT_METAL_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MASTER_JSON: model_tracer/traced_operations/ttnn_operations_master.json
         run: |
           # Check if manifest was actually modified
           if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
@@ -399,29 +405,41 @@ jobs:
             git push origin "$BRANCH_NAME"
 
             # Parse trace stats for PR body
-            MASTER_JSON="model_tracer/traced_operations/ttnn_operations_master.json"
-            CONFIG_COUNT=$(python3 -c "
+            CONFIG_COUNT=$(python3 - <<'PY'
           import json
-          with open('$MASTER_JSON') as f:
-              data = json.load(f)
-          ops = data.get('operations', {})
-          print(sum(len(op.get('configurations', [])) for op in ops.values()))
-          ")
+          import os
 
-            MACHINE_INFO=$(python3 -c "
-          import json
-          with open('$MASTER_JSON') as f:
+          with open(os.environ["MASTER_JSON"]) as f:
               data = json.load(f)
-          for op_data in data.get('operations', {}).values():
-              for cfg in op_data.get('configurations', []):
-                  for exc in cfg.get('executions', []):
-                      mi = exc.get('machine_info', {})
-                      if isinstance(mi, list): mi = mi[0]
+
+          ops = data.get("operations", {})
+          print(sum(len(op.get("configurations", [])) for op in ops.values()))
+          PY
+            )
+
+            MACHINE_INFO=$(python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      mi = exc.get("machine_info", {})
+                      if isinstance(mi, list):
+                          mi = mi[0]
                       if mi:
-                          print(f\"{mi.get('board_type', '?')} / {mi.get('device_series', '?')} (x{mi.get('card_count', '?')})\")
-                          exit()
-          print('unknown')
-          ")
+                          print(
+                              f"{mi.get('board_type', '?')} / {mi.get('device_series', '?')} "
+                              f"(x{mi.get('card_count', '?')})"
+                          )
+                          raise SystemExit(0)
+
+          print("unknown")
+          PY
+            )
 
             gh pr create \
               --base "$BASE_REF" \
