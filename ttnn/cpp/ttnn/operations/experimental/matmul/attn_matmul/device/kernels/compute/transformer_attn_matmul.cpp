@@ -40,6 +40,8 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
+    DEVICE_PRINT("KERNEL START\n");
+
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
@@ -88,4 +90,6 @@ void kernel_main() {
             }
         }
     }
+
+    DEVICE_PRINT("KERNEL END\n");
 }
