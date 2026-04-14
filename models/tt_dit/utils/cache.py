@@ -79,10 +79,6 @@ def load_model(
     if tt_model.is_loaded():
         return
 
-    # unload any modules that need to be unloaded before loading this module
-    for module in tt_model.unload_set or []:
-        module.deallocate_weights()
-
     cache_dir = model_cache_dir(
         model_name=model_name,
         subfolder=subfolder,

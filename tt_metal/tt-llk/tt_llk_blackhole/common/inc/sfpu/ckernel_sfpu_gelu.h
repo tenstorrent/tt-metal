@@ -29,8 +29,8 @@ inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
     else
     {
         // f = (0.044715*x^3 + x)
-        result = (in * in) * (in * sfpi::sFloat16(0.044715f)) + in;
-        result *= sfpi::sFloat16(0.79788f);
+        result = (in * in) * (in * sfpi::sFloat16b(0.044715f)) + in;
+        result *= sfpi::sFloat16b(0.79788f);
     }
 
     return result;
