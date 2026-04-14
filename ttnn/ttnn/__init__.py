@@ -7,7 +7,9 @@ import json
 import importlib
 import os
 import pathlib
+import pkgutil
 import re
+import sys
 from types import ModuleType
 
 from loguru import logger
@@ -373,10 +375,34 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
+import ttnn.operations
+
 import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
-import ttnn.operations
+# After experimental_loader creates ttnn.experimental, append all submodules from _experimental
+# This allows us to add new experimental modules without conflicting with experimental_loader
+if "ttnn.experimental" in sys.modules:
+    import ttnn._experimental
+
+    # Discover all submodules in _experimental
+    for _, name, ispkg in pkgutil.iter_modules(ttnn._experimental.__path__):
+        # Import the submodule
+        submodule = importlib.import_module(f"ttnn._experimental.{name}")
+
+        # Add it to the experimental module created by experimental_loader
+        setattr(sys.modules["ttnn.experimental"], name, submodule)
+
+        # Also register it as a submodule in sys.modules for import statements
+        sys.modules[f"ttnn.experimental.{name}"] = submodule
+
+        # Recursively register sub-submodules if it's a package
+        if ispkg and hasattr(submodule, "__path__"):
+            for _, subname, _ in pkgutil.walk_packages(submodule.__path__, f"{name}."):
+                full_internal_name = f"ttnn._experimental.{subname}"
+                full_external_name = f"ttnn.experimental.{subname}"
+                sub_submodule = importlib.import_module(full_internal_name)
+                sys.modules[full_external_name] = sub_submodule
 
 from ttnn.operations.unary import SigmoidMode
 
