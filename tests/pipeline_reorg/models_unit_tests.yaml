@@ -130,7 +130,7 @@
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -273,8 +273,8 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
   skus:
-    wh_galaxy_perf:
-      timeout: 30
+    wh_galaxy:
+      timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models

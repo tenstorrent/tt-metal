@@ -20,7 +20,7 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 7
       tier: 1
     wh_llmbox_perf:
       timeout: 7
@@ -104,7 +104,7 @@
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 50
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -117,7 +117,7 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -130,7 +130,7 @@
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -143,7 +143,7 @@
   model: mistral-7b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 7
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -156,7 +156,7 @@
   model: gemma-3-4b
   skus:
     wh_n150:
-      timeout: 25
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -169,7 +169,7 @@
   model: gemma-3-27b
   skus:
     wh_llmbox_perf:
-      timeout: 25
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -182,7 +182,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 40
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -207,7 +207,7 @@
   model: qwen3-32b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -233,7 +233,7 @@
   model: gpt-oss-120b-high-batch-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 20
       tier: 1
   owner_id: U08TJ70UFRT # Stuti Raizada
   team: models
