@@ -7,19 +7,19 @@
 #include <cstdint>
 
 #include "ckernel_sfpu.h"
-#include "sfpu/ckernel_sfpu_topk.h"
 #include "ckernel_sfpu_add_top_row.h"
 #include "ckernel_sfpu_binary.h"
-#include "llk_sfpu_types.h"
+#include "sfpu/ckernel_sfpu_topk.h"
+// #include "helpers/include/llk_sfpu_types.h"
 
 // Metal SFPU operations from tt-metal repository
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "metal_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the case statement in call_sfpu_operation() switch below
-#include "metal_sfpu/ckernel_sfpu_exp.h"
-#include "metal_sfpu/ckernel_sfpu_log1p.h"
-#include "metal_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_log1p.h"
+#include "llk_sfpu/ckernel_sfpu_tanh.h"
 
 namespace test_utils
 {
@@ -131,7 +131,7 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>();
             calculate_log1p<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
-        case SfpuType::neg:
+        // case SfpuType::neg:
         case SfpuType::negative:
             if (math_format == ckernel::to_underlying(DataFormat::Int32))
             {

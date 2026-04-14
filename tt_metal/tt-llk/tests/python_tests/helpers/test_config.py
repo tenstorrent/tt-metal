@@ -346,6 +346,10 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
+        tt_metal_arch_value = TestConfig.ARCH.value
+        if tt_metal_arch_value == "wormhole":
+            tt_metal_arch_value = "wormhole_b0"
+
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
                 "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
@@ -366,7 +370,7 @@ class TestConfig:
             "-I../common",
             f"-I{TestConfig.HEADER_DIR}",
             f"-Ihw_specific/{TestConfig.ARCH.value}",
-            f"-Ihw_specific/{TestConfig.ARCH.value}/metal_sfpu",
+            f"-I../../hw/ckernels/{tt_metal_arch_value}/metal/llk_api",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
         ]
