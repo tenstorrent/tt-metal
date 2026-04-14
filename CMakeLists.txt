@@ -297,9 +297,6 @@ add_subdirectory(ttnn)
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()
-if(TT_METAL_USE_EMULE)
-    add_subdirectory(tt_emule)
-endif()
 
 ############################################################################################################################
 # Install targets for build artifacts and nanobinds
