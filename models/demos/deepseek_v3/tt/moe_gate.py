@@ -52,6 +52,24 @@ class MoEGate(AbstractModule):
         score_correction_bias = get_dequantized_tensor(
             state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
         )
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_device_cores = grid.x * grid.y
+        core_grid = ttnn.num_cores_to_corerangeset(
+            num_device_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        )
+        input_output_shard_shape = (32, 32)
+        input_output_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            input_output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
+        )
+        with torch.no_grad():
+            score_correction_bias -= torch.mean(score_correction_bias)
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
@@ -67,12 +85,16 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    torch.nn.functional.pad(
+                        score_correction_bias.reshape(1, 16, 16), (0, 16, 0, 16, 0, 0), "constant", 0
+                    )
+                    .transpose(1, 2)
+                    .repeat(num_device_cores, 1, 1),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
-                    dtype=ttnn.float32,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=input_output_mem_config,
+                    layout=ttnn.TILE_LAYOUT,
                 )
             },
         }
@@ -308,11 +330,12 @@ class MoEGate(AbstractModule):
         )
         # create the bias tensor
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = scores_correction_bias - ttnn.mean(scores_correction_bias)
-        scores_correction_bias = ttnn.reshape(scores_correction_bias, (1, 16, 16))
-        scores_correction_bias = ttnn.transpose(scores_correction_bias, dim1=-2, dim2=-1)
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, (batch_size_per_iter, 1, 1))
-        scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_output_mem_config)
+        scores_correction_bias = ttnn.slice(
+            scores_correction_bias,
+            slice_start=[0, 0, 0],
+            slice_end=[batch_size_per_iter, 16, 16],
+            memory_config=input_output_mem_config,
+        )
 
         # get the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
@@ -350,7 +373,8 @@ class MoEGate(AbstractModule):
             cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            scores_correction_bias = ttnn.typecast(scores_correction_bias, dtype=ttnn.bfloat16)
+            assert scores_correction_bias.dtype == ttnn.bfloat16
+            assert cur_logits.dtype == ttnn.bfloat16
             topk_experts_weights, topk_experts_indices = DeepseekMoeGateOp.op(
                 cur_logits,
                 scores_correction_bias,
