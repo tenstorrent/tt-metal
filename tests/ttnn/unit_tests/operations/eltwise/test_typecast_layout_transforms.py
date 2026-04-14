@@ -673,3 +673,132 @@ class TestTypecastReshardTransform:
         torch_golden = ttnn.to_torch(cpu_cast)
         torch_output = ttnn.to_torch(tt_output)
         assert_with_pcc(torch_golden, torch_output, pcc=0.99)
+
+
+# ---------------------------------------------------------------------------
+# 8. Same-dtype layout and memory transforms
+# ---------------------------------------------------------------------------
+class TestTypecastSameDtypeTransforms:
+    """Same dtype with layout and/or memory config changes."""
+
+    @pytest.mark.parametrize(
+        "pt_dtype, tt_dtype",
+        [
+            (torch.bfloat16, ttnn.bfloat16),
+            (torch.float32, ttnn.float32),
+            (torch.int, ttnn.int32),
+        ],
+    )
+    @pytest.mark.parametrize("input_shape", [[1, 1, 32, 32], [1, 1, 128, 128]])
+    def test_tile_to_rm_same_dtype(self, device, pt_dtype, tt_dtype, input_shape):
+        """TILE -> RM without dtype change."""
+        torch.manual_seed(0)
+        torch_input = _make_torch_input(input_shape, pt_dtype)
+        tt_input = ttnn.from_torch(torch_input, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.typecast(tt_input, dtype=tt_dtype, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert tt_output.dtype == tt_dtype
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+
+    @pytest.mark.parametrize(
+        "pt_dtype, tt_dtype",
+        [
+            (torch.bfloat16, ttnn.bfloat16),
+            (torch.float32, ttnn.float32),
+            (torch.int, ttnn.int32),
+        ],
+    )
+    @pytest.mark.parametrize("input_shape", [[1, 1, 32, 32], [1, 1, 128, 128]])
+    def test_rm_to_tile_same_dtype(self, device, pt_dtype, tt_dtype, input_shape):
+        """RM -> TILE without dtype change."""
+        torch.manual_seed(0)
+        torch_input = _make_torch_input(input_shape, pt_dtype)
+        tt_input = ttnn.from_torch(torch_input, dtype=tt_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tt_output = ttnn.typecast(tt_input, dtype=tt_dtype, output_layout=ttnn.TILE_LAYOUT)
+        assert tt_output.layout == ttnn.TILE_LAYOUT
+        assert tt_output.dtype == tt_dtype
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+
+    @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
+    def test_sharded_to_interleaved_same_dtype(self, device, input_shape):
+        """Sharded -> interleaved without dtype change."""
+        torch.manual_seed(0)
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        input_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
+        )
+        tt_output = ttnn.typecast(tt_input, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert not tt_output.is_sharded()
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+
+    @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
+    def test_tile_sharded_to_rm_interleaved_same_dtype(self, device, input_shape):
+        """TILE sharded -> RM interleaved without dtype change (layout + memory)."""
+        torch.manual_seed(0)
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        input_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
+        )
+        tt_output = ttnn.typecast(
+            tt_input, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert not tt_output.is_sharded()
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+
+    @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
+    def test_rm_interleaved_to_tile_sharded_same_dtype(self, device, input_shape):
+        """RM interleaved -> TILE sharded without dtype change (layout + memory)."""
+        torch.manual_seed(0)
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        output_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_output = ttnn.typecast(
+            tt_input, dtype=ttnn.bfloat16, memory_config=output_mem_config, output_layout=ttnn.TILE_LAYOUT
+        )
+        assert tt_output.layout == ttnn.TILE_LAYOUT
+        assert tt_output.is_sharded()
+        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
+
+
+# ---------------------------------------------------------------------------
+# 9. Negative cases: invalid output format/layout combinations
+# ---------------------------------------------------------------------------
+class TestTypecastNegativeCases:
+    """Tests that invalid combinations are properly rejected."""
+
+    def test_bfp8_to_bfp8_rm_rejected(self, device):
+        """BFP8_B TILE -> BFP8_B RM should be rejected (tile-only format)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat8_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def test_bfp4_to_bfp4_rm_rejected(self, device):
+        """BFP4_B TILE -> BFP4_B RM should be rejected (tile-only format)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat4_b, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def test_rm_to_bfp8_rm_rejected(self, device):
+        """RM float32 -> BFP8_B without layout change should fail (BFP can't be RM)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.float32)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat8_b)
+
+    def test_rm_to_bfp4_rm_rejected(self, device):
+        """RM float32 -> BFP4_B without layout change should fail (BFP can't be RM)."""
+        torch_input = torch.randn([1, 1, 32, 32], dtype=torch.float32)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        with pytest.raises(RuntimeError):
+            ttnn.typecast(tt_input, dtype=ttnn.bfloat4_b)
