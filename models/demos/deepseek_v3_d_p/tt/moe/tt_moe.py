@@ -14,6 +14,7 @@ This module assembles the full MoE pipeline:
 6. Final: Add routed output + shared output
 """
 
+from pathlib import Path
 from typing import Optional, Union
 
 import torch
@@ -73,9 +74,13 @@ class TtMoe(LightweightModule):
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
-        activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activations_dtype=ttnn.bfloat16,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
+        weight_cache_path: Optional[Path] = None,
+        layer_idx: int = 0,
     ):
         """
         Initialize TtMoe module.
@@ -100,8 +105,10 @@ class TtMoe(LightweightModule):
                                    per expert. Length must be experts_per_chip.
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj
                                    for shared expert.
-            activations_dtype: Data type for activations (default: bfloat8_b)
-            weights_dtype: Data type for weights (default: bfloat4_b)
+            routed_expert_activations_dtype: Data type for routed expert activations
+            routed_expert_weights_dtype: Data type for routed expert weights
+            shared_expert_activations_dtype: Data type for shared expert activations
+            shared_expert_weights_dtype: Data type for shared expert weights
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
         """
@@ -147,6 +154,8 @@ class TtMoe(LightweightModule):
             weight=gate_weights["weight"],
             bias=gate_weights["e_score_correction_bias"],
             fallback_mode=gate_fallback_mode,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.gate",
         )
         self.gate_input_mem_config = get_input_mem_config(gate_config, mesh_device.shape)
 
@@ -199,8 +208,10 @@ class TtMoe(LightweightModule):
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
-            activations_dtype=activations_dtype,
-            weights_dtype=weights_dtype,
+            activations_dtype=routed_expert_activations_dtype,
+            weights_dtype=routed_expert_weights_dtype,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.routed_expert",
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -211,8 +222,10 @@ class TtMoe(LightweightModule):
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
             topology=self.col_topology,
-            activations_dtype=activations_dtype,
-            weights_dtype=weights_dtype,
+            activations_dtype=shared_expert_activations_dtype,
+            weights_dtype=shared_expert_weights_dtype,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=f"layer_{layer_idx}.shared_expert",
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -260,6 +273,13 @@ class TtMoe(LightweightModule):
             x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
         scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
+
+        # DEBUG
+        # Print full token counts per expert for monitoring
+        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+        logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
@@ -353,6 +373,9 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
+        if expert_outputs.dtype != ttnn.bfloat16:
+            logger.warning(f"Typecasting expert_outputs from {expert_outputs.dtype} to bfloat16 for combine module")
+            expert_outputs = ttnn.typecast(expert_outputs, ttnn.bfloat16)
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 

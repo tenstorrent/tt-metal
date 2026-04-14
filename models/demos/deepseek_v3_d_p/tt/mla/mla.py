@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from pathlib import Path
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -25,11 +27,13 @@ class ttMLA:
         tp_axis: int = 1,
         is_balanced: bool = False,
         topology=ttnn.Topology.Linear,
+        weight_cache_path: Optional[Path] = None,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
+        self.weight_cache_path = weight_cache_path
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -163,6 +167,11 @@ class ttMLA:
         # Load weights to TT device
         self._load_weights(state_dict)
 
+    def _cache_name(self, name: str) -> Optional[str]:
+        if self.weight_cache_path is None:
+            return None
+        return str(self.weight_cache_path / f"layer_{self.layer_idx}.mla.{name}")
+
     def _load_weights(self, state_dict: dict[str, torch.Tensor]):
         """
         Load weights from state dict and convert to TT tensors.
@@ -179,23 +188,25 @@ class ttMLA:
 
         # Mesh Device = (sp x tp)
         q_a_ln_weight = state_dict["q_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-        self.q_a_layernorm_weight = ttnn.from_torch(
+        self.q_a_layernorm_weight = ttnn.as_tensor(
             q_a_ln_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=self._cache_name("q_a_layernorm"),
         )
 
         kv_a_ln_weight = state_dict["kv_a_layernorm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-        self.kv_a_layernorm_weight = ttnn.from_torch(
+        self.kv_a_layernorm_weight = ttnn.as_tensor(
             kv_a_ln_weight,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=self._cache_name("kv_a_layernorm"),
         )
 
         q_a_proj = state_dict["q_a_proj.weight"]
@@ -206,13 +217,14 @@ class ttMLA:
         mesh_mapper = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
-        self.q_a_proj_weight = ttnn.from_torch(
+        self.q_a_proj_weight = ttnn.as_tensor(
             q_a_proj,
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("q_a_proj"),
         )
 
         shard_dims[self.tp_axis] = 1
@@ -220,22 +232,24 @@ class ttMLA:
         mesh_mapper_q_b_proj = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
-        self.q_b_proj_weight = ttnn.from_torch(
+        self.q_b_proj_weight = ttnn.as_tensor(
             state_dict["q_b_proj.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("q_b_proj"),
         )
 
-        self.kv_a_proj_with_mqa_weight = ttnn.from_torch(
+        self.kv_a_proj_with_mqa_weight = ttnn.as_tensor(
             state_dict["kv_a_proj_with_mqa.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("kv_a_proj_with_mqa"),
         )
         kv_b_proj_weights = state_dict["kv_b_proj.weight"].reshape(
             1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
@@ -246,33 +260,53 @@ class ttMLA:
 
         shard_dims[self.tp_axis] = 1
         shard_dims[self.sp_axis] = None
-        self.wkv_b1_weight = ttnn.from_torch(
+        self.wkv_b1_weight = ttnn.as_tensor(
             torch_weights_k.transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("wkv_b1"),
         )
-        self.wkv_b2_weight = ttnn.from_torch(
+        self.wkv_b2_weight = ttnn.as_tensor(
             torch_weights_v.transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper_q_b_proj,
+            cache_file_name=self._cache_name("wkv_b2"),
         )
 
-        self.o_proj_weight = ttnn.from_torch(
+        self.o_proj_weight = ttnn.as_tensor(
             state_dict["o_proj.weight"].transpose(-2, -1),
             device=self.mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
+            cache_file_name=self._cache_name("o_proj"),
         )
 
         logger.info(f"✓ Loaded {len(state_dict)} weights in MLA layer {self.layer_idx} to TT device")
+
+    @staticmethod
+    def kv_cache_to_host(kvpe_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
+        """Read KVPE cache from device to host tensor [1, 1, seq_total, kv_lora_rank + qk_rope_head_dim]."""
+        return ttnn.to_torch(
+            kvpe_cache,
+            mesh_composer=ttnn.create_mesh_composer(
+                mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(2, -1),
+                    mesh_shape_override=ttnn.MeshShape(
+                        mesh_device.shape[sp_axis],  # concat SP shards
+                        1,  # collapse TP replicas
+                    ),
+                ),
+            ),
+        ).to(torch.bfloat16)
 
     def get_weight_shapes(self) -> dict[str, tuple]:
         return {
@@ -296,15 +330,69 @@ class ttMLA:
         "o_proj": ttnn.bfloat16,
     }
 
+    # Matmul dimensions for batched matmuls (wkv_b1 / wkv_b2) keyed by weight name.
+    # Each entry: (K_attr, N_attr) where values are attribute names on self.
+    _BATCHED_MM_DIMS = {
+        "wkv_b1": ("qk_nope_head_dim", "kv_lora_rank"),
+        "wkv_b2": ("kv_lora_rank", "v_head_dim"),
+    }
+
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults."""
         cfg = self.mm_configs[weight_name].get(seq_len_local) if is_blackhole() else None
         if cfg is None:
+            if weight_name in self._BATCHED_MM_DIMS:
+                return self._make_batched_mm_kwargs(weight_name, seq_len_local)
             return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
         return {
             "memory_config": cfg["out_mem_config"],
             "program_config": cfg["program_config"],
             "dtype": cfg["out_dtype"],
+        }
+
+    def _make_batched_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
+        """Build MatmulMultiCoreReuseMultiCast1DProgramConfig for batched matmuls (wkv_b1/wkv_b2).
+
+        These matmuls require fuse_batch=False and mcast_in0=False to support
+        batch broadcasting (in0 batch=1, in1 batch=num_heads).
+        """
+        k_attr, n_attr = self._BATCHED_MM_DIMS[weight_name]
+        K_tiles = getattr(self, k_attr) // ttnn.TILE_SIZE
+        N_tiles = getattr(self, n_attr) // ttnn.TILE_SIZE
+        M_tiles = seq_len_local // ttnn.TILE_SIZE
+
+        num_cores = self.ring_sdpa_compute_grid[0] * self.ring_sdpa_compute_grid[1]
+        per_core_M = max(1, -(-M_tiles // num_cores))  # ceil division
+        while M_tiles % per_core_M != 0:
+            per_core_M += 1
+
+        # out_subblock: h * w <= 8, h divides per_core_M, w divides N_tiles
+        out_subblock_w = min(N_tiles, 8)
+        while N_tiles % out_subblock_w != 0:
+            out_subblock_w -= 1
+        out_subblock_h = min(per_core_M, 8 // out_subblock_w)
+        while per_core_M % out_subblock_h != 0:
+            out_subblock_h -= 1
+
+        # in0_block_w: factor of K_tiles, capped for L1 pressure
+        in0_block_w = min(4, K_tiles)
+        while K_tiles % in0_block_w != 0:
+            in0_block_w -= 1
+
+        return {
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=per_core_M,
+                per_core_N=N_tiles,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
         }
 
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
@@ -321,7 +409,9 @@ class ttMLA:
 
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
-    def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor, cache_user_idx: int = 0
+    ) -> ttnn.Tensor:
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
@@ -333,28 +423,29 @@ class ttMLA:
             **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
-        # All reduce
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_q,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
-        tt_q = ttnn.experimental.all_gather_async(
-            tt_q,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
+        # All reduce (skip for single-device TP)
+        if self.tp_factor > 1:
+            tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+                tt_q,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            tt_q = ttnn.experimental.all_gather_async(
+                tt_q,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
 
         # rmsnorm
         tt_q = ttnn.rms_norm(
@@ -416,20 +507,21 @@ class ttMLA:
             **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
         )
 
-        # All reduce
-        tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv,
-            dim=1,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
-        tt_kv = ttnn.experimental.fast_reduce_nc(
-            tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
-        )
+        # All reduce (skip for single-device TP)
+        if self.tp_factor > 1:
+            tt_kv = ttnn.experimental.all_gather_async(
+                tt_kv,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+            tt_kv = ttnn.experimental.fast_reduce_nc(
+                tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            )
 
         # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
@@ -460,7 +552,7 @@ class ttMLA:
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
         # Update KV cache with compressed latent representation
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, 0)
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_user_idx)
 
         tt_v_embedding = ttnn.linear(
             tt_kv_nope,
@@ -503,14 +595,17 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
-        out = ttnn.experimental.reduce_scatter_minimal_async(
-            v_out,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
+        if self.tp_factor > 1:
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                v_out,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
+        else:
+            out = v_out
         return out
