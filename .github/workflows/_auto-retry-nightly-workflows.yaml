@@ -57,7 +57,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MAX_ATTEMPTS=10
+          MAX_ATTEMPTS=3
           CURRENT_HOUR=$(date +"%H")
 
           # Fetch workflow run details
