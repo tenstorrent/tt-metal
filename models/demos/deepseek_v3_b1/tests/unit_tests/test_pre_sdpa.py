@@ -23,28 +23,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
 )
-from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache, generate_mm_weights
 from models.demos.deepseek_v3_b1.weights.transforms.attention import (
     fuse_kv_b12,
     fuse_o_proj_gate_mm_norms,
     fuse_q_ab_kv_a,
 )
-
-
-def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
-    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
-
-    The global KV cache is written in round-robin device_chunk_size blocks:
-      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
-    ShardTensor2dMesh splits dim-2 contiguously, so each device would
-    receive the wrong data.  This function reorders to:
-      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
-    so that after the contiguous split each device gets its own chunks.
-    """
-    b, h, seq, d = kv.shape
-    num_chunks = seq // device_chunk_size
-    chunks_per_device = num_chunks // num_devices
-    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
 
 
 def test_get_device_mla_work_assignment():
