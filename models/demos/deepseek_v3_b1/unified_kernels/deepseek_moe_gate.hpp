@@ -106,6 +106,13 @@ struct DeepseekMoeGate {
             // TRISC: Compute gate logic
             // ================================================================
 
+            // Comment out reconfig_data_format to make kernel returning wrong results
+            // then turn on LLK_ASSERT to see assert hit and fix the issue
+            // ....
+            //
+            // TT_METAL_LLK_ASSERTS=1 pytest
+            // models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py::test_deepseek_moe_gate[42-True-1]
+            //
             // Input indices CB should have the same tile shape as the input CB
             reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
             // Output indices CB should have the same tile shape as the output CB
