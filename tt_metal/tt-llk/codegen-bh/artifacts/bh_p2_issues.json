@@ -1,0 +1,381 @@
+{
+    "repo": "tenstorrent/tt-llk",
+    "query": {
+        "labels": [
+            "blackhole",
+            "P2"
+        ],
+        "state": "open"
+    },
+    "fetched_at": "2026-04-08T09:34:33.693786",
+    "count": 18,
+    "issues": [
+        {
+            "number": 51,
+            "title": "[Code improvement] Throw assert if calling API with block_ct_dim < full_ct_dim",
+            "body":
+                "We know that code paths that are triggered with block_ct_dim < full_ct_dim are not well tested and might have serious bugs.\nTo avoid silent failures due to using this code path, we should throw an assert to signalize that it shouldn't be used currently.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/51",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "code improvement",
+                "blackhole",
+                "wormhole",
+                "llk_asserts"
+            ],
+            "assignees": [
+                "ndivnicTT"
+            ],
+            "comment_count": 2,
+            "created_at": "2025-03-12T16:32:27Z",
+            "updated_at": "2026-01-23T15:20:21Z"
+        },
+        {
+            "number": 55,
+            "title": "[Blackhole] CFGSHIFTMASK instruction",
+            "body":
+                "Blackhole has new CFGSHIFTMASK that can update addresses for the unpacker instructions inside the mop/replay buffers.\n\nInstead of updating addresses in this method:\n\n```\n  TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG3_Base_address_ADDR32);\n  TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TILE_SIZE_A);\n  TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);\n  TTI_WRCFG(p_gpr_unpack::TMP0,0,THCON_SEC0_REG3_Base_address_ADDR32);\n```\n\nUsing the CFGSHIFTMASK instruction, it could be done like this:\n\n```\nTTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32); // THCON_SEC0_REG3_Base_address_ADDR32 =  THCON_SEC0_REG3_Base_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32 \n```\n\nas long as the scratch buffer is correctly populated:\n\n```\nTTI_WRCFG(p_gpr_unpack::TILE_SIZE_A, 0, SCRATCH_SEC0_val_ADDR32);\nTTI_NOP;\n```\n\nIf an operation is unpacker bound, then using the CFGSHIFTMASK should increase performance.\n",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/55",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "code improvement",
+                "blackhole",
+                "performance",
+                "do-not-close"
+            ],
+            "assignees": [
+                "fvranicTT"
+            ],
+            "comment_count": 5,
+            "created_at": "2025-03-13T16:14:56Z",
+            "updated_at": "2026-02-03T14:32:24Z"
+        },
+        {
+            "number": 57,
+            "title": "Unpack 32x32 tiles",
+            "body":
+                "Currently the only unpacker kernel that unpacks 32x32 tiles is the llk_unpack_AB_matmul.h. The addition was done to saturate the compute kernel for matmul operations. There are other unpacker kernels that could also make use of the same additions:\n\n```\n    llk_unpack_A.h\n    llk_unpack_AB.h\n    llk_unpack_reduce.h\n    llk_unpack_tilize.h\n    llk_unpack_untilize.h\n```\n\nNot only would this be helpful for performance, but also it could remove the unnecessary face dimensions configs:\n\n    config_unpacker_x_end<UNP_SEL>(face_r_dim);\n\nThat need to be added to init functions such as _llk_unpack_A_init_ to be able to fuse operations that switch between unpacking 16x16 and unpacking 32x32.\n\n@nvelickovicTT fyi\n",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/57",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "code improvement",
+                "blackhole",
+                "wormhole"
+            ],
+            "assignees": [
+                "rtawfik01"
+            ],
+            "comment_count": 4,
+            "created_at": "2025-03-17T14:26:37Z",
+            "updated_at": "2026-01-23T15:21:56Z"
+        },
+        {
+            "number": 61,
+            "title": "[Blackhole]: Pack untilize improvements",
+            "body":
+                "Pack untilize kernel needed to be re-written for Blackhole, due to Blackhole packer limitations:\n\nOnly one Dest offset register for the packer instance (but we can use strided mode of 16 rows apart)\nPACR instructions can only write L1 contiguous output.\nThese L1 Offset registers, are now set per PACR Context, not per rows output from PACR instruction (i.e PACK_INTF_SEL)\n\n```\nTHCON_SEC0_REG1_L1_Dest_addr_ADDR32 -> Context 0\nTHCON_SEC0_REG8_L1_Dest_addr_ADDR32 -> Context 1\nTHCON_SEC1_REG1_L1_Dest_addr_ADDR32 -> Context 2\nTHCON_SEC1_REG8_L1_Dest_addr_ADDR32 -> Context 3\n```\n\nHere is the current algorithm:\n\n![Image](https://github.com/user-attachments/assets/2368edba-a9ad-4e5c-9952-df51b1b474a6)\n\nFor wormhole b0, 8x16 rows can be output per tile (before incrementing counters), while for blackhole with the above implementation, only 2x16 can. Since pack_untilize feature needs to be fused with other operations, we cannot change the unpacker to use a different unpacking scheme (Fastest untilize scheme would be T0F0, T0F1, T1F0, T1F1, T0F2, T0F3, T1F2, T1,F3)). However, we should use that implementation if the use case is doing a pack_untilize for a block of tiles (i.e not fused).\n\nOne major optimization, is to enable the use of contexts.\n```\nTHCON_SEC0_REG1_L1_Dest_addr_ADDR32 = CNTX0 = tile_offset (Configured for top faces)\nTHCON_SEC0_REG8_L1_Dest_addr_ADDR32 = CNTX2 = tile_offset + block_ct_dim * TILE_C_DIM *datum_size ((Configured for bottom faces)\n```\nThen algorithm can do 4x16 rows, will change to something like this:\n\n```\nCH0 x_stride = number of bytes per datum (2 bytes for Float16b default)\nCH0 y_stride = FACE_C_DIM*x_stride\nCH0 z_stride = FACE_R_DIM*y_stride (1x16x16 datums default, already done in pack_hw_config)\nCH0 w_stride = 4*z_stride (32x32 by default)\nPACK_INTF_SELECT_0 = 0b0011 (read 2 rows from dest)\nPACK_INTF_SELECT_1 = 0b1100 (read 2 rows from dest)\nDest Mode = DST_STRIDED_MODE (Each row read from dest is 16 apart)\n\n    for face_r_dim (16 by default):\n        for block_ct_dim (2 in this example) {\n            PACK(CNTX0, PACK_INTF_SELECT_0); (Reads 2 rows, writes them contiguous in L1, dest rows = 0,16, 1, 17, 2, 18 .....)\n            PACK(CNTX1, PACK_INTF_SELECT_1); (Reads 2 rows, writes them contiguous in L1, dest rows = 32,48, 33, 49,  .....)\n            W_CNT += 1 (Jumps to next tile)\n        }\n        Y_CNT+=1\n    }\n```\nThe problem here is if contexts are used, initial hardware configuration for data formats, tile sizes, etc, all need to also be programmed.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/61",
+            "state": "OPEN",
+            "labels": [
+                "enhancement",
+                "P2",
+                "code improvement",
+                "blackhole",
+                "performance"
+            ],
+            "assignees": [
+                "nvelickovicTT",
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2025-03-20T13:46:38Z",
+            "updated_at": "2026-02-02T13:48:51Z"
+        },
+        {
+            "number": 186,
+            "title": "Add asserts before semaphore posts and gets in LLK code.",
+            "body":
+                "Due to some race conditions for example one explained here \n\nhttps://github.com/tenstorrent/tt-metal/issues/19201#issuecomment-2867613877\n\nwe can have semaphore_get and semaphore_post instructions dropped, for example trying to call semaphore_get on a semaphore that is already 0. These could lead to very expensive  bugs. We need to add watcher asserts to make sure these situations do not arise. The timing due to enabling watcher may change and some bugs may not manifest, but still it may expose many bugs. ",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/186",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "code improvement",
+                "blackhole",
+                "wormhole",
+                "LLK",
+                "llk_asserts"
+            ],
+            "assignees": [
+                "skrsmanovicTT",
+                "ndivnicTT"
+            ],
+            "comment_count": 6,
+            "created_at": "2025-05-09T20:51:20Z",
+            "updated_at": "2026-01-23T17:28:35Z"
+        },
+        {
+            "number": 239,
+            "title": "Wrong registers set during configuration/initialization for packer.",
+            "body":
+                "Some registers or flags are adjacent, and to optimize a write to them, developers often used only one call to cfg_reg_rmw_tensix function trying to pack more data to do multiple tasks, but in blackhole some registers were not adjacent anymore. Thus the copied over code is invalid. The case I have encountered so far will not likely give wrong results but will consume more power. \n\nMoreover the helper structure to write into registers may not correspond to the original register ordering. \n\nFile : ``` tt_llk_blackhole/common/inc/cpack_common.h```\n\nExamples \n\n```\n   inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc){\n\n      const uint32_t pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);\n\n      cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_ADDR32, THCON_SEC0_REG1_Pack_L1_Acc_SHAMT, THCON_SEC0_REG1_Disable_pack_zero_flags_MASK | THCON_SEC0_REG1_Pack_L1_Acc_MASK>(pack_l1_acc_disable_pack_zero_flag);\n\n   }\n```\n\nThe optimization for Wormhole can be valid since we have the bits adjacent in wormhole but not in blackhole\n\nWormhole fields :\n```\n#define THCON_SEC0_REG1_Pack_L1_Acc_ADDR32 59\n#define THCON_SEC0_REG1_Pack_L1_Acc_SHAMT 21\n#define THCON_SEC0_REG1_Pack_L1_Acc_MASK 0x200000\n#define THCON_SEC0_REG1_Pack_L1_Acc_RMW \\\n    THCON_SEC0_REG1_Pack_L1_Acc_ADDR32, THCON_SEC0_REG1_Pack_L1_Acc_SHAMT, THCON_SEC0_REG1_Pack_L1_Acc_MASK\n\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_ADDR32 59\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_SHAMT 22\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_MASK 0x400000\n```\n\nBlackhole fields:\n```\n#define THCON_SEC0_REG1_Pack_L1_Acc_ADDR32 71\n#define THCON_SEC0_REG1_Pack_L1_Acc_SHAMT 19\n#define THCON_SEC0_REG1_Pack_L1_Acc_MASK 0x80000\n#define THCON_SEC0_REG1_Pack_L1_Acc_RMW \\\n    THCON_SEC0_REG1_Pack_L1_Acc_ADDR32, THCON_SEC0_REG1_Pack_L1_Acc_SHAMT, THCON_SEC0_REG1_Pack_L1_Acc_MASK\n\n---- REMOVED ---- \n\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_ADDR32 70\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_SHAMT 2\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_MASK 0x4\n#define THCON_SEC0_REG1_Disable_pack_zero_flags_RMW                                                \\\n    THCON_SEC0_REG1_Disable_pack_zero_flags_ADDR32, THCON_SEC0_REG1_Disable_pack_zero_flags_SHAMT, \\\n        THCON_SEC0_REG1_Disable_pack_zero_flags_MASK\n```\n\nFor the ground truth the structures like this , in the same file cfg_defins.h files should be used as they are generated using scripts from rtls.\nAll such instances should be looked at and fixed.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/239",
+            "state": "OPEN",
+            "labels": [
+                "bug",
+                "P2",
+                "blackhole",
+                "LLK",
+                "do-not-close"
+            ],
+            "assignees": [
+                "ncvetkovicTT",
+                "skrsmanovicTT"
+            ],
+            "comment_count": 2,
+            "created_at": "2025-05-23T21:05:18Z",
+            "updated_at": "2026-01-26T11:34:43Z"
+        },
+        {
+            "number": 273,
+            "title": "Fix ordering of fields in pack_config_t with the actual ordering of the registers.",
+            "body":
+                "The structurre of pack_config_t for Wormhole_b0. can be seen here \n\n![Image](https://github.com/user-attachments/assets/6dafc871-81cd-44c9-899a-f4571440383c)\n\n\nThe ordering of the registers in cfg_defines.h for Wormhole_b0 can be seen here\n\n![Image](https://github.com/user-attachments/assets/b2b7b397-29d8-44e7-ba48-ae3384c1d74d)\n\nAs can be seen what is between src_if_sel and l1_src_addr is different between the pack_config_t and the original register structure. \nSo we need to make sure the structure is okay for both wormhole and blackhole and make sure all corresponding function calls are corrected. ",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/273",
+            "state": "OPEN",
+            "labels": [
+                "bug",
+                "P2",
+                "blackhole",
+                "wormhole",
+                "LLK",
+                "do-not-close"
+            ],
+            "assignees": [],
+            "comment_count": 5,
+            "created_at": "2025-05-29T19:09:15Z",
+            "updated_at": "2026-01-23T20:42:11Z"
+        },
+        {
+            "number": 361,
+            "title": "Standardize instruction type for maintainability and readability",
+            "body":
+                "There are examples in the LLK code where our instructions are declared like this:\n`static constexpr uint unpack_srca_zerosrc    = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);`\n\nTo improve portability, readability, and type safety we should introduce a new definition:\n`#define instruction_t uint32_t`,\nand use `instruction_t` consistently whenever declaring or storing an instruction. \n\nThis guarantees 32-bit width, which is important as `uint` is not a standard type and may vary across compilers.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/361",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "LLK"
+            ],
+            "assignees": [],
+            "comment_count": 1,
+            "created_at": "2025-06-12T16:06:01Z",
+            "updated_at": "2025-06-20T13:25:23Z"
+        },
+        {
+            "number": 625,
+            "title": "Move SFPU code from tt-metal to tt-llk",
+            "body":
+                "# Move SFPU functions to tt-llk and add testing \u2014 $[Amount], [Difficulty]\n\n**Project/Repo:** [tt-llk](https://github.com/tenstorrent/tt-llk)  and [tt-metal](https://github.com/tenstorrent/tt-metal)\n**Category:** Feature\n**Bounty Status:** Open\n\n---\n\n## \ud83d\udcdd Background\nSome LLK implementation of SFPU OPs (for both WH and BH) lack testing coverage, but live in the tt-metal repo. We need to move these down to the tt-llk repo and add tests to prevent regressions.\n\n## \ud83c\udfaf What Success Looks Like\n- Below are listed the files containing OPs which need to either be moved or overwritten in tt-llk\n- \"move implementation to tt-llk\" means to create a file in the tt-llk repo and move the implementation there so that it can be tested\n- \"overwrite llk implementation with tt-metal\" means to just replace the existing llk implementation with the one from tt-metal and test that\n- All these OPs need tests in the tt-llk infra written for them as well\n\nWH:\n- [ ] ckernel_sfpu_abs.h -> overwrite llk implementation with tt-metal implementation\n- [ ] ckernel_sfpu_add1.h -> move implementation to tt-llk\n- [ ] ckernel_sfpu_cast_fp32_to_fp16a.h -> overwrite llk implementation with tt-metal implementation\n- [ ] ckernel_sfpu_max.h -> overwrite tt-llk implementation with tt-metal implementation\n- [ ] ckernel_sfpu_min.h -> move implementation to tt-llk\n\nBH:\n- [ ] ckernel_sfpu_abs.h -> overwrite llk implementation  with tt-metal\n- [ ] ckernel_sfpu_add1.h -> move implementation to tt-llk\n- [ ] ckernel_sfpu_cast_fp32_to_fp16a.h -> overwrite llk implementation with tt-metal BUT UPDATE ADDRMOD TO 7\n- [ ] ckernel_sfpu_max.h -> overwrite llk implementation with tt-metal implementation\n- [ ] ckernel_sfpu_min.h -> move implementation to tt-llk\n\n## \ud83d\udca1 Problem to Solve\nMoving the implementations to tt-llk, adding tests to verify each OP, extending the test-infra to enable these OPs.\n\n## \ud83e\udded Guidance & Starting Points\n- unary SFPU OP testing is done in `tt-metal/tt_metal/third_party/tt_llk/tests/python_tests/test_eltwise_unary_sfpu.py`\n- contact @rdjogoTT for support\n\n## \ud83d\udd0e Possible Approaches\n- this bounty is meant to get you familiar with how the test-infra works, so looking at other tests and golden implementations is a good place to start\n- using torch or math library versions of the OPs as a golden is one possible approach\n\n---\n\n## \ud83d\udcda Resources\n- [Reference documentation for getting started in tt-llk](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md)",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/625",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "cleanup"
+            ],
+            "assignees": [],
+            "comment_count": 6,
+            "created_at": "2025-08-28T17:39:12Z",
+            "updated_at": "2025-09-29T17:12:12Z"
+        },
+        {
+            "number": 820,
+            "title": "Reduce Improvement",
+            "body":
+                "Based on this issue https://github.com/tenstorrent/tt-metal/issues/22870 we should adapt native reduce (`llk_math_reduce.h` and `llk_unpack_AB.h`) to implement a block reduce:\n* column reduce - MATH: GM/GAPOOL in a loop over `block_rt_dim`, clear dvalid for SrcA at each iteration, at the end clear dvalid for SrcB. UNPACK: UNPACR a single face of scaler into SrcB, then UNPACR a whole tile into SrcA in a loop over `block_rt_dim`\n* row reduce -  MATH: GM/GAPOOL in a loop over `block_ct_dim`, clear dvalid for SrcA at each iteration, at the end transpose the result by moving from DEST to SrcB and clear dvalid for SrcB. UNPACK: don't forget haloize mode, UNPACR a single face of scaler into SrcB, then UNPACR a whole tile into SrcA in a loop over `block_ct_dim`\n* scalar reduce - combine the two above, care about location of intermediate result in DEST and what dim is larger (first do reduce across larger dim)",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/820",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2025-11-07T13:35:11Z",
+            "updated_at": "2026-01-23T14:35:57Z"
+        },
+        {
+            "number": 880,
+            "title": "[subissue-guardrails] Clean up redundant llk_math_eltwise_binary_init",
+            "body":
+                "There are two versions of `llk_math_eltwise_binary_init`, w/ and w/o operands. Let's remove the one w/o operands since it just sets `num_faces` to default four. Change the usage of the Low Level API in the Compute API appropriately.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/880",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "llk_contract_gaps",
+                "ease_of_use_task"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 1,
+            "created_at": "2025-11-25T22:05:33Z",
+            "updated_at": "2026-01-27T14:50:02Z"
+        },
+        {
+            "number": 911,
+            "title": "[Ease-of-Use] Closing LLK Contract Gaps",
+            "body":
+                "This issue represents _Closing LLK Contract Gaps_ User Story within our _Ease of Use_ Epic. The list is not conclusive, and can be seen [here](https://docs.google.com/spreadsheets/d/1oOsQCDgBL_1BTEIhMfMd5Q5WnXmtSyfZVRt08-_4yZ8/edit?gid=0#gid=0) (internal access only).\n\nThese issues need to be closed in order to make our LLK code compliant to the LLK Contract defined during Red Team F2F in Nov '25.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/911",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "LLK",
+                "cleanup",
+                "llk_contract_gaps"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 3,
+            "created_at": "2025-12-04T19:56:18Z",
+            "updated_at": "2026-02-24T13:59:04Z"
+        },
+        {
+            "number": 951,
+            "title": "[subissue-guardrails] Check Data Format Handling for Math",
+            "body":
+                "According to HW team, unpack0_dst_format is used as the FPU data format, while unpack1_dst_format is used as the SFPU format. \n\nWe should do some experiments and changes to make sure this HW behavior is clear in our SW:\n\n1. Take for example `_llk_math_hw_configure_`.\n2. Check if we're ever passing different formats from tt-metal for `srca_data_format` / `srca_data_format`\n3. This can be checked in jit `chlc_unpack_data_formats.hpp` artifacts in `~/.cache/tt-metal-cache`\n4. If different, we should check also if tt-metal data format inference logic doesn't change these to one common data format.\n5. In the end, if we're sure that the passed data formats are different, we should confirm the behavior of the HW based on the premise.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/951",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "LLK",
+                "llk_contract_gaps",
+                "ease_of_use_task"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2025-12-16T13:07:56Z",
+            "updated_at": "2026-01-27T14:50:28Z"
+        },
+        {
+            "number": 960,
+            "title": "[subissue-guardrails] Check disable_src_zero_flag condition",
+            "body":
+                "This commit:\nhttps://github.com/tenstorrent/tt-llk/commit/3e042d77c93910731336fffb50ecf3961916feea\n\nIntroduced a condition for disabling zero flags on WH that takes into account uint16 data, but it's unclear why this setting depends on that particular data format. \n\nWe should explore and explain/adapt in the following files:\n`tt-metal/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h`\n`tt-metal/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h`\n`tt-metal/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h`\n`tt-metal/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A.h`",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/960",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "llk_contract_gaps",
+                "ease_of_use_task"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2025-12-17T13:57:00Z",
+            "updated_at": "2026-01-27T14:51:39Z"
+        },
+        {
+            "number": 1089,
+            "title": "Expose separate transpose settings in llk_unpack_AB",
+            "body":
+                "### Is your feature request related to a problem? Please describe\n\n`llk_unpack_AB` currently has a single transpose setting that controls both `transpose_faces` and `within_face_16x16_transpose`. For reduce-row we only need `within_face_16x16_transpose`, but not transpose_faces.\n\nIt would be useful to expose separate init settings for these two, similar to how this is handled in `llk_unpack_A`.\n\n### Describe the solution you'd like\n\n_No response_\n\n### Describe alternatives you've considered\n\n_No response_\n\n### Additional context\n\n_No response_",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/1089",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "llk_contract_gaps",
+                "ease_of_use_task"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2026-01-14T10:47:21Z",
+            "updated_at": "2026-01-27T14:54:13Z"
+        },
+        {
+            "number": 1141,
+            "title": "Optimize SFPU based reductions.",
+            "body":
+                "### Optimize SFPU based reduce\n\nThe SFPU based reductions can be optimized by a somewhat non-trivial percentage.  Here are the steps. \n\nFor column reduce, we could remove one transpose only. we would still be summing up the elements in a column but in a different order like instead of adding elements from row 0 with 1 , 2, 3, you probably would be adding 0, 4, 8, 12.\n\nFor Wormhole, some of the nops required after some SFPU instructions can be removed by reordering the order of operations. \n\nFor columnwise reduction \n\nWe transpose \nwe are doing a reduction across the registers (0 to 3 and result in 3) and (4 to 7 and result in 4) \nWe transpose\nagain we are doing a reduction across the registers (0 to 3 and result in 3) and (4 to 7 and result in 4)\nWe add register 0 with 4\n\nBut we could just do \n\n a reduction across the registers (0 to 3 and result in 3) and (4 to 7 and result in 4) \n add register 0 with 4 \n transpose \n a reduction across the registers (0 to 3 and result in 3)\n\nIn the previous approach the addition of 0, and 4, the first lanes computation matters only, in this approach when we add 0, and 4 useful addition is being done across all the lanes, thus reducing the total operations. ",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/1141",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "feature"
+            ],
+            "assignees": [],
+            "comment_count": 0,
+            "created_at": "2026-01-21T20:58:24Z",
+            "updated_at": "2026-01-21T21:02:49Z"
+        },
+        {
+            "number": 1148,
+            "title": "[subissue-guardrails] Make DataCopyType an Enum Class",
+            "body":
+                "During https://github.com/tenstorrent/tt-llk/pull/976 fvranic had a comment:\n```\n[tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h](https://github.com/tenstorrent/tt-llk/pull/976/files/f4e15b661bc2309a9b7d291d76b8e7ca0dbe60ca#diff-b4807c8ff56066f4c41a5594fb7f502f2e4fa717029607dbda62242560837b3d)\n\n    // Workaround for HW bug (budabackend#1372): unpack_to_dest (A2D) with broadcast OR 32-bit data needs bit 11 disabled\n    // When type == A2D, unpack_to_dest is implied\n    if constexpr (type == A2D)\nMember\n@[fvranicTT](https://github.com/fvranicTT)\nfvranicTT\n[4 hours ago](https://github.com/tenstorrent/tt-llk/pull/976#discussion_r2716348440)\n\u2022 \nHow hard would it be to start using DataCopyType::A2D instead? I know it's an enum, not an enum class, and this is allowed, but it being an enum means we're leaking symbols to the global namespace. We could convert all of the enums to enum classes, since it will make our lives easier along the way. We already had ODR violation issues in the past.\n```",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/1148",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole",
+                "wormhole",
+                "LLK",
+                "llk_contract_gaps",
+                "ease_of_use_task"
+            ],
+            "assignees": [
+                "ncvetkovicTT"
+            ],
+            "comment_count": 0,
+            "created_at": "2026-01-22T14:53:12Z",
+            "updated_at": "2026-01-27T14:54:30Z"
+        },
+        {
+            "number": 1153,
+            "title": "Investigate tensix_sync in _llk_math_reconfig_remap_",
+            "body":
+                "Comment in this function indicates that the `tensix_sync()` is used to wait on all DEST accesses before modifying registers. Need to investigate whether this can be replaced with a stallwait with thorough testing - if the `tensix_sync` waits for DEST accesses from another thread such as UNPACK, then replacing with a stallwait would lead to less safe behaviour.",
+            "url": "https://github.com/tenstorrent/tt-llk/issues/1153",
+            "state": "OPEN",
+            "labels": [
+                "P2",
+                "blackhole"
+            ],
+            "assignees": [],
+            "comment_count": 0,
+            "created_at": "2026-01-22T19:26:26Z",
+            "updated_at": "2026-01-22T19:26:26Z"
+        }
+    ]
+}
