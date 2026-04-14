@@ -4,7 +4,7 @@
 #pragma once
 
 #include <type_traits>
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
 
 /**
  * @file matmul_block_helpers.inl
