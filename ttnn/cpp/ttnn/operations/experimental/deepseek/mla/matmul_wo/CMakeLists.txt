@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_deepseek_mla_matmul_wo ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO ALIAS ttnn_op_experimental_deepseek_mla_matmul_wo)
 
-target_precompile_headers(ttnn_op_experimental_deepseek_mla_matmul_wo REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_mla_matmul_wo TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_mla_matmul_wo)
 
 target_sources(

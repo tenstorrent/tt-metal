@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,6 @@
 
 #include "recv_async_op_device_operation_types.hpp"
 #include "recv_async_op_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -25,7 +22,7 @@ struct RecvAsyncDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

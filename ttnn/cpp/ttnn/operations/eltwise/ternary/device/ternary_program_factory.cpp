@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -121,6 +121,35 @@ void detect_broadcasts(
         pred_is_bcast = (pred_row_bcast && pred_col_bcast);
         true_is_bcast = (true_row_bcast && true_col_bcast);
         false_is_bcast = (false_row_bcast && false_col_bcast);
+    } else if (broadcast_type == TernaryBroadcastType::ROW_COL_BCAST) {
+        // Mixed row+col broadcast: is_bcast = true for col-broadcast (W=1) tensors,
+        // which are pushed before the tw loop and waited on outside the compute freq loop.
+        auto pred_w = pred_shape[-1];
+
+        if (variant == TernaryVariant::TTT) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto true_w = true_shape[-1];
+            auto false_w = false_shape[-1];
+            auto max_w = std::max({pred_w, true_w, false_w});
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = (true_w == 1 && max_w > 1);
+            false_is_bcast = (false_w == 1 && max_w > 1);
+        } else if (variant == TernaryVariant::TTS) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto true_w = true_shape[-1];
+            auto max_w = std::max(pred_w, true_w);
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = (true_w == 1 && max_w > 1);
+            false_is_bcast = false;
+        } else if (variant == TernaryVariant::TST) {
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto false_w = false_shape[-1];
+            auto max_w = std::max(pred_w, false_w);
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = false;
+            false_is_bcast = (false_w == 1 && max_w > 1);
+        }
     } else if (broadcast_type == TernaryBroadcastType::SCALAR_A_BCAST) {
         // Scalar broadcast detection (H and W dimensions of condition tensor must be broadcast for TTS/TST)
         pred_is_bcast = true;
@@ -742,9 +771,7 @@ void set_or_update_runtime_arguments(
         }
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
-                // TODO: test for TTS and TST
-                // case TernaryBroadcastType::ROW_B_COL_A:
-                // case TernaryBroadcastType::ROW_A_COL_B:
+                case TernaryBroadcastType::ROW_COL_BCAST:
                 case TernaryBroadcastType::COL_BCAST: {
                     uint32_t start_t = start_tile_id % (output_dims.Ht * output_dims.Wt);
                     uint32_t start_tw = start_t % output_dims.Wt;
@@ -1000,6 +1027,50 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         false_is_bcast,
         has_sharding);
 
+    // For mixed row+col broadcast: add per-tensor row-bcast and scalar defines for the reader
+    if (broadcast_type == TernaryBroadcastType::ROW_COL_BCAST) {
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto pred_h = pred_shape[-2];
+        auto pred_w = pred_shape[-1];
+
+        if (variant == TernaryVariant::TTT) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto max_h = std::max({pred_h, true_shape[-2], false_shape[-2]});
+            auto max_w = std::max({pred_w, true_shape[-1], false_shape[-1]});
+
+            bool pred_h1 = (pred_h == 1 && max_h > 1);
+            bool pred_w1 = (pred_w == 1 && max_w > 1);
+            bool true_h1 = (true_shape[-2] == 1 && max_h > 1);
+            bool true_w1 = (true_shape[-1] == 1 && max_w > 1);
+            bool false_h1 = (false_shape[-2] == 1 && max_h > 1);
+            bool false_w1 = (false_shape[-1] == 1 && max_w > 1);
+
+            reader_defines["SRC_ROW_BCAST_A"] = (pred_h1 && !pred_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_B"] = (true_h1 && !true_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_C"] = (false_h1 && !false_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_A"] = (pred_h1 && pred_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_B"] = (true_h1 && true_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_C"] = (false_h1 && false_w1) ? "1" : "0";
+        } else {
+            const auto& tensor_op =
+                (variant == TernaryVariant::TTS) ? value_true_tensor.value() : value_false_tensor.value();
+            auto tensor_shape = tensor_op.logical_shape();
+            auto max_h = std::max(pred_h, tensor_shape[-2]);
+            auto max_w = std::max(pred_w, tensor_shape[-1]);
+
+            bool pred_h1 = (pred_h == 1 && max_h > 1);
+            bool pred_w1 = (pred_w == 1 && max_w > 1);
+            bool tensor_h1 = (tensor_shape[-2] == 1 && max_h > 1);
+            bool tensor_w1 = (tensor_shape[-1] == 1 && max_w > 1);
+
+            reader_defines["SRC_ROW_BCAST_A"] = (pred_h1 && !pred_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_A"] = (pred_h1 && pred_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_CB1"] = (tensor_h1 && !tensor_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_CB1"] = (tensor_h1 && tensor_w1) ? "1" : "0";
+        }
+    }
+
     std::map<std::string, std::string> kernel_defines;
     if (variant == TernaryVariant::TTT) {
         if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
@@ -1089,37 +1160,37 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     // c_0 is always predicate
     unpack_to_dest_mode[tt::CBIndex::c_0] = (predicate_tensor.dtype() == DataType::FLOAT32)
-                                                ? UnpackToDestMode::UnpackToDestFp32
-                                                : UnpackToDestMode::Default;
+                                                ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                : tt::tt_metal::UnpackToDestMode::Default;
 
     // c_1 assignment depends on variant
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     } else if (variant == TernaryVariant::TST) {
         // TST: c_1 = value_false tensor
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     } else {
         // TTT: c_1 = value_true tensor, c_2 = value_false tensor (including column broadcast)
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
         unpack_to_dest_mode[tt::CBIndex::c_2] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
-                                                    ? UnpackToDestMode::UnpackToDestFp32
-                                                    : UnpackToDestMode::Default;
+                                                    ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                    : tt::tt_metal::UnpackToDestMode::Default;
     }
 
     // Output CB depends on variant: c_2 for binary_ng compatibility (TTT col bcast), c_3 for other cases
     unpack_to_dest_mode[output_cb_index] =
-        (output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        (output.dtype() == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
 
     constexpr uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
 
@@ -1136,8 +1207,8 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         kernel_defines["BCAST_C"] = false_is_bcast ? "1" : "0";
     } else if (
         (variant == TernaryVariant::TTS || variant == TernaryVariant::TST) &&
-        broadcast_type == TernaryBroadcastType::COL_BCAST) {
-        // Unified TTS/TST column broadcast configuration
+        (broadcast_type == TernaryBroadcastType::COL_BCAST || broadcast_type == TernaryBroadcastType::ROW_COL_BCAST)) {
+        // Unified TTS/TST column and mixed broadcast configuration
         kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";
         if (variant == TernaryVariant::TTS) {
             kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";

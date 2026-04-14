@@ -1,14 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
-#include <fstream>
-#include <sstream>
 #include <string>
-#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -20,6 +17,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
@@ -65,55 +63,32 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
 
-struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
-
-    std::string source_;
-    SourceType source_type_;
-    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
-    std::filesystem::path path_;
-
-    KernelSource(const std::string& source, const SourceType& source_type);
-
-    std::string name() const {
-        std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
-            const std::size_t pos_of_dot = this->source_.rfind('.');
-            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
-        } else {
-            name = "Kernel_Source_Code";
-        }
-        return name;
-    }
-
-    // Returns the actual source code (file content or source string)
-    std::string get_content() const {
-        switch (source_type_) {
-            case SourceType::FILE_PATH: {
-                std::ifstream file(path_);
-                if (!file.is_open()) {
-                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
-                }
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                if (file.fail() && !file.eof()) {
-                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
-                }
-                return buffer.str();
-            }
-            case SourceType::SOURCE_CODE: return source_;
-        }
-        ttsl::unreachable();
-    }
+struct DramConfig {
+    NOC noc = NOC::NOC_0;
+    std::vector<uint32_t> compile_args;
+    std::map<std::string, std::string> defines;
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config);
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
         DataMovementConfig,
         EthernetConfig,
         ComputeConfig,
+        DramConfig,
         experimental::quasar::QuasarDataMovementConfig,
         experimental::quasar::QuasarComputeConfig>;
 
@@ -183,6 +158,8 @@ public:
     void add_defines(const std::map<std::string, std::string>& defines);
 
     virtual uint8_t expected_num_binaries() const = 0;
+    // Returns the HAL processor indices that use the given binary (for L1 offset / set_iram_text_size).
+    virtual std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
 
@@ -327,6 +304,44 @@ private:
     std::string config_hash() const override;
 };
 
+class DramKernel : public Kernel {
+public:
+    DramKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
+        Kernel(
+            HalProgrammableCoreType::DRAM,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config) {}
+
+    ~DramKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const DramConfig config_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
 class ComputeKernel : public Kernel {
 public:
     ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
@@ -423,6 +438,7 @@ public:
     ~QuasarDataMovementKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device) override;
 
@@ -495,6 +511,8 @@ public:
     std::string_view get_linker_opt_level() const override;
 
     void set_build_options(JitBuildOptions& build_options) const override;
+
+    const std::vector<QuasarComputeProcessor>& get_compute_processors() const { return this->compute_processors_; }
 
 private:
     const QuasarComputeConfig config_;

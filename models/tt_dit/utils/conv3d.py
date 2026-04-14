@@ -1,8 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
+import hashlib
 from itertools import repeat
 
 import torch
@@ -22,23 +23,44 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
+_conv3d_blocking_configs = {
+    # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+    (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
+    (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
+    (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
+    (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
+    (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
+    (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
+    (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+}
+
+
+def register_conv3d_configs(configs: dict) -> None:
+    """Register additional conv3d blocking configs from external models.
+
+    Args:
+        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
+            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
+
+    Example::
+
+        register_conv3d_configs({
+            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
+            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
+        })
+    """
+    _conv3d_blocking_configs.update(configs)
+
+
 def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
     if weights_dtype == ttnn.float32:
         # Use smaller block size to reduce memory use.
         config_to_blocking = {(in_channels, out_channels, kernel_size): (32, 32, 1, 1, 1)}
     else:
-        config_to_blocking = {
-            # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-            (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
-            (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
-            (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
-            (384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
-            (192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),
-            (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
-            (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
-            (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
-            (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
-        }
+        config_to_blocking = _conv3d_blocking_configs
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
@@ -60,20 +82,29 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
     )
 
 
-def count_convs(module: Module) -> int:
-    """
-    Recursively count the total number of WanCausalConv3d instances in a class and its attributes.
-
-    Args:
-        module: The `Module` to search through
-
-    Returns:
-        int: Total count of WanCausalConv3d instances found
-    """
-    count = 1 if module.__class__.__name__ == "WanCausalConv3d" else 0
+def _walk_conv3d_modules(module: Module):
+    """Yield every child module that has a conv_config (i.e. conv3d layers)."""
+    if hasattr(module, "conv_config"):
+        yield module
     for _, child in module.named_children():
-        count += count_convs(child)
-    return count
+        yield from _walk_conv3d_modules(child)
+
+
+def conv3d_blocking_hash(module: Module) -> str:
+    """Build a cache key suffix from C_in_block values of all conv3d layers.
+
+    prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
+    are only valid for the same blocking configuration.
+    """
+    cin_blocks = [str(m.conv_config.C_in_block) for m in _walk_conv3d_modules(module)]
+    if not cin_blocks:
+        return ""
+    return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+
+
+def count_convs(module: Module) -> int:
+    """Count the total number of conv3d modules in a module tree."""
+    return sum(1 for _ in _walk_conv3d_modules(module))
 
 
 def conv_pad_height(tensor_BTHWC, h_factor):
@@ -116,29 +147,3 @@ def aligned_channels(channels):
     if channels % ALIGNMENT != 0:
         channels = channels + ALIGN_PAD
     return channels
-
-
-def prepare_conv3d_weights(weight, bias, conv_config):
-    """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    padded_C_in = aligned_channels(C_in)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = conv_config.C_in_block
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert (
-        num_C_in_blocks * C_in_block == C_in_aligned
-    ), f"num_C_in_blocks * C_in_block == C_in_aligned, got {num_C_in_blocks} * {C_in_block} != {C_in_aligned}"
-
-    # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    return w, bias.reshape(1, -1)

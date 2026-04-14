@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
@@ -29,7 +28,7 @@ struct TernaryDeviceOperation {
         std::optional<ScalarVariant> scalar_input_a;
         std::optional<ScalarVariant> scalar_input_b;
 
-        tt::stl::hash::hash_t to_hash() const;
+        ttsl::hash::hash_t to_hash() const;
 
         DataType get_dtype() const;
     };
@@ -66,7 +65,7 @@ struct TernaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

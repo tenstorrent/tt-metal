@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -200,6 +202,21 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
         const std::array<uint32_t, 2> tensor2d_shape_in_pages{
             static_cast<uint32_t>(height_in_pages), static_cast<uint32_t>(width_in_pages)};
         shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+        auto padded_shape = compute_padded_shape(shape);
+        if (padded_shape.rank() < 2) {  // Edge Case: For 1-D tensors and scalars, we need to make its shape 2D to
+                                        // construct the buffer distribution spec, since the tensor rank cannot be less
+                                        // than the shard rank (always 2 for 2D sharding).
+            padded_shape = Shape({1, padded_shape[0]});
+        }
+        distribution_spec = BufferDistributionSpec::from_shard_spec(
+            padded_shape,
+            Shape(shard_spec->shape),
+            page_shape,
+            shard_spec->grid,
+            shard_spec->orientation,
+            memory_config_.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardDistributionStrategy::GRID_2D
+                : ShardDistributionStrategy::ROUND_ROBIN_1D);
     }
 
     if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
@@ -212,8 +229,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
     }
-    return BufferShardingArgs(
-        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    auto sharding_args =
+        BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config_)) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+    return sharding_args;
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {

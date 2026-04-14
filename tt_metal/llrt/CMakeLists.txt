@@ -15,7 +15,7 @@ add_dependencies(llrt hal_generate_dev_msgs_header)
 target_link_libraries(
     llrt
     PUBLIC
-        umd::device
+        umd::tt-umd
         TT::Metalium::HostDevCommon
     PRIVATE
         HAL::1xx
@@ -27,6 +27,7 @@ target_link_libraries(
         enchantum::enchantum
         TT::Metalium::Common
         tt-logger::tt-logger
+        Metalium::Metal::Hardware
 )
 target_include_directories(llrt PUBLIC .)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

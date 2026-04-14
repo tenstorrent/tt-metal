@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -51,9 +52,9 @@ uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
@@ -186,6 +187,7 @@ int main(int argc, char* argv[]) {
 #endif
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_ncrisc_completion();
 #if defined(ARCH_WORMHOLE)

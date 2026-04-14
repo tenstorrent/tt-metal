@@ -10,6 +10,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+    hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
     hw/inc/fabric_direction_table_interface.h
@@ -33,9 +34,6 @@ set(FABRIC_SOURCES
     builder/fabric_static_sized_channels_allocator.cpp
     builder/fabric_remote_channels_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
-    builder/fabric_router_recipe.cpp
-    builder/channel_to_pool_mapping.cpp
-    builder/multi_pool_channel_allocator.cpp
     builder/connection_registry.cpp
     builder/router_connection_mapping.cpp
     channel_trimming_export.cpp
@@ -43,6 +41,7 @@ set(FABRIC_SOURCES
     channel_trimming_io.cpp
     channel_trimming_report.cpp
     fabric.cpp
+    fabric_vc2_connection.cpp
     fabric_init.cpp
     fabric_host_utils.cpp
     fabric_switch_manager.cpp

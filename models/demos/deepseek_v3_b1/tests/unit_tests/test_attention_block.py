@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,21 +17,21 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
+from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
+from models.demos.deepseek_v3_b1.utils import deinterleave_kv_cache, generate_mm_weights
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
 )
-from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
+    fuse_q_ab_kv_a,
+)
 
 
 @pytest.mark.parametrize(
@@ -41,9 +41,7 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
+@pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -60,6 +58,7 @@ def create_fabric_router_config(max_payload_size):
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -69,11 +68,14 @@ def create_fabric_router_config(max_payload_size):
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
             "trace_region_size": 573440,
+            "worker_l1_size": 1374544,
         }
     ],
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.requires_grid_size((13, 10))
 def test_attention_block(
     bh_2d_mesh_device,
     mesh_rows,
@@ -82,18 +84,21 @@ def test_attention_block(
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
+    device_params,
     noc_mode,
+    num_internal_iterations,
 ):
     """Test TTNN attention block fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
+    num_links_bcast = 1
+    num_links_allreduce = 2
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -105,7 +110,9 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh)
+    attention_block_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
 
     # ========================================================================
     # Configuration
@@ -188,13 +195,12 @@ def test_attention_block(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # TODO: Reduce to 3 slots
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 68 tiles of [8, 32] at bfloat16 = 43520 B per core.
-    # Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 68 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 4
-    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
+    sdpa_out_interm_num_slots = 5
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 3 tile-rows of [8, 32]
     sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
@@ -280,10 +286,9 @@ def test_attention_block(
     # ========================================================================
     # Create PyTorch tensors
     # ========================================================================
-    torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
+    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
 
     # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
@@ -292,16 +297,18 @@ def test_attention_block(
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = torch.randn(
+    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
         (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
     )
 
     # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
     # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = torch.randn((num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16)
+    torch_matmul3_weights = generate_mm_weights(
+        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
+    )
 
-    # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
-    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    # DKV matmul weights (raw, unshuffled — fuse_q_ab_kv_a handles shard reordering)
+    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
     torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
@@ -365,32 +372,32 @@ def test_attention_block(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    # Weights are shared across all devices (replicated per TP slice)
-    torch_weights1 = torch.randn((K1, post_sdpa_intermediate), dtype=torch.bfloat16)
-    torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
-
-    torch_kv_b2_proj_weights = torch.cat([torch_weights1] * num_tp, dim=1) if num_tp > 1 else torch_weights1
-    torch_o_proj_weights = torch.cat([torch_weights2] * num_tp, dim=0) if num_tp > 1 else torch_weights2
+    # kv_b2_proj: [K1, intermediate * num_tp] — full TP width, split along output dim per column
+    torch_kv_b2_proj_weights = generate_mm_weights((K1, post_sdpa_intermediate * num_tp), dtype=torch.bfloat16)
+    # o_proj: [K2 * num_tp, output_size] — full TP height, split along input dim per column
+    torch_o_proj_weights = generate_mm_weights((K2 * num_tp, output_size), dtype=torch.bfloat16)
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
-    # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
-    bdw = BlitzDecodeWeights(submesh)
-    (
-        matmul_weights_overlapped,
-        matmul2_weights_overlapped,
-        dkv_matmul_weights_overlapped,
-    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+    # weights as overlapped tensors sharing a single L1 buffer via fuse_q_ab_kv_a.
+    qab_kva = fuse_q_ab_kv_a(
         torch_matmul_weights,
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
+        submesh,
     )
+    matmul_weights_overlapped = qab_kva["q_a_proj"]
+    matmul2_weights_overlapped = qab_kva["q_b_proj"]
+    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
 
-    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_weights_overlapped, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(
+    kv_b12 = fuse_kv_b12(
         torch_matmul3_weights_flat,
         torch_kv_b2_proj_weights,
+        submesh,
     )
+    matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
+    kv_b2_overlapped = kv_b12["kv_b2_proj"]
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # After 3-phase CreateQHeads tilization:
@@ -480,7 +487,7 @@ def test_attention_block(
 
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem_config,
@@ -492,21 +499,19 @@ def test_attention_block(
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
     # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    (
-        o_proj_overlapped,  # o_proj
-        _,  # gate_mm
-        gamma_overlapped,
-        rmsnorm2_gamma_overlapped,
-        dkv_rmsnorm_gamma_overlapped,
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = fuse_o_proj_gate_mm_norms(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_gamma,
         torch_rmsnorm2_gamma,
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
+        submesh,
     )
+    o_proj_overlapped = o_norms["o_proj"]
+    gamma_overlapped = o_norms["attn_norm"]
+    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()
@@ -565,7 +570,7 @@ def test_attention_block(
     dcs = program_config.device_chunk_size
     num_sp = mesh_rows
 
-    torch_kv_cache = torch.full(cache_shape, float("-inf"), dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros(cache_shape, dtype=torch.bfloat16)
     torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
 
@@ -620,7 +625,7 @@ def test_attention_block(
     num_matmul1_cores = matmul1_grid.num_cores()  # 64
 
     # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
-    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    matmul2_grid = o_proj_cfg.o_proj.core_range_set
     num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # SDPA configuration (matching original sdpa_reduce_to_all test)
@@ -717,8 +722,9 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create CCL tensors and semaphores
+    # Create CCL tensors
     # ========================================================================
+    # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -822,6 +828,8 @@ def test_attention_block(
     sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
     # WIDTH_SHARDED across 2 forwarder cores, each gets half
     num_forwarders = 2
+    # THIS BUFFER SIZE IS NOT CORRECT BECAUSE WE'RE INCORRECTLY DIVIDING BY 2
+    # TODO: Plan to remove this scratch buffer entirely once we reduce cb memory usage currently being overlapped with this buffer.
     sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // num_forwarders
     sdpa_forwarder_shard_shape = (1, sdpa_fwd_per_forwarder)
     sdpa_forwarder_shard_spec = ttnn.ShardSpec(
@@ -848,7 +856,6 @@ def test_attention_block(
     # Run pre-SDPA operation
     # ========================================================================
     logger.info(f"Running attention block operation with position_id={position_id}...")
-
     for i in range(num_iters):
         ttnn_output_result = AttentionBlock.op(
             input_tensor_mesh,
@@ -865,7 +872,6 @@ def test_attention_block(
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
-            position_id,
             ttnn_position_ids,
             scale,
             ttnn_output,
@@ -881,27 +887,32 @@ def test_attention_block(
             ttnn_sdpa_output_l,
             ttnn_sdpa_intermediate_recv,
             ttnn_sdpa_forwarder_scratch,
-            0,  # sdpa_per_device_chunk_size
+            program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
-            attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
-            reduce_cluster_axis,
-            0,  # sdpa_cluster_axis
-            1.0,  # sdpa_scale_fp32
-            1,  # num_links
-            epsilon,
-            use_fp32,
-            skip_ccl,
-            noc_mode,
+            attention_block_semaphores=attention_block_semaphores,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links_bcast=num_links_bcast,
+            num_links_allreduce=num_links_allreduce,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
+            num_iterations=num_internal_iterations,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 
     kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
-    # Read back the FlashMLA output (pre-post-SDPA) for SDPA validation
-    sdpa_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    # If True, validate the local FlashMLA output before SDPA AllReduce
+    # Need to uncomment and use ttnn_output_tensor as the backing buffer for mla_out_o_cb
+    validate_local_flash_mla = False
+
+    # Read back the FlashMLA output (pre-post-SDPA) for validation
+    if validate_local_flash_mla:
+        sdpa_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Convert back to torch for verification
     output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
@@ -932,6 +943,8 @@ def test_attention_block(
         torch_dkv_rmsnorm_gamma,
         torch_kv_cache,
         scale,
+        torch_kv_b2_proj_weights,
+        torch_o_proj_weights,
         epsilon=epsilon,
         num_qnope_heads=total_qnope_heads,
         num_qrope_heads=total_qrope_heads,
@@ -954,6 +967,71 @@ def test_attention_block(
         dev_contrib = max(0, min(remainder, dev_end) - dev_start)
         return num_full_blocks * device_chunk_size + dev_contrib
 
+    if validate_local_flash_mla:
+        # ========================================================================
+        # Compute per-SP golden for pre-SDPA output (before post-SDPA reduce)
+        # ========================================================================
+        def build_local_kv_cache(sp_idx):
+            """Extract sp_idx's local KV cache from torch_kv_cache_shuffled."""
+            sp_block = device_chunk_size * num_sp
+            num_full_blocks = position_id // sp_block
+            remainder = position_id % sp_block
+            dev_start = sp_idx * device_chunk_size
+            dev_end = dev_start + device_chunk_size
+            dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+            local_len = num_full_blocks * device_chunk_size + dev_contrib
+            if local_len == 0:
+                return None, 0
+            shard_offset = sp_idx * per_device_max_seq_len
+            local_kv = torch_kv_cache_shuffled[:, :, shard_offset : shard_offset + local_len, :]
+            return local_kv, local_len
+
+        pre_sdpa_golden_args = dict(
+            input_tensor=torch_input,
+            gamma_tensor=torch_gamma,
+            matmul_weights_tensor=torch_matmul_weights,
+            rmsnorm2_gamma_tensor=torch_rmsnorm2_gamma,
+            matmul2_weights_tensor=torch_matmul2_weights_full_unshuffled,
+            matmul3_weights_tensor=torch_matmul3_weights,
+            sin_tensor=torch_sin,
+            cos_tensor=torch_cos,
+            dkv_matmul_weights_tensor=torch_dkv_matmul_weights,
+            dkv_rmsnorm_gamma_tensor=torch_dkv_rmsnorm_gamma,
+            scale=scale,
+            epsilon=epsilon,
+            num_qnope_heads=total_qnope_heads,
+            num_qrope_heads=total_qrope_heads,
+            qnope_head_dim=QNOPE_HEAD_DIM,
+            qrope_head_dim=QROPE_HEAD_DIM,
+            heads_per_row=HEADS_PER_ROW,
+            nope_dim=KNOPE_DIM,
+            rope_dim=KROPE_DIM,
+        )
+
+        golden_per_sp = {}
+        for sp_idx in range(num_sp):
+            local_kv, local_seq_len = build_local_kv_cache(sp_idx)
+            is_owner = sp_idx == owning_sp_device
+            if local_kv is None:
+                if is_owner:
+                    local_kv = torch.zeros(1, 1, 0, kvpe_dim, dtype=torch.bfloat16)
+                else:
+                    continue
+            local_pos = torch.tensor([local_seq_len if is_owner else local_seq_len - 1])
+            _, _, mla_output = PreSDPA.golden(
+                **pre_sdpa_golden_args,
+                local_position_ids=local_pos,
+                global_position_ids=torch.tensor([position_id]),
+                kv_cache_tensor=local_kv,
+                kv_cache_update=is_owner,
+            )
+            golden_per_sp[sp_idx] = mla_output
+
+        logger.info(
+            f"Per-SP golden computed for {len(golden_per_sp)} SP devices "
+            f"(owning_sp_device={owning_sp_device}, device_chunk_size={device_chunk_size})"
+        )
+
     # ========================================================================
     # Validate KV cache outputs (per SP device)
     # ========================================================================
@@ -961,7 +1039,7 @@ def test_attention_block(
         sp_group = device_idx // mesh_cols
         local_seq_len = get_local_seq_len(sp_group)
 
-        if local_seq_len == 0:
+        if local_seq_len == 0 and sp_group != owning_sp_device:
             logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
             continue
 
@@ -989,24 +1067,56 @@ def test_attention_block(
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
     # ========================================================================
-    # Validate SDPA output (global golden: full KV cache, global position_id)
-    # Post-SDPA reduces all local FlashMLA outputs across SP devices, so the
-    # final MLA output corresponds to running attention over the full KV cache.
+    # Validate pre-SDPA output (per-SP golden: local KV cache per device)
+    # This is the FlashMLA output before post-SDPA reduce across SP devices.
     # ========================================================================
-    slice_size = sdpa_input_output_shape[0]  # 64 heads per device
+    if validate_local_flash_mla:
+        slice_size = sdpa_input_output_shape[0]  # 64 heads per device
+        for device_idx in range(mesh_rows * mesh_cols):
+            tp_group = device_idx % mesh_cols
+            sp_group = device_idx // mesh_cols
+
+            if sp_group not in golden_per_sp:
+                logger.info(f"Device {device_idx} (SP={sp_group}) no work, skipped")
+                continue
+
+            golden_mla_output = golden_per_sp[sp_group]
+
+            start = device_idx * slice_size
+            end = start + slice_size
+            received = sdpa_output_torch[start:end, :]
+
+            tp_start = tp_group * slice_size
+            tp_end = tp_start + slice_size
+            expected = golden_mla_output[tp_start:tp_end, :]
+            print(expected[:8, :32:8])
+
+            if received.shape != expected.shape:
+                logger.error(
+                    f"Device {device_idx} (TP={tp_group}, SP={sp_group}) output shape mismatch: "
+                    f"got {received.shape}, expected {expected.shape}"
+                )
+                continue
+
+            passing, pcc = comp_pcc(expected, received, 0.84)
+            logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {pcc}")
+            assert passing, f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC check failed: {pcc}"
+
+    # ========================================================================
+    # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
+    # ========================================================================
+    ref_device_idx = 0
+    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
     for device_idx in range(mesh_rows * mesh_cols):
-        tp_group = device_idx % mesh_cols
-        start = device_idx * slice_size
-        end = start + slice_size
-        received = sdpa_output_torch[start:end, :]
+        received = output_torch[device_idx : device_idx + 1, :]
+        if device_idx != ref_device_idx:
+            dev_eq = torch.equal(received, ref_device_output)
+            assert dev_eq, f"Device {device_idx} output mismatch"
 
-        tp_start = tp_group * slice_size
-        tp_end = tp_start + slice_size
-        expected = torch_output_expected[tp_start:tp_end, :]
-
-        passing, pcc = comp_pcc(expected, received, 0.84)
-        logger.info(f"Device {device_idx} (TP={tp_group}) SDPA Output PCC: {pcc}")
-        assert passing, f"Device {device_idx} (TP={tp_group}) SDPA Output PCC check failed: {pcc}"
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
+        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
+        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
     logger.info("✓ Attention Block mesh test passed!")
 

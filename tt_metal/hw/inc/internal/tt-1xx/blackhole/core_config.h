@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,8 @@ enum ProgrammableCoreType {
     TENSIX = 0,
     ACTIVE_ETH = 1,
     IDLE_ETH = 2,
-    COUNT = 3,
+    DRAM = 3,
+    COUNT = 4,
 };
 
 enum class TensixProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, MATH0 = 2, MATH1 = 3, MATH2 = 4, COUNT = 5 };
@@ -30,7 +31,9 @@ union subordinate_map_t {
 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
+constexpr uint8_t MaxProcessorsForThreadingVariables = 0;  // No multi-threading on Blackhole. Set to 0 to save space.
 constexpr uint8_t MaxDMProcessorsPerCoreType = 2;
+constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType+1; // +1 for the compute kernel.
 constexpr uint8_t noc_size_x = 17;
 constexpr uint8_t noc_size_y = 12;
 constexpr uint8_t tensix_harvest_axis = 0x2;

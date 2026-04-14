@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,16 @@ import torch
 import pytest
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
-from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, assert_equal
+
+
+def assert_cumsum_quality(expected_output, torch_output):
+    if torch_output.dtype == torch.int32:
+        assert_equal(expected_output, torch_output)
+    elif torch_output.dtype == torch.bfloat16:
+        assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
+    else:
+        assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-4)
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -22,17 +30,6 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     return tt_output_grad, tt_input_grad, torch_output_grad
-
-
-def is_supported(shape, dim, ttnn_dtype):
-    tensor_rank = len(shape)
-
-    if dim < tensor_rank:
-        accumulation_length = shape[dim]
-        if ttnn_dtype == ttnn.bfloat16 and accumulation_length > 10000:
-            return False  # for bfloat16, accumulation errors can happen easily on long tensor
-
-    return True
 
 
 @pytest.mark.parametrize(
@@ -71,9 +68,6 @@ def test_cumsum(size, dim, dtypes, device):
 
         expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-        if not is_supported(size, dim, expected_output_dtype):
-            pytest.skip("Unsupported configuration by ttnn.cumsum")
-
         output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
         assert output_tensor.dtype == expected_output_dtype
@@ -83,11 +77,7 @@ def test_cumsum(size, dim, dtypes, device):
 
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
-        if torch_output.numel() > 0:
-            if torch_dtype is torch.float32:
-                assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
-            else:
-                assert_allclose(expected_output, torch_output)
+        assert_cumsum_quality(expected_output, torch_output)
 
 
 @pytest.mark.parametrize(
@@ -123,9 +113,6 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-    if not is_supported(size, dim, expected_output_dtype):
-        pytest.skip("Unsupported configuration by ttnn.cumsum")
-
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
 
     output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype, out=preallocated_output_tensor)
@@ -141,11 +128,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     assert preallocated_output_tensor == output_tensor
 
-    if torch_output.numel() > 0:
-        if torch_dtype is torch.float32:
-            assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
-        else:
-            assert_allclose(expected_output, torch_output)
+    assert_cumsum_quality(expected_output, torch_output)
 
     assert device.num_program_cache_entries() >= 1
 
@@ -194,10 +177,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
     )
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-
-    # test for equivalance
-    rtol = atol = 0.1
-    assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    assert_cumsum_quality(torch_input_tensor.grad, tt_input_grad_cpu)
 
 
 @pytest.mark.parametrize(

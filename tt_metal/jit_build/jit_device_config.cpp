@@ -4,6 +4,7 @@
 
 #include "jit_device_config.hpp"
 
+#include "context/metal_env_accessor.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -18,16 +19,18 @@
 namespace tt::tt_metal {
 
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs) {
+    // Need both runtime state and hardware query
     auto& ctx = MetalContext::instance();
-    const auto& hal = ctx.hal();
-    const auto& cluster = ctx.get_cluster();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    const auto& hal = env.get_hal();
+    const auto& cluster = env.get_cluster();
     const auto& dispatch_core_config = ctx.get_dispatch_core_manager().get_dispatch_core_config();
     const metal_SocDescriptor& soc_d = cluster.get_soc_desc(device_id);
 
     const size_t num_dram_banks = static_cast<size_t>(soc_d.get_num_dram_views());
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
-    const size_t num_l1_banks = get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
+    const size_t num_l1_banks = get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config).size();
 
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];

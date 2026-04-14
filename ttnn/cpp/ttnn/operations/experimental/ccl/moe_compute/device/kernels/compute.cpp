@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,6 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
-
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_pages.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -28,35 +24,6 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
         invalidate_l1_cache();
     } while ((*sem_addr) < val);
     WAYPOINT("NSMD");
-}
-
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
 }
 
 void kernel_main() {
@@ -167,15 +134,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
 
-    uint32_t num_active_tokens[2];
-
     constexpr uint32_t BITS_PER_EXPERT = 10;
     constexpr uint32_t EXPERT_MASK = 0x3FFu;
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-        num_active_tokens[expert_id] = num_tokens;
     }
 
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
@@ -207,13 +171,6 @@ void kernel_main() {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
-
-            // for (uint32_t i = 0; i < 224; ++i) {
-            //                 if (i % 2 == 0) {
-            //                     const uint32_t idx = (use_second_half_buffer)? num_w0_w1_tiles_h+i:i;
-            //                     PACK((print_tile_rows(cb_s2c_in, idx, true, 0, num_active_tokens[expert_id])));
-            //                 }
-            //             }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}

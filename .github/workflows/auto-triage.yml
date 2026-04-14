@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_name:
-        description: "Workflow file name to inspect (e.g., galaxy-quick)"
+        description: "Workflow file base name under .github/workflows (e.g., .github/workflows/galaxy-quick.yml → galaxy-quick; t3000-unit-tests; single-card-demo-tests), without .yml/.yaml extension"
         required: true
         type: string
       job_name:
@@ -25,6 +25,11 @@ on:
         description: "Slack channel ID for sending notifications"
         required: false
         default: ''
+        type: string
+      cutoff_commit:
+        description: "Optional commit SHA to ignore runs newer than this commit"
+        required: false
+        default: ""
         type: string
 
 
@@ -51,7 +56,24 @@ jobs:
           slack_ts: ${{ inputs.slack_ts }}
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
+          cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
           SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+
+      - name: Export triage result for data pipeline
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          SLACK_MSG=".auto_triage/output/slack_message.json"
+          if [ ! -f "$SLACK_MSG" ]; then
+            echo "$SLACK_MSG not found, skipping"
+            exit 0
+          fi
+          JOB_ID=$(jq -r '.failing_run_url' "$SLACK_MSG" \
+                   | grep -oE '/job/[0-9]+' | grep -oE '[0-9]+')
+          jq -n --arg job_id "$JOB_ID" \
+             --arg run_id "$GITHUB_RUN_ID" \
+             '{github_job_id: ($job_id|tonumber),
+              auto_triage_run_id: ($run_id|tonumber)}' > .auto_triage/output/auto_triage_result.json

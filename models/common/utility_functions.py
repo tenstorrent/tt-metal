@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -539,20 +539,22 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return False, 0.0
 
     # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-        )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
+    # Skip this for integer types which don't have NaN/Inf values
+    if golden.dtype.is_floating_point:
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+            )
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
 
     if torch.equal(golden, calculated):
         return True, 1.0
@@ -741,6 +743,12 @@ def calculate_detailed_ulp_stats(expected, actual):
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    # 0-volume tensors are special because they don't have elements, so we can't compute PCC, etc.
+    # If one of the tensors is a 0-volume tensor, simply call torch.equal to check if they are equal
+    # (i.e. that both are 0-volume tensors and they have equal shapes).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
@@ -752,7 +760,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if torch.numel(golden) != 1:
         passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
         passing &= passing_pcc
-        output += f", {output_pcc}"
+        output += f", pcc={output_pcc}"
 
     return passing, output
 
@@ -1044,9 +1052,7 @@ def is_watcher_enabled():
 
 def is_llk_assert_enabled():
     llk_assert = os.environ.get("TT_METAL_LLK_ASSERTS")
-    watcher = os.environ.get("TT_METAL_WATCHER")
-    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
-    return ((watcher is not None and watcher != "") or lightweight_asserts == "1") and llk_assert == "1"
+    return llk_assert == "1"
 
 
 def is_n300():

@@ -5,7 +5,7 @@
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
      defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_MAIN_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC) + \
-     defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_DM)) != 1
+     defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_DM) + defined(COMPILE_FOR_DRISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
@@ -113,6 +113,13 @@ OUTPUT_ARCH(riscv)
 #define TEXT_SIZE MEM_DM_KERNEL_SIZE
 #endif
 
+#elif defined(COMPILE_FOR_DRISC)
+#define DATA_START MEM_LOCAL_BASE
+#define DATA_SIZE MEM_DRISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_DRISC_STACK_MIN_SIZE
+#define TEXT_START MEM_DRISC_FIRMWARE_BASE
+#define TEXT_SIZE MEM_DRISC_FIRMWARE_SIZE
+
 #else
 #error "compiling for unknown"
 #endif
@@ -127,6 +134,24 @@ PHDRS {
 
 SECTIONS
 {
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
+  .device_print_strings 0x6400000 :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+
+  /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
+  .device_print_strings_info 0x6500000 :
+  {
+      __device_print_strings_info_start = .;
+      KEEP(*(.device_print_strings_info))
+      __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
+
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else

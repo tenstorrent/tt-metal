@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -21,20 +20,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-
-std::pair<std::array<uint32_t, 7>, std::array<uint32_t, 7>> get_cb_sizes(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& indices_tensor,
-    const ttnn::Tensor& scores_tensor,
-    const ttnn::Tensor& mapping_tensor,
-    uint32_t num_links,
-    std::optional<uint32_t> axis);
-
-}  // namespace detail
-
 struct AllToAllDispatchMetadataDeviceOperation {
     struct operation_attributes_t {
+        const std::optional<std::vector<uint32_t>> shared_expert_ids;
         const CoreRangeSet worker_core_range_set;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
@@ -147,6 +135,7 @@ all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<std::vector<uint32_t>>& shared_expert_ids,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,

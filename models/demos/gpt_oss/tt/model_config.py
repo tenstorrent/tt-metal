@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,6 +108,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 

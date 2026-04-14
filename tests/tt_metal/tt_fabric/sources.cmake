@@ -26,6 +26,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
+    disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp
@@ -33,8 +34,6 @@ set(UNIT_TESTS_FABRIC_SRC
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)
-
-set(FABRIC_ELASTIC_CHANNELS_HOST_TEST_SOURCES feature_bringup/fabric_elastic_channels_host_test.cpp)
 
 set(TEST_SYSTEM_HEALTH_SMOKE_SOURCES system_health/test_system_health.cpp)
 

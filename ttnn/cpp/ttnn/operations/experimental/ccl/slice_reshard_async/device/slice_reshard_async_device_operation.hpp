@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -33,7 +32,7 @@ struct SliceReshardAsyncDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

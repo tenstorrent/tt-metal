@@ -1,12 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -837,7 +840,11 @@ struct CatAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, first_reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<FirstReaderType>) {
+                fill_zeros_async(dst_addr, first_reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, first_reader.page_size);
+            }
             return 1;
         }
     }
@@ -874,7 +881,11 @@ struct PaddedAddrGenerator {
             return 1;
         } else {
             // fill with zeros
-            fill_zeros_async(dst_addr, reader.page_size);
+            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+                fill_zeros_async(dst_addr, reader.get_aligned_page_size());
+            } else {
+                fill_zeros_async(dst_addr, reader.page_size);
+            }
             return 1;
         }
     }
@@ -908,25 +919,23 @@ struct Slice {
     uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
+// Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
+// cb_reserve_back / cb_push_back. Used by forwarding paths that mcast before pushing.
 template <typename CatAddrGeneratorType>
-void read_block(
+void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
-    const uint32_t cb_id,
+    const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose) {
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
-    const uint32_t num_tiles = src_rows * src_cols;
-    cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
     uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
-    uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
         for (uint32_t col = 0; col < src_cols; ++col) {
             uint32_t did_read = cat_addr_generator.maybe_read_tile(
                 src_slice.d0,
@@ -940,6 +949,19 @@ void read_block(
         }
     }
     noc_async_read_barrier();
+}
+
+template <typename CatAddrGeneratorType>
+void read_block(
+    const CatAddrGeneratorType& cat_addr_generator,
+    const Slice& src_slice,
+    const uint32_t end_seq_tile,
+    const uint32_t cb_id,
+    const uint32_t tile_bytes,
+    const bool transpose) {
+    const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
+    cb_reserve_back(cb_id, num_tiles);
+    fetch_block(cat_addr_generator, src_slice, end_seq_tile, get_write_ptr(cb_id), tile_bytes, transpose);
     cb_push_back(cb_id, num_tiles);
 }
 
@@ -1067,12 +1089,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     }
 }
 
-template <
-    bool is_causal,
-    bool is_chunked,
-    uint32_t sliding_window_size,
-    bool padded_or_joint_masks,
-    uint32_t cb_mask_in>
+template <bool is_chunked, uint32_t sliding_window_size, bool padded_or_joint_masks, uint32_t cb_mask_in>
 void generate_mask(
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
@@ -1081,8 +1098,9 @@ void generate_mask(
     const bool generate_mask_0,
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
-    const uint32_t unpadded_Sk_mask_1) {
-    if constexpr (is_causal || sliding_window_size > 0) {
+    const uint32_t unpadded_Sk_mask_1,
+    const bool is_causal) {
+    if (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
             // Bump it up to the chunk start

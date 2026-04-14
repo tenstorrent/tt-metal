@@ -57,10 +57,11 @@ runs:
 
     - name: 📦 Download Build Artifact
       if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
-      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
+        digest-mismatch: error
 
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
@@ -70,10 +71,11 @@ runs:
 
     - name: 🧪 Download Python Wheel
       if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
-      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
+        digest-mismatch: error
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
@@ -144,7 +146,10 @@ runs:
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
-        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH 1>&2" >> $GITHUB_ENV
+        TT_TRIAGE_OUTPUT_PATH=/work/generated/triage_output.txt
+        HANG_REPORT="/opt/venv/bin/python3 $(pwd)/.github/scripts/utils/hang_report.py"
+        TRIAGE="/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=generated/triage_summary.txt"
+        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$HANG_REPORT; mkdir -p generated; $TRIAGE 2>&1 | tee $TT_TRIAGE_OUTPUT_PATH 1>&2; $HANG_REPORT --update" >> $GITHUB_ENV
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
         echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
         echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV

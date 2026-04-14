@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,13 @@ import ttnn
 
 import math
 
-from ttnn._ttnn.operations.normalization import create_group_norm_input_mask, create_group_norm_input_negative_mask
+from ttnn._ttnn.operations.normalization import (
+    create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
+    determine_expected_group_norm_sharded_config_and_grid_size,
+    _compute_num_virtual_cols,
+    _find_expected_dram_grid,
+)
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
@@ -206,74 +212,20 @@ def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.Core
 
 
 # group norm helper function
-def determine_expected_group_norm_sharded_config_and_grid_size(
-    *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False
-):
-    """Derive sharded memory config and grid for group norm.
 
-    - num_channels must be divisible by num_groups and 32 (tile width).
-    - input_nhw is N*H*W in logical units; padded to core multiples.
-    - If is_height_sharded: shard along NHW only; channels per core is all C.
-      Otherwise: shard across channels and NHW (BLOCK_SHARDED).
-    - is_row_major toggles shard shape orientation.
 
-    Returns: (MemoryConfig, CoreGrid)
+def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):
+    """Determine a valid core grid for DRAM interleaved (non-sharded) group norm.
+
+    Delegates to the C++ implementation which finds the largest grid (x then y)
+    within the device compute grid that satisfies the DRAM group-norm constraints.
+
+    Returns: CoreGrid
     """
     assert num_channels % num_groups == 0
-    assert num_channels % 32 == 0
-    group_size = num_channels // num_groups
-    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    device_grid_size = [compute_with_storage_grid_size.x, compute_with_storage_grid_size.y]
-    if is_row_major:
-        device_grid_size = [compute_with_storage_grid_size.y, compute_with_storage_grid_size.x]
-
-    max_num_cores = device_grid_size[0] * device_grid_size[1]
-    input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
-    num_cores_nhw = find_closest_largest_divisor(
-        input_nhw_paddedto32 // 32, max_num_cores if is_height_sharded else device_grid_size[0]
-    )
-    if is_height_sharded:
-        num_cores_channels = 1
-    else:
-        num_cores_channels = device_grid_size[1]
-        # num_channels_tiles = num_channels // 16
-        num_channels_tiles = num_channels // 8
-        while (num_channels_tiles % num_cores_channels != 0) or (
-            ((num_channels // num_cores_channels) % group_size) != 0
-        ):
-            num_cores_channels -= 1
-            assert num_cores_channels > 0
-    input_nhw_padded_to_ncores = math.ceil(input_nhw / (num_cores_nhw * 32)) * (num_cores_nhw * 32)
-    gn_in_channels_per_core = num_channels // num_cores_channels
-    # assert gn_in_channels_per_core % 16 == 0
-    assert gn_in_channels_per_core % 8 == 0
-    gn_nhw_per_core = input_nhw_padded_to_ncores // num_cores_nhw
-    if is_height_sharded:
-        grid_size = [
-            device_grid_size[0] if num_cores_nhw >= device_grid_size[0] else num_cores_nhw,
-            math.ceil(num_cores_nhw / device_grid_size[0]),
-        ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
-        assert (
-            num_cores_nhw <= grid_size[0] * grid_size[1]
-        ), "Error: For height sharding, num_cores_nhw must be <= grid size"
-    else:
-        grid_size = [num_cores_channels, num_cores_nhw] if is_row_major else [num_cores_nhw, num_cores_channels]
-    shard_shape = (
-        (1, 1, gn_nhw_per_core, gn_in_channels_per_core)
-        if is_row_major
-        else (1, 1, gn_in_channels_per_core, gn_nhw_per_core)
-    )
-    shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
-    shard_orientation = (
-        ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded or is_row_major else ttnn.ShardOrientation.COL_MAJOR
-    )
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        shard_strategy,
-        shard_orientation,
-        use_height_and_width_as_shard_shape=True,
-    ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
+    assert num_channels % ttnn.TILE_SIZE == 0
+    compute_grid = device.compute_with_storage_grid_size()
+    return _find_expected_dram_grid(compute_grid.x, compute_grid.y, num_channels, num_groups, input_nhw)
 
 
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
@@ -300,12 +252,14 @@ def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
 def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
     """Choose number of virtual columns for DRAM params/mask generation.
 
-    Tries to find the largest number of virtual columns that will evenly divide the number of channels into tiles.
+    Delegates to the C++ implementation of compute_num_virtual_cols.
     """
-    num_virtual_cols = min(core_grid.x, num_groups)
-    while (num_channels / num_virtual_cols) % ttnn.TILE_SIZE != 0:
-        num_virtual_cols -= 1
-    return num_virtual_cols
+    result = _compute_num_virtual_cols(core_grid.x, num_groups, num_channels)
+    assert result > 0, (
+        f"dram_group_norm_virtual_columns: could not find a valid num_virtual_cols for "
+        f"grid_x={core_grid.x}, num_channels={num_channels}, num_groups={num_groups}"
+    )
+    return result
 
 
 def dram_group_norm_params_from_torch(
@@ -443,12 +397,18 @@ def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
     return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid)
 
 
-def get_group_norm_cores_across_channel(memory_layout, core_grid):
+def get_group_norm_cores_across_channel(memory_layout, core_grid, shard_orientation=None):
     """Compute effective cores that split the channel axis.
-    Used to reshape gamma/beta per-core views in the golden code.
+
+    For BLOCK_SHARDED, the channel axis lives in grid.y (COL_MAJOR)
+    or grid.x (ROW_MAJOR).  When *shard_orientation* is not supplied
+    the legacy COL_MAJOR behaviour is assumed.
     """
     if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
-        num_cores_across_channel = core_grid.y
+        if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+            num_cores_across_channel = core_grid.x
+        else:
+            num_cores_across_channel = core_grid.y
     elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
         num_cores_across_channel = 1
     else:
@@ -472,7 +432,10 @@ def _golden_function(
     import torch
 
     num_channels = input_tensor.shape[-1]
-    num_cores_across_channel = get_group_norm_cores_across_channel(memory_config.memory_layout, core_grid)
+    shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
+    num_cores_across_channel = get_group_norm_cores_across_channel(
+        memory_config.memory_layout, core_grid, shard_orientation
+    )
     weight = weight.reshape((num_cores_across_channel, -1))
     weight = weight[:, : num_channels // num_cores_across_channel].flatten()
     if bias is not None:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,7 @@ from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Un
 import ttnn
 
 
-def get_mesh_device_core_grid(mesh_device):
-    compute_with_storage_grid_size = mesh_device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
-
-
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
-MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 

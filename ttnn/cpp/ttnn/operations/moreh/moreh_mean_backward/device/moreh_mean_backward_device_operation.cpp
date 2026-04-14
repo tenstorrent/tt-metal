@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor
         keepdim,
         input_grad_shape,
         memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -5,6 +5,7 @@ target_link_libraries(
     watcher_dump
     PRIVATE
         Metalium::Metal
+        Metalium::Metal::Hardware
         TT::STL
 )
 target_include_directories(
@@ -23,4 +24,4 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(watcher_dump REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(watcher_dump TT::CommonPCH)

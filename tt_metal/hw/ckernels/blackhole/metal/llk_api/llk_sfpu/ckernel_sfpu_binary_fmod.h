@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_remainder_int32.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {

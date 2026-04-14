@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@
 #include "tt-metalium/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -34,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils/memory_utils.hpp"
 
@@ -50,6 +51,9 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
     // Expose multihost DistributedContext under core.distributed as a non-owning type (not exposed by ttnn)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
+
+    // TTProfiler binding
+    nb::class_<ttml::core::TTProfiler>(m, "TTProfiler");
 
     // Utils submodule for memory tracking
     m.def_submodule("utils");
@@ -231,6 +235,32 @@ void py_module(nb::module_& m) {
             nb::arg("rank"),
             nb::arg("use_grad") = false,
             nb::rv_policy::reference);
+    }
+
+    // TTProfiler method bindings
+    {
+        auto py_profiler = static_cast<nb::class_<ttml::core::TTProfiler>>(m.attr("TTProfiler"));
+        py_profiler.def("is_enabled", &ttml::core::TTProfiler::is_enabled, "Check if profiler is enabled");
+        py_profiler.def("enable", &ttml::core::TTProfiler::enable, "Enable profiler");
+        py_profiler.def("disable", &ttml::core::TTProfiler::disable, "Disable profiler");
+        py_profiler.def(
+            "get_naive_profiling",
+            &ttml::core::TTProfiler::get_naive_profiling,
+            "Check if TTML_NAIVE_PROFILER env var is set");
+        py_profiler.def(
+            "read_results",
+            [](const ttml::core::TTProfiler& self,
+               ttnn::distributed::MeshDevice& device,
+               const std::string& noop_identifier,
+               bool dump_results) {
+                self.read_results(&device, noop_identifier, dump_results, 5U, tt::tt_metal::ProfilerReadState::NORMAL);
+            },
+            nb::arg("device"),
+            nb::arg("noop_identifier") = "noop_identifier",
+            nb::arg("dump_results") = false,
+            "Insert a profiler marker. Synchronizes device and emits a timestamp (naive mode) "
+            "or inserts noop markers for Tracy profiling. "
+            "When dump_results is True, also flushes device profiling data to disk.");
     }
 
     // MemoryUsageTracker bindings under core.utils

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "profiler.hpp"
 
+#include <tt-metalium/device_types.hpp>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/set.h>

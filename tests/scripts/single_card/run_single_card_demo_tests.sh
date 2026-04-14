@@ -120,6 +120,14 @@ run_sentencebert_func() {
 
 }
 
+run_bge_m3_demo() {
+
+  # BGE-M3 Demo
+  HF_MODEL=BAAI/bge-m3 $PYTEST_CMD models/demos/wormhole/bge_m3/demo/demo.py --timeout 1200
+  echo "LOG_METAL: BGE-M3 Demo completed"
+
+}
+
 run_yolov11_func() {
 
  #Yolov11 Demo
@@ -207,6 +215,7 @@ run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/demos/stable_diffusion_xl_base/demo/demo_lora.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {

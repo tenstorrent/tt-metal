@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,6 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
-    bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::tt_metal::Program program{};
@@ -102,17 +101,11 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
         input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-        unpack_to_dest_mode[tt::CBIndex::c_0] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    }
+    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
 
     if (!core_range.empty()) {
         CreateKernel(

@@ -3,52 +3,40 @@
 ## Overview
 This repository contains a high-performance training framework developed in C++ designed to efficiently leverage the computational capabilities of Tenstorrent hardware. The framework is optimized to accelerate model training tasks, providing a seamless interface for training deep learning models on Tenstorrent's advanced hardware architecture.
 
-# Install
-1. Initialize and update submodules
-```
+# Prerequisites
+
+tt-train is built as part of tt-metal. Before building, ensure you have:
+
+1. Cloned the tt-metal repository with submodules:
+```bash
 git submodule update --init --recursive
 ```
-2. Install CMake 3.30
-3. Run setup script to configure env variables, direnv, clang-tidy and clang-format.
-```
-source ./init_repo.sh
-```
-4. Navigate to `tt-metal` folder and follow repository instructions to build it
 
+2. Followed the tt-metal setup instructions in the main repository README.
 
-# Building the project:
-You have two options for building the project:
+# Building the project
 
-## Compiler Selection
-By default, the project uses `clang-20` (via `CC`/`CXX` environment variables). You can override the compiler using standard CMake environment variables:
+tt-train is built using the `build_metal.sh` script from the tt-metal root directory.
+
+## Terminal
 
 ```bash
-# Use standard CC/CXX environment variables
-CC=gcc-12 CXX=g++-12 cmake -B build -GNinja
+# Release build (default)
+./build_metal.sh --build-tt-train
 
-# Or specify compilers directly via CMake cache variables
-cmake -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -B build -GNinja
+# Debug build
+./build_metal.sh --build-tt-train --debug
+
+# Development build (RelWithDebInfo)
+./build_metal.sh --build-tt-train --development
 ```
 
-For more information on compiler selection, see:
-- https://cmake.org/cmake/help/latest/envvar/CC.html
-- https://cmake.org/cmake/help/latest/envvar/CXX.html
+## VSCode
 
-## 1. VSCode
-* Install the [CMake](https://marketplace.visualstudio.com/items?itemName=twxs.cmake) and [direnv](https://marketplace.visualstudio.com/items?itemName=mkhl.direnv) extensions for VSCode.
-* Use UI to build all targets.
-
-## 2. Terminal
-#### Debug
-```
-cmake -DCMAKE_BUILD_TYPE=Debug -B build -GNinja
-cmake --build build --config Debug --clean-first
-```
-#### Release
-```
-cmake -DCMAKE_BUILD_TYPE=Release -B build -GNinja
-cmake --build build --config Release --clean-first
-```
+1. Open the tt-metal root directory in VSCode
+2. Install the [CMake](https://marketplace.visualstudio.com/items?itemName=twxs.cmake) extension
+3. Set `BUILD_TT_TRAIN=ON` in your CMake configure settings
+4. Build all targets using the CMake extension
 
 
 # Run

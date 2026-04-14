@@ -23,6 +23,8 @@ on:
         options:
           - disabled
           - all
+          - t3k_ttmetal_tests
+          - t3k_ttnn_tests
           - falcon7b
           - falcon40b
           - llama3-small
@@ -109,6 +111,7 @@ on:
           - mistral
           - wan2.2
           - mochi
+          - deepseek-modules
       t3000-e2e:
         required: false
         type: boolean
