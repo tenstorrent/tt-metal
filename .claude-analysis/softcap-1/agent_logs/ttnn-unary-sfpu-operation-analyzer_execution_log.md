@@ -86,3 +86,37 @@ Analyzed the SFPU kernel implementation for the `hardtanh` unary operation. Foun
 - Verified that no `hardtanh_tile` / `hardtanh_tile_init` API functions exist in `tt_metal/hw/inc/api/compute/eltwise_unary/`
 - Verified that no `llk_math_eltwise_unary_sfpu_hardtanh.h` exists in either WH or BH llk_lib
 - Confirmed WH and BH implementations are byte-for-byte identical
+
+---
+
+## Operation: sinh
+## Date: 2026-04-14
+
+### Summary
+Successfully analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel computes `sinh(x) = (exp(x) - exp(-x)) / 2` using a custom fast 2^z approximation (Moroz et al. 2022) with a Taylor series fallback for small inputs where catastrophic cancellation would occur. Uses SFPI abstractions (Style A). Wormhole and Blackhole implementations are identical.
+
+### Key Findings
+1. **Kernel style**: SFPI-based (vFloat, vInt, dst_reg, v_if/v_endif, addexp, exexp, exman9, setexp, setsgn, float_to_fp16b)
+2. **Algorithm**: Dual exp_21f calls to compute exp(x) and exp(-x) via fast 2^z approximation, then `(exp(x) - exp(-x)) * 0.5`. For |x| < 0.5, overrides with Taylor approximation `x + x^3/6` to avoid catastrophic cancellation.
+3. **APPROXIMATION_MODE**: Template parameter `false` is passed through to `exp_21f`, but `exp_21f` does not branch on it -- single code path regardless.
+4. **Address mode**: ADDR_MOD_7 with all increments = 0 (standard unary default)
+5. **Instructions**: SFPLOAD, SFPSTORE, SFPMAD, SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPCAST, SFPIADD, SFPSETEXP, SFPSETSGN, SFP_STOCH_RND, SFPLOADI, SFPSETCC, SFPENCC, SFPCOMPC, SFPPUSHC, SFPPOPC
+6. **Notable**: `_float_to_int32_positive_` is called in exp_21f but is undefined in the current codebase -- flagged as UNVERIFIED. This may indicate a missing helper or build issue.
+7. **Final rounding**: Explicit `float_to_fp16b(y, 0)` converts FP32 result to bfloat16 with round-to-nearest-even for deterministic output.
+
+### Files Produced
+- `.claude-analysis/softcap-1/sinh_analysis.md` -- Main SFPU analysis document
+
+### Verification Steps
+- Verified function names via grep: `calculate_sinh`, `sinh_init`, `exp_21f` all found in both WH and BH ckernel_sfpu_sinh.h
+- Verified all 4 file paths in abstraction layers table exist
+- Verified SFPI intrinsic-to-instruction mappings via `runtime/sfpi/include/sfpi_lib.h`:
+  - `addexp` -> SFPDIVP2 (confirmed)
+  - `exexp` -> SFPEXEXP (confirmed)
+  - `exman9` -> SFPEXMAN (confirmed)
+  - `int32_to_float` -> SFPCAST (confirmed)
+  - `setexp` -> SFPSETEXP (confirmed)
+  - `setsgn` -> SFPSETSGN (confirmed)
+  - `float_to_fp16b` -> SFP_STOCH_RND (confirmed, RTNE when mode=0)
+- Searched entire codebase for `_float_to_int32_positive_` definition -- found only in sinh kernel usage, no definition anywhere (flagged as UNVERIFIED)
+- Confirmed WH and BH implementations are byte-for-byte identical
