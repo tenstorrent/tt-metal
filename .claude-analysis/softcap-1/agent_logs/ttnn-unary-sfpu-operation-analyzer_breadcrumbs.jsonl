@@ -1,0 +1,8 @@
+{"ts":"2026-04-14T23:16:07+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"sinh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-14T23:16:11+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"swish","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-14T23:16:12+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"ts":"2026-04-14T23:16:21+00:00","event":"start","agent":"ttnn-unary-sfpu-operation-analyzer","operation":"frac","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"]}
+{"event":"dispatch_config_found","details":"SINH: compute_kernel=eltwise_sfpu.cpp, SFPU_OP_CHAIN_0 expands to sinh_tile_init() + sinh_tile(i), macro=SFPU_OP_SINH_INCLUDE, approx_mode=false (default case)","ts":"2026-04-14T23:16:29+00:00"}
+{"event":"start","operation":"hardtanh","input_files":["ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp"],"ts":"2026-04-14T23:16:31+00:00"}
+{"event":"read_unary_op_utils","details":"FRAC uses compute kernel eltwise_sfpu.cpp, SFPU_OP_CHAIN_0 expands to frac_tile(0), init is frac_tile_init(), macro SFPU_OP_FRAC_INCLUDE is defined, math_approx_mode=false (default case)","ts":"2026-04-14T23:16:41+00:00"}
+{"event":"dispatch_config_resolved","details":"swish: compute kernel=eltwise_sfpu.cpp, SFPU_OP_CHAIN_0 expands to swish_tile(0)/swish_tile_init(), approx_mode=false (default case), macro=SFPU_OP_SWISH_INCLUDE","ts":"2026-04-14T23:17:02+00:00"}
