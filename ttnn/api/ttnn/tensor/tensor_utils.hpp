@@ -119,4 +119,38 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
  */
 MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config);
 
+/**
+ * @brief Adjusts an existing ShardSpec to match a new tensor shape.
+ *
+ * Scales shard dimensions proportionally based on the ratio of from_shape to to_shape.
+ * Used when inheriting a shard spec from an input tensor whose shape differs from the output.
+ */
+ShardSpec adjust_shard_spec_to_shape(
+    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+/**
+ * @brief Binary op overload: computes auto shard spec considering two input tensors.
+ *
+ * Priority: explicit shard_spec > inherit from input_a > inherit from input_b > generate fresh.
+ * When inheriting, adjusts the shard spec to match the broadcasted output shape.
+ */
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config);
+
+/**
+ * @brief Ternary op overload: computes auto shard spec considering three input tensors.
+ *
+ * Priority: explicit shard_spec > inherit from input with largest shard grid > generate fresh.
+ * When inheriting, adjusts the shard spec to match the output shape.
+ */
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config);
+
 }  // namespace tt::tt_metal

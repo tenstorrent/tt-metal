@@ -118,6 +118,28 @@ static std::pair<uint32_t, uint32_t> find_best_1d_shard(
     return {best_num_cores, best_shard_dim};
 }
 
+ShardSpec adjust_shard_spec_to_shape(
+    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+    const auto from_rank = static_cast<int>(from_shape.rank());
+    const auto to_rank = static_cast<int>(to_shape.rank());
+    for (int i = 0; i < from_rank - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+    for (int i = 0; i < to_rank - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
+    }
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    return ret;
+}
+
 MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config) {
     // If output memory config is not sharded or already has a shard_spec, return as-is
     if (!output_memory_config.is_sharded() || output_memory_config.shard_spec().has_value()) {
@@ -317,6 +339,80 @@ MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryCon
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     ShardSpec shard_spec(grid_set, shard_shape, orientation);
     return output_memory_config.with_shard_spec(shard_spec);
+}
+
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config) {
+    if (!output_memory_config.is_sharded() || output_memory_config.shard_spec().has_value()) {
+        return output_memory_config;
+    }
+
+    const auto& memory_layout = output_memory_config.memory_layout();
+    const auto& buffer_type = output_memory_config.buffer_type();
+
+    // Compute padded output shape for shard adjustment
+    const auto& padded_out_shape = input_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+
+    // Priority: inherit from input_a > inherit from input_b > generate fresh
+    std::optional<ShardSpec> shard_spec_opt;
+    if (input_a.is_sharded() && input_a.shard_spec().has_value()) {
+        shard_spec_opt = adjust_shard_spec_to_shape(
+            *input_a.memory_config().shard_spec(), input_a.padded_shape(), padded_out_shape);
+    } else if (input_b.is_sharded() && input_b.shard_spec().has_value()) {
+        shard_spec_opt = adjust_shard_spec_to_shape(
+            *input_b.memory_config().shard_spec(), input_b.padded_shape(), padded_out_shape);
+    } else {
+        // No input is sharded — use the unary overload to generate fresh
+        return compute_auto_shard_spec(input_a, output_memory_config);
+    }
+
+    return MemoryConfig(memory_layout, buffer_type, shard_spec_opt);
+}
+
+MemoryConfig compute_auto_shard_spec(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    const ttnn::Shape& output_shape,
+    const MemoryConfig& output_memory_config) {
+    if (!output_memory_config.is_sharded() || output_memory_config.shard_spec().has_value()) {
+        return output_memory_config;
+    }
+
+    const auto& memory_layout = output_memory_config.memory_layout();
+    const auto& buffer_type = output_memory_config.buffer_type();
+
+    // Compute padded output shape
+    const auto& padded_out_shape = input_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+
+    // Priority: inherit from input with largest shard grid > generate fresh
+    const Tensor* best_input = nullptr;
+    uint32_t best_num_cores = 0;
+
+    auto check_input = [&](const Tensor& t) {
+        if (t.is_sharded() && t.shard_spec().has_value()) {
+            uint32_t num_cores = t.shard_spec()->num_cores();
+            if (num_cores > best_num_cores) {
+                best_input = &t;
+                best_num_cores = num_cores;
+            }
+        }
+    };
+    check_input(input_a);
+    check_input(input_b);
+    check_input(input_c);
+
+    if (best_input != nullptr) {
+        auto shard_spec_opt = adjust_shard_spec_to_shape(
+            *best_input->memory_config().shard_spec(), best_input->padded_shape(), padded_out_shape);
+        return MemoryConfig(memory_layout, buffer_type, shard_spec_opt);
+    }
+
+    // No input is sharded — use the unary overload to generate fresh
+    return compute_auto_shard_spec(input_a, output_memory_config);
 }
 
 }  // namespace tt::tt_metal
