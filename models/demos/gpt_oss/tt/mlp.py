@@ -85,7 +85,7 @@ class MLP:
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
                     seq_len_per_chip=prefill_seq_len,
-                    num_links=1,
+                    num_links=4,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
                 perm = _compute_weight_permutation(
