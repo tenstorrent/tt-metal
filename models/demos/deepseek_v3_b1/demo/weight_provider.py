@@ -86,6 +86,9 @@ class WeightProviderPerformanceReport:
         stage_id: int | None = None,
         weight_provider_name: str | None = None,
         timestamp_utc: str | None = None,
+        model_directory: str | None = None,
+        cache_directory: str | None = None,
+        hostname: str | None = None,
     ) -> dict[str, object]:
         report: dict[str, object] = {
             "total_s": self.total_s,
@@ -106,6 +109,12 @@ class WeightProviderPerformanceReport:
             report["weight_provider_name"] = weight_provider_name
         if timestamp_utc is not None:
             report["timestamp_utc"] = timestamp_utc
+        if model_directory is not None:
+            report["model_directory"] = model_directory
+        if cache_directory is not None:
+            report["cache_directory"] = cache_directory
+        if hostname is not None:
+            report["hostname"] = hostname
         return report
 
     def to_json(
@@ -115,12 +124,18 @@ class WeightProviderPerformanceReport:
         stage_id: int | None = None,
         weight_provider_name: str | None = None,
         timestamp_utc: str | None = None,
+        model_directory: str | None = None,
+        cache_directory: str | None = None,
+        hostname: str | None = None,
     ) -> str:
         return json.dumps(
             self.to_dict(
                 stage_id=stage_id,
                 weight_provider_name=weight_provider_name,
                 timestamp_utc=timestamp_utc,
+                model_directory=model_directory,
+                cache_directory=cache_directory,
+                hostname=hostname,
             ),
             indent=indent,
         )

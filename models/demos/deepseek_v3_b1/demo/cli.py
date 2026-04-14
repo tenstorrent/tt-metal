@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -162,6 +163,9 @@ def write_weight_load_performance_report(
     perf_report: WeightProviderPerformanceReport,
     mesh_id: int,
     weight_provider_name: str,
+    model_directory: str | None,
+    cache_directory: str | None,
+    hostname: str,
 ) -> Path:
     report_path = get_report_path_for_mesh(weight_perf_report_path, mesh_id)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +175,9 @@ def write_weight_load_performance_report(
             stage_id=mesh_id,
             weight_provider_name=weight_provider_name,
             timestamp_utc=timestamp_utc,
+            model_directory=model_directory,
+            cache_directory=cache_directory,
+            hostname=hostname,
         )
         + "\n",
         encoding="utf-8",
@@ -216,11 +223,16 @@ def run_demo(
         logger.info("Weight loading performance summary (mesh_id={}):\n{}", my_mesh_id, perf_report.summary())
         if weight_perf_report_path is not None:
             weight_provider_name = type(model_pipeline.weight_provider).__name__
+            model_directory = str(model_path.resolve()) if model_path is not None else None
+            cache_directory = str(cache_path.resolve()) if cache_path is not None else None
             report_path = write_weight_load_performance_report(
                 weight_perf_report_path=weight_perf_report_path,
                 perf_report=perf_report,
                 mesh_id=my_mesh_id,
                 weight_provider_name=weight_provider_name,
+                model_directory=model_directory,
+                cache_directory=cache_directory,
+                hostname=socket.gethostname(),
             )
             logger.info("Wrote weight performance report (mesh_id={}): {}", my_mesh_id, report_path)
 
