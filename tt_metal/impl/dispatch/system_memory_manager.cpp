@@ -11,11 +11,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <optional>
 #include <thread>
 #include <string>
-#include <tuple>
-
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
@@ -25,7 +22,6 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_io.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
@@ -110,14 +106,11 @@ void loop_and_wait_with_timeout(
 SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs) :
     context_id(context_id),
     device_id(device_id),
-    completion_byte_addrs(num_hw_cqs),
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
+    completion_queue_writer_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs) {
-    this->prefetch_q_writers.reserve(num_hw_cqs);
-    this->completion_q_writers.reserve(num_hw_cqs);
-
     if (is_mock_device()) {
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
@@ -187,10 +180,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
 
 void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel) {
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type =
-        ctx.get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t completion_q_rd_ptr = ctx.dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t prefetch_q_base = ctx.dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
     const uint32_t cq_start =
@@ -201,7 +191,6 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
             prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -209,18 +198,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             completion_queue_writer_core.chip,
             CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
             core_type);
-
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = ctx.get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(tt_cxy_pair(
-            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
+        this->completion_queue_writer_cores[cq_id] = tt_cxy_pair(
+            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y);
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
@@ -601,8 +580,15 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-    this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+    const uint32_t completion_q_rd_ptr_dev =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    ctx.get_cluster().write_core(
+        &read_ptr_and_toggle,
+        sizeof(read_ptr_and_toggle),
+        this->completion_queue_writer_cores[cq_id],
+        completion_q_rd_ptr_dev);
+
     const uint32_t completion_q_rd_ptr =
         ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
 
@@ -805,7 +791,9 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
-    this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
+    auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+    ctx.get_cluster().write_core(
+        &command_size_16B, sizeof(command_size_16B), this->prefetcher_cores[cq_id], this->prefetch_q_dev_ptrs[cq_id]);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 

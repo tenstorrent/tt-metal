@@ -6,8 +6,6 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
-#include <umd/device/tt_io.hpp>                     // for umd::Writer
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
@@ -113,7 +111,6 @@ private:
 
     ContextId context_id;
     ChipId device_id = 0;
-    std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
@@ -122,8 +119,7 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<umd::Writer> prefetch_q_writers;
-    std::vector<umd::Writer> completion_q_writers;
+    std::vector<tt_cxy_pair> completion_queue_writer_cores;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 
