@@ -71,21 +71,6 @@ inline void load_face_data(std::uint32_t upper_face_addr, std::uint32_t lower_fa
 }
 
 /**
- * @brief Perform column-wise summation using transpose and replay buffer
- *
- * Process column sums for both upper and lower face using transpose and replay buffer.
- * @tparam replay_buffer_length The replay buffer index to use (6 for int, 12 for float on Wormhole)
- */
-template <std::uint32_t replay_buffer_length>
-inline void sum_columns()
-{
-    TTI_SFPTRANSP(0, 0, 0, 0);             // Transpose: LREG0-3 → lanes 0-3, LREG4-7 → lanes 0-3 (overlapping)
-    lltt::replay(0, replay_buffer_length); // Column-wise sum within each lreg after transpose
-    TTI_SFPTRANSP(0, 0, 0, 0);             // Transpose back to original register layout
-    lltt::replay(0, replay_buffer_length); // Sum column sums within each face after transpose
-}
-
-/**
  * @brief Perform integer averaging with proper handling of negative numbers
  * @tparam INSTRUCTION_MODE The instruction mode (determines signed vs unsigned)
  *
@@ -143,35 +128,47 @@ inline void perform_reduce_col_sum_avg()
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP || INSTRUCTION_MODE == InstrModLoadStore::LO16);
 
-    // Optimized approach: Process 4 iterations to handle all column combinations
-    // This reduces operations by processing complementary face pairs simultaneously, less load/store operations
+    // Optimized column reduction: Reduce → Add → Transpose → HalfReduce
+    // Instead of the naive Transpose → Reduce → Transpose → Reduce → Add approach, we first reduce
+    // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
+    // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
+    // and halves the second reduction pass.
     for (std::uint32_t i = 0; i < NUM_FACES; i++)
     {
-        // Iteration mapping - Process vertically aligned faces (0+2, 1+3) to optimize column operations:
-        // i=0: even columns, left half  (faces 0 + 2, columns 0,2,4,6,8,10,12,14)
-        // i=1: odd columns,  left half  (faces 0 + 2, columns 1,3,5,7,9,11,13,15)
-        // i=2: even columns, right half (faces 1 + 3, columns 16,18,20,22,24,26,28,30)
-        // i=3: odd columns,  right half (faces 1 + 3, columns 17,19,21,23,25,27,29,31)
-        // Key optimization: Process faces 0+2 and 1+3 (vertically aligned) instead of 0+1 and 2+3
-        // This allows processing all 32 rows of a column at once (16 from upper face + 16 from lower face)
-        // Reduces load/store operations by accumulating all rows into one LREG per column group
-        // Final result stored in top row of upper face (first row in dest) - no intermediate storage needed
         const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
         const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
         const std::uint32_t column_offset   = COLUMN_OFFSETS[i];
         load_face_data<INSTRUCTION_MODE>(upper_face_addr, lower_face_addr, column_offset);
-        // Perform column-wise summation (different replay buffer lengths for int vs float on Wormhole)
+
+        // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
+        lltt::replay(0, 6);
+
+        // Step 2: Cross-face addition — all 4 positions carry meaningful partial sums.
         if constexpr (is_integer_mode)
         {
-            sum_columns<6>();                                // Integer replay buffer
-            TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4); // LREG0 = upper_face_sums + lower_face_sums (int)
+            TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, 4); // LREG0 = upper + lower (int)
         }
         else
         {
-            sum_columns<12>();                                                            // Float replay buffer (includes NOPs for Wormhole)
+            TTI_SFPNOP;                                                                   // Wait for LREG4 (2-cycle SFPADD latency)
             TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0); // LREG0 = upper + lower (float)
-            TTI_SFPNOP;                                                                   // Required for Wormhole
+            TTI_SFPNOP;                                                                   // Wait for LREG0 before SFPTRANSP
         }
+
+        // Step 3: Transpose to rearrange the 4 partial sums for final reduction
+        TTI_SFPTRANSP(0, 0, 0, 0);
+
+        // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed).
+        if constexpr (is_integer_mode)
+        {
+            lltt::replay(0, 3); // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
+        }
+        else
+        {
+            lltt::replay(6, 5); // Half reduce with NOPs for 2-cycle SFPADD latency
+            TTI_SFPNOP;         // Wait for LREG0 result before store/average
+        }
+
         // Perform averaging if requested (different for int vs float)
         if constexpr (pool_type == AVG)
         {
@@ -184,7 +181,7 @@ inline void perform_reduce_col_sum_avg()
                 perform_float_average();
             }
         }
-        // Store the final combined column sums
+        // Store the final column sum/average to the first row
         TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, upper_face_addr + column_offset);
     }
 }
@@ -446,14 +443,8 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset)
             TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second);
             TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
 
-            if constexpr (is_integer_mode)
-            {
-                lltt::replay(0, 6); // Integer replay buffer
-            }
-            else
-            {
-                lltt::replay(0, 12); // Float replay buffer (includes NOPs for Wormhole)
-            }
+            // Replay the full tree-reduce buffer (both int and float use 6 interleaved instructions)
+            lltt::replay(0, 6);
 
             // Horizontal reduction: consolidate all 8 SFPU columns into column 0 (interleaved for latency hiding)
             horizontal_reduce<is_integer_mode>();
@@ -738,7 +729,9 @@ inline void init_reduce_max_min(std::uint32_t num_cols)
 /**
  * @brief Initialization for SFPU reduce SUM and AVG kernels.
  *        Records replay buffers for column-wise summation using tree reduction.
- *        Integer modes use 6 instructions (SFPIADD), float modes use 12 (SFPADD + NOPs for latency).
+ *        Integer: 6 sequential instructions (positions 0-5), first 3 reusable as half-reduce.
+ *        Float: 6 interleaved instructions (positions 0-5) + 5 half-reduce with NOPs (positions 6-10).
+ *        Interleaving eliminates NOPs in the full reduce by using B operations to hide A's 2-cycle latency.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
@@ -751,14 +744,10 @@ inline void init_reduce_sum_avg()
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP || INSTRUCTION_MODE == InstrModLoadStore::LO16);
 
-    // Program optimized replay buffer for column summation
-    // This replay buffer is called twice per iteration:
-    // 1st call: After first transpose - operates on transposed data where LREG0-3 and LREG4-7 both map to lanes 0→3
-    // 2nd call: After second transpose - operates on data transposed back to original layout
-
     if constexpr (is_integer_mode)
     {
-        // Integer replay buffer: 6 instructions for column summation
+        // Integer replay buffer: 6 sequential instructions (1-cycle SFPIADD latency, no NOPs needed)
+        // Positions 0-2 form a natural half-reduce for LREG0-3 (reusable via replay(0, 3))
         lltt::record(0, 6);
 
         // Upper face column summation (LREG0-3)
@@ -773,24 +762,25 @@ inline void init_reduce_sum_avg()
     }
     else
     {
-        // Float replay buffer: 12 instructions (includes NOPs for latency)
-        lltt::record(0, 12);
+        // Float replay buffer: 11 instructions total
+        // Positions 0-5: Full reduce, interleaved to eliminate NOPs (B hides A's 2-cycle latency)
+        // Positions 6-10: Half reduce for LREG0-3 only, with NOPs for dependent SFPADD chains
+        lltt::record(0, 11);
 
-        // Upper face column summation (LREG0-3) with float operations
-        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // LREG2 = (LREG2 * 1) + LREG3
-        TTI_SFPNOP;
-        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0); // LREG1 = (LREG1 * 1) + LREG2
-        TTI_SFPNOP;
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0); // LREG0 = (LREG0 * 1) + LREG1
-        TTI_SFPNOP;
+        // Full reduce (positions 0-5): interleaved upper/lower face summation
+        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // A1
+        TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG6, 0); // B1 (hides A1 latency)
+        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0); // A2
+        TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0); // B2 (hides A2 latency)
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0); // A3
+        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0); // B3 (hides A3 latency)
 
-        // Lower face column summation (LREG4-7) with float operations
-        TTI_SFPADD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG6, 0); // LREG6 = (LREG6 * 1) + LREG7
-        TTI_SFPNOP;
-        TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG5, 0); // LREG5 = (LREG5 * 1) + LREG6
-        TTI_SFPNOP;
-        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0); // LREG4 = (LREG4 * 1) + LREG5
-        TTI_SFPNOP;
+        // Half reduce (positions 6-10): upper face only, NOPs required for 2-cycle SFPADD latency
+        TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // A1
+        TTI_SFPNOP;                                                                   // Cover A1 latency
+        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0); // A2
+        TTI_SFPNOP;                                                                   // Cover A2 latency
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0); // A3
     }
 }
 
