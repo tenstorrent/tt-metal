@@ -4,6 +4,7 @@
 
 #include "routed_expert_ffn.hpp"
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -11,8 +12,6 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 namespace {
-
-constexpr uint32_t ceil_div(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 // Largest divisor of n that is <= max_val
 constexpr uint32_t largest_divisor(uint32_t n, uint32_t max_val) {
@@ -126,9 +125,9 @@ ttnn::Tensor routed_expert_ffn_optim(
 
     // --- Gate/Up matmul config ---
     // Grid Y: try per_core_M=4, cap rows at GRID_Y, then recompute per_core_M to cover all M
-    const uint32_t gate_up_grid_y = std::min(ceil_div(M_tiles, 4u), GRID_Y);
-    const uint32_t gate_up_per_core_M = ceil_div(M_tiles, gate_up_grid_y);
-    const uint32_t gate_up_per_core_N = ceil_div(N_gate_tiles, GRID_X);
+    const uint32_t gate_up_grid_y = std::min(tt::div_up(M_tiles, 4u), GRID_Y);
+    const uint32_t gate_up_per_core_M = tt::div_up(M_tiles, gate_up_grid_y);
+    const uint32_t gate_up_per_core_N = tt::div_up(N_gate_tiles, GRID_X);
 
     // in0_block_w: test with smaller value to check if parameter is honored
     (void)K_gate_tiles;
@@ -210,9 +209,9 @@ ttnn::Tensor routed_expert_ffn_optim(
     up_result.deallocate();
 
     // --- Down matmul config ---
-    const uint32_t down_grid_y = std::min(ceil_div(M_tiles, 4u), GRID_Y);
-    const uint32_t down_per_core_M = ceil_div(M_tiles, down_grid_y);
-    const uint32_t down_per_core_N = ceil_div(N_down_tiles, GRID_X);
+    const uint32_t down_grid_y = std::min(tt::div_up(M_tiles, 4u), GRID_Y);
+    const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
+    const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
     const uint32_t down_in0_bw = best_in0_block_w(K_down_tiles, down_per_core_M, down_per_core_N);
 
