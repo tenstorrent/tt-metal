@@ -283,7 +283,7 @@ private:
             if (buffer_pin == nullptr) {
                 return false;
             }
-            if (!tt::tt_metal::logical_matches_physical(shard_spec)) {
+            if (!tt::tt_metal::tensor_impl::logical_matches_physical(shard_spec)) {
                 return false;
             }
             if (tt::tt_metal::convert_to_data_type<std::remove_const_t<T>>() != shard_spec.data_type()) {
@@ -406,7 +406,7 @@ public:
         }
 
         // Convert individual shards to logical data of the correct type `T`, if needed.
-        if (!tt::tt_metal::logical_matches_physical(tensor.tensor_spec())) {
+        if (!tt::tt_metal::tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
             dst_buffer = dst_buffer.transform(
                 [&tensor](const tt::tt_metal::HostBuffer& shard) {
                     return tt::tt_metal::HostBuffer(Tensor(shard, tensor.tensor_spec()).to_vector<T>());
