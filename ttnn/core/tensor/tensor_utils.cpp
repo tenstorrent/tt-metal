@@ -33,6 +33,8 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
+    auto tile_desc = tensor.layout() == Layout::TILE ? TileDescriptor(tensor.tensor_spec().tile()) : TileDescriptor();
+
     return CBDescriptor{
         .total_size = effective_total_size,
         .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
@@ -40,7 +42,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
             .buffer_index = cb_index,
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
             .page_size = tensor.buffer()->aligned_page_size(),
-            .tile = TileDescriptor(tensor.tensor_spec().tile())}},
+            .tile = tile_desc}},
         .buffer = tensor.buffer(),
         .address_offset = address_offset,
         .global_circular_buffer = nullptr};

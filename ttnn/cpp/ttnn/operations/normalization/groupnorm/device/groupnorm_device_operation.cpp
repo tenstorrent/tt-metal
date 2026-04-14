@@ -23,7 +23,8 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     uint32_t batch = input.padded_shape()[0];
     uint32_t W = input.padded_shape()[3];
-    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    auto input_tile = input.layout() == Layout::TILE ? input.tensor_spec().tile() : Tile();
+    const uint32_t tile_width = input_tile.get_width();
     uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, args.num_groups);
 
     while (num_virtual_cols > 0 &&
@@ -48,8 +49,9 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     const auto& input_mask = tensor_args.input_mask;
     const auto& negative_mask = tensor_args.negative_mask;
     const auto& reciprocals = tensor_args.reciprocals;
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    auto a_tile = a.layout() == Layout::TILE ? a.tensor_spec().tile() : Tile();
+    const uint32_t tile_height = a_tile.get_height();
+    const uint32_t tile_width = a_tile.get_width();
 
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");

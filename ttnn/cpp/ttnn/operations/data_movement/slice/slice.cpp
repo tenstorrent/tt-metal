@@ -50,7 +50,8 @@ ttnn::Tensor slice(
         }
     }
 
-    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto tile = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    const auto& tile_shape = tile.get_tile_shape();
 
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());

@@ -114,13 +114,23 @@ ttnn::Tensor get_mask_tensor(
                 num_channel);
             num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
         }
+        uint32_t tile_height, tile_width;
+        if (input_tensor.layout() == Layout::TILE) {
+            const auto& tile = input_tensor.tensor_spec().tile();
+            tile_height = tile.get_height();
+            tile_width = tile.get_width();
+        } else {
+            tt::tt_metal::Tile default_tile;
+            tile_height = default_tile.get_height();
+            tile_width = default_tile.get_width();
+        }
         mask = create_group_norm_input_mask(
             num_channel,
             num_groups,
             num_cores_across_channel,
             tt::tt_metal::DataType::BFLOAT16,
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width());
+            tile_height,
+            tile_width);
         mask = mask.to_device(input_tensor.device());
     }
     return mask;

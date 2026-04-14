@@ -1115,7 +1115,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     }
 
     auto source_layout = tensor.layout();
-    auto tile = tensor.tensor_spec().tile();
+    auto tile = source_layout == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
         [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
@@ -1138,7 +1138,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(target_layout, tensor.tensor_spec().tile()),
+                PageConfig(target_layout, target_layout == Layout::TILE ? std::make_optional(tile) : std::nullopt),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
@@ -1254,13 +1254,14 @@ HostTensor pad_impl(
         return output_buffer;
     };
 
+    const auto tile = tensor.layout() == Layout::TILE ? std::make_optional(tensor.tensor_spec().tile()) : std::nullopt;
     return HostTensor(
         tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
@@ -1371,14 +1372,13 @@ HostTensor unpad_impl(
         return output_buffer;
     };
 
+    const auto tile = tensor.layout() == Layout::TILE ? std::make_optional(tensor.tensor_spec().tile()) : std::nullopt;
     return HostTensor(
         tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
-                tensor.dtype(),
-                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
-                tt::tt_metal::MemoryConfig{})),
+                tensor.dtype(), tt::tt_metal::PageConfig(tensor.layout(), tile), tt::tt_metal::MemoryConfig{})),
         tensor.tensor_topology());
 }
 
@@ -1493,12 +1493,8 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
     ::detail::ReadShard(*buffer, device_data, core_id);
 
     auto output_buffer = std::vector<T>(std::move(device_data));
-    return Tensor(
-        HostBuffer(std::move(output_buffer)),
-        shard_shape,
-        tensor.dtype(),
-        tensor.layout(),
-        tensor.tensor_spec().tile());
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    return Tensor(HostBuffer(std::move(output_buffer)), shard_shape, tensor.dtype(), tensor.layout(), tile);
 }
 
 template <>
@@ -1555,10 +1551,12 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
+            const auto tile =
+                input_tensor_spec.layout() == Layout::TILE ? input_tensor_spec.tile() : tt::tt_metal::Tile();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
                 tilized_data = CMAKE_UNIQUE_NAMESPACE::convert_layout_row_major_to_tile(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                    input_tensor_spec.physical_shape(), tile, data);
                 data = ttsl::make_const_span(tilized_data);
             }
 
@@ -1566,9 +1564,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, tile);
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, tile);
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -1638,11 +1636,13 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     const auto layout =
         (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
 
+    const auto tile =
+        input_tensor.layout() == Layout::TILE ? std::make_optional(input_tensor.tensor_spec().tile()) : std::nullopt;
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
-            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            tt::tt_metal::PageConfig(layout, tile),
             input_tensor.tensor_spec().memory_config(),
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));

@@ -207,7 +207,8 @@ Tensor create_tt_tensor_from_host_data(
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
-        TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
+        TensorLayout dst_tensor_layout(
+            dst_dtype, PageConfig(layout, layout == Layout::TILE ? optional_tile : std::nullopt), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);

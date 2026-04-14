@@ -33,7 +33,7 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
-    const auto& tile = x.tensor_spec().tile();
+    const auto tile = x.layout() == Layout::TILE ? x.tensor_spec().tile() : Tile();
     return {
         shape.rank() >= 5 ? shape[-5] : 1,
         shape[-4],
@@ -163,8 +163,9 @@ public:
         end_core(shard_spec.grid.ranges().rbegin()->end_coord),
         row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
         memory_layout(tensor.memory_config().memory_layout()) {
-        auto tile_height = tensor.tensor_spec().tile().get_height();
-        auto tile_width = tensor.tensor_spec().tile().get_width();
+        auto t = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : Tile();
+        auto tile_height = t.get_height();
+        auto tile_width = t.get_width();
 
         shard_shape = {
             tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
@@ -292,8 +293,9 @@ void set_or_update_runtime_arguments(
     const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
     const uint32_t c_alignment = c.buffer()->alignment();
 
-    const uint32_t tile_height = c.tensor_spec().tile().get_height();
-    const uint32_t tile_width = c.tensor_spec().tile().get_width();
+    const auto c_tile = c.layout() == Layout::TILE ? c.tensor_spec().tile() : Tile();
+    const uint32_t tile_height = c_tile.get_height();
+    const uint32_t tile_width = c_tile.get_width();
     const uint32_t tile_hw = tile_height * tile_width;
 
     uint32_t c_num_tiles;
@@ -790,7 +792,8 @@ std::optional<AllShardVolumes> get_shard_volumes(
     const auto a_sharded = a.memory_config().is_sharded();
     const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
     const auto c_sharded = c.memory_config().is_sharded();
-    const auto tile_hw = c.tile().get_tile_hw();
+    const auto c_tile_for_vol = c.layout() == Layout::TILE ? c.tile() : Tile();
+    const auto tile_hw = c_tile_for_vol.get_tile_hw();
 
     return AllShardVolumes{
         .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},

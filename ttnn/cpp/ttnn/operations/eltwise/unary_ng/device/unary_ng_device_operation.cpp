@@ -156,11 +156,13 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
     std::optional<uint32_t> src_shard_vol = std::nullopt;
     std::optional<uint32_t> dst_shard_vol = std::nullopt;
     if (shard_specs.has_value()) {
-        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        auto input_tile = input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : Tile();
+        const auto tile_hw = input_tile.get_tile_hw();
         if (input_tensor.is_sharded()) {
             src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
         }
-        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        auto out_tile = output_spec.layout() == Layout::TILE ? output_spec.tile() : Tile();
+        const auto out_tile_hw = out_tile.get_tile_hw();
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 

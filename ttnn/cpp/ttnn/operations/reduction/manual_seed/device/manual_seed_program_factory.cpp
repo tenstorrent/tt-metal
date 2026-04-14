@@ -39,7 +39,8 @@ void create_tensor_circular_buffer(
     Program& program, const CoreRangeSet& core_grid, const Tensor& tensor, uint32_t cb_index) {
     // Circular buffer config
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    const uint32_t tensor_tile_size = tensor.tensor_spec().tile().get_tile_size(cb_data_format);
+    const auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : Tile();
+    const uint32_t tensor_tile_size = tile.get_tile_size(cb_data_format);
 
     // Create circular buffer config
     const tt::tt_metal::CircularBufferConfig cb_config =
