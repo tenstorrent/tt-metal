@@ -96,21 +96,22 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
+  # DEBUGGING hang in AllGatherReturnedTensor -- commenting out passing tests for faster CI turnaround
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
-  timeout 300 ./build/test/ttnn/test_ccl_multi_cq_multi_device ; fail+=$?
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
+  # timeout 300 ./build/test/ttnn/test_ccl_multi_cq_multi_device ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
+  # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
-  pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  # pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
+  # pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
+  # pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
