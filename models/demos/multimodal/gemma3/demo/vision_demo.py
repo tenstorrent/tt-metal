@@ -25,6 +25,7 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -138,6 +139,26 @@ def prepare_generator_args(
     return model_args, model
 
 
+def _gemma3_vision_demo_device_params():
+    # Blackhole (P150, etc.): 2 CQs + L1 small size match successful multimodal bring-up; trace budget may be raised
+    # further by get_supported_trace_region_size (trace_region_config.py) when HF_MODEL is set.
+    if is_blackhole():
+        return {
+            "fabric_config": True,
+            "trace_region_size": 70000000,
+            "num_command_queues": 2,
+            "l1_small_size": 24576,
+        }
+    return {
+        "fabric_config": True,
+        "trace_region_size": 21448704,
+        "num_command_queues": 1,
+        # avg_pool2d (multimodal projector) and other ops may use L1_SMALL; match gemma3 tests (e.g. test_mmp.py)
+        "l1_small_size": 24576,
+    }
+
+
+# MESH_DEVICE: select mesh shape, e.g. P150 (1x1), P300, P150x4, P150x8, or N150/T3K on Wormhole.
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -190,7 +211,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
+    [_gemma3_vision_demo_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -243,6 +264,13 @@ def test_multimodal_demo_text(
         num_layers=num_layers,
         dummy_weights=dummy_weights,
     )
+
+    if enable_trace and not model_args[0].supports_decode_trace():
+        logger.warning(
+            "Gemma3 vision_demo: prefill/decode trace is unsupported on this arch "
+            "(capture can hang after compile). Running without trace."
+        )
+        enable_trace = False
 
     from transformers import AutoProcessor
 
@@ -506,30 +534,38 @@ def test_multimodal_demo_text(
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
-        target_prefill_tok_s = {
+        perf_key = f"{tt_device_name}_{base_model_name}"
+        ci_prefill_targets = {
             "N300_Llama-3.2-11B": 23,
             "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
             "N150_gemma-3-4b": 285,
             "N300_gemma-3-4b": 390,
             "T3K_gemma-3-27b": 265,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s_u = {
+            "P150_gemma-3-4b": 285,
+            "P150_gemma-3-27b": 265,
+        }
+        ci_decode_targets = {
             "N300_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-11B": 35,
             "T3K_Llama-3.2-90B": 6,
             "N150_gemma-3-4b": 24,
             "N300_gemma-3-4b": 28,
             "T3K_gemma-3-27b": 13,
-        }[f"{tt_device_name}_{base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * max_batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
+            "P150_gemma-3-4b": 24,
+            "P150_gemma-3-27b": 13,
         }
+        target_prefill_tok_s = ci_prefill_targets.get(perf_key)
+        target_decode_tok_s_u = ci_decode_targets.get(perf_key)
+        if target_prefill_tok_s is None or target_decode_tok_s_u is None:
+            logger.warning(f"No CI vision perf targets for {perf_key}; skipping benchmark save and verify_perf.")
+        else:
+            target_decode_tok_s = target_decode_tok_s_u * max_batch_size
+            targets = {
+                "prefill_t/s": target_prefill_tok_s,
+                "decode_t/s": target_decode_tok_s,
+                "decode_t/s/u": target_decode_tok_s_u,
+            }
 
         # Save benchmark data for CI
         N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}

@@ -1580,9 +1580,13 @@ class Generator(WarmupForwardMixin):
 
         if not async_read:
             if isinstance(tt_out[0], tuple):
-                return [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
+                result = [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
+                logger.info("read_decode_output: done")
+                return result
             elif isinstance(tt_out[0], ttnn.Tensor):
-                return [out.cpu() for out in tt_out]
+                result = [out.cpu() for out in tt_out]
+                logger.info("read_decode_output: done")
+                return result
 
         host_outputs = []
         read_events = []

@@ -175,7 +175,7 @@ class ModelArgs(TTModelArgs):
         # This dictionary is used to override the default ceil warmup prefill value
         # Longer seqlens take too much time to warmup, so CI times out
         model_specific_ceil_warmup_lengths = {
-            "gemma-3-4b": 2048,
+            "gemma-3-4b": 65536,
             "gemma-3-27b": 2048,
         }
 
