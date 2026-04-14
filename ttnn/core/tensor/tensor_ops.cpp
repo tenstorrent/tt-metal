@@ -42,18 +42,16 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 Tensor create_device_tensor(
-    const TensorSpec& tensor_spec, IDevice* device, std::optional<TensorTopology> tensor_topology) {
+    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
         tensor_spec.tensor_layout().get_data_type(),
         tensor_spec.tensor_layout().get_layout(),
-        device,
+        mesh_device,
         tensor_spec.tensor_layout().get_memory_config());
 
     Tensor output;
-    distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-
     auto topology = std::invoke([&]() {
         if (tensor_topology.has_value()) {
             return std::move(*tensor_topology);
