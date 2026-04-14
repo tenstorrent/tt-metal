@@ -74,13 +74,19 @@ def generate_pool_type_and_math_fidelity_combinations():
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.MxFp4,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
+    implied_math_format=lambda format: (
+        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        if not format.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
 )
 def test_reduce_quasar(
     formats,
@@ -115,12 +121,23 @@ def test_reduce_quasar(
     if pool_type == ReducePool.Max:
         generate_golden = get_golden_generator(ReduceGolden)
         golden_tensor = generate_golden(
-            src_A, reduce_dim, pool_type, formats.output_format, tile_cnt
+            src_A,
+            reduce_dim,
+            pool_type,
+            formats.output_format,
+            tile_cnt,
+            input_format=formats.input_format,
         )
     else:
         generate_golden = get_golden_generator(ReduceGapoolGolden)
         golden_tensor = generate_golden(
-            src_A, src_B, formats.output_format, reduce_dim, math_fidelity, tile_cnt
+            src_A,
+            src_B,
+            formats.output_format,
+            reduce_dim,
+            math_fidelity,
+            tile_cnt,
+            input_format=formats.input_format,
         )
 
     mathop = mathop_mapping[reduce_dim]
@@ -154,6 +171,12 @@ def test_reduce_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
+        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
+        # This ensures Python-side format inference uses Float16_b for MX internal math
+        disable_format_inference=(
+            implied_math_format == ImpliedMathFormat.Yes
+            and formats.input_format.is_mx_format()
+        ),
     )
 
     res_from_L1 = configuration.run().result
@@ -164,6 +187,11 @@ def test_reduce_quasar(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # Check if test passes with detailed error reporting
+    test_passed = passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+    )
+
+    assert test_passed, "Assert against golden failed"
