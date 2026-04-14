@@ -16,6 +16,7 @@
 #include "api/socket_api.h"
 #include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "../../../unified_kernels/kernel_op_api.hpp"
 
 // Bit-cast helpers without UB
@@ -986,17 +987,20 @@ struct TopKSampling {
         FORCE_INLINE void write_topk_slot(
             uint32_t scores_slot_addr,
             uint32_t indices_slot_addr,
-            volatile tt_l1_ptr uint16_t* scores,
-            volatile tt_l1_ptr uint32_t* indices) {
+            uint32_t scores_base,
+            uint32_t indices_base) {
             constexpr uint32_t K = CTArgs::topk_k;
-            auto dst_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_slot_addr);
-            auto dst_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_slot_addr);
-            for (uint32_t i = 0; i < K; ++i) {
-                dst_scores[i] = scores[i];
-            }
-            for (uint32_t i = 0; i < K; ++i) {
-                dst_indices[i] = indices[i];
-            }
+            // auto dst_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_slot_addr);
+            // auto dst_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_slot_addr);
+            // for (uint32_t i = 0; i < K; ++i) {
+            //     dst_scores[i] = scores[i];
+            // }
+            // for (uint32_t i = 0; i < K; ++i) {
+            //     dst_indices[i] = indices[i];
+            // }
+            noc_async_read(get_noc_addr(scores_base), scores_slot_addr, K * sizeof(uint16_t));
+            noc_async_read(get_noc_addr(indices_base), indices_slot_addr, K * sizeof(uint32_t));
+            noc_async_read_barrier();
         }
 
         // N-way merge of sorted top-K arrays received in mesh stage scratch slots.
@@ -1330,8 +1334,8 @@ struct TopKSampling {
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_scores_stride,
                             args.indices_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_indices_stride,
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores),
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices));
+                            global_scores,
+                            global_indices);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
 
@@ -1378,8 +1382,8 @@ struct TopKSampling {
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_scores_stride,
                             args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_indices_stride,
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores),
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices));
+                            global_scores,
+                            global_indices);
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
@@ -1430,12 +1434,8 @@ struct TopKSampling {
                         DPRINT << "  [" << i << "] " << BF16(global_scores_addr[i]) << ENDL();
                     }
 
-                    cb_reserve_back(CTArgs::scaler_cb, 1);
-                    auto scaler_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::scaler_cb));
-                    for (uint32_t i = 0; i < 1024; ++i) {
-                        scaler_ptr[i] = BF16_ONE;
-                    }
-                    cb_push_back(CTArgs::scaler_cb, 1);
+                    constexpr uint32_t BF16_ONE_PACKED = 0x3F803F80;
+                    generate_reduce_scaler(CTArgs::scaler_cb, BF16_ONE_PACKED);
 
                     {
                         DPRINT << "Inv temp BF16: " << BF16((uint16_t)(CTArgs::inv_temp_bf16 >> 16)) << ENDL();
@@ -1448,8 +1448,12 @@ struct TopKSampling {
                     auto tile_u32 =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
                     constexpr uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
-                    for (uint32_t i = 0; i < 512; ++i) {
+                    constexpr uint32_t FACE_U32 = 128;  // 256 bf16 per face / 2
+                    for (uint32_t i = 0; i < 8; ++i) {
                         tile_u32[i] = NEG_INF_BF16_PAIR;
+                    }
+                    for (uint32_t i = 0; i < 8; ++i) {
+                        tile_u32[FACE_U32 + i] = NEG_INF_BF16_PAIR;
                     }
                     // auto tile_u16 =
                     //     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
