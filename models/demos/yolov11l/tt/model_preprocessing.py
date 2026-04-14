@@ -11,6 +11,13 @@ from models.demos.yolov11l.reference.yolov11 import Conv, YoloV11
 from models.demos.yolov11l.tt.common import get_mesh_mappers
 
 
+def _as_plain_torch_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    """Convert tensor subclasses (e.g. TracedTorchTensor) to base torch.Tensor."""
+    if type(tensor) is torch.Tensor:
+        return tensor
+    return tensor.as_subclass(torch.Tensor)
+
+
 def create_yolov11_input_tensors(
     device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=True
 ):
