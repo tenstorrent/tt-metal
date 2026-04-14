@@ -314,15 +314,17 @@ def prepare_output_tensor_from_combine_writer(
 
 
 ATOL_THRESHOLD = 700
+SWIGLU_PCC_THRESHOLD = 0.984
+SILU_PCC_THRESHOLD = 0.988
 
 
 def _get_pcc_threshold(activation_type):
     # Determine PCC threshold based on activation type
     # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
     if activation_type == MoEActivationFunction.SWIGLU:
-        pcc_threshold = 0.984
+        return SWIGLU_PCC_THRESHOLD
     elif activation_type == MoEActivationFunction.SILU:  # SILU
-        pcc_threshold = 0.988
+        return SILU_PCC_THRESHOLD
 
 
 def validate_matmul(
