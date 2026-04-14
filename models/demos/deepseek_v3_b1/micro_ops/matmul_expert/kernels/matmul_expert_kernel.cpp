@@ -4,7 +4,7 @@
 // Expert Matmul with Compressed Weights — Hybrid SRAM + DRAM kernel.
 //
 // Both sram_mm() and dram_mm() are called. Each loops over the index array,
-// checks is_dram[expert_idx], and skips non-matching experts.
+// checks bit 15 of the index value (1=SRAM, 0=DRAM), and skips non-matching experts.
 //
 // SRAM path uses cb_in1 (CB 1) for sharded B data.
 // DRAM path uses cb_in1_dram (CB 4) for streaming buffer.
@@ -43,7 +43,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_in0_num_pages"),
         get_named_compile_time_arg_val("sram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("sram_k_per_core"),
@@ -69,7 +68,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("next_core_noc_y"),
         get_named_compile_time_arg_val("cores_per_dram_bank"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
@@ -95,7 +93,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("out_w"),
         get_named_compile_time_arg_val("sram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("accum_experts"),
@@ -114,7 +111,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("per_core_n"),
         get_named_compile_time_arg_val("dram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
-        get_named_compile_time_arg_val("is_dram_l1_addr"),
         get_named_compile_time_arg_val("table_idx_l1_addr"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
