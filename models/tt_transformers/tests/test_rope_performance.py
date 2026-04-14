@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -18,6 +18,7 @@ Example:
   HF_MODEL=meta-llama/Llama-3.2-1B-Instruct pytest models/tt_transformers/tests/test_rope_performance.py -s
 """
 import csv
+import math
 import os
 import re
 import subprocess
@@ -198,7 +199,7 @@ def _fmt_ratio_metric(hf_val: float | None, llama_val: float | None) -> str:
     if hf_val is None or llama_val is None:
         return "n/a"
     r = ratio(hf_val, llama_val)
-    if r != r:  # NaN
+    if math.isnan(r):
         return "n/a"
     return f"{r:.4f}"
 
