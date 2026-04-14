@@ -8,17 +8,14 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
-// Adaptive per-segment degree — reduces Horner steps for low-degree segments
-#define HAS_SEGMENT_DEGREES
 #ifdef INP_FLOAT32
+#define HAS_SEGMENT_DEGREES
 constexpr uint32_t SEGMENT_DEGREES[] = {11, 11};
-#else
-constexpr uint32_t SEGMENT_DEGREES[] = {8, 8, 6, 4};
-#endif
-
 #include "ckernel_sfpu_piecewise_polynomial.h"
 #include "ckernel_sfpu_piecewise_rational.h"
+#endif
 
 namespace ckernel::sfpu {
 
@@ -26,18 +23,16 @@ namespace ckernel::sfpu {
 // LUT-based softplus via abs(x) symmetry + residual function
 //
 // Uses the identity: softplus(-x) = softplus(x) - x
-// Equivalently, defining f(a) = ln(1 + exp(-a)) for a >= 0:
+// Defining f(a) = ln(1 + exp(-a)) for a >= 0:
 //   softplus(t) = t + f(t)   for t >= 0
 //   softplus(t) = f(-t)      for t < 0
 //
-// The LUT approximates f(a) on [0, LUT_HI], halving the segment count.
-//
-// BF16: polynomial, 4 segment(s), range [0, 10.0], max degree 8
-// FP32: rational n11/d11, 2 segment(s), range [-10.0, 10.0]
+// BF16: single degree-8 polynomial for f(a) on [0, 5] + exp(-a) tail
+// FP32: rational n11/d11 on [-10, 10] (PR's original LUT)
 // ======================================================================
 
 #ifdef INP_FLOAT32
-// FP32 path: rational n11/d11 on [-10, 10] (original PR LUT, uses full-range eval)
+// FP32 path: rational n11/d11 on [-10, 10] (unchanged from PR)
 constexpr uint32_t SOFTPLUS_NUM_DEGREE = 11;
 constexpr uint32_t SOFTPLUS_DEN_DEGREE = 11;
 constexpr uint32_t SOFTPLUS_NUM_SEGMENTS = 2;
@@ -56,27 +51,20 @@ constexpr std::array<float, 51> SOFTPLUS_LUT = {
      1.0815194273e+02f,  6.0431155443e+01f,  2.9775133565e+01f,  9.8190872483e+00f,  2.2600082848e+00f,
      4.1877857578e-01f,  4.7625164822e-02f,  3.5753458696e-03f,  3.2110606327e-04f,  -1.4526502952e-06f,
      -5.0736897138e-10f}};
-
-#else
-// BF16 path: polynomial approximation of f(a) = ln(1 + exp(-a)) on [0, 12]
-// 4 segments, max degree 8, 41 LUT entries (vs 241 for the full-range 16-segment version)
-// Range [0, 12] ensures f(a) covers all bf16-representable residuals (exp(-12) ≈ 6e-6)
-constexpr uint32_t SOFTPLUS_NUM_DEGREE = 8;
-constexpr uint32_t SOFTPLUS_NUM_SEGMENTS = 4;
-constexpr uint32_t SOFTPLUS_LUT_SIZE = 41;
-constexpr float SOFTPLUS_LUT_HI = 12.0f;
-constexpr std::array<float, 41> SOFTPLUS_LUT = {
-    {0.0000000000e+00f,  3.0000000000e+00f,  6.0000000000e+00f,  9.0000000000e+00f,  1.2000000000e+01f,
-     6.9314652681e-01f,  -4.9998274446e-01f, 1.2489502877e-01f,  2.4864752777e-04f,  -5.4577449337e-03f,
-     4.2756633775e-05f,  4.7246625763e-04f,  -1.1166145123e-04f, 8.5480596681e-06f,  6.4356017113e-01f,
-     -4.1999831796e-01f, 6.9007471204e-02f,  2.4819521233e-02f,  -1.4719141647e-02f, 3.3421402331e-03f,
-     -4.1296074050e-04f, 2.7464138839e-05f,  -7.7396288134e-07f, 3.3762899041e-01f,  -2.0769727230e-01f,
-     5.4375723004e-02f,  -7.7192140743e-03f, 6.2426319346e-04f,  -2.7179625249e-05f, 4.9635303867e-07f,
-     0.0000000000e+00f,  0.0000000000e+00f,  2.2023772821e-02f,  -7.4348580092e-03f, 9.4883231213e-04f,
-     -5.4178526625e-05f, 1.1665415514e-06f,  0.0000000000e+00f,  0.0000000000e+00f,  0.0000000000e+00f,
-     0.0000000000e+00f}};
-
 #endif
+
+// BF16 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
+// For a > 5, exp(-a) is used instead (seamless transition in bf16).
+constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
+constexpr float SOFTPLUS_POLY_C0 = 6.9310557842e-01f;
+constexpr float SOFTPLUS_POLY_C1 = -4.9926245213e-01f;
+constexpr float SOFTPLUS_POLY_C2 = 1.2186349183e-01f;
+constexpr float SOFTPLUS_POLY_C3 = 5.6753782555e-03f;
+constexpr float SOFTPLUS_POLY_C4 = -1.0528374463e-02f;
+constexpr float SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
+constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
+constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
+constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
@@ -95,25 +83,32 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         v_endif;
         sfpi::dst_reg[0] = beta_reciprocal * result;
 #else
-        // BF16: symmetry approach — evaluate f(a) = ln(1+exp(-a)) on [0, LUT_HI]
-        // then reconstruct: softplus(t) = t + f(|t|) if t >= 0, f(|t|) if t < 0
-
-        // Compute a = |t| via conditional negate (SFPI has no abs instruction)
+        // BF16: symmetry approach with inline Horner + exp tail
+        // a = |t|
         sfpi::vFloat a = t;
         v_if(t < 0.0f) { a = -t; }
         v_endif;
 
-        // Evaluate residual f(a) from LUT
-        sfpi::vFloat residual =
-            piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, a);
+        // f(a) via degree-8 Horner on [0, 5]
+        sfpi::vFloat residual = PolynomialEvaluator::eval(
+            a,
+            SOFTPLUS_POLY_C0,
+            SOFTPLUS_POLY_C1,
+            SOFTPLUS_POLY_C2,
+            SOFTPLUS_POLY_C3,
+            SOFTPLUS_POLY_C4,
+            SOFTPLUS_POLY_C5,
+            SOFTPLUS_POLY_C6,
+            SOFTPLUS_POLY_C7,
+            SOFTPLUS_POLY_C8);
 
-        // Tail: f(a) ≈ exp(-a) for a > LUT_HI
-        v_if(a > SOFTPLUS_LUT_HI) { residual = _sfpu_exp_21f_bf16_<false>(-a); }
+        // Tail: f(a) ≈ exp(-a) for a > 5 (seamless in bf16)
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = _sfpu_exp_21f_bf16_<false>(-a); }
         v_endif;
 
         // Reconstruct softplus(t):
         //   t >= 0: softplus(t) = t + f(t)
-        //   t < 0:  softplus(t) = f(-t) = f(a) = residual
+        //   t < 0:  softplus(t) = f(|t|) = residual
         sfpi::vFloat sp = residual;
         v_if(t >= 0.0f) { sp = t + residual; }
         v_endif;
