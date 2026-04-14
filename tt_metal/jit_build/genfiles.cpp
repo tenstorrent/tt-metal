@@ -94,13 +94,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                "//\n"
                "// SPDX-License-Identifier: Apache-2.0\n\n"
                "// AUTO-GENERATED — do not edit.\n\n"
-               "#pragma once\n\n"
-               "#include <cstdint>\n\n";
+               "#pragma once\n\n";
     if (entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
+        content << "#include \"experimental/dataflow_buffer.h\"\n\n";
         for (const auto& [name, id] : entries) {
-            content << "constexpr uint16_t " << name << " = " << id << ";\n";
+            content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
         }
     }
     write_file(path, content.str());

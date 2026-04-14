@@ -28,6 +28,28 @@
 
 namespace experimental {
 
+// Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
+// The user will never directly interact with this type.
+//
+// The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
+// Usage:
+//
+//   // Host code declares "my_dfb_name" as a the DFB local accessor name for this kernel.
+//   // In the kernel code:
+//   DataflowBuffer dfb(my_dfb_name);
+//
+// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
+//
+// Currently, DFBAccessor is backed by a compile-time ID, baked into the kernel binary.
+// If we later decide we need a dynamic mechanism instead, the implementation can switch to an
+// implicit RTA, changing only the generated header and the DFBAccessor struct's internals.
+// (Kernel source code stays unchanged.)
+struct DFBAccessor {
+    explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
+    uint16_t id;
+};
+
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -36,6 +58,12 @@ public:
     using DFBInterface = LocalCBInterface;
 #endif
 
+    // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
+    // Pass the named binding constant from kernel_bindings_generated.h:
+    //   DataflowBuffer dfb(my_dfb_name);
+    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.id) {}
+
+    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
