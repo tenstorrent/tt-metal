@@ -453,7 +453,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     for (BroadcastDim bcast_dim : k_quasar_dims) {
         for (const auto& fmt : k_formats) {
             // TODO (#38092): Remove when we can run back to back tests on Quasar
-            if (bcast_dim != BroadcastDim::ROW || fmt.in_t != tt::DataFormat::Float16_b) {
+            if (bcast_dim != BroadcastDim::COL || fmt.in_t != tt::DataFormat::Float16_b) {
                 continue;
             }
             UnaryBroadcastConfig test_config = {

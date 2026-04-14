@@ -34,6 +34,7 @@ inline void llk_unpack_unary_operand_init(
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_unpack_unary_operand_tile(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t l1_tile_idx = g_dfb_interface[operand_id].rd_entry_idx + tile_index;
+    const auto& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t l1_tile_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
     _llk_unpack_unary_operand_<UNP_SEL, reuse_dest>(l1_tile_idx);
 }

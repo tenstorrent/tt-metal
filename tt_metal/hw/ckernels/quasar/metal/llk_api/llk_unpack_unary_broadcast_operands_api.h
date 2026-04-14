@@ -29,6 +29,7 @@ inline void llk_unpack_unary_broadcast_operands_init(const std::uint32_t operand
 template <std::uint32_t UNP_SEL, bool unpack_to_dest>
 inline void llk_unpack_unary_broadcast_operands(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t l1_tile_index = g_dfb_interface[operand_id].rd_entry_idx + tile_index;
+    const auto& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t l1_tile_index = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
     _llk_unpack_unary_broadcast_operands_<UNP_SEL, unpack_to_dest>(l1_tile_index);
 }

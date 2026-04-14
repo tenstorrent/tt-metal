@@ -66,10 +66,10 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     UNPACK((llk_unpack_hw_configure(icb)));
     if (enable_unpack_to_dest_u) {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(
-            false, false /*transpose within 16x16 face*/, icb)));
+            false, icb)));
     } else {
         UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(
-            false, false /*transpose within 16x16 face*/, icb)));
+            false, icb)));
     }
 #endif
 
@@ -225,7 +225,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 
     if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
         UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
-            false, false /*transpose within 16x16 face*/, new_icb)));
+            false, new_icb)));
     }
 #endif
 
