@@ -14,9 +14,9 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations, CheckpointType
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.tt_transformers.tt.common import encode_prompt_hf
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -96,7 +96,7 @@ def test_llama_model_inference(
     )
     model_args.use_prefetcher = False
     model_args.n_layers = 1
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -124,7 +124,10 @@ def test_llama_model_inference(
         prompt = f.read()
 
     if instruct:
-        encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
+        if model_args.checkpoint_type == CheckpointType.HuggingFace:
+            encoded_prompt = encode_prompt_hf(tokenizer, prompt)[:seq_len]
+        else:
+            encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
     else:
         encoded_prompt = tokenizer.encode(prompt, bos=True, eos=False)[:seq_len]
 
