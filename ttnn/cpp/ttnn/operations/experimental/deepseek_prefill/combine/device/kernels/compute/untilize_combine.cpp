@@ -42,8 +42,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
 
-    uint32_t batch_counter = 0;
-
     while (true) {
         cb_reserve_back(cb_untilize_id, read_batch_size);
         cb_wait_front(cb_signal_id, 1);
@@ -59,8 +57,6 @@ void kernel_main() {
         }
 
         cb_push_back(cb_untilize_id, read_batch_size);
-        DPRINT_COMBINE << "Processed batch %u\n" << batch_counter << ENDL();
-        batch_counter++;
     }
     pack_untilize_uninit(cb_untilize_id);
 }

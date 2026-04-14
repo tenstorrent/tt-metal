@@ -433,6 +433,8 @@ def test_ttnn_dispatch_combine(
         init_zeros=True,
     )
 
+    tt_dispatched_buffer = ttnn.to_layout(tt_dispatched_buffer, layout=ttnn.TILE_LAYOUT)
+
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)

@@ -604,7 +604,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
         std::vector<uint32_t> zi_compile_time_args = {
             output_aligned_page_size,
-            1,  // num_sender_cores = 1: each idle core signals only its owning sender
+            num_cores,  // num_sender_cores = num_cores: each idle core signals all sender cores
             static_cast<uint32_t>(tt::CBIndex::c_6),
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(zi_compile_time_args);
@@ -639,6 +639,10 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         auto per_sender_compile_args = reader_compile_time_args_base;
         per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender k_s)
         per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
+        if (init_zeros) {
+            per_sender_compile_args.push_back(
+                num_idle_cores);  // num_total_idle_cores (all idle cores across all senders)
+        }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         reader_kernel_ids.push_back(tt::tt_metal::CreateKernel(
             program,
@@ -691,16 +695,17 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
             uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
 
-            // Each idle core signals only its owning sender (num_sender_cores CT arg = 1)
-            uint32_t owning_sender = idle_sender_map[idle_idx];
+            // Each idle core signals all sender cores
             std::vector<uint32_t> zi_runtime_args = {
                 output_tensor.buffer()->address(),
                 page_start,
                 page_end,
                 zi_done_semaphore_id,
-                sender_noc_coords[owning_sender].first,
-                sender_noc_coords[owning_sender].second,
             };
+            for (const auto& [noc_x, noc_y] : sender_noc_coords) {
+                zi_runtime_args.push_back(noc_x);
+                zi_runtime_args.push_back(noc_y);
+            }
 
             tt::tt_metal::SetRuntimeArgs(program, zero_init_kernel_id, zero_init_cores_vec[idle_idx], zi_runtime_args);
         }

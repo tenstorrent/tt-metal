@@ -92,6 +92,7 @@ void kernel_main() {
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t num_total_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
 #else
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
@@ -131,7 +132,7 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, num_idle_cores);
+        noc_semaphore_wait(zi_done_sem_ptr, num_total_idle_cores);
         noc_semaphore_set(zi_done_sem_ptr, 0);
     }
 #endif
