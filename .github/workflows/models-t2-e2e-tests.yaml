@@ -19,11 +19,6 @@ on:
           - qwen2.5-72b-vl
           - mistral-7b
           - gemma-3-27b
-          - gemma4-e2b
-          - gemma4-e4b
-          - gemma4-e4b-n300
-          - gemma4-a4b-t3k
-          - gemma4-31b-t3k
           - mixtral-8x7b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"

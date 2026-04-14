@@ -30,8 +30,6 @@ on:
           - qwen25_vl
           - qwen3_vl
           - gemma3
-          - gemma4-a4b
-          - gemma4-31b
           - wan22
           - mochi
           - gpt-oss

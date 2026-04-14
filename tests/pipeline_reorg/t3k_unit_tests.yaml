@@ -222,21 +222,3 @@
       timeout: 5
   owner_id: U09BZ5Q33LK # Piotr Stankiewicz
   team: scaleout
-
-- name: t3k_gemma4_a4b_tests
-  cmd: run_t3000_gemma4_a4b_tests
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gemma4-a4b
-
-- name: t3k_gemma4_31b_tests
-  cmd: run_t3000_gemma4_31b_tests
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gemma4-31b

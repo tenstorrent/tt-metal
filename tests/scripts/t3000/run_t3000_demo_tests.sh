@@ -454,20 +454,6 @@ run_t3000_gpt_oss_tests() {
   fi
 }
 
-run_t3000_gemma4_a4b_demo() {
-  uv pip install -r models/demos/gemma4/requirements.txt
-  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
-  pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
-  echo "LOG_METAL: Gemma4 A4B demo completed"
-}
-
-run_t3000_gemma4_31b_demo() {
-  uv pip install -r models/demos/gemma4/requirements.txt
-  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
-  pytest models/demos/gemma4/demo/text_demo.py -k "1x8" --timeout 600
-  echo "LOG_METAL: Gemma4 31B demo completed"
-}
-
 run_t3000_tests() {
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests

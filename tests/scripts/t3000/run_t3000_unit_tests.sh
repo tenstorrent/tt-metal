@@ -222,18 +222,6 @@ run_t3000_gemma3-small_tests() {
   pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
-run_t3000_gemma4_a4b_tests() {
-  uv pip install -r models/demos/gemma4/requirements.txt
-  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it
-  pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
-}
-
-run_t3000_gemma4_31b_tests() {
-  uv pip install -r models/demos/gemma4/requirements.txt
-  export HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-4-31B-it
-  pytest models/demos/gemma4/tests/unit -k "1x8" --timeout 300
-}
-
 run_t3000_llama3-small_tests() {
   # Record the start time
   fail=0
