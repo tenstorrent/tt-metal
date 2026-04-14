@@ -1205,6 +1205,10 @@ def ttnn_graph_report(request):
                 from ttnn.graph_report import import_report
 
                 import_report(report_path, report_path)
+                for p in sorted(report_path.glob("graph_capture_*.json")):
+                    p.unlink(missing_ok=True)
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
