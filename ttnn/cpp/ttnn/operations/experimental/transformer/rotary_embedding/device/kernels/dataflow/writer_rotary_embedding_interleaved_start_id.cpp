@@ -33,7 +33,7 @@ void kernel_main() {
     cb_wait_front(untilized_sin_cb_id, Wt);
     cb_reserve_back(untilized_sin_sync_cb_id, Wt);
     uint64_t sin_l1_read_addr = get_noc_addr(get_read_ptr(untilized_sin_cb_id)) + cos_sin_offset;
-    uint32_t sin_l1_write_addr = get_read_ptr(untilized_sin_cb_id);
+    uint32_t sin_l1_write_addr = get_write_ptr(untilized_sin_cb_id);
     noc_async_read(sin_l1_read_addr, sin_l1_write_addr, Wbytes);
     noc_async_read_barrier();
     cb_push_back(untilized_sin_sync_cb_id, Wt);
@@ -41,7 +41,7 @@ void kernel_main() {
     cb_wait_front(untilized_cos_cb_id, Wt);
     cb_reserve_back(untilized_cos_sync_cb_id, Wt);
     uint64_t cos_l1_read_addr = get_noc_addr(get_read_ptr(untilized_cos_cb_id)) + cos_sin_offset;
-    uint32_t cos_l1_write_addr = get_read_ptr(untilized_cos_cb_id);
+    uint32_t cos_l1_write_addr = get_write_ptr(untilized_cos_cb_id);
     noc_async_read(cos_l1_read_addr, cos_l1_write_addr, Wbytes);
     noc_async_read_barrier();
     cb_push_back(untilized_cos_sync_cb_id, Wt);
