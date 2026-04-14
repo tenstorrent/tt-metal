@@ -120,7 +120,6 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 // WH, blocked pack only pays off once the per-row width is large enough;
 // narrower writes fall back to regular tile-by-tile packing to avoid the
 // packer reconfiguration overhead.
-template <bool blocked_pack = false>
 ALWI void pack_contiguous_rows(
     uint32_t out_cb,
     uint32_t row_base,
@@ -129,7 +128,7 @@ ALWI void pack_contiguous_rows(
     uint32_t col_base,
     uint32_t pack_width) {
     uint32_t dst_index = 0;
-    const bool use_blocked_pack_width = blocked_pack && should_use_blocked_pack_width(pack_width);
+    const bool use_blocked_pack_width = should_use_blocked_pack_width(pack_width);
     for (uint32_t row = 0; row < row_count; ++row) {
         uint32_t out_tile_index = (row_base + row) * row_stride + col_base;
         if (use_blocked_pack_width) {
@@ -147,7 +146,7 @@ ALWI void pack_contiguous_rows(
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
-template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, bool blocked_pack = false>
+template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
 SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -174,8 +173,8 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_contiguous_rows<blocked_pack>(
-        out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
+    configure_row_pack_width(out_cb, subblock_w);
+    pack_contiguous_rows(out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     if (trigger_reduce) {
         PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
     }
@@ -254,7 +253,7 @@ void reduce_c_row_group(
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
-template <bool profiling_enabled, uint32_t scale_fp32, bool blocked_pack = false>
+template <bool profiling_enabled, uint32_t scale_fp32>
 SDPA_NOINLINE void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -309,13 +308,9 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions
-        pack_contiguous_rows<blocked_pack>(
-            inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
-
-        // Reduce to reduce_cb: first tile of first kt_subblock overwrites, rest accumulate
-        if constexpr (blocked_pack) {
-            configure_single_tile_pack(reduce_cb);
-        }
+        configure_row_pack_width(inout_cb, tiles_per_column);
+        pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
+        configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
@@ -340,9 +335,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     // Restore packer ReLU config after all exp operations complete
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-    if (blocked_pack && should_use_blocked_pack_width(tiles_per_column)) {
-        configure_pack_width(reduce_cb, tiles_per_column);
-    }
+    configure_row_pack_width(inout_cb, tiles_per_column);
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
@@ -449,7 +442,7 @@ void salad_correct_fused(
         if (use_blocked_out_pack) {
             configure_pack_width(out_out_cb, cur_cols);
         }
-        pack_contiguous_rows<true>(out_out_cb, write_row_base, tiles_per_row, tiles_per_column, col_base, cur_cols);
+        pack_contiguous_rows(out_out_cb, write_row_base, tiles_per_row, tiles_per_column, col_base, cur_cols);
         dst_index = tiles_per_row * cur_cols;
         if (fuse_sum_here) {
             configure_single_tile_pack(sum_out_cb);
@@ -741,7 +734,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
                 }
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, true /*blocked_pack*/>(
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -765,7 +758,7 @@ static void sdpa_inner_loop_step(
                 }
                 // The last subblock posts the semaphore — one post per reduce.
                 bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
-                blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
+                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
