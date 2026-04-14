@@ -35,11 +35,6 @@ on:
         required: false
         default: false
         type: boolean
-      use_durations:
-        description: "Use previously collected test durations for balanced splitting"
-        required: false
-        default: false
-        type: boolean
       compile_time_args:
         description: "Convert every runtime argument into compile time argument and compile all variants like that"
         required: false
@@ -127,14 +122,6 @@ jobs:
           SPEED_OF_LIGHT_FLAG=""
           if [[ "${{ inputs.compile_time_args }}" == "true" ]]; then
             SPEED_OF_LIGHT_FLAG="--speed-of-light"
-          fi
-
-          DURATIONS_FLAG=""
-          if [[ "${{ inputs.use_durations }}" == "true" ]] && [[ -f ".test_durations" ]]; then
-            DURATIONS_FLAG="--durations-path=.test_durations"
-            echo "Using duration-based test splitting from .test_durations"
-          else
-            echo "Duration file not found or not enabled, using default splitting"
           fi
 
           echo "Compiling artefacts"

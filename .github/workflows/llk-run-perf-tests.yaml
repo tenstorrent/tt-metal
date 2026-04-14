@@ -23,7 +23,7 @@ jobs:
     if: |
       contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+       contains(github.event.pull_request.labels.*.name, 'llk:performance-tests'))
     outputs:
       wormhole: ${{ steps.set.outputs.wormhole }}
       blackhole: ${{ steps.set.outputs.blackhole }}
@@ -114,7 +114,7 @@ jobs:
       always() && (
       contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+       contains(github.event.pull_request.labels.*.name, 'llk:performance-tests'))
       )
     needs:
       - build-images

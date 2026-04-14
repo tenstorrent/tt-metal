@@ -71,7 +71,6 @@ while IFS= read -r FILE; do
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
-            LLK_TESTS_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true

@@ -441,6 +441,9 @@ jobs:
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
     needs: find-changed-files
+    permissions:
+      issues: write
+      pull-requests: write
     if: >-
       ${{
         github.event_name == 'pull_request' &&
@@ -523,7 +526,6 @@ jobs:
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
-      use_durations: false
 
   # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/test/ci changes)
   llk-test-blackhole:
@@ -544,7 +546,6 @@ jobs:
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
-      use_durations: false
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
