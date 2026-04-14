@@ -10,6 +10,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: t3k_ttmetal_tests
+  model-name: t3k_ttmetal_tests
   cmd: run_t3000_ttmetal_tests
   skus:
     wh_llmbox:
@@ -18,6 +19,7 @@
   team: scaleout
 
 - name: t3k_ttnn_tests
+  model-name: t3k_ttnn_tests
   cmd: run_t3000_ttnn_tests
   skus:
     wh_llmbox:

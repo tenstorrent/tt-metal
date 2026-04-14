@@ -18,9 +18,14 @@ namespace ckernel
 namespace sfpu
 {
 
-// computes L1=trunc(L0).
-inline void _trunc_body_()
+// #41922: CONSTRUCTION ZONE
+// Implemented:Standard calling API, old bodies
+// ToDo: use sfpi API
+
+// compute truncate to zero
+sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
 {
+    sfpi::l_reg[sfpi::LRegs::LReg0] = val;
     // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
     // mask = 0x8000_0000
@@ -37,26 +42,36 @@ inline void _trunc_body_()
     TTI_SFPENCC(0, 0, 0, 0);
     // apply mask
     TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+
+    // Make sure compiler avoids these two regs here, ugh.
+    sfpi::vFloat tmp2 __attribute__((unused)) = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vFloat tmp3 __attribute__((unused)) = sfpi::l_reg[sfpi::LRegs::LReg3];
+
+    return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
 
-// computes L1=floor(L0).
-inline void _floor_body_()
+// compute floor
+sfpi_inline sfpi::vFloat _floor_body_(sfpi::vFloat val)
 {
-    _trunc_body_();
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
     // if v>u, set v=v-1.
     TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1); // SFPGT_MOD1_SET_CC
     TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
     TTI_SFPENCC(0, 0, 0, 0);
+
+    return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
 
-// computes L1=ceil(L0).
-inline void _ceil_body_()
+// computes ceil
+sfpi_inline sfpi::vFloat _ceil_body_(sfpi::vFloat val)
 {
-    _trunc_body_();
+    sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(val);
     // if v<u, set v=v+1.
     TTI_SFPGT(0, p_sfpu::LREG1, p_sfpu::LREG0, 1); // SFPGT_MOD1_SET_CC
     TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
     TTI_SFPENCC(0, 0, 0, 0);
+
+    return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
 
 inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
@@ -68,48 +83,48 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 };
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_floor_()
+sfpi_inline void _calculate_floor_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        _floor_body_();
+        sfpi::l_reg[sfpi::LRegs::LReg1] = _floor_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
         TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_ceil_()
+sfpi_inline void _calculate_ceil_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        _ceil_body_();
+        sfpi::l_reg[sfpi::LRegs::LReg1] = _ceil_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
         TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_trunc_()
+sfpi_inline void _calculate_trunc_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        _trunc_body_();
+        sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
         TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_frac_()
+sfpi_inline void _calculate_frac_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-        _trunc_body_();
+        sfpi::l_reg[sfpi::LRegs::LReg1] = _trunc_body_(sfpi::l_reg[sfpi::LRegs::LReg0]);
         // frac(x) = x - trunc(x)
         TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
@@ -117,7 +132,7 @@ inline void _calculate_frac_()
     }
 }
 
-inline sfpi::vFloat _round_even_(sfpi::vFloat v)
+sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 {
     // Create a temporary copy tmp = abs(v).
     sfpi::vFloat tmp = sfpi::setsgn(v, 0);
@@ -169,7 +184,7 @@ void _calculate_round_(const int decimals)
 
 // Performs stochastic rounding of values in DST from fp32 to fp16b format.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void _calculate_stochastic_round_()
+sfpi_inline void _calculate_stochastic_round_()
 {
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)
