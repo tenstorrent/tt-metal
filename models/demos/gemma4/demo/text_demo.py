@@ -123,12 +123,14 @@ def run_generation(
             input_ids = tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
 
         prompt_len = input_ids.shape[0]
-        # Pad to tile alignment for prefill
-        padded_len = ((prompt_len + 31) // 32) * 32
-        if padded_len > prompt_len:
-            input_ids_padded = torch.nn.functional.pad(input_ids, (0, padded_len - prompt_len), value=0)
+        # Pad to standard prefill lengths (matches tt_transformers/gpt_oss pattern)
+        if prompt_len <= 128:
+            padded_len = 128
+        elif prompt_len <= 1024:
+            padded_len = 1024
         else:
-            input_ids_padded = input_ids
+            padded_len = 2 ** (prompt_len - 1).bit_length()
+        input_ids_padded = torch.nn.functional.pad(input_ids, (0, padded_len - prompt_len), value=0)
         logger.info(f"Prompt tokens: {prompt_len} (padded to {padded_len})")
 
         # Prefill
@@ -530,13 +532,13 @@ def test_demo(mesh_device, model_path):
         pytest -k "1x2"   # N300 / TP=2
         pytest -k "1x8"   # T3K  / TP=8
     """
-    prompts = ["Explain quantum computing in simple terms"]
+    prompts = ["Explain quantum computing in simple terms. You have around 1000 words to explain it."]
     results = run_generation(
         mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
-        max_new_tokens=64,
-        max_seq_len=512,
+        max_new_tokens=2048,
+        max_seq_len=4 * 1024,
         enable_decode_trace=True,
     )
     assert len(results) == 1
