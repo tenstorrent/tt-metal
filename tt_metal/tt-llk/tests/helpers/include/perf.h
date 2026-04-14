@@ -90,6 +90,10 @@ public:
 // Legacy macro kept for compatibility but unused in perf tests
 #define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped _perf_ctr_legacy_(llk_perf::detail::zone_name_hash(zone_name));
 
+// Counter RAII calls cause GCC to de-inline LLK functions. flatten forces them
+// Marking validate as pure lets GCC CSE (Common Subexpression Eliminate) the
+// duplicate calls — same arguments → same result → call once, reuse result.
+
 #endif // PERF_COUNTERS_COMPILED
 
 // FIXME: this shouldn't be statically allocated

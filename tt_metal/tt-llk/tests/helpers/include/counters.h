@@ -759,16 +759,17 @@ public:
             }
         }
 
-        // L1-flag barrier: each thread signals arrival, then spins until all arrive.
-        // Uses per-zone stop_counter memory (separate from stop_flags used by stop())
-        // to avoid ATINCGET which requires compile-time constant zone addresses.
+        // L1-flag barrier: all threads must arrive before entering profiler zone.
+        // Without this barrier, L1_TO_L1 run type produces corrupted profiler data
+        // because threads enter zones asynchronously and race on shared resources.
         volatile std::uint32_t* start_flags       = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
         start_flags[thread_info::get_thread_id()] = 1;
-        ckernel::invalidate_data_cache();
+        asm volatile("fence" ::: "memory");
         for (std::uint32_t t = 0; t < PERF_COUNTER_THREADS; ++t)
         {
             while (!start_flags[t])
             {
+                asm volatile("fence" ::: "memory");
             }
         }
     }
@@ -788,7 +789,7 @@ public:
 
         // Signal arrival.
         stop_flags[thread_id] = 1;
-        ckernel::invalidate_data_cache();
+        asm volatile("fence" ::: "memory");
 
         // Check if we're the last thread (other flags already set).
         bool is_last = true;
@@ -809,7 +810,7 @@ public:
             volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
             while (read_l1_word(sync_ctrl) == 0)
             {
-                // Spin — last thread will write SYNC_ZONE_COMPLETE when done.
+                asm volatile("fence" ::: "memory");
             }
             return;
         }
