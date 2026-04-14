@@ -239,6 +239,14 @@ Tensor xielu(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// Softcap: cap * tanh(x / cap)
+Tensor softcap(
+    const Tensor& input_tensor,
+    float cap = 50.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
 // clamp_tss
 Tensor clamp_tss(
     const Tensor& input_tensor,
