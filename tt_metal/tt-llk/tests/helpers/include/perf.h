@@ -16,85 +16,16 @@
 // We only need forward declarations + RAII class here to avoid pulling
 // ATINCGET assembly into the test source compilation context.
 
-#ifndef PERF_COUNTERS_COMPILED
-
-// No counters: MEASURE_PERF_COUNTERS is no-op, PERF_ZONE_SCOPED = ZONE_SCOPED
+// Counter hooks are now integrated into profiler.h's zone_scoped class.
+// When PERF_COUNTERS_COMPILED is defined, zone_scoped calls
+// _profiler_counter_start/_stop automatically — no extra RAII objects
+// in run_kernel, so compiler inlining decisions are identical to NC builds.
+//
+// PERF_ZONE_SCOPED is now just an alias for ZONE_SCOPED (kept for compatibility).
+#define PERF_ZONE_SCOPED(marker) ZONE_SCOPED(marker)
 #ifndef MEASURE_PERF_COUNTERS
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
-#define PERF_ZONE_SCOPED(marker) ZONE_SCOPED(marker)
-
-#else
-
-// Guards to prevent redefinition when counters.h is included later (via trisc.cpp)
-#define _LLK_PERF_COUNTER_SCOPED_DEFINED_
-#define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
-
-namespace llk_perf
-{
-namespace detail
-{
-constexpr std::uint32_t zone_name_hash(const char* s)
-{
-    std::uint32_t h = 5381;
-    while (*s)
-    {
-        h = h * 33 + static_cast<std::uint32_t>(*s++);
-    }
-    return h % 32;
-}
-} // namespace detail
-
-// Defined in counters.h (compiled via trisc.cpp in the same translation unit).
-void start_perf_counters(std::uint32_t zone);
-void stop_perf_counters(std::uint32_t zone);
-std::uint32_t get_zone_id(std::uint32_t hash_val);
-
-// Combined profiler + counter RAII.
-// ONE object per zone = same register pressure as NC build.
-// Counter start before ZONE_START, counter stop after ZONE_END.
-class perf_counter_scoped
-{
-    std::uint32_t m_zone;
-
-public:
-    perf_counter_scoped(const perf_counter_scoped&)            = delete;
-    perf_counter_scoped(perf_counter_scoped&&)                 = delete;
-    perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
-    perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
-
-    // noinline + cold + zzz section: compiler treats these as unlikely calls
-    // that don't affect inlining decisions for LLK functions in run_kernel.
-    // Without cold, the 4 counter calls cause de-inlining of ~166-insn LLK inits.
-    __attribute__((noinline, cold)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
-    {
-        start_perf_counters(m_zone);
-    }
-
-    __attribute__((noinline, cold)) ~perf_counter_scoped()
-    {
-        stop_perf_counters(m_zone);
-    }
-};
-} // namespace llk_perf
-
-// PERF_ZONE_SCOPED: replaces both MEASURE_PERF_COUNTERS + ZONE_SCOPED.
-// Counter start (noinline) → profiler ZONE_START → ... → profiler ZONE_END → counter stop (noinline)
-// C++ destruction: _zone_scoped_ (ZONE_END) then _perf_ctr_ (counter stop) — correct order.
-// Two local variables but counter ctor/dtor are noinline calls, so compiler sees
-// the same effective code complexity as NC's single zone_scoped variable.
-#define PERF_ZONE_SCOPED(marker)                                                              \
-    const llk_perf::perf_counter_scoped _perf_ctr_(llk_perf::detail::zone_name_hash(marker)); \
-    ZONE_SCOPED(marker)
-
-// Legacy macro kept for compatibility but unused in perf tests
-#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped _perf_ctr_legacy_(llk_perf::detail::zone_name_hash(zone_name));
-
-// Counter RAII calls cause GCC to de-inline LLK functions. flatten forces them
-// Marking validate as pure lets GCC CSE (Common Subexpression Eliminate) the
-// duplicate calls — same arguments → same result → call once, reuse result.
-
-#endif // PERF_COUNTERS_COMPILED
 
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
