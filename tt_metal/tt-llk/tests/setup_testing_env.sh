@@ -15,26 +15,6 @@ cleanup() {
 # --- Globals ---
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 
-# Function to get chip architecture using tt-smi
-get_chip_architecture() {
-    local smi_output
-    if ! smi_output=$(tt-smi -ls 2>/dev/null); then
-        echo "ERROR: tt-smi command failed or not found. Please ensure tt-smi is installed and in your PATH." >&2
-        exit 1
-    fi
-
-    if echo "$smi_output" | grep -q "Blackhole"; then
-        echo "blackhole"
-    elif echo "$smi_output" | grep -q "Wormhole"; then
-        echo "wormhole"
-    else
-        echo "ERROR: Unable to determine chip architecture from tt-smi output." >&2
-        echo "tt-smi output:" >&2
-        echo "$smi_output" >&2
-        exit 1
-    fi
-}
-
 # Function to setup pre-commit hooks
 setup_precommit() {
     echo "Setting up pre-commit hooks..."
@@ -76,15 +56,6 @@ main() {
     if [[ ! -r "$version_file" ]]; then
         echo "ERROR: sfpi-info.sh not found or not readable at '$version_file'" >&2
         exit 1
-    fi
-
-    # Get chip architecture
-    local chip_arch
-    if [[ -n "${CHIP_ARCH:-}" ]]; then
-        chip_arch="$CHIP_ARCH"
-        echo "Using CHIP_ARCH environment variable: $chip_arch"
-    else
-        chip_arch=$(get_chip_architecture)
     fi
 
     # Setup pre-commit hooks
