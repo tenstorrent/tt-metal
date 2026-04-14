@@ -16,12 +16,13 @@ Essential context for developing and extending the SDPA kernel.
 | + no Q DRAM             | 59.3%     | +0.2%     |
 
 
-| config                 | Math Util (%) |
-| ---------------------- | ------------- |
-| baseline (KV chaining) | 46.9          |
-| + K fwd chain          | 54.9          |
-| w/ mcast               | 52.1          |
-| w/ mcast, no write     | 53.3          |
+| config                      | Math Util (%) |
+| --------------------------- | ------------- |
+| baseline (KV chaining)      | 46.9          |
+| + K fwd chain               | 54.9          |
+| w/ mcast                    | 52.1          |
+| w/ mcast, no write          | 53.3          |
+| w/ mcast + light Q KV skip  | 51.2          |
 
 Observation: multicast should be faster than unicast. Investigate why.
 
@@ -380,7 +381,16 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 - Enabled when `NHK < NH` (MLA) and `B == 1` (single batch)
 - Fallback to unicast with logged reason when conditions not met
 
-**Phase 3: Multi-batch K mcast** (future)
+**Phase 3: Light Q causal KV skip** ✅ COMPLETE
+- During ring_iter 0 (causal, balanced zigzag), light Q chunks only need the first half of KV chunks
+- All cores agree on light/heavy per q_iter (structural guarantee of pair-based zigzag)
+- Reader and compute both reduce k_chunk loop bound for light q_iters: reader halves `iter_num_kv_chunks`, compute uses `light_kv_bound`
+- Gated on `ring_iter == 0` (reader) / `is_causal` runtime flag (compute)
+- Eliminates 30 of 120 KV iterations per core during ring_iter 0 (all pure discard)
+- Math util: 51.2% (+4.3% over baseline, but below K unicast chain at 54.9% — mcast overhead still dominates)
+- **Prior hang:** Original implementation gated on `!do_joint_kv` in the reader, which evaluated `false` on the last ring device (`ring_id == ring_size - 1`) even with `L=0`. Compute's gate (`iter_k_chunk_end <= num_local_k_chunks`) correctly evaluated `true`. Reader pushed 20 K/V, compute popped 10 → CB desync → K mcast hang. Fixed by using `ring_iter == 0` guard and `iter_num_kv_chunks /= 2` instead.
+
+**Phase 4: Multi-batch K mcast** (future)
 - Current limitation: K mcast only works for single batch (`B == 1`)
 - Options: multiple injectors (one per batch), sequential mcast per batch, or hybrid approach
 
@@ -638,3 +648,118 @@ The K mcast and V chain require all cores to iterate the same number of KV chunk
 | Injector | Chain head, reads from DRAM |
 | Sink | Chain tail, receives but doesn't forward |
 | `q_iter` | Iteration counter tracking work completed (used for chain forwarding) |
+
+---
+
+## Appendix A: Ring Iter 0 Execution Trace (mla_100k, Galaxy)
+
+### Grid and work distribution
+
+Galaxy config: grid = (12, 10), sdpa_cols = 11, `num_cores = 110`.
+
+- Total Q chunks = 1 × 32 × 20 = 640, total pairs = 320
+- 320 / 110 = 2 remainder 100
+- First 100 cores: 3 pairs = 6 chunks; last 10 cores: 2 pairs = 4 chunks
+- 3 heads × 10 pairs = 30 pairs → exactly 10 cores at 3 pairs each
+
+### Per-core Q chunk assignments (first 10 cores, heads 0-2)
+
+Zigzag remap is per-head. Even q_iters → light, odd q_iters → heavy (consequence of pair-based distribution).
+
+```
+            q_iter 0 (L)  q_iter 1 (H)  q_iter 2 (L)  q_iter 3 (H)  q_iter 4 (L)  q_iter 5 (H)
+Core 0  H0: q= 0  qh= 1   q=19  qh=20   q= 1  qh= 2   q=18  qh=19   q= 2  qh= 3   q=17  qh=18
+Core 1  H0: q= 3  qh= 4   q=16  qh=17   q= 4  qh= 5   q=15  qh=16   q= 5  qh= 6   q=14  qh=15
+Core 2  H0: q= 6  qh= 7   q=13  qh=14   q= 7  qh= 8   q=12  qh=13   q= 8  qh= 9   q=11  qh=12
+Core 3  H0→H1:  q= 9  qh=10   q=10  qh=11   q= 0  qh= 1   q=19  qh=20   q= 1  qh= 2   q=18  qh=19
+Core 4  H1: q= 2  qh= 3   q=17  qh=18   q= 3  qh= 4   q=16  qh=17   q= 4  qh= 5   q=15  qh=16
+Core 5  H1: q= 5  qh= 6   q=14  qh=15   q= 6  qh= 7   q=13  qh=14   q= 7  qh= 8   q=12  qh=13
+Core 6  H1→H2:  q= 8  qh= 9   q=11  qh=12   q= 9  qh=10   q=10  qh=11   q= 0  qh= 1   q=19  qh=20
+Core 7  H2: q= 1  qh= 2   q=18  qh=19   q= 2  qh= 3   q=17  qh=18   q= 3  qh= 4   q=16  qh=17
+Core 8  H2: q= 4  qh= 5   q=15  qh=16   q= 5  qh= 6   q=14  qh=15   q= 6  qh= 7   q=13  qh=14
+Core 9  H2: q= 7  qh= 8   q=12  qh=13   q= 8  qh= 9   q=11  qh=12   q= 9  qh=10   q=10  qh=11
+```
+
+### Algorithm: one q_iter (all cores in lockstep via K mcast)
+
+```
+for k = 0..19:
+    ┌─ INJECTOR: read K[k] from DRAM
+    │  ALL RECEIVERS: signal injector "ready"
+    │  INJECTOR: wait for 9 signals, then multicast K[k] to all 10 cores
+    └─ ← BARRIER: no core proceeds until K[k] is delivered to all ←
+
+    // Each core independently:
+    if k == 0: read Q from DRAM
+
+    if k < q_high:           // within causal triangle
+        V: read/receive via per-head V chain
+        V: forward via chain
+        COMPUTE: QK = Q @ K^T, mask, softmax, out += scores @ V
+    else:                     // CAUSAL DISCARD
+        V: read/receive via V chain    ← still happens
+        V: forward via chain           ← still happens
+        COMPUTE: wait(K); pop(K); wait(V); pop(V)   ← no math
+```
+
+### q_iter 0 (all light): compute vs discard grid
+
+`C` = compute, `D` = discard. Each row = one K mcast step.
+
+```
+          C0    C1    C2    C3    C4    C5    C6    C7    C8    C9
+         qh=1  qh=4  qh=7 qh=10  qh=3  qh=6  qh=9  qh=2  qh=5  qh=8
+K[ 0]:    C     C     C     C     C     C     C     C     C     C
+K[ 1]:    D     C     C     C     C     C     C     C     C     C
+K[ 2]:    D     C     C     C     C     C     C     D     C     C
+K[ 3]:    D     C     C     C     D     C     C     D     C     C
+K[ 4]:    D     D     C     C     D     C     C     D     C     C
+K[ 5]:    D     D     C     C     D     C     C     D     D     C
+K[ 6]:    D     D     C     C     D     D     C     D     D     C
+K[ 7]:    D     D     D     C     D     D     C     D     D     C
+K[ 8]:    D     D     D     C     D     D     C     D     D     D
+K[ 9]:    D     D     D     C     D     D     D     D     D     D     ← only C3 computes
+K[10]:    D     D     D     D     D     D     D     D     D     D
+  ⋮       D     D     D     D     D     D     D     D     D     D
+K[19]:    D     D     D     D     D     D     D     D     D     D
+
+Compute:  1     4     7    10     3     6     9     2     5     8  = 55 / 200 = 27.5%
+```
+
+K[10]-K[19]: pure waste — read, multicast, chain-forwarded, discarded by ALL cores.
+
+### q_iter 1 (all heavy): compute vs discard grid
+
+```
+          C0    C1    C2    C3    C4    C5    C6    C7    C8    C9
+        qh=20 qh=17 qh=14 qh=11 qh=18 qh=15 qh=12 qh=19 qh=16 qh=13
+K[ 0]:    C     C     C     C     C     C     C     C     C     C
+  ⋮       C     C     C     C     C     C     C     C     C     C
+K[10]:    C     C     C     C     C     C     C     C     C     C
+K[11]:    C     C     C     D     C     C     C     C     C     C
+K[12]:    C     C     C     D     C     C     D     C     C     C
+K[13]:    C     C     C     D     C     C     D     C     C     D
+K[14]:    C     C     D     D     C     C     D     C     C     D
+K[15]:    C     C     D     D     C     D     D     C     C     D
+K[16]:    C     C     D     D     C     D     D     C     D     D
+K[17]:    C     D     D     D     C     D     D     C     D     D
+K[18]:    C     D     D     D     D     D     D     C     D     D
+K[19]:    C     D     D     D     D     D     D     D     D     D
+
+Compute: 20    17    14    11    18    15    12    19    16    13  = 155 / 200 = 77.5%
+```
+
+### Per-core totals (all 6 q_iters)
+
+Each zigzag pair (light `l`, heavy `h`) has `l + h = 19`, so computes = `(l+1) + (h+1) = 21` per pair. All cores have 3 pairs → **63 computes, 57 discards, identical across all cores**.
+
+```
+                    Light q_iters    Heavy q_iters    Total
+                    (0, 2, 4)        (1, 3, 5)
+Compute / core:     ~18              ~45              63
+Discard / core:     ~42              ~15              57
+Total / core:       60               60               120
+Compute fraction:   ~30%             ~75%             52.5%
+```
+
+52.5% matches the causal triangle ratio: `sum(1..20) / 20² = 210/400`. The waste is inherent to causality — the problem is that discards still cost full DRAM + mcast + chain bandwidth instead of being free skips.

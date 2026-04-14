@@ -243,7 +243,7 @@ void kernel_main() {
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
-    uint32_t half_sequence = num_q_chunks / 2;
+    constexpr uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
@@ -343,7 +343,17 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
-            for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
+            // For light Q in ring_iter 0 (causal balanced zigzag): only iterate K chunks
+            // up to the causal boundary. All cores agree on light/heavy per q_iter
+            // (structural guarantee of pair-based zigzag), so K mcast stays synchronized.
+            uint32_t q_iter_kv_chunks = iter_num_kv_chunks;
+            if constexpr (is_causal && use_zigzag_balancing) {
+                if (ring_iter == 0 && q_chunk < half_sequence) {
+                    q_iter_kv_chunks /= 2;
+                }
+            }
+
+            for (uint32_t k_chunk = 0; k_chunk < q_iter_kv_chunks; ++k_chunk) {
                 /**
                  * Iterate over all KV chunks for this Q chunk.
                  * If this is the last ring ID, we will also read from joint KV.
