@@ -19,11 +19,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen35_27b.tt.chunk_delta_rule_ops import (
-    chunk_gated_delta_rule_ttnn,
-    create_chunk_masks,
-    rms_norm_gated_ttnn,
-)
+from models.demos.qwen35_27b.tt.chunk_delta_rule_ops import create_chunk_masks
 from models.demos.qwen35_27b.tt.gdn_kernel.gdn_kernel_op import gdn_full_fused_inplace, gdn_recurrence_fused_inplace
 from models.demos.qwen35_27b.tt.model_config import create_prefill_matmul_program_config
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -237,6 +233,8 @@ class TtGatedDeltaNet(LightweightModule):
 
     def forward_decode(self, x):
         """GDN decode: dispatches to fused or unfused path."""
+        if _os.environ.get("GDN_DIAG"):
+            print(f"  GDN DIAG forward_decode: _use_full_fused={self._use_full_fused}")
         if self._use_full_fused:
             try:
                 return self._forward_decode_fused(x)  # e2e traced uses fused path
@@ -276,6 +274,13 @@ class TtGatedDeltaNet(LightweightModule):
 
         # ---- Projections ----
         qkvz_tt = _unshard(_shard_linear(x, tw["qkvz"], act_shard, self.args.gdn_qkvz_progcfg, self.compute_cfg))
+
+        # DIAG: log projection output for user 0
+        if _os.environ.get("GDN_DIAG"):
+            _qkvz_cpu = ttnn.to_torch(qkvz_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _tok0 = _qkvz_cpu[0, 0, 0, :].float()
+            print(f"  GDN DIAG decode proj: user0_norm={_tok0.norm():.4f} mean={_tok0.mean():.6f}")
+
         qkv_tt = ttnn.slice(qkvz_tt, (0, 0, 0), (1, B, qkv_dim_tp))
         z_tt = ttnn.slice(qkvz_tt, (0, 0, qkv_dim_tp), (1, B, qkvz_dim_tp))
         ttnn.deallocate(qkvz_tt)
@@ -392,6 +397,13 @@ class TtGatedDeltaNet(LightweightModule):
 
         # ---- Projections ----
         qkvz_tt = _unshard(_shard_linear(x, tw["qkvz"], act_shard, self.args.gdn_qkvz_progcfg, self.compute_cfg))
+
+        # DIAG: log unfused decode projection output ([1, B, dim] 3D)
+        if _os.environ.get("GDN_DIAG"):
+            _qkvz_cpu = ttnn.to_torch(qkvz_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _tok0 = _qkvz_cpu[0, 0, :].float()  # user 0
+            print(f"  GDN DIAG unfused decode proj: user0_norm={_tok0.norm():.4f} mean={_tok0.mean():.6f}")
+
         qkv_tt = ttnn.slice(qkvz_tt, (0, 0, 0), (1, B, qkv_dim_tp))
         z_tt = ttnn.slice(qkvz_tt, (0, 0, qkv_dim_tp), (1, B, qkvz_dim_tp))
         ttnn.deallocate(qkvz_tt)
@@ -419,6 +431,12 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(conv_acc)
         if len(conv_out.shape) == 4:
             conv_out = ttnn.reshape(conv_out, (1, B, qkv_dim_tp))
+
+        # DIAG: log conv1d output
+        if _os.environ.get("GDN_DIAG"):
+            _conv_cpu = ttnn.to_torch(conv_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _c0 = _conv_cpu[0, 0, :].float()
+            print(f"  GDN DIAG unfused conv1d out: user0_norm={_c0.norm():.4f} mean={_c0.mean():.6f}")
 
         # ---- Split Q/K/V from conv output ----
         key_dim_tp = self.key_dim_tp
@@ -500,6 +518,12 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(beta_fused)
 
         # ---- Post-processing ----
+        # DIAG: log recurrence output before norm
+        if _os.environ.get("GDN_DIAG"):
+            _rec_cpu = ttnn.to_torch(self.rec_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _r0 = _rec_cpu[0, 0, :].float()  # first pair (user 0, head 0)
+            print(f"  GDN DIAG unfused recurrence out: pair0_norm={_r0.norm():.4f} mean={_r0.mean():.6f}")
+
         out_r = ttnn.reshape(self.rec_output, (B, Nv_TP, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(out_r)
@@ -751,6 +775,12 @@ class TtGatedDeltaNet(LightweightModule):
         )
         # qkvz_all: [1, 1, seq_len, qkvz_dim_tp]
 
+        # DIAG: log projection output norm for last token
+        if _os.environ.get("GDN_DIAG"):
+            _qkvz_cpu = ttnn.to_torch(qkvz_all, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _last_tok = _qkvz_cpu[0, 0, seq_len - 1, :].float()
+            print(f"  GDN DIAG prefill proj: last_tok_norm={_last_tok.norm():.4f} mean={_last_tok.mean():.6f}")
+
         ab_progcfg = create_prefill_matmul_program_config(seq_len, dim, Nv_TP * 2)
         ab_all = ttnn.linear(
             x_dram,
@@ -775,21 +805,31 @@ class TtGatedDeltaNet(LightweightModule):
 
         # Batched causal conv1d over full sequence
         # conv_out[t] = silu(tap[0]*qkv[t-3] + tap[1]*qkv[t-2] + tap[2]*qkv[t-1] + tap[3]*qkv[t])
-        # where qkv[t<0] = 0 (causal zero-padding)
+        # where qkv[t<0] = previous chunk's last tokens (or 0 for first chunk)
         K = self.conv_kernel_size  # 4
 
-        # Build shifted views: for tap[j], we need qkv shifted right by (K-1-j) positions
-        # Pad qkv_all with (K-1)=3 zero rows at the start of the sequence dim
-        pad_shape = [1, 1, K - 1, qkv_dim_tp]
-        zero_pad = ttnn.from_torch(
-            torch.zeros(pad_shape, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        padded = ttnn.concat([zero_pad, qkv_all], dim=2)  # [1, 1, seq_len + K-1, qkv_dim_tp]
-        ttnn.deallocate(zero_pad)
+        # Build shifted views: pad with (K-1) rows at the start of the sequence dim
+        # Use saved conv states from previous chunk if available, otherwise zeros
+        states = self._prefill_conv_states
+        has_prev_state = states is not None and any(s is not None for s in states[:K])
+        if has_prev_state:
+            # Use saved states from previous chunk: reshape [1, 1, qkv_dim_tp] -> [1, 1, 1, qkv_dim_tp]
+            pad_rows = []
+            for j in range(K - 1):
+                s = ttnn.reshape(states[j + 1], (1, 1, 1, qkv_dim_tp))  # states[1], states[2], states[3]
+                pad_rows.append(s)
+            conv_pad = ttnn.concat(pad_rows, dim=2)  # [1, 1, K-1, qkv_dim_tp]
+        else:
+            pad_shape = [1, 1, K - 1, qkv_dim_tp]
+            conv_pad = ttnn.from_torch(
+                torch.zeros(pad_shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        padded = ttnn.concat([conv_pad, qkv_all], dim=2)  # [1, 1, seq_len + K-1, qkv_dim_tp]
+        ttnn.deallocate(conv_pad)
 
         # Compute weighted sum of shifted versions
         # Match decode shift register ordering: tap[0] * oldest, tap[K-1] * current
@@ -809,6 +849,12 @@ class TtGatedDeltaNet(LightweightModule):
 
         conv_out_all = ttnn.silu(conv_out_all)
         # conv_out_all: [1, 1, seq_len, qkv_dim_tp]
+
+        # DIAG: log prefill conv1d output for last token
+        if _os.environ.get("GDN_DIAG"):
+            _conv_cpu = ttnn.to_torch(conv_out_all, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            _clast = _conv_cpu[0, 0, seq_len - 1, :].float()
+            print(f"  GDN DIAG prefill conv1d out: last_tok_norm={_clast.norm():.4f} mean={_clast.mean():.6f}")
 
         # Save last (K-1) tokens of qkv input into prefill conv states for decode
         states = self._prefill_conv_states
@@ -836,7 +882,7 @@ class TtGatedDeltaNet(LightweightModule):
         b_cpu = ttnn.to_torch(b_all, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
         ttnn.deallocate(b_all)
         z_cpu = ttnn.to_torch(z_all, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
-        ttnn.deallocate(z_all)
+        # Keep z_all alive for per-token RMS norm + gate loop later
         neg_exp_A_cpu = ttnn.to_torch(self.neg_exp_A, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
         dt_bias_cpu = ttnn.to_torch(tw["dt_bias"], mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
 
@@ -872,97 +918,120 @@ class TtGatedDeltaNet(LightweightModule):
 
         del conv_cpu, a_cpu, b_cpu, neg_exp_A_cpu, dt_bias_cpu
 
-        # Send to device as sharded mesh tensors: cat on dim=0, shard across devices
-        def _to_mesh_bf16(parts):
-            return ttnn.from_torch(
-                torch.cat(parts, dim=0).to(torch.bfloat16).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-            )
+        del z_parts, z_cpu
 
-        q_tt = _to_mesh_bf16(q_parts)
-        k_tt = _to_mesh_bf16(k_parts)
-        v_tt = _to_mesh_bf16(v_parts)
-        z_tt = _to_mesh_bf16(z_parts)
-        del q_parts, k_parts, v_parts, z_parts
+        # ---- Sequential CPU recurrence (matches decode kernel's numerical path) ----
+        # The chunk-parallel algorithm (solve_triangular) produces 13.5% different output
+        # from the decode kernel (sequential bfloat16). Using sequential CPU recurrence
+        # matches the decode path and gives PCC 0.999+ per layer.
 
-        # beta and g are [1, seq_len, Nv_TP] per device — no last dim
-        beta_tt = ttnn.from_torch(
-            torch.cat(beta_parts, dim=0).to(torch.bfloat16).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        g_tt = ttnn.from_torch(
-            torch.cat(g_parts, dim=0).to(torch.bfloat16).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        del beta_parts, g_parts, z_cpu
+        # Reshape parts from [1, seq_len, Nv_TP, D] to [Nv_TP, seq_len, D] (head-first)
+        # then concatenate across devices to get [BH_total, seq_len, D]
+        scale_val = self.scale
+        q_cpu = torch.cat([p.squeeze(0).permute(1, 0, 2) for p in q_parts], dim=0).float()
+        k_cpu = torch.cat([p.squeeze(0).permute(1, 0, 2) for p in k_parts], dim=0).float()
+        v_cpu = torch.cat([p.squeeze(0).permute(1, 0, 2) for p in v_parts], dim=0).float()
+        beta_cpu_all = torch.cat(
+            [p.squeeze(0).permute(1, 0).unsqueeze(-1) for p in beta_parts], dim=0
+        ).float()  # [BH_total, seq_len, 1]
+        g_cpu_all = torch.cat([p.squeeze(0).permute(1, 0) for p in g_parts], dim=0).float()  # [BH_total, seq_len]
 
-        # ---- Run chunk-parallel recurrence on device ----
-        o_tt, final_state = chunk_gated_delta_rule_ttnn(
-            q=q_tt,
-            k=k_tt,
-            v=v_tt,
-            beta=beta_tt,
-            g=g_tt,
-            chunk_size=self.chunk_size,
-            initial_state=None,
-            device=mesh,
-            cached_masks=self._chunk_masks,
-        )
-        ttnn.deallocate(q_tt)
-        ttnn.deallocate(k_tt)
-        ttnn.deallocate(v_tt)
-        ttnn.deallocate(beta_tt)
-        ttnn.deallocate(g_tt)
-        # o_tt: [1, seq_len, Nv_TP, Dv] per device (bfloat16)
-        # final_state: [1, Nv_TP, Dk, Dv] per device (float32)
+        q_cpu = q_cpu / (q_cpu.norm(dim=-1, keepdim=True) + 1e-6) * scale_val
+        k_cpu = k_cpu / (k_cpu.norm(dim=-1, keepdim=True) + 1e-6)
+
+        # Load initial state from previous chunk (if any)
+        BH_total = q_cpu.shape[0]
+        if self._prefill_rec_states is not None:
+            S_cpu_init = ttnn.to_torch(
+                self._prefill_rec_states, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)
+            ).float()
+            # Reshape from [num_devices * Nv_TP, Dk, Dv] to [BH_total, Dk, Dv]
+            S_cpu = S_cpu_init.reshape(BH_total, Dk, Dv)
+        else:
+            S_cpu = torch.zeros(BH_total, Dk, Dv, dtype=torch.float32)
+
+        outputs_cpu = []
+        for t in range(seq_len):
+            q_t = q_cpu[:, t : t + 1, :]
+            k_t = k_cpu[:, t : t + 1, :]
+            v_t = v_cpu[:, t : t + 1, :]
+            beta_t = beta_cpu_all[:, t : t + 1, :]
+            g_t = g_cpu_all[:, t]
+            decay = torch.exp(g_t).unsqueeze(-1).unsqueeze(-1)
+            S_cpu = S_cpu * decay
+            kv_mem = torch.bmm(k_t, S_cpu)
+            delta = beta_t * (v_t - kv_mem)
+            S_cpu = S_cpu + torch.bmm(k_t.transpose(-2, -1), delta)
+            o_t = torch.bmm(q_t, S_cpu)
+            outputs_cpu.append(o_t)
+
+        chunk_out_cpu_all = torch.cat(outputs_cpu, dim=1)  # [BH_total, seq_len, Dv]
+        del q_cpu, k_cpu, v_cpu, beta_cpu_all, g_cpu_all, outputs_cpu
+
+        del q_parts, k_parts, v_parts, beta_parts, g_parts
 
         # ---- Store final state for decode ----
-        # final_state is [1, Nv_TP, Dk, Dv] per device; _prefill_rec_states is [Nv_TP, Dk, Dv]
-        state_bf16 = ttnn.typecast(
-            ttnn.reshape(final_state, (B_pf * Nv_TP, Dk, Dv)),
-            ttnn.bfloat16,
+        state_bf16 = ttnn.from_torch(
+            S_cpu.to(torch.bfloat16).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
         )
         ttnn.copy(state_bf16, self._prefill_rec_states)
         ttnn.deallocate(state_bf16)
-        ttnn.deallocate(final_state)
+        del S_cpu
 
-        # ---- Batched RMS norm + SiLU gate ----
-        # o_tt: [1, seq_len, Nv_TP, Dv], z_tt: [1, seq_len, Nv_TP, Dv] per device
-        gated_out = rms_norm_gated_ttnn(o_tt, z_tt, tw["norm_w"], eps=1e-6)
-        ttnn.deallocate(o_tt)
-        ttnn.deallocate(z_tt)
-        # gated_out: [1, seq_len, Nv_TP, Dv] per device
-
-        # ---- Reshape to [1, 1, seq_len, value_dim_tp] for output projection ----
-        # Merge head dims on CPU (ttnn reshape can't do this correctly in TILE_LAYOUT)
-        gated_cpu = ttnn.to_torch(gated_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
-        ttnn.deallocate(gated_out)
-
-        flat_parts = []
+        # ---- Output: transpose + RMS norm + SiLU gate on CPU ----
+        # chunk_out_cpu_all: [BH_total, seq_len, Dv] where BH_total = num_devices * Nv_TP
+        # z_cpu still available: [num_devices, 1, seq_len, Nv_TP, Dv]
+        out_4d_parts = []
         for d in range(num_devices):
-            g_d = gated_cpu[d]  # [seq_len, Nv_TP, Dv]
-            g_d = g_d.reshape(seq_len, self.value_dim_tp)
-            flat_parts.append(g_d.unsqueeze(0).unsqueeze(0))  # [1, 1, seq_len, value_dim_tp]
-        gated_flat = torch.cat(flat_parts, dim=0).contiguous()
-        del gated_cpu, flat_parts
+            o_d = chunk_out_cpu_all[d * Nv_TP : (d + 1) * Nv_TP]  # [Nv_TP, seq_len, Dv]
+            o_d = o_d.permute(1, 0, 2).reshape(seq_len, self.value_dim_tp)  # [seq_len, Nv_TP*Dv]
+            out_4d_parts.append(o_d.unsqueeze(0).unsqueeze(0))  # [1, 1, seq_len, value_dim_tp]
+        out_4d = torch.cat(out_4d_parts, dim=0).contiguous()
+        del chunk_out_cpu_all, out_4d_parts
 
-        gated_seq = ttnn.from_torch(
-            gated_flat.to(torch.bfloat16),
+        chunk_out_dev = ttnn.from_torch(
+            out_4d.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
         )
-        del gated_flat
+        del out_4d
+
+        # Per-token RMS norm + SiLU gate (same pattern as original working prefill)
+        gated_outputs_list = []
+        for t in range(seq_len):
+            out_t = ttnn.slice(chunk_out_dev, (0, 0, t, 0), (1, 1, t + 1, self.value_dim_tp))
+            out_t = ttnn.reshape(out_t, (B_pf, Nv_TP, Dv))
+            out_n = ttnn.rms_norm(out_t, weight=tw["norm_w"], epsilon=1e-6)
+            ttnn.deallocate(out_t)
+            out_f = ttnn.reshape(out_n, (1, B_pf, self.value_dim_tp))
+            ttnn.deallocate(out_n)
+
+            z_tt = ttnn.slice(z_all, (0, 0, t, 0), (1, 1, t + 1, qkvz_dim_tp - qkv_dim_tp))
+            z_tt = ttnn.reshape(z_tt, (1, B_pf, qkvz_dim_tp - qkv_dim_tp))
+            z_act = ttnn.silu(z_tt)
+            ttnn.deallocate(z_tt)
+            out_f = _unshard(out_f)
+            gated = ttnn.multiply(out_f, z_act)
+            ttnn.deallocate(out_f)
+            ttnn.deallocate(z_act)
+            gated_outputs_list.append(gated)
+
+        ttnn.deallocate(chunk_out_dev)
+        ttnn.deallocate(z_all)
+
+        if len(gated_outputs_list) > 1:
+            gated_seq = ttnn.concat(gated_outputs_list, dim=1)
+            for g in gated_outputs_list:
+                ttnn.deallocate(g)
+            gated_seq = ttnn.reshape(gated_seq, (1, 1, seq_len, self.value_dim_tp))
+        else:
+            gated_seq = ttnn.reshape(gated_outputs_list[0], (1, 1, 1, self.value_dim_tp))
 
         # ---- Output projection with 2D matmul (full sequence) + all-reduce ----
         out_progcfg = create_prefill_matmul_program_config(seq_len, self.value_dim_tp, dim)

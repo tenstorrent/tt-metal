@@ -274,6 +274,11 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_conv_kernel_size = GDN_CONV_KERNEL_SIZE
         self.gdn_chunk_size = 64  # Chunkwise prefill chunk size (must be power of 2, >= 32)
 
+        # Override prefill_len_cutoff for long-sequence support.
+        # Framework default is 512 on BH, which limits MLP matmul to 512 rows.
+        # We need up to 4096 for attention layers that process full sequences.
+        self.prefill_len_cutoff = 4096
+
         # TP-derived dimensions
         self.gdn_nk_tp = GDN_Nk // tp
         self.gdn_nv_tp = GDN_Nv // tp

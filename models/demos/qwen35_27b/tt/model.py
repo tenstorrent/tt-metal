@@ -399,33 +399,28 @@ class Transformer(TTTransformer):
 
         return result
 
-    def prefill_layer_chunked(self, tokens_tensor, chunk_size=2048):
+    def prefill_layer_chunked(self, tokens_tensor, chunk_size=None):
         """Prefill long sequences using layer-at-a-time chunked processing.
 
         Args:
             tokens_tensor: [1, seq_len] torch tensor of token IDs
-            chunk_size: base chunk size (default 2048)
+            chunk_size: base chunk size (default: prefill_len_cutoff, 512 on BH)
 
         Returns:
             x_normed: last-token output after final norm, ready for LM head
         """
+        if chunk_size is None:
+            chunk_size = self.args.prefill_len_cutoff  # 512 on BH, 1024 on WH
         seq_len = tokens_tensor.shape[-1]
 
-        # ── Step 1: Embed tokens ──────────────────────────────────────
-        tokens_tt = tokens_tensor.reshape(1, 1, 1, seq_len)
-        tokens_tt = ttnn.from_torch(
-            tokens_tt,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        x = self.embd(tokens_tt)
-        x = ttnn.unsqueeze_to_4D(x)  # [1, 1, seq_len, dim]
-
-        # ── Step 2: Full RoPE tables ─────────────────────────────────
-        cos_full = self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :]
-        sin_full = self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :]
+        # ── Step 1: Embed tokens + RoPE via framework ────────────────
+        # Use the framework's prepare_inputs_prefill to handle embedding
+        # and RoPE correctly (mesh sharding, tile layout, etc.)
+        prefill_inputs = self.prepare_inputs_prefill(tokens_tensor)
+        x = prefill_inputs[0]  # [1, 1, seq_len, dim] (mesh-sharded embedding)
+        rot_mats_full = prefill_inputs[1]  # [cos, sin] each [1, 1, seq_len, rope_dim]
+        cos_full = rot_mats_full[0]
+        sin_full = rot_mats_full[1]
 
         # ── Step 3: Init GDN prefill states ──────────────────────────
         for layer in self.layers:
@@ -443,19 +438,23 @@ class Transformer(TTTransformer):
             is_last_layer = layer_idx == n_layers - 1
             is_attention = layer_type == "full_attention"
 
-            # Attention layers use a larger minimum chunk size
-            layer_chunk_size = max(chunk_size, 4096) if is_attention else chunk_size
+            # Attention layers process full sequence (need full KV context for causal SDPA).
+            # GDN layers chunk (recurrent state carries over between chunks).
+            layer_chunk_size = seq_len if is_attention else chunk_size
 
             chunk_outputs = []
             for chunk_start in range(0, seq_len, layer_chunk_size):
                 chunk_end = min(chunk_start + layer_chunk_size, seq_len)
 
-                # Slice input for this chunk
-                x_chunk = ttnn.slice(
-                    x,
-                    (0, 0, chunk_start, 0),
-                    (1, 1, chunk_end, x.shape[-1]),
-                )
+                if chunk_end == seq_len and len(chunk_outputs) == 0:
+                    # Single chunk covers full sequence — no slice needed
+                    x_chunk = x
+                else:
+                    x_chunk = ttnn.slice(
+                        x,
+                        (0, 0, chunk_start, 0),
+                        (1, 1, chunk_end, x.shape[-1]),
+                    )
 
                 # Prepare rot_mats for this chunk
                 if is_attention:
@@ -466,6 +465,7 @@ class Transformer(TTTransformer):
                     rot_mats = None
 
                 # Run layer on chunk
+                logger.info(f"    Chunk [{chunk_start}:{chunk_end}] x_chunk.shape={x_chunk.shape}")
                 out_chunk = layer(
                     x_chunk,
                     current_pos=None,
@@ -496,7 +496,7 @@ class Transformer(TTTransformer):
             ttnn.deallocate(x)
             x = x_new
 
-            logger.info(f"  Layer {layer_idx}/{n_layers} ({layer_type}) done")
+            logger.info(f"  Layer {layer_idx}/{n_layers} ({layer_type}) done, x.shape={x.shape}")
 
         # ── Step 5: Replicate prefill states to batch ────────────────
         for layer in self.layers:

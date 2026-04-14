@@ -464,7 +464,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     seq_len = len(prompt_tokens)
     tokens_tensor = torch.tensor([prompt_tokens], dtype=torch.long)  # [1, seq_len]
     last_token_idx = ((seq_len - 1) // 32) * 32
-    use_chunked = seq_len > 1024
+    use_chunked = seq_len > args.prefill_len_cutoff or os.environ.get("FORCE_CHUNKED_PREFILL")
 
     # === PREFILL (compile run) ===
     logger.info(f"Prefilling {len(prompt_tokens)} tokens ({'chunked' if use_chunked else 'batched'}, compile run)...")
@@ -472,7 +472,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     t_prefill = time.time()
     if use_chunked:
-        tt_out = model.prefill_layer_chunked(tokens_tensor, chunk_size=2048)
+        tt_out = model.prefill_layer_chunked(tokens_tensor)
     else:
         prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
         tt_embeds = prefill_inputs[0]
@@ -510,7 +510,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     t_prefill_trace = time.time()
     if use_chunked:
-        tt_out = model.prefill_layer_chunked(tokens_tensor, chunk_size=2048)
+        tt_out = model.prefill_layer_chunked(tokens_tensor)
     else:
         prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
         tt_embeds = prefill_inputs[0]
