@@ -41,8 +41,8 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_and_compute_layer_by_layer,
     load_reference_cache,
     save_reference_cache,
-    tokenize_infinitebench_to_isl,
-    tokenize_prompts_to_isl,
+    tokenize_prompt_to_chat_template,
+    tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -204,31 +204,30 @@ def test_prefill_transformer(
     # --- Create input (needed early for reference computation) ---
     if input_source == "random":
         token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
-    elif input_source == "json_prompts":
+    else:
         profiler.start("tokenization")
         tok = request.getfixturevalue("tokenizer")
-        token_ids = tokenize_prompts_to_isl(tok, PROMPTS_PATH, isl_total, sp_factor)
-        profiler.end("tokenization")
-        logger.info(f"Tokenized input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
-    elif input_source == "abc_1k":
-        profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
-        token_ids = tokenize_prompts_to_isl(tok, ABC_1K_PATH, isl_total, sp_factor)
-        profiler.end("tokenization")
-        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
-    elif input_source in INFINITEBENCH_SUBSET_NAMES:
-        profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
-        cached_path = download_infinitebench_subset(input_source)
-        with open(cached_path) as f:
-            prompt_text = json.load(f)["prompt"]
-        token_ids = tokenize_infinitebench_to_isl(tok, prompt_text, isl_total, sp_factor)
+        if input_source == "json_prompts":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(PROMPTS_PATH))
+            prompt_text = prompt_text[0] if isinstance(prompt_text, list) else prompt_text
+        elif input_source == "abc_1k":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(ABC_1K_PATH))
+        elif input_source in INFINITEBENCH_SUBSET_NAMES:
+            cached_path = download_infinitebench_subset(input_source)
+            with open(cached_path) as f:
+                prompt_text = json.load(f)["prompt"]
+            token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+        else:
+            raise ValueError(f"Unknown input_source: {input_source}")
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         profiler.end("tokenization")
         logger.info(
-            f"Tokenized InfiniteBench [{input_source}] shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+            f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
         )
-    else:
-        raise ValueError(f"Unknown input_source: {input_source}")
 
     # --- Build HF model and/or extract weights based on cache state ---
     profiler.start("weights_creation")
@@ -248,6 +247,7 @@ def test_prefill_transformer(
                 config=config,
                 num_layers=num_layers,
                 token_ids=token_ids,
+                attention_mask=attention_mask,
                 compute_reference=need_to_compute_reference,
                 build_ttnn_cache=need_to_load_weights,
                 weight_cache_path=effective_cache_path,
@@ -488,3 +488,31 @@ def test_prefill_transformer(
     # Deferred PCC failure check (after timing report)
     if pcc_validation and has_pcc_failures:
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
+
+
+def test_tokenize_prompt_to_isl(tokenizer):
+    max_isl = 32
+    input_ids, attention_mask, tokens = tokenize_prompt_to_isl(
+        tokenizer, max_isl=max_isl, prompt_text="This is a test prompt.", debug=True
+    )
+
+    logger.debug(f"Input IDs: {input_ids}")
+    logger.debug(f"Attention Mask: {attention_mask}")
+    logger.debug(f"Tokens: {tokens}")
+
+    assert input_ids.shape == (1, max_isl), f"Expected input_ids shape (1, {max_isl}), got {input_ids.shape}"
+
+
+def test_tokenize_prompt_to_chat_template(tokenizer):
+    max_isl = 64
+    input_ids, tokens = tokenize_prompt_to_chat_template(
+        tokenizer,
+        max_isl=max_isl,
+        user_prompt="What is the capital of Serbia?",
+        system_prompt="You are a helpful assistant.",
+        debug=True,
+    )
+    logger.debug(f"Input IDs: {input_ids}")
+    logger.debug(f"Tokens: {tokens}")
+
+    assert input_ids.shape == (1, max_isl), f"Expected input_ids shape (1, {max_isl}), got {input_ids.shape}"
