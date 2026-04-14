@@ -203,7 +203,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLING_TOP_P,
         help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
     )
-    p.add_argument("--cache-dir", type=str, required=True)
+    p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Legacy DeepSeek weight-cache directory. Optional; weights are now converted directly in memory.",
+    )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -455,9 +460,7 @@ def run_demo(
         raise SystemExit("Missing model path. Provide --model-path.")
     model_path = Path(model_path)
 
-    if cache_dir is None:
-        raise SystemExit("Missing cache directory. Provide --cache-dir.")
-    cache_dir = Path(cache_dir)
+    cache_dir = None if cache_dir is None else Path(cache_dir)
 
     if sampling_temperature < 0:
         raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")

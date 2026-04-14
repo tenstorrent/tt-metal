@@ -62,7 +62,7 @@ class MoEGate(AbstractModule):
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    gate_weight.T.unsqueeze(0).unsqueeze(0),
+                    gate_weight.unsqueeze(0).unsqueeze(0).contiguous(),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -145,6 +145,7 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
@@ -214,6 +215,7 @@ class MoEGate(AbstractModule):
             return {
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),

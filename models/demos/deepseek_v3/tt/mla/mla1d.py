@@ -27,7 +27,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     PermuteConfig,
     ReshardConfig,
-    SavedWeight,
     SliceConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import K_CHUNK_SIZE, Q_CHUNK_SIZE
@@ -324,9 +323,8 @@ class MLA1D(AbstractModule):
             shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
-        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
-            -2, -1
-        )  # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
+        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(-2, -1).contiguous()
+        # [num_shards, num_heads, kv_lora_rank, qk_nope_head_dim]
         torch_weights_v = torch_weights[..., qk_nope_head_dim:, :]  # [num_shards, num_heads, v_head_dim, kv_lora_rank]
 
         # Create DRAM HEIGHT sharded memory config for wkv_b1 (batch sharding)
@@ -403,7 +401,7 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
         padding_needed: tuple[int, int, int] = (0, 0, 0),
-    ) -> SavedWeight:
+    ) -> ttnn.Tensor:
         return shard_and_save(
             path,
             torch_metaweight.transpose(-2, -1).contiguous(),
@@ -1110,6 +1108,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            subdevice_id=ttnn.SubDeviceId(0),
             use_broadcast=True,
         )
 

@@ -128,15 +128,16 @@ def get_weight_config(
     cache_subdir_name: str | None = None,
 ):
     """
-    Get weight configuration, either from cache or by converting weights.
+    Convert HuggingFace weights directly into in-memory TTNN tensors.
 
     Args:
         ModuleClass: The module class to convert weights for
         hf_config: HuggingFace model configuration
         state_dicts: Optional pre-loaded state dicts. If None, will be loaded based on random_weights/model_path.
-        weight_cache_path: Path to cache weights
+        weight_cache_path: Optional base path used only to preserve the historical conversion subdirectory layout for
+            callers that key weight generation by this path. No on-disk weight cache is generated.
         mesh_device: TTNN mesh device
-        force_recalculate: Force recalculation even if cached weights exist
+        force_recalculate: Accepted for API compatibility. Weight conversion always happens directly in memory.
         random_weights: If True, generate random weights from reference model
         model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
         single_layer: Optional single layer name (used for validation with random weights)
@@ -146,26 +147,25 @@ def get_weight_config(
     Returns:
         Weight configuration dictionary
     """
-    if weight_cache_path is None:
-        raise ValueError("weight_cache_path must be provided")
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
-    weight_cache_path = weight_cache_path.expanduser()
-    if not weight_cache_path.is_absolute():
-        weight_cache_path = weight_cache_path.resolve()
+    if force_recalculate:
+        logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
 
-    cache_subdir_name = cache_subdir_name or f"{hf_config.num_hidden_layers}_layers"
-    weight_cache_path = weight_cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    config_path = weight_cache_path / "config.json"
+    if weight_cache_path is not None:
+        weight_cache_path = weight_cache_path.expanduser()
+        if not weight_cache_path.is_absolute():
+            weight_cache_path = weight_cache_path.resolve()
+        cache_subdir_name = cache_subdir_name or f"{hf_config.num_hidden_layers}_layers"
+        output_path = weight_cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    else:
+        output_path = (
+            Path("generated/deepseek_v3")
+            / f"{hf_config.num_hidden_layers}_layers"
+            / (f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}")
+        )
 
-    # Try to load from cache
-    cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
-    if cached_config is not None:
-        return cached_config
-
-    # Cache miss - need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
     if state_dicts is None:
         logger.info("State dict was not provided, preparing from random weights or model path")
         from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
@@ -178,23 +178,26 @@ def get_weight_config(
         )
         state_dicts = (model_state,)
 
-    # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
+    logger.info("Converting DeepSeek weights directly to TTNN tensors (no on-disk weight cache)")
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, output_path, mesh_device)
+    if contains_saved_weights(weight_config):
+        if weight_cache_path is None:
+            raise ValueError(
+                "weight_cache_path must be provided when convert_weights returns legacy SavedWeight entries"
+            )
+        validate_weight_config_paths(output_path, weight_config)
+        return normalize_weight_config_paths(output_path, weight_config)
+    return weight_config
 
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
 
-    # Validate the converted weight config
-    validate_weight_config_paths(weight_cache_path, weight_config)
-
-    # Save config with relative paths for portability
-    # Use exclusive lock to prevent concurrent writes and corruption
-    with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(weight_config, f, cls=WeightConfigEncoder)
-
-    # Return normalized config with absolute paths for runtime use
-    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
-    logger.info("Done converting weights to TTNN SavedWeight format")
-    return normalized_config
+def contains_saved_weights(weight_config: Any) -> bool:
+    if isinstance(weight_config, SavedWeight):
+        return True
+    if isinstance(weight_config, dict):
+        return any(contains_saved_weights(value) for value in weight_config.values())
+    if isinstance(weight_config, (list, tuple)):
+        return any(contains_saved_weights(value) for value in weight_config)
+    return False
 
 
 def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:
@@ -213,6 +216,8 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
         entries = weight_config.items()
     elif isinstance(weight_config, (list, tuple)):
         entries = enumerate(weight_config)
+    elif isinstance(weight_config, ttnn.Tensor):
+        return
     else:
         raise ValueError(f"Invalid weight config type: {type(weight_config)}")
 
@@ -279,6 +284,8 @@ def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) 
         else:
             normalized_path = root_path / weight_config.path
         return SavedWeight(path=normalized_path, memory_config=weight_config.memory_config)
+    elif isinstance(weight_config, ttnn.Tensor):
+        return weight_config
     else:
         # For other types (None, primitives, etc.), return as-is
         return weight_config

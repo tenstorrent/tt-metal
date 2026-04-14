@@ -35,7 +35,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     make_deepseek_sampling_args,
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
-from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -411,8 +411,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             dump_ttnn_meminfo(self.mesh_device, header=header)
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
-        weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
-        weight_cache_base.mkdir(parents=True, exist_ok=True)
+        weight_cache_base = Path(cache_dir) if cache_dir is not None else None
+        if weight_cache_base is not None:
+            logger.info(
+                f"DeepSeek weight cache directory '{weight_cache_base}' is ignored; weights are converted directly in memory."
+            )
 
         cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers"
         if self.enable_mtp:
@@ -711,6 +714,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             if self.model_decode_cfg is not None:
                 del self.model_decode_cfg
             if self.model_weight_config is not None:
+                deallocate_weight_config_tensors(self.model_weight_config)
                 del self.model_weight_config
 
         except Exception as e:

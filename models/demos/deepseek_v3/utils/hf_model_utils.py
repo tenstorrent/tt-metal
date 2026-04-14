@@ -5,6 +5,7 @@ import concurrent.futures
 import gc
 import json
 import os
+import re
 import shutil
 from collections.abc import Mapping
 from glob import glob
@@ -24,10 +25,14 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCa
 
 MODEL_INDEX_FILENAME = "model.safetensors.index.json"
 DEQUANTIZED_CHECKPOINT_SUFFIX = "-dequantized"
+STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX = f"{DEQUANTIZED_CHECKPOINT_SUFFIX}-stacked"
 DEQUANTIZED_CHECKPOINT_SCRIPT = "models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py"
 DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE = (
     "Pass a dequantized HF checkpoint. "
     f"Use `{DEQUANTIZED_CHECKPOINT_SCRIPT}` to generate one from the original HF weights."
+)
+STACKED_EXPERT_WEIGHT_PATTERN = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
 )
 
 
@@ -60,19 +65,43 @@ def index_model_weights(model_path: str | Path) -> Mapping[str, torch.Tensor]:
 def materialize_model_weights(
     model_path: str | Path, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
-    safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
     weights_dict = {}
-    iterable = (
-        map(lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths)
-        if thread_pool_executor is None
-        else thread_pool_executor.map(
-            lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths
+    model_path = Path(model_path)
+    index_path = model_path / MODEL_INDEX_FILENAME
+
+    if index_path.is_file():
+        weight_map, _ = _load_model_weight_map(model_path)
+        shard_to_keys: dict[str, list[str]] = {}
+        for key, shard_name in weight_map.items():
+            shard_to_keys.setdefault(shard_name, []).append(key)
+
+        def load_indexed_shard(shard_name: str) -> None:
+            with safe_open(model_path / shard_name, framework="pt", device="cpu") as handle:
+                for key in shard_to_keys[shard_name]:
+                    weights_dict[key] = handle.get_tensor(key)
+
+        shard_names = sorted(shard_to_keys)
+        iterable = (
+            map(load_indexed_shard, shard_names)
+            if thread_pool_executor is None
+            else thread_pool_executor.map(load_indexed_shard, shard_names)
         )
-    )
+        total_shards = len(shard_names)
+    else:
+        safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
+        iterable = (
+            map(lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths)
+            if thread_pool_executor is None
+            else thread_pool_executor.map(
+                lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths
+            )
+        )
+        total_shards = len(safetensors_filepaths)
+
     list(
         tqdm(
             iterable,
-            total=len(safetensors_filepaths),
+            total=total_shards,
             desc="Loading weights",
         )
     )
@@ -86,6 +115,15 @@ def default_dequantized_model_path(model_path: str | Path) -> Path:
     if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
         return model_path
     return model_path.with_name(f"{model_path.name}{DEQUANTIZED_CHECKPOINT_SUFFIX}")
+
+
+def default_stacked_dequantized_model_path(model_path: str | Path) -> Path:
+    model_path = Path(model_path)
+    if model_path.name.endswith(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX):
+        return model_path
+    if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
+        return model_path.with_name(f"{model_path.name}-stacked")
+    return model_path.with_name(f"{model_path.name}{STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX}")
 
 
 def _get_weight_block_shape_from_quant_config(quantization_config: Any) -> tuple[int, ...]:
@@ -214,6 +252,20 @@ def _copy_non_weight_artifacts(source_model_path: Path, output_model_path: Path)
             shutil.copy2(source_path, destination)
 
 
+def _link_or_copy_file(source_path: Path, destination_path: Path) -> None:
+    try:
+        os.link(source_path, destination_path)
+        return
+    except OSError:
+        pass
+
+    try:
+        os.symlink(os.path.relpath(source_path, start=destination_path.parent), destination_path)
+        return
+    except OSError:
+        shutil.copy2(source_path, destination_path)
+
+
 def _load_tensor_from_shards(
     model_path: Path,
     weight_map: Mapping[str, str],
@@ -235,16 +287,74 @@ def _close_shard_handles(file_handles: Mapping[str, Any]) -> None:
             close_fn()
 
 
+def _load_converted_tensor_from_shards(
+    model_path: Path,
+    weight_map: Mapping[str, str],
+    file_handles: dict[str, Any],
+    key: str,
+    block_shape: tuple[int, ...],
+    *,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    scale_key = f"{key}_scale_inv"
+    tensor = _load_tensor_from_shards(model_path, weight_map, file_handles, key)
+    if scale_key in weight_map:
+        return dequantize_weight_tensor(
+            tensor,
+            _load_tensor_from_shards(model_path, weight_map, file_handles, scale_key),
+            block_shape,
+            dtype=dtype,
+        )
+
+    if tensor.dtype == torch.float8_e4m3fn:
+        raise ValueError(f"Found float8 tensor '{key}' without matching inverse scale '{scale_key}'.")
+    return tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+
+
+def _stacked_expert_weight_name(layer_idx: int, projection: str) -> str:
+    return f"model.layers.{layer_idx}.mlp.experts_stacked.{projection}.weight"
+
+
+def _group_stacked_expert_keys(weight_map: Mapping[str, str]) -> dict[int, dict[str, list[str]]]:
+    grouped: dict[int, dict[str, list[tuple[int, str]]]] = {}
+    for key in weight_map:
+        match = STACKED_EXPERT_WEIGHT_PATTERN.match(key)
+        if match is None:
+            continue
+
+        layer_idx = int(match.group("layer"))
+        expert_idx = int(match.group("expert"))
+        projection = match.group("projection")
+        grouped.setdefault(layer_idx, {}).setdefault(projection, []).append((expert_idx, key))
+
+    normalized: dict[int, dict[str, list[str]]] = {}
+    for layer_idx, projections in grouped.items():
+        normalized[layer_idx] = {}
+        for projection, expert_entries in projections.items():
+            expert_entries.sort(key=lambda item: item[0])
+            expert_ids = [expert_idx for expert_idx, _ in expert_entries]
+            if expert_ids != list(range(len(expert_entries))):
+                raise ValueError(
+                    f"Expert weights for layer {layer_idx} projection '{projection}' are incomplete or non-contiguous: "
+                    f"{expert_ids}"
+                )
+            normalized[layer_idx][projection] = [key for _, key in expert_entries]
+    return normalized
+
+
 def save_dequantized_hf_checkpoint(
     source_model_path: str | Path,
     output_model_path: str | Path | None = None,
     *,
     overwrite: bool = False,
     dtype: torch.dtype = torch.bfloat16,
+    stack_experts: bool = False,
 ) -> Path:
     source_model_path = Path(source_model_path).resolve()
     output_model_path = (
-        default_dequantized_model_path(source_model_path)
+        default_stacked_dequantized_model_path(source_model_path)
+        if output_model_path is None and stack_experts
+        else default_dequantized_model_path(source_model_path)
         if output_model_path is None
         else Path(output_model_path).resolve()
     )
@@ -270,41 +380,83 @@ def save_dequantized_hf_checkpoint(
 
     block_shape = get_weight_block_shape_from_model_path(source_model_path)
     weight_map, metadata = _load_model_weight_map(source_model_path)
-    shard_to_keys: dict[str, list[str]] = {}
-    for key, shard_name in weight_map.items():
-        shard_to_keys.setdefault(shard_name, []).append(key)
+    stacked_expert_keys = _group_stacked_expert_keys(weight_map) if stack_experts else {}
+    skipped_weight_keys = {
+        source_key
+        for projections in stacked_expert_keys.values()
+        for source_keys in projections.values()
+        for source_key in source_keys
+    }
+    source_is_dequantized = not any(key.endswith("_scale_inv") for key in weight_map)
+    can_reuse_source_shards = stack_experts and source_is_dequantized and dtype == torch.bfloat16
 
-    output_weight_map: dict[str, str] = {}
-    total_size = 0
+    output_weight_map: dict[str, str]
+    total_size: int
+    shard_to_keys: dict[str, list[str]] = {}
+    if can_reuse_source_shards:
+        for shard_path in sorted(source_model_path.glob("*.safetensors")):
+            _link_or_copy_file(shard_path, output_model_path / shard_path.name)
+        output_weight_map = {
+            key: shard_name
+            for key, shard_name in weight_map.items()
+            if not key.endswith("_scale_inv") and key not in skipped_weight_keys
+        }
+        total_size = int(metadata.get("total_size", 0))
+    else:
+        output_weight_map = {}
+        total_size = 0
+        for key, shard_name in weight_map.items():
+            if key.endswith("_scale_inv") or key in skipped_weight_keys:
+                continue
+            shard_to_keys.setdefault(shard_name, []).append(key)
+
     file_handles: dict[str, Any] = {}
     try:
-        for shard_name in sorted(shard_to_keys):
-            output_tensors: dict[str, torch.Tensor] = {}
-            for key in shard_to_keys[shard_name]:
-                if key.endswith("_scale_inv"):
-                    continue
-
-                scale_key = f"{key}_scale_inv"
-                tensor = _load_tensor_from_shards(source_model_path, weight_map, file_handles, key)
-                if scale_key in weight_map:
-                    output_tensor = dequantize_weight_tensor(
-                        tensor,
-                        _load_tensor_from_shards(source_model_path, weight_map, file_handles, scale_key),
-                        block_shape,
-                        dtype=dtype,
+        if not can_reuse_source_shards:
+            for shard_name in sorted(shard_to_keys):
+                output_tensors: dict[str, torch.Tensor] = {}
+                for key in shard_to_keys[shard_name]:
+                    output_tensor = _load_converted_tensor_from_shards(
+                        source_model_path, weight_map, file_handles, key, block_shape, dtype=dtype
                     )
-                else:
-                    if tensor.dtype == torch.float8_e4m3fn:
-                        raise ValueError(f"Found float8 tensor '{key}' without matching inverse scale '{scale_key}'.")
-                    output_tensor = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+                    output_tensors[key] = output_tensor
+                    output_weight_map[key] = shard_name
+                    total_size += output_tensor.numel() * output_tensor.element_size()
 
-                output_tensors[key] = output_tensor
-                output_weight_map[key] = shard_name
-                total_size += output_tensor.numel() * output_tensor.element_size()
+                if output_tensors:
+                    logger.info(f"Saving dequantized shard {shard_name} with {len(output_tensors)} tensors")
+                    save_file(output_tensors, str(output_model_path / shard_name))
 
-            if output_tensors:
-                logger.info(f"Saving dequantized shard {shard_name} with {len(output_tensors)} tensors")
-                save_file(output_tensors, str(output_model_path / shard_name))
+        if stack_experts:
+            for layer_idx in sorted(stacked_expert_keys):
+                shard_name = f"stacked-experts-layer-{layer_idx:05d}.safetensors"
+                output_tensors: dict[str, torch.Tensor] = {}
+                for projection in sorted(stacked_expert_keys[layer_idx]):
+                    source_keys = stacked_expert_keys[layer_idx][projection]
+                    output_key = _stacked_expert_weight_name(layer_idx, projection)
+                    source_tensors = [
+                        _load_converted_tensor_from_shards(
+                            source_model_path,
+                            weight_map,
+                            file_handles,
+                            source_key,
+                            block_shape,
+                            dtype=dtype,
+                        )
+                        for source_key in source_keys
+                    ]
+                    if can_reuse_source_shards:
+                        total_size -= sum(tensor.numel() * tensor.element_size() for tensor in source_tensors)
+                    output_tensor = torch.stack(source_tensors).contiguous()
+                    output_tensors[output_key] = output_tensor
+                    output_weight_map[output_key] = shard_name
+                    total_size += output_tensor.numel() * output_tensor.element_size()
+
+                if output_tensors:
+                    logger.info(
+                        f"Saving stacked expert shard {shard_name} with {len(output_tensors)} tensors for layer {layer_idx}"
+                    )
+                    save_file(output_tensors, str(output_model_path / shard_name))
     finally:
         _close_shard_handles(file_handles)
 

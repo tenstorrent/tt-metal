@@ -54,6 +54,15 @@ class Experts(AbstractModule):
         assert state_dict is not None
 
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
+            stacked_weight_name = f"experts_stacked.{hf_name}.weight"
+            if stacked_weight_name in state_dict:
+                stacked_weight = get_dequantized_tensor(state_dict, stacked_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
+                if stacked_weight.ndim != 3:
+                    raise ValueError(
+                        f"Expected stacked expert weight '{stacked_weight_name}' to have rank 3, got {stacked_weight.ndim}"
+                    )
+                return stacked_weight.contiguous()
+
             weight_name = f"{hf_name}.weight"
             expert_weights: list[torch.Tensor] = []
             for expert_id in range(hf_config.n_routed_experts):
@@ -62,13 +71,13 @@ class Experts(AbstractModule):
                     get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
                 )
 
-            return torch.stack(expert_weights)
+            return torch.stack(expert_weights).contiguous()
 
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2).contiguous(),
+                    _load_expert_weight(hf_name).unsqueeze(0).contiguous(),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
@@ -119,16 +128,19 @@ class Experts(AbstractModule):
             "mesh_device": MeshDeviceStub(mesh_device.shape),
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
