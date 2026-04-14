@@ -45,6 +45,7 @@ import heapq
 import inspect
 import os
 import shutil
+import subprocess
 import threading
 from time import time
 import traceback
@@ -993,6 +994,14 @@ def main():
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
+
+    if os.environ.get("TT_TRIAGE_RESET_AFTER_RUN", "0") == "1":
+        utils.INFO("Resetting devices after tt-triage run...")
+        try:
+            subprocess.run(["tt-smi", "-r"], check=True)
+            utils.INFO("Device reset completed successfully.")
+        except subprocess.CalledProcessError as e:
+            utils.WARN(f"Device reset failed: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
