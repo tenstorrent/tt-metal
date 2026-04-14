@@ -17,9 +17,9 @@ from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
     get_pad_embedding,
-    merge_vision_tokens_ttnn,
-    multimodal_rope_from_hf,
-    preprocess_inputs_prefill_ttnn,
+    merge_vision_tokens_single_user_ttnn,
+    multimodal_rope_single_user_from_hf,
+    preprocess_inputs_prefill_single_user_ttnn,
     sample_host,
 )
 from models.demos.qwen3_vl.tt.generator import Generator
@@ -207,6 +207,19 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
+        # (  # Batch-32 run with 512x512 image and ~128 token text prompt, repeated 8 times
+        #     "models/demos/qwen3_vl/demo/sample_prompts/batch32_512x512_128tok.json",
+        #     True,  # instruct mode
+        #     32,  # repeat_batches to simulate multiple users with the same prompt
+        #     4096,  # max_seq_len, allow for image tokens
+        #     32,  # batch_size -- samples to load from the prompt JSON
+        #     200,  # max_generated_tokens
+        #     True,  # paged_attention
+        #     {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+        #     True,  # stop_at_eos
+        #     False,  # ci_only
+        # ),
     ],
     ids=[
         "batch-1",  # latency
@@ -217,6 +230,7 @@ def create_tt_model(
         "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
         "long-context-64k",  # real-world test for 300DPI scanned document with 64k long context
         "long-context-128k",  # real-world test for 300DPI scanned document with 128k long context
+        # "batch-32-512x512-128tok-8repeat",  # batch-32 with 512x512 image, 128 token prompt, 8 repeat batches
     ],
 )
 @pytest.mark.parametrize(
@@ -242,6 +256,7 @@ def create_tt_model(
     ],
     indirect=True,
 )
+@pytest.mark.timeout(3600)
 def test_demo(
     input_prompts,
     instruct,
@@ -417,101 +432,170 @@ def test_demo(
             # text-only
             num_image_tokens.append([0] * batch_size)
 
-        # Vision prefill
-        logger.info(f"Vision model prefill batch {batch_idx}")
-        if not vision_model_traced:
-            image_embeds, deepstack_visual_embeds = (
-                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                if "pixel_values" in inputs
-                else (torch.tensor([], dtype=torch.bfloat16), None)
-            )
-            vision_model_traced = True
-        profiler.start(f"vision_model_prefill", iteration=batch_idx)
-        image_embeds, deepstack_visual_embeds = (
-            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            if "pixel_values" in inputs
-            else (
-                ttnn.from_torch(
-                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
-                ),
-                None,
-            )
-        )
-        profiler.end(f"vision_model_prefill", iteration=batch_idx)
-
-        # Prepare text + vision inputs for decoder model
-        logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
-        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
-        text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        text_embeds_tt = ttnn.from_torch(
-            text_embeds,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                model_args.mesh_device, dims=(None, 2), mesh_shape=model_args.cluster_shape
-            ),
-        )
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
-            inputs.input_ids,
-            text_embeds_tt,
-            image_embeds,
-            reference_model.config,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-            model_args=model_args,
-        )
+        # Single loop over users: vision → text embed → merge → preprocess → prefill
+        # This reduces memory pressure by processing and deallocating each user's data before moving to next
         pad_token_id = tokenizer.pad_token_id
-        max_prompt_len = max(x.shape[0] for x in input_embeds)
-        assert (
-            model_args.max_seq_len >= max_prompt_len + max_generated_tokens
-        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max_prompt_len}) + max generated tokens ({max_generated_tokens})"
         pad_embedding_tt = get_pad_embedding(reference_model, pad_token_id, model_args)
-        (
-            input_prefill_pt,
-            deepstack_visual_embeds,
-            decoding_pos,  # Position where decoding should start for each user
-            prefill_lens,
-        ) = preprocess_inputs_prefill_ttnn(
-            input_embeds,
-            model_args,
-            inputs.attention_mask,
-            pad_embedding=pad_embedding_tt,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        # Get user-specific rotary position embeddings
-        cos, sin, rope_deltas = multimodal_rope_from_hf(inputs, reference_model, model_args, pad_token_id=pad_token_id)
+
+        # Check if we have images
+        has_images = "pixel_values" in inputs
+
+        # Track pixel value offset for extracting per-user images
+        pixel_offset = 0
+
+        # Output storage
+        output_logits = torch.zeros(batch_size, 1, model_args.vocab_size)
+        all_decoding_pos = []
+        all_prefill_lens = []
+        all_rope_deltas = []
+
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
-        logits = generator.prefill_forward_text(
-            ttnn.unsqueeze(input_prefill_pt[0], 0),  # Just warmup prefill for 1 user
-            rot_mats=(cos, sin),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+        # Single loop: process each user completely before moving to next
+        for user_id in range(batch_size):
+            logger.info(f"Processing user {user_id + 1}/{batch_size} for batch {batch_idx}")
 
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_prefill_pt,
-            rot_mats=(cos, sin),
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
-        # torch.save(logits, f"ttnn_logits.pt")
-        prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
+            # Get this user's input_ids and attention_mask
+            user_input_ids = inputs.input_ids[user_id]
+            user_attention_mask = inputs.attention_mask[user_id]
+
+            # === VISION MODEL ===
+            profiler.start(f"vision_model_prefill_user_{user_id}", iteration=batch_idx)
+            if has_images and image_inputs and user_id < len(image_inputs) and image_inputs[user_id] is not None:
+                # Get this user's grid_thw
+                user_grid_thw = inputs.image_grid_thw[user_id]
+
+                # Calculate number of pixels for this user's image
+                num_pixels = user_grid_thw.prod().item()
+
+                # Extract this user's pixel_values
+                user_pixel_values = inputs.pixel_values[pixel_offset : pixel_offset + num_pixels]
+                pixel_offset += num_pixels
+
+                # Warmup vision model on first user of first batch
+                if not vision_model_traced:
+                    _ = visual_model.forward_single_user(user_pixel_values, grid_thw=user_grid_thw)
+                    vision_model_traced = True
+
+                # Run vision model for this single user
+                image_embeds, deepstack_visual_embeds = visual_model.forward_single_user(
+                    user_pixel_values, grid_thw=user_grid_thw
+                )
+            else:
+                # Text-only user
+                image_embeds = ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
+                )
+                deepstack_visual_embeds = None
+                user_grid_thw = None
+            profiler.end(f"vision_model_prefill_user_{user_id}", iteration=batch_idx)
+
+            # === TEXT EMBEDDINGS ===
+            user_text_embeds = reference_model.model.language_model.embed_tokens(user_input_ids.unsqueeze(0))
+            user_text_embeds_tt = ttnn.from_torch(
+                user_text_embeds.squeeze(0),  # Remove batch dim for single-user processing
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    model_args.mesh_device, dims=(None, 1), mesh_shape=model_args.cluster_shape
+                ),
+            )
+
+            # === MERGE VISION TOKENS ===
+            input_embeds, deepstack_visual_embeds = merge_vision_tokens_single_user_ttnn(
+                user_input_ids,
+                user_text_embeds_tt,
+                image_embeds,
+                reference_model.config,
+                deepstack_visual_embeds,
+                model_args,
+            )
+            ttnn.deallocate(user_text_embeds_tt)
+            ttnn.deallocate(image_embeds)
+
+            # === PREPROCESS ===
+            (
+                input_prefill,
+                deepstack_visual_embeds_processed,
+                decoding_pos,
+                prefill_len,
+            ) = preprocess_inputs_prefill_single_user_ttnn(
+                input_embeds,
+                model_args,
+                user_attention_mask,
+                pad_embedding=pad_embedding_tt,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            # Store decoding position and prefill length
+            all_decoding_pos.append(decoding_pos)
+            all_prefill_lens.append(prefill_len)
+
+            # === COMPUTE ROPE ===
+            cos, sin, rope_deltas = multimodal_rope_single_user_from_hf(
+                user_input_ids,
+                user_grid_thw.unsqueeze(0) if user_grid_thw is not None else None,
+                reference_model,
+                model_args,
+                pad_token_id=pad_token_id,
+            )
+            all_rope_deltas.append(rope_deltas)
+
+            # === PREFILL ===
+            # Get page table for this user
+            if page_table is not None:
+                page_table_user = generator._ttt_generator._get_prefill_user_page_table(
+                    page_table, tt_kv_cache, decoding_pos
+                )
+            else:
+                page_table_user = None
+
+            # Warmup/compile on first user
+            # if user_id == 0:
+            #     profiler.start(f"compile_prefill", iteration=batch_idx)
+            #     _ = generator.prefill_forward_single_user_text(
+            #         ttnn.unsqueeze(input_prefill, 0),
+            #         page_table=page_table_user,
+            #         user_id=user_id,
+            #         last_token_idx=decoding_pos - 1,
+            #         rot_mats=(cos, sin),
+            #         kv_cache=tt_kv_cache,
+            #         deepstack_visual_embeds=deepstack_visual_embeds_processed,
+            #     )
+            #     profiler.end(f"compile_prefill", iteration=batch_idx)
+
+            # Run prefill for this user (timed per-user)
+            profiler.start(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            logits = generator.prefill_forward_single_user_text(
+                ttnn.unsqueeze(input_prefill, 0),
+                page_table=page_table_user,
+                user_id=user_id,
+                last_token_idx=decoding_pos - 1,
+                rot_mats=(cos, sin),
+                kv_cache=tt_kv_cache,
+                deepstack_visual_embeds=deepstack_visual_embeds_processed,
+            )
+            profiler.end(f"inference_prefill_user_{user_id}", iteration=batch_idx)
+            output_logits[user_id] = logits
+
+            # === DEALLOCATE === (free memory before next user)
+            ttnn.deallocate(input_prefill)
+            if deepstack_visual_embeds_processed is not None:
+                for dsve in deepstack_visual_embeds_processed:
+                    ttnn.deallocate(dsve)
+
+        # Update rope deltas for decode
+        generator.update_rope_deltas([rd.squeeze(0).item() for rd in all_rope_deltas])
+        prefilled_token = torch.argmax(output_logits, dim=-1)
+
+        # Use the per-user results for decoding
+        decoding_pos = all_decoding_pos
+        prefill_lens = all_prefill_lens
+
+        # Deallocate pad embedding
+        ttnn.deallocate(pad_embedding_tt)
+        logger.info(f"Prefill finished for all {batch_size} users")
 
         # Initial positions continuing from prefill, no need to offset by rope_deltas
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -687,12 +771,15 @@ def test_demo(
     compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
     compile_decode_time = profiler.get_duration("compile_decode", iteration=batch_idx)
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill", iteration=batch_idx)
+    # Sum up per-user prefill times (excludes vision model time)
+    total_inference_prefill_time = sum(
+        profiler.get_duration(f"inference_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
+    )
     total_inference_decode_time = 0
     for i in range(1, iteration):  # i == 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
-    # Average prefill time for each user
+    # Average prefill time for each user (text prefill only, excludes vision)
     avg_time_to_first_token = total_inference_prefill_time / batch_size
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
@@ -703,9 +790,12 @@ def test_demo(
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
-    vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
+    # Sum up per-user vision model times
+    vision_model_time = sum(
+        profiler.get_duration(f"vision_model_prefill_user_{i}", iteration=batch_idx) for i in range(batch_size)
+    )
     vision_model_time_per_user = vision_model_time / batch_size
-    vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
+    vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time if vision_model_time > 0 else 0
     vision_model_t_u_s = vision_model_t_s / batch_size
 
     measurements = {
@@ -716,6 +806,7 @@ def test_demo(
         "compile_prefill": compile_prefill_time,
         "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
+        "inference_prefill time per user": avg_time_to_first_token,
         "inference_decode": total_inference_decode_time,
         "prefill_time_to_token": avg_time_to_first_token,
         "prefill_t/s": prefill_tok_s,  # tokens/s
