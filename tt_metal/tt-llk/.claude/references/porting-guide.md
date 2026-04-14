@@ -20,13 +20,13 @@ Read the source implementation and extract:
 - **Data format handling**: Which formats are supported, any special paths?
 - **Dependencies**: Other files/functions used
 
-```bash
+```
 # Find the source kernel
-ls tt_llk_{source_arch}/llk_lib/llk_{type}_{op}*.h
-ls tt_llk_{source_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h
+Glob for tt_llk_{source_arch}/llk_lib/llk_{type}_{op}*.h
+Glob for tt_llk_{source_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h
 
 # Read it
-cat tt_llk_{source_arch}/llk_lib/llk_{type}_{op}.h
+Read tt_llk_{source_arch}/llk_lib/llk_{type}_{op}.h
 ```
 
 ---
@@ -35,12 +35,12 @@ cat tt_llk_{source_arch}/llk_lib/llk_{type}_{op}.h
 
 ### 2a: Find the Closest Existing Target Kernel
 
-```bash
+```
 # List all kernels of the same type on the target
-ls tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
+Glob for tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
 
 # For SFPU
-ls tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h
+Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h
 ```
 
 Read the closest existing kernel LINE BY LINE. Document:
@@ -56,35 +56,35 @@ Read the closest existing kernel LINE BY LINE. Document:
 
 The test file defines what function signatures the target expects:
 
-```bash
+```
 # Find the test source
-ls tests/sources/*{op}*.cpp
+Glob for tests/sources/*{op}*.cpp
 
 # Extract target-arch-specific signatures
-grep -A20 "ARCH_{TARGET}" tests/sources/*{op}*.cpp
+Grep for "ARCH_{TARGET}" in tests/sources/*{op}*.cpp (20 lines context)
 ```
 
 **If the test harness and source implementation disagree on signatures, the test harness wins.**
 
 ### 2c: Check the Parent/Caller File
 
-```bash
-grep -r "#include.*{op}" tt_llk_{target_arch}/llk_lib/ --include="*.h"
+```
+Grep for "#include.*{op}" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 Read wrapper functions, verify template params, find helper functions.
 
 ### 2d: Check assembly.yaml for Instruction Availability
 
-```bash
+```
 # Verify the instruction exists on the target
-grep -c "^{INSTRUCTION}:" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep (count mode) for "^{INSTRUCTION}:" in tt_llk_{target_arch}/instructions/assembly.yaml
 
 # Get full instruction definition
-grep -A 50 "^{INSTRUCTION}:" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep for "^{INSTRUCTION}:" in tt_llk_{target_arch}/instructions/assembly.yaml (50 lines context)
 
 # If instruction doesn't exist, find alternatives
-grep -i "{partial_name}" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep (case-insensitive) for "{partial_name}" in tt_llk_{target_arch}/instructions/assembly.yaml
 ```
 
 ---
@@ -94,27 +94,27 @@ grep -i "{partial_name}" tt_llk_{target_arch}/instructions/assembly.yaml
 ### Instruction Macros
 
 Check which macro style the target uses:
-```bash
-grep -c "TTI_WRCFG" tt_llk_{target_arch}/llk_lib/*.h
-grep -c "TTI_REG2FLOP" tt_llk_{target_arch}/llk_lib/*.h
+```
+Grep (count mode) for "TTI_WRCFG" in tt_llk_{target_arch}/llk_lib/ (*.h files)
+Grep (count mode) for "TTI_REG2FLOP" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 ### Template Types
 
-```bash
-grep -r "ckernel_template\|ckernel_unpack_template" tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
+```
+Grep for "ckernel_template|ckernel_unpack_template" in tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
 ```
 
 ### Replay Buffer
 
-```bash
-grep -r "load_replay_buf\|replay" tt_llk_{target_arch}/llk_lib/ --include="*.h" -l
+```
+Grep (files only) for "load_replay_buf|replay" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 ### Config Writes
 
-```bash
-grep -r "TTI_STALLWAIT.*TTI_WRCFG\|TTI_REG2FLOP" tt_llk_{target_arch}/llk_lib/ --include="*.h" | head -10
+```
+Grep for "TTI_STALLWAIT.*TTI_WRCFG|TTI_REG2FLOP" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 ---
@@ -124,27 +124,27 @@ grep -r "TTI_STALLWAIT.*TTI_WRCFG\|TTI_REG2FLOP" tt_llk_{target_arch}/llk_lib/ -
 ### WH vs BH/QSR Common Differences
 
 Discover these dynamically — do NOT assume:
-```bash
+```
 # Check PACR parameter count
-grep -r "TT_OP_PACR\|TTI_PACR" tt_llk_{target_arch}/llk_lib/ --include="*.h" | head -5
+Grep for "TT_OP_PACR|TTI_PACR" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 
 # Check SFPU instruction availability
-grep "^SFPLOADMACRO:" tt_llk_{target_arch}/instructions/assembly.yaml
-grep "^SFPSHFT2:" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep for "^SFPLOADMACRO:" in tt_llk_{target_arch}/instructions/assembly.yaml
+Grep for "^SFPSHFT2:" in tt_llk_{target_arch}/instructions/assembly.yaml
 ```
 
 ### Quasar-Specific
 
 Quasar uses different file naming. The equivalent of a WH/BH file may have a completely different name:
-```bash
+```
 # Don't search for llk_unpack_AB.h on Quasar — it doesn't exist
 # Search by concept instead
-grep -r "binary.*operand\|dual.*operand" tt_llk_quasar/llk_lib/ --include="*.h" -l
+Grep (files only) for "binary.*operand|dual.*operand" in tt_llk_quasar/llk_lib/ (*.h files)
 ```
 
 Check for TensorShape usage:
-```bash
-grep -r "TensorShape\|tensor_shape" tt_llk_quasar/llk_lib/llk_{type}_{op}*.h
+```
+Grep for "TensorShape|tensor_shape" in tt_llk_quasar/llk_lib/llk_{type}_{op}*.h
 ```
 
 ---
@@ -161,8 +161,8 @@ For every HW register `_init_` modifies, document how `_uninit_` restores the de
 
 ### Format Paths
 Check which data format paths exist on the target:
-```bash
-grep -r "DataFormat\|data_format\|is_32_bit\|is_fp32" tt_llk_{target_arch}/llk_lib/llk_{type}_{op}*.h
+```
+Grep for "DataFormat|data_format|is_32_bit|is_fp32" in tt_llk_{target_arch}/llk_lib/llk_{type}_{op}*.h
 ```
 
 ---

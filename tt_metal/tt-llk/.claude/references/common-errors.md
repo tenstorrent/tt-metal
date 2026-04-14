@@ -7,8 +7,8 @@ Error patterns observed during LLK kernel development. This is a starting point 
 1. Match your error against the patterns below
 2. Run the investigation commands (replace `{target_arch}` with your architecture)
 3. If the pattern doesn't match, investigate dynamically:
-   - Existing code: `grep -r "{symbol}" tt_llk_{target_arch}/ --include="*.h" | head -20`
-   - assembly.yaml: `grep -A 20 "^{INSTRUCTION}:" tt_llk_{target_arch}/instructions/assembly.yaml`
+   - Existing code: `Grep for "{symbol}" in tt_llk_{target_arch}/ (*.h files)`
+   - assembly.yaml: `Grep for "^{INSTRUCTION}:" in tt_llk_{target_arch}/instructions/assembly.yaml`
 
 ---
 
@@ -17,18 +17,18 @@ Error patterns observed during LLK kernel development. This is a starting point 
 ### Undeclared Symbol
 **Pattern**: `'X' was not declared in this scope`
 
-```bash
+```
 # Find where the symbol IS used correctly
-grep -r "X" tt_llk_{target_arch}/ --include="*.h" -l
+Grep for "X" in tt_llk_{target_arch}/ (*.h files) to find matching files
 # Check what includes that file uses
-head -20 {file_that_uses_X}
+Read the file that uses X
 ```
 
 ### Not a Member of Namespace
 **Pattern**: `'X' is not a member of 'Y'`
 
-```bash
-grep -r "X" tt_llk_{target_arch}/ --include="*.h" | grep -v "^Binary"
+```
+Grep for "X" in tt_llk_{target_arch}/ (*.h files)
 ```
 
 ### Missing Include
@@ -41,9 +41,9 @@ Common SFPU includes:
 #include "ckernel_sfpu_load_config.h"
 ```
 
-```bash
+```
 # Check what includes similar kernels use
-head -10 tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h
+Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h, then Read the top of each file
 ```
 
 ### Wrong v_if Syntax
@@ -66,13 +66,13 @@ sfpi::vInt bits = sfpi::reinterpret<sfpi::vInt>(val);
 ### Deprecated/Renamed Instruction
 **Pattern**: Instruction exists on reference arch but not on target
 
-```bash
+```
 # Verify the instruction doesn't exist
-grep -c "^{INSTRUCTION}:" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep for "^{INSTRUCTION}:" in tt_llk_{target_arch}/instructions/assembly.yaml
 # Search for similar names
-grep -i "{partial_name}" tt_llk_{target_arch}/instructions/assembly.yaml
+Grep (case-insensitive) for "{partial_name}" in tt_llk_{target_arch}/instructions/assembly.yaml
 # Check how existing code handles this
-grep -r "{operation_concept}" tt_llk_{target_arch}/ --include="*.h"
+Grep for "{operation_concept}" in tt_llk_{target_arch}/ (*.h files)
 ```
 
 ---
@@ -97,21 +97,21 @@ grep -r "{operation_concept}" tt_llk_{target_arch}/ --include="*.h"
 **WRONG**: `TT_OP_UNPACR_NOP(..., pool_type == PoolType::MAX, ...);`
 **CORRECT**: Use `p_unpacr_nop::CLR_SRC_NEGINF` or `p_unpacr_nop::CLR_SRC_0`
 
-```bash
+```
 # Find the correct constants
-grep -r "p_unpacr_nop\|p_pacr" tt_llk_{target_arch}/common/inc/ --include="*.h" | head -20
+Grep for "p_unpacr_nop|p_pacr" in tt_llk_{target_arch}/common/inc/ (*.h files)
 ```
 
 ### Wrong Namespace
 Common mistakes:
-```bash
+```
 # Find the correct namespace for a symbol
-grep -rn "{symbol}" tt_llk_{target_arch}/common/inc/ --include="*.h" | head -10
+Grep for "{symbol}" in tt_llk_{target_arch}/common/inc/ (*.h files)
 ```
 
 | Wrong | Correct (verify on your target) |
 |-------|---------|
-| `Srcs::SrcA` | `SrcA` (unqualified) — verify: `grep "SrcA" tt_llk_{target_arch}/common/inc/*.h` |
+| `Srcs::SrcA` | `SrcA` (unqualified) — verify: Grep for "SrcA" in `tt_llk_{target_arch}/common/inc/` (*.h files) |
 | `Srcs::SrcA` in UNPACR_NOP | `p_unpacr_nop::UNP0` — verify in existing code |
 
 ---
@@ -121,45 +121,45 @@ grep -rn "{symbol}" tt_llk_{target_arch}/common/inc/ --include="*.h" | head -10
 ### TIMEOUT on Unpacker/Packer
 **Pattern**: `TENSIX TIMED OUT - waited 2 seconds for Unpacker`
 
-```bash
+```
 # Check MOP loop counts in similar working kernels
-grep -A10 "outerloop\|innerloop" tt_llk_{target_arch}/llk_lib/llk_{type}_*.h | head -30
+Grep for "outerloop|innerloop" in tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
 
 # Check config write pattern
-grep -r "TTI_WRCFG\|TTI_REG2FLOP" tt_llk_{target_arch}/llk_lib/ --include="*.h" | head -20
+Grep for "TTI_WRCFG|TTI_REG2FLOP" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 
 # Verify tile dimension configuration
-grep -r "Tile_x_dim\|Tile_z_dim" tt_llk_{target_arch}/llk_lib/ --include="*.h" | head -10
+Grep for "Tile_x_dim|Tile_z_dim" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 ### Wrong Config Write Pattern
 **Symptom**: Kernel compiles but hangs or produces wrong results.
 
 Different architectures use different config write patterns:
-```bash
-grep -c "TTI_WRCFG" tt_llk_{target_arch}/llk_lib/*.h
-grep -c "TTI_REG2FLOP" tt_llk_{target_arch}/llk_lib/*.h
+```
+Grep (count mode) for "TTI_WRCFG" in tt_llk_{target_arch}/llk_lib/ (*.h files)
+Grep (count mode) for "TTI_REG2FLOP" in tt_llk_{target_arch}/llk_lib/ (*.h files)
 ```
 
 ### Wrong Template Type
 **Symptom**: Compiles but hangs or wrong results.
 
-```bash
-grep -r "ckernel_template\|ckernel_unpack_template" tt_llk_{target_arch}/llk_lib/llk_unpack_*.h
+```
+Grep for "ckernel_template|ckernel_unpack_template" in tt_llk_{target_arch}/llk_lib/llk_unpack_*.h
 ```
 
 ### Missing Replay Buffer
 **Pattern**: `'load_replay_buf' was not declared in this scope`
 
-```bash
-grep -r "replay" tt_llk_{target_arch}/ --include="*.h" -l
+```
+Grep for "replay" in tt_llk_{target_arch}/ (*.h files)
 ```
 
 ### CFGSHIFTMASK Not Working
 **Symptom**: Address auto-increment in replay buffer not working.
 
-```bash
-grep -B5 -A10 "CFGSHIFTMASK" tt_llk_{target_arch}/llk_lib/ --include="*.h" -r
+```
+Grep for "CFGSHIFTMASK" in tt_llk_{target_arch}/llk_lib/ (*.h files) with surrounding context
 ```
 
 ---
@@ -177,10 +177,10 @@ grep -B5 -A10 "CFGSHIFTMASK" tt_llk_{target_arch}/llk_lib/ --include="*.h" -r
 ### Reconfig Escape
 **Symptom**: Test passes alone, fails when run after another test.
 
-```bash
+```
 # Check init/uninit symmetry
-grep -A20 "_init_" tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h
-grep -A20 "_uninit_" tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h
+Grep for "_init_" in tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h with context
+Grep for "_uninit_" in tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h with context
 ```
 
 Every register modified in `_init_` must be restored in `_uninit_`. Do NOT reset the device — it masks the bug.

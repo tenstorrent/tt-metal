@@ -17,7 +17,7 @@ PARALLEL_JOBS="${PARALLEL_JOBS:-10}"
 FAIL_FAST="${FAIL_FAST:-1}"
 PYTEST_ARGS="${PYTEST_ARGS:-}"
 
-LOG_DIR="/tmp/llk_test"
+LOG_DIR="/tmp/llk_test_$(whoami)"
 mkdir -p "$LOG_DIR"
 
 # Determine test target
@@ -42,8 +42,11 @@ if [[ -n "$PYTEST_ARGS" ]]; then
 fi
 
 # Activate venv if it exists
+# Temporarily disable nounset — venv activate scripts may reference unset variables
 if [[ -f ".venv/bin/activate" ]]; then
+    set +u
     source .venv/bin/activate
+    set -u
 fi
 
 # Step 1: Environment setup

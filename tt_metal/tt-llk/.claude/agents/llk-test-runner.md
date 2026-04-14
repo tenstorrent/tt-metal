@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 
 - **NEVER run `pytest` directly** — always use `.claude/scripts/run_test.sh`
 - **ALWAYS run from the `tests/` directory**
-- Only read logs when needed: compile errors → `/tmp/llk_test/compile.log`, test failures → `/tmp/llk_test/run.log`
+- Only read logs when needed: compile errors → `$LOG_DIR/compile.log`, test failures → `$LOG_DIR/run.log`
 - This agent runs tests — it does not debug or modify code
 
 ## Command
@@ -48,8 +48,8 @@ ENV_SETUP=<0|1> COMPILED=<0|1> RUN_TEST=1 FILE_NAME="<test_name>.py" ../.claude/
 ## How the Script Works
 
 1. If `ENV_SETUP=1`: runs `./setup_testing_env.sh`
-2. If `COMPILED=1`: runs `pytest --compile-producer -n <PARALLEL_JOBS> [-x] ./<test>` and writes `/tmp/llk_test/compile.log`
-3. If `RUN_TEST=1`: runs `pytest --compile-consumer [-x] ./<test>` and writes `/tmp/llk_test/run.log`
+2. If `COMPILED=1`: runs `pytest --compile-producer -n <PARALLEL_JOBS> [-x] ./<test>` and writes `$LOG_DIR/compile.log`
+3. If `RUN_TEST=1`: runs `pytest --compile-consumer [-x] ./<test>` and writes `$LOG_DIR/run.log`
 4. In `QUIET=1` mode: only the last 10 lines of the run log are printed
 
 ## Usage Examples
@@ -93,7 +93,7 @@ PASS — test_pack_untilize.py (code-changed scenario)
 FAIL — test_pack_untilize.py (code-changed scenario)
 - 45 tests collected, 3 failed
 - Failing: formats:Bfp8_b->Float16_b (DATA_MISMATCH)
-- Log: /tmp/llk_test/run.log
+- Log: $LOG_DIR/run.log
 ```
 
 ## Limits

@@ -60,8 +60,8 @@ Determine the target architecture from (in priority order):
 ### Step 1: Classify the Error
 
 Read the error output or log file:
-- Compile errors: `/tmp/llk_test/compile.log`
-- Runtime errors: `/tmp/llk_test/run.log`
+- Compile errors: `$LOG_DIR/compile.log`
+- Runtime errors: `$LOG_DIR/run.log`
 
 ### Step 2: Check common-errors.md
 
@@ -71,9 +71,9 @@ Read `.claude/references/common-errors.md` for known patterns and investigation 
 
 #### COMPILE_ERROR
 1. Read the full error message — compiler suggestions ("did you mean X?") are usually correct
-2. Check function signatures against the test harness:
+2. Check function signatures against the test harness (WH/BH only — Quasar has no `ARCH_` guards in test sources):
    ```
-   grep -A20 "ARCH_{ARCH}" tests/sources/*{kernel}*.cpp
+   grep -A20 "#ifdef ARCH_{ARCH}" tests/sources/*{kernel}*.cpp
    ```
 3. Compare includes and namespaces with a similar working kernel in the same architecture
 4. Check `assembly.yaml` if the error involves an instruction macro
