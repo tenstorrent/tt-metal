@@ -169,7 +169,7 @@ TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
             reduced_shape);
         auto output_vector_max = output_tensor_max.to_vector<bfloat16>();
         auto output_vector_min = output_tensor_min.to_vector<bfloat16>();
-        float expected_max = (float)(param.offset + param.w - 1.0);
+        float expected_max = (float)(param.offset + param.w - 1);
         float expected_min = (float)param.offset;
         for (int i = 0; i < param.h; i++) {
             float max = output_vector_max[i];
@@ -229,7 +229,7 @@ TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
         auto output_vector_max = output_tensor_max.to_vector<bfloat16>();
         auto output_vector_min = output_tensor_min.to_vector<bfloat16>();
         for (int i = 0; i < param.w; i++) {
-            float expected_max = (float)(param.offset + param.h - 1.0);
+            float expected_max = (float)(param.offset + param.h - 1);
             float expected_min = (float)param.offset;
             float max = output_vector_max[i];
             float min = output_vector_min[i];
@@ -283,7 +283,7 @@ TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
             output_vector_min.size() == 1,
             "Result should only have a single element instead of {}",
             output_vector_min.size());
-        float expected_max = (float)(param.offset + param.h * param.w - 1.0);
+        float expected_max = (float)(param.offset + param.h * param.w - 1);
         float expected_min = (float)param.offset;
         float max = output_vector_max[0];
         float min = output_vector_min[0];
