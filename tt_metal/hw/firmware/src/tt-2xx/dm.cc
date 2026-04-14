@@ -121,6 +121,7 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
+    DPRINT << "signaling subordinate completion" << ENDL();
     uint32_t hartid = internal_::get_hw_thread_idx();
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
@@ -169,6 +170,7 @@ inline void run_triscs(uint32_t enables) {
 }
 
 inline void start_subordinate_kernel_run_early(uint32_t enables) {
+    DPRINT << "DM0-FW: starting subordinate kernel run early" << ENDL();
     for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
         if (enables & (1u << i)) {
             *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
@@ -235,15 +237,20 @@ extern "C" uint32_t _start1() {
             // ensures that the unicast data will also have been received.
             DPRINT << "DM0-FW: waiting for GO message" << ENDL();
             DEVICE_PRINT("DM0-FW: waiting for GO message\n");
+            DPRINT << "DM0-FW: go message index: " << mailboxes->go_message_index << ENDL();
+            DPRINT << "DM0-FW: go messages offset: " << offsetof(mailboxes_t, go_messages) << ENDL();
+            DPRINT << "DM0-FW: go messages address: " << (uintptr_t)(&(mailboxes->go_messages)) << ENDL();
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
+                DPRINT << "DM0-FW: Received GO message signal: " << go_message_signal << ENDL();
                 invalidate_l1_cache();
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
                     (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
                     (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+                    DPRINT << "DM0-FW: Reset read ptr signal" << ENDL();
                     // Set the rd_ptr on workers to specified value
                     mailboxes->launch_msg_rd_ptr = 0;
                     if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
@@ -264,6 +271,8 @@ extern "C" uint32_t _start1() {
                     }
                 }
             }
+
+            DPRINT << "DM0-FW: go message signal: " << go_message_signal << ENDL();
 
             WAYPOINT("GD");
 
@@ -322,6 +331,7 @@ extern "C" uint32_t _start1() {
 
                 // Run the kernel
                 WAYPOINT("R");
+                DPRINT << "DM0-FW: running kernel" << ENDL();
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
                     uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
@@ -390,6 +400,7 @@ extern "C" uint32_t _start1() {
     while (1) {
         // WAYPOINT("GW");
         WAYPOINT("W1");
+        DPRINT << "Subordinates waiting for go message" << ENDL();
         while (true) {
             if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
                 *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
@@ -397,6 +408,7 @@ extern "C" uint32_t _start1() {
             }
             asm("nop; nop; nop; nop; nop");
         }
+        DPRINT << "Subordinates got go message" << ENDL();
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
@@ -424,6 +436,7 @@ extern "C" uint32_t _start1() {
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 
+        DPRINT << "Subordinates signaling completion" << ENDL();
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
 
