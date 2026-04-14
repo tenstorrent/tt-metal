@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "atlassian": {
+            "transport": "sse",
+            "url": "https://mcp.atlassian.com/v1/sse"
+        },
+        "deepwiki": {
+            "transport": "http",
+            "url": "https://mcp.deepwiki.com/mcp"
+        }
+    }
+}
