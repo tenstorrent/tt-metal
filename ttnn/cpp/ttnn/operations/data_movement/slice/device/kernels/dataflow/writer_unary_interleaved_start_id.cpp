@@ -17,7 +17,6 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_pages);

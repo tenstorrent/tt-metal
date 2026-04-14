@@ -51,7 +51,6 @@ void kernel_main() {
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 

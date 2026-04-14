@@ -23,14 +23,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     uint32_t l1_write_addr_in0;
-    uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     const auto s0 = TensorAccessor(src0_args, src0_addr);
     uint32_t l1_write_addr_in1;
-    uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     uint32_t l1_write_addr_in2;
-    uint32_t src2_tile_bytes = get_tile_size(cb_id_in2);
     const auto s2 = TensorAccessor(src2_args, src2_addr);
 
     cb_reserve_back(cb_id_in0, onetile);

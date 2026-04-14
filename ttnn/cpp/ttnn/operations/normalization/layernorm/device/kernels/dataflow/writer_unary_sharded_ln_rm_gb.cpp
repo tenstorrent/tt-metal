@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
     constexpr auto gamma_args = TensorAccessorArgs<5>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1) == 1;
     constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2) == 1;
 

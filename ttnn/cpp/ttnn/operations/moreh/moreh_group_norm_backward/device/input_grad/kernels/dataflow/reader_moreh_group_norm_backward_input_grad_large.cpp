@@ -72,11 +72,9 @@ void kernel_main() {
     }
 
     // output_grad
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
     // input
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // mean
@@ -84,11 +82,9 @@ void kernel_main() {
     const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
 
     // rstd
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
     const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     // gamma
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
     const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr);
 
     const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);

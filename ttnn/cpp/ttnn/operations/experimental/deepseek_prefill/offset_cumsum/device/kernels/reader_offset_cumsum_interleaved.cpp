@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
     constexpr bool dst_offsets_is_dram = (bool)get_compile_time_arg_val(3);
     constexpr bool dst_totals_is_dram = (bool)get_compile_time_arg_val(4);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t offsets_page_size = get_compile_time_arg_val(6);
     constexpr uint32_t totals_page_size = get_compile_time_arg_val(7);
     constexpr uint32_t W = get_compile_time_arg_val(8);

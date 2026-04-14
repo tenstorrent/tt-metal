@@ -96,7 +96,6 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(1);
     constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t num_embeddings = get_compile_time_arg_val(3);
-    constexpr uint32_t index_page_size = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_grad = tt::CBIndex::c_0;
     constexpr uint32_t cb_index = tt::CBIndex::c_1;

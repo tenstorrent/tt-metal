@@ -20,12 +20,10 @@ void kernel_main() {
     constexpr uint32_t cb_in1_bcast_row = get_compile_time_arg_val(3);
 
     uint32_t l1_write_addr_in0;
-    uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     constexpr auto src0_args = TensorAccessorArgs<4>();
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     uint32_t l1_write_addr_in1;
-    uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 

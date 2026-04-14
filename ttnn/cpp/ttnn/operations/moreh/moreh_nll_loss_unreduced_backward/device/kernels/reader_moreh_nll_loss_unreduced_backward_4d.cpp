@@ -26,12 +26,9 @@ void kernel_main() {
     constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
 
     // ublocks size defined in tiles
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const DataFormat weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_output_grad);
     const DataFormat output_grad_data_format = get_dataformat(cb_output_grad);
 
     constexpr auto target_args = TensorAccessorArgs<0>();

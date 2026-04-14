@@ -72,7 +72,6 @@ void kernel_main() {
     constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
     constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
     constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
-    constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t src_accessor_offset = 17;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();

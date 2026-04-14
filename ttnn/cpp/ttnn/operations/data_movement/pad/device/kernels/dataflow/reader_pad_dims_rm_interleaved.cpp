@@ -51,7 +51,6 @@ void kernel_main() {
     const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();

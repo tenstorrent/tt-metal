@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
-    constexpr uint32_t target_indexes_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
 

@@ -26,11 +26,9 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Index tensor config
-    constexpr uint32_t user_ids_tensor_tile_size_bytes = get_tile_size(user_ids_cb_index);
     constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_cb_index);
     const auto user_ids_tensor_dram = TensorAccessor(user_ids_tensor_accessor_args, user_ids_tensor_buffer_addr);
 
-    constexpr uint32_t seeds_tensor_tile_size_bytes = get_tile_size(seeds_cb_index);
     constexpr DataFormat seeds_tensor_data_format = get_dataformat(seeds_cb_index);
     const auto seeds_tensor_dram = TensorAccessor(seeds_tensor_accessor_args, seeds_tensor_buffer_addr);
 

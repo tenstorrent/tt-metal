@@ -30,15 +30,10 @@ void kernel_main() {
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t input_tile_bytes = get_tile_size(cb_input);
     const auto input_data_format = get_dataformat(cb_input);
 
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
-
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const auto weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t divisor_tile_bytes = get_tile_size(cb_divisor);
     const auto divisor_data_format = get_dataformat(cb_divisor);
 
     constexpr auto input_args = TensorAccessorArgs<0>();

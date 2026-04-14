@@ -13,7 +13,6 @@ This kernel copies local shards from one to another tensor. Output is required t
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
-    uint32_t page_size = get_compile_time_arg_val(0);
     uint32_t input_base_address = get_arg_val<uint32_t>(0);
     uint32_t output_base_address = get_arg_val<uint32_t>(1);
     uint32_t first_shard_id = get_arg_val<uint32_t>(2);

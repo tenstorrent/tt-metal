@@ -17,7 +17,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
 
-    uint32_t output_tile_bytes = get_tile_size(cb_id_out);
     const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

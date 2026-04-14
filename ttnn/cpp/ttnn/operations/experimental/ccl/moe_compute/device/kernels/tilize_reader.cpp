@@ -306,9 +306,7 @@ void kernel_main() {
     constexpr uint32_t mapping_pages = get_named_compile_time_arg_val("mapping_pages");
 
     // Page sizes
-    constexpr uint32_t input_page_size = get_named_compile_time_arg_val("input_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
-    constexpr uint32_t mapping_page_size = get_named_compile_time_arg_val("mapping_page_size");
     constexpr uint32_t per_expert_total_tokens_output_page_size =
         get_named_compile_time_arg_val("per_expert_total_tokens_output_page_size");
     constexpr uint32_t expert_activation_output_page_size =

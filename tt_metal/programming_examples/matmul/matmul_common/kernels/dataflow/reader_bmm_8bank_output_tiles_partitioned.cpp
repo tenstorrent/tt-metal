@@ -30,8 +30,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
 
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 

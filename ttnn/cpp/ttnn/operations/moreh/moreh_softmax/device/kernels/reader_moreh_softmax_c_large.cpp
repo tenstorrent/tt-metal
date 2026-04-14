@@ -18,7 +18,6 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t src_in_tile_bytes = get_tile_size(cb_in);
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     const auto src_in = TensorAccessor(in_args, src_addr);

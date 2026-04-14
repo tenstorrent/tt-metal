@@ -17,7 +17,6 @@ void kernel_main() {
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);

@@ -14,7 +14,6 @@ void kernel_main() {
     constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(2);
     constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(4);  // 0 or 1
-    constexpr uint32_t row_page_size_bytes = get_compile_time_arg_val(5);
     constexpr auto src_args = TensorAccessorArgs<6>();
 
     constexpr uint32_t onepage = 1;

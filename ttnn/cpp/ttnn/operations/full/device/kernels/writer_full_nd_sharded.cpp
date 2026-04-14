@@ -14,7 +14,6 @@ void kernel_main() {
     constexpr uint32_t cb_value = get_compile_time_arg_val(0);
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_shards = get_compile_time_arg_val(4);
     constexpr uint32_t num_cores = get_compile_time_arg_val(5);
     constexpr auto dst_args = TensorAccessorArgs<6>();

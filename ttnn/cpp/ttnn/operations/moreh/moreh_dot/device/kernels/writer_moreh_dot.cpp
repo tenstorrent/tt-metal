@@ -14,7 +14,6 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 

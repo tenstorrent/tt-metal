@@ -42,7 +42,6 @@ void kernel_main() {
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
     const auto s2 = TensorAccessor(sin_args, sin_addr);
 
-    const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
     const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
 
     uint32_t trans_mat_curr_idx = 0;

@@ -49,7 +49,6 @@ void kernel_main() {
     uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t output_row_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // NOTE: Row major layout only supports bfp16

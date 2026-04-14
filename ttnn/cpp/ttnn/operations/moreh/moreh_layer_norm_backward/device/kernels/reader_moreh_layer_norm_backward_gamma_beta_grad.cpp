@@ -110,11 +110,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_scaler = 4;
     constexpr uint32_t cb_id_mask_h = 5;
 
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-
     constexpr bool gamma_grad_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool do_mask_h = get_compile_time_arg_val(1) == 1;
     constexpr auto output_grad_args = TensorAccessorArgs<2>();

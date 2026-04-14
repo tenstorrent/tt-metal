@@ -10,7 +10,6 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t write_size = get_compile_time_arg_val(2);
     constexpr auto dst_args = TensorAccessorArgs<3>();
 

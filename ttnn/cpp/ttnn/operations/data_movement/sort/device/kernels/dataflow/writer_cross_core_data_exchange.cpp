@@ -40,7 +40,6 @@ void kernel_main() {
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
     // Output tensor config
-    const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
     const auto output_tensor_accessor = TensorAccessor(value_tensor_args, output_tensor_buffer_addr);
 
     for (uint32_t h = 0; h < Ht; h++) {

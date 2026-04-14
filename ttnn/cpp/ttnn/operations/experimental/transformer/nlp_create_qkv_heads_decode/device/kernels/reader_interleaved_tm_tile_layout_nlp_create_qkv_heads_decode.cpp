@@ -25,7 +25,6 @@ void kernel_main() {
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
 
     // Q
-    constexpr uint32_t qkv_tile_bytes = get_tile_size(cb_id_q_out);
     const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr);
 
     uint32_t q_write_addr = 0;

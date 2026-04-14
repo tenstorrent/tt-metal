@@ -21,7 +21,6 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;

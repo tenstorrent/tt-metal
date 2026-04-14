@@ -20,7 +20,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
     constexpr uint32_t row_length = get_compile_time_arg_val(5);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
@@ -38,7 +37,6 @@ void kernel_main() {
 
     cb_reserve_back(cb_id_in1, 1);
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
-    const uint32_t tile_size_bytes = get_tile_size(cb_id_in1);
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {

@@ -234,7 +234,6 @@ void kernel_main() {
     // This CB holds intermediate outputs (values) in each core
     constexpr uint32_t red_vals_cb_idx = get_compile_time_arg_val(3);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(4);
     constexpr uint32_t dst_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t red_idx_size_per_core = get_compile_time_arg_val(6);
     constexpr uint32_t red_val_size_per_core = get_compile_time_arg_val(7);

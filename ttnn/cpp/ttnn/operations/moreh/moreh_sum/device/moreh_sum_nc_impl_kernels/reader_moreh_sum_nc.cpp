@@ -33,7 +33,6 @@ void kernel_main() {
 #endif
 
     uint32_t l1_write_addr_in0;
-    uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {

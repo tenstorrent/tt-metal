@@ -15,8 +15,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
-    constexpr uint32_t single_tile_size = 2 * 1024;
-
     // Create TensorAccessors for the input buffers
     constexpr auto s0_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(s0_args, src0_addr);

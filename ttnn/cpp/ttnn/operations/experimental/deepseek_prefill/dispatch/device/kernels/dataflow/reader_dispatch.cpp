@@ -49,10 +49,8 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(17);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(18);
     constexpr uint32_t weights_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(20);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(21);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(22);
-    constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(23);
 
     // Operation parameters (indices 24-31)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
@@ -76,7 +74,6 @@ void kernel_main() {
     constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(38);
     constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(39);
     constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(40);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(42);
     constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(43);
 

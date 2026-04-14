@@ -106,7 +106,6 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_LINE_BYTES = FACE_WIDTH * element_size;
 
     // Address generator
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 

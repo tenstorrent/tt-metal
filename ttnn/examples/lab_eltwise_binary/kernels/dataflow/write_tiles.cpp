@@ -16,7 +16,6 @@ void kernel_main() {
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
     // buffers (which is most often the case).
-    constexpr uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Create address generator for the output buffer. Address generators can determine
     // physical address based on the provided data layout and base address.

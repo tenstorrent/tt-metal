@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr auto out1_tensor_args = TensorAccessorArgs<out0_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     constexpr uint32_t onetile = 1;
 

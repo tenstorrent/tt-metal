@@ -27,14 +27,12 @@ void kernel_main() {
 
     // DRAM tensor accessor configuration
     constexpr auto s_args = TensorAccessorArgs<5>();
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const auto s = TensorAccessor(s_args, src_addr);
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
     constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(4);
-    constexpr uint32_t indices_tile_bytes = get_tile_size(cb_id_in1);
     const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
 #endif  // not GENERATE_INDICES
 

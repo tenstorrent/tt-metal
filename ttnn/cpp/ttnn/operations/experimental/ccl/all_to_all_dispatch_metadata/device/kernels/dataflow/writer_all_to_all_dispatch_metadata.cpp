@@ -862,7 +862,6 @@ void kernel_main() {
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
     constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
-    constexpr uint32_t output_scores_page_size = get_compile_time_arg_val(43);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
     constexpr auto input_args = TensorAccessorArgs<45>();

@@ -35,13 +35,10 @@ void kernel_main() {
     constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
     const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t cb_length = get_compile_time_arg_val(6);

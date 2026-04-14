@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1;
-    const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);

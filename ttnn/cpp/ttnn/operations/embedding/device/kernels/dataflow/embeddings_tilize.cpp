@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
     constexpr uint32_t weight_block_size = get_compile_time_arg_val(5);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(6);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(7);

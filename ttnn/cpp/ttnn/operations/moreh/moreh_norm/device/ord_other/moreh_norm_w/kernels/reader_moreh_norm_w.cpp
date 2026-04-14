@@ -18,8 +18,6 @@ void kernel_main() {
     const auto cb_id_one = cb_id++;
     const auto cb_id_mask_w = cb_id++;
 
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 

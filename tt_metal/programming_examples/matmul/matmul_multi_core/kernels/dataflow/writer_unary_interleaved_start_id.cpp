@@ -16,7 +16,6 @@ void kernel_main() {
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr uint32_t onetile = 1;  // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto c_args = TensorAccessorArgs<0>();
     const auto c = TensorAccessor(c_args, dst_addr);

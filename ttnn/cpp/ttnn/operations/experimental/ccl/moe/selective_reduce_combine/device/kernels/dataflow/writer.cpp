@@ -123,7 +123,6 @@ void kernel_main() {
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
-    constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");

@@ -27,7 +27,6 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t output_tensor_page_size = get_named_compile_time_arg_val("output_tensor_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;

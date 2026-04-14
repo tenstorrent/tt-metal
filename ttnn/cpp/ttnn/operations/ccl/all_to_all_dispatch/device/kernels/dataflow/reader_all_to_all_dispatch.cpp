@@ -17,9 +17,6 @@ void kernel_main() {
     constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);

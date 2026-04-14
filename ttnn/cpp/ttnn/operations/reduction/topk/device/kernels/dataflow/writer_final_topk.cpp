@@ -22,8 +22,6 @@ void kernel_main() {
 
     // Memory transfer configuration
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
 
     // Initialize DRAM tensor accessors for interleaved output format
     const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);

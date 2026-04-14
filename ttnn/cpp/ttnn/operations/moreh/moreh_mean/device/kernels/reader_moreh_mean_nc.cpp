@@ -31,7 +31,6 @@ void kernel_main() {
     fill_cb_with_value(cb_id_in2, scaler.u, 1);
 
     uint32_t l1_write_addr_in0;
-    uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 

@@ -84,7 +84,6 @@ void kernel_main() {
     fill_cb_with_value(cb_id_in2, scaler.u, 1);
 
     uint32_t l1_write_addr_in0;
-    uint32_t output_grad_tile_bytes = get_tile_size(cb_id_in0);
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {

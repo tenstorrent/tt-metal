@@ -12,7 +12,6 @@ void kernel_main() {
     auto start_id = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
-    const uint32_t output_tile_bytes = get_tile_size(cb_output);
 
     constexpr auto output_args = TensorAccessorArgs<0>();
 

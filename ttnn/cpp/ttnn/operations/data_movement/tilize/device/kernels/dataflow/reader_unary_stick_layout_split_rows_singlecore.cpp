@@ -17,7 +17,6 @@ void kernel_main() {
     const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto src_tensor_args = TensorAccessorArgs<1>();
 
     const auto s = TensorAccessor(src_tensor_args, src_addr);

@@ -25,8 +25,6 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t y_tile_bytes = get_tile_size(cb_y);
-    uint32_t dy_tile_bytes = get_tile_size(cb_dy);
 
     constexpr auto y_args = TensorAccessorArgs<0>();
     constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();

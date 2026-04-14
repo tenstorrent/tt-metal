@@ -55,7 +55,6 @@ void kernel_main() {
 
     // The output DRAM buffer is ROW_MAJOR with page_size = W * elem_size_bytes (one full row per page).
     // W = Wt * TILE_W, computed from runtime args.
-    const uint32_t rm_page_size = Wt * TILE_W * elem_size_bytes;
     const auto dst_a = TensorAccessor(dst_args, dst_addr);
 
     // Row stride inside a pack_untilize_block<block_size, block_size> output block.

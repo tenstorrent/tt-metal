@@ -51,7 +51,6 @@ void kernel_main() {
     constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
     constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
     constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(args_base + 8);
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
     constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
     constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);

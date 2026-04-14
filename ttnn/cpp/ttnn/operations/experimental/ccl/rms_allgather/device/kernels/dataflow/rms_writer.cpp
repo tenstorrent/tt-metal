@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(16);
 
     // Data type CTs
-    constexpr uint32_t stick_size = get_compile_time_arg_val(17);
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(18) == 1;
 
     // Reshard writer

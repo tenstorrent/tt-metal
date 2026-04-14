@@ -402,7 +402,6 @@ FORCE_INLINE void gather(uint32_t tokens_per_tile) {
 void kernel_main() {
     constexpr uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
     constexpr uint32_t cb_out_indices = get_named_compile_time_arg_val("cb_out_indices");
-    constexpr uint32_t weights_page_size = get_named_compile_time_arg_val("weights_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");

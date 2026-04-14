@@ -20,7 +20,6 @@ void kernel_main() {
     const uint32_t dst_stick_offset = get_arg_val<uint32_t>(25);  // == start_src_stick_wi * elem_size
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 

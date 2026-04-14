@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t dims = get_compile_time_arg_val(1);
     constexpr uint32_t element_size = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();

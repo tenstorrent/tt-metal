@@ -23,8 +23,6 @@ void kernel_main() {
 
     // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
     // buffers in the host code, so we can use the same address for both DRAM and CBs.
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     constexpr auto a_args = TensorAccessorArgs<0>();
     const auto a = TensorAccessor(a_args, src0_addr);

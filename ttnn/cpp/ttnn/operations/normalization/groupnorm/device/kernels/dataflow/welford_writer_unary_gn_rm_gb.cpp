@@ -43,7 +43,6 @@ void kernel_main() {
     constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();

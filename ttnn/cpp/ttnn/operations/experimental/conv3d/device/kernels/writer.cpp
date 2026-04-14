@@ -25,7 +25,6 @@ void kernel_main() {
     constexpr uint32_t matmul_K_t = get_compile_time_arg_val(15);
     constexpr uint32_t matmul_N_t = get_compile_time_arg_val(16);
     constexpr uint32_t num_patches_tile_padded = get_compile_time_arg_val(17);
-    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));

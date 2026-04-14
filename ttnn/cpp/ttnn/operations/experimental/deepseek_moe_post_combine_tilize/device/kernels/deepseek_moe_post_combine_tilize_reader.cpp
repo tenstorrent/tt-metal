@@ -9,7 +9,6 @@
 
 void kernel_main() {
     constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
-    constexpr uint32_t input_row_page_size = get_named_compile_time_arg_val("input_row_page_size");
     constexpr uint32_t bytes_to_read_per_row = get_named_compile_time_arg_val("bytes_to_read_per_row");
 
     uint32_t rt_args_idx = 0;

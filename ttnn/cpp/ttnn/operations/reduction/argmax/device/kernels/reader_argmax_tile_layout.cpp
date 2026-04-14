@@ -16,7 +16,6 @@ void kernel_main() {
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
     constexpr uint32_t tile_height = get_compile_time_arg_val(4);
     constexpr uint32_t tile_width = get_compile_time_arg_val(5);

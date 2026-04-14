@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t ones_cb_index = get_compile_time_arg_val(1);
 
     // Input data config
-    const uint32_t input_data_tile_size_bytes = get_tile_size(src_cb_index);
     constexpr auto interleaved_accessor_args = TensorAccessorArgs<2>();
     const auto interleaved_accessor = TensorAccessor(interleaved_accessor_args, input_buffer_addr);
 

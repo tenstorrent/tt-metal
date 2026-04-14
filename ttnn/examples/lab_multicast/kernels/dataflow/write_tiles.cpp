@@ -16,7 +16,6 @@ void kernel_main() {
 
     ////////// BUFFER SETUP //////////
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-    const uint32_t tile_size_bytes = get_tile_size(cb_id_out0);
 
     // Create address generator for the output buffer using TensorAccessorArgs.
     // TensorAccessorArgs extracts data distribution details from compile-time arguments.

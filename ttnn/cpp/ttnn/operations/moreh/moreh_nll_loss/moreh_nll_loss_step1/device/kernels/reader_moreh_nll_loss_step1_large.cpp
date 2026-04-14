@@ -23,7 +23,6 @@ void kernel_main() {
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
     constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr auto target_args = TensorAccessorArgs<1>();

@@ -194,7 +194,6 @@ struct KVCacheUpdate {
             // ============================================================
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;

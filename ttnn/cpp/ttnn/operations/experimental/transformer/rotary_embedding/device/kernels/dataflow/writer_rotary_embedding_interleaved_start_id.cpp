@@ -16,7 +16,6 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifndef OUT_SHARDED
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const auto s = TensorAccessor(dst_args, dst_addr);
 #endif
 

@@ -7,7 +7,6 @@
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Constexpr

@@ -51,7 +51,6 @@ void kernel_main() {
         cb_push_back(trans_mat_cb_id, onetile);
     } else {
         // Non-height-sharded/fewer-#shards-than-cores-height-sharded cases
-        const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
         const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
 
         cb_reserve_back(trans_mat_cb_id, onetile);

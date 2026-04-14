@@ -8,7 +8,6 @@
 
 void kernel_main() {
     constexpr std::uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr std::uint32_t page_size = get_compile_time_arg_val(1);
     std::uint32_t dst_addr_base = get_arg_val<uint32_t>(0);
     std::uint32_t num_tiles = get_arg_val<uint32_t>(1);
 

@@ -26,7 +26,6 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(4);
     constexpr auto src_args = TensorAccessorArgs<5>();
     const auto s = TensorAccessor(src_args, src_addr);
 

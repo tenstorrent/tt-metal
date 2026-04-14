@@ -26,8 +26,6 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // single-tile ublocks
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;

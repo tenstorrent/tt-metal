@@ -113,11 +113,9 @@ void kernel_main() {
     const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // mean
-    const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
     const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
 
     // rstd
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
     const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     uint32_t offs = 0;

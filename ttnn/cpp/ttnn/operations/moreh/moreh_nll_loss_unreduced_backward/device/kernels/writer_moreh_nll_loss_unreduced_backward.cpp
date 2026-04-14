@@ -12,8 +12,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
-    const uint32_t input_grad_tile_bytes = get_tile_size(cb_input_grad);
-
     constexpr auto input_grad_args = TensorAccessorArgs<0>();
 
     const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);

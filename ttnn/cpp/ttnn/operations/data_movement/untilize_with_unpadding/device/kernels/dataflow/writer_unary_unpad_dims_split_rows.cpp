@@ -31,7 +31,6 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t num_tiles_block_c =

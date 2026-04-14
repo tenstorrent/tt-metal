@@ -272,7 +272,6 @@ struct FlashMLADecode {
             }
 
             const uint32_t k_chunk_tiles = args.Sk_chunk_t * args.DHt;
-            const uint32_t k_tile_bytes = get_tile_size(args.cb_k_in);
 
             const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr);
 

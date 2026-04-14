@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;

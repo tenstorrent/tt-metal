@@ -33,8 +33,6 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);

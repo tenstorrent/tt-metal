@@ -51,7 +51,6 @@ void kernel_main() {
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t stats_tile_bytes = get_tile_size(stats_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
-    const uint32_t transformation_mat_tile_bytes = get_tile_size(transformation_mat_cb);
     const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
     const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 

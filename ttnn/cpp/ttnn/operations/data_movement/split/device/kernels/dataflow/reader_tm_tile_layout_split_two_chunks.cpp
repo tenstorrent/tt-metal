@@ -28,7 +28,6 @@ void kernel_main() {
 
     constexpr uint32_t out_num_tensors = 1;
     constexpr uint32_t cb_id_in0 = 0;
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t onetile = 1;
 

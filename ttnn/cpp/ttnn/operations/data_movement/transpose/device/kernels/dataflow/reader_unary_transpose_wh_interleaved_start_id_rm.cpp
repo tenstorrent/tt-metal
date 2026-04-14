@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr uint32_t HtWt = get_compile_time_arg_val(5);
     constexpr uint32_t W_size_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t page_size = get_compile_time_arg_val(8);
     constexpr auto src_args = TensorAccessorArgs<9>();
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;

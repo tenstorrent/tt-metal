@@ -64,7 +64,6 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
 
-    constexpr uint32_t tile_bytes = TILE_HW * element_size;
     constexpr uint32_t w_dim = RANK - 1;
 
     // For output height, tile-based:

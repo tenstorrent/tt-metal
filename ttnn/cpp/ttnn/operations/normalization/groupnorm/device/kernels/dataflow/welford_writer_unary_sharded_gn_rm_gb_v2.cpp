@@ -30,8 +30,6 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(8);
     constexpr uint32_t block_w = get_compile_time_arg_val(9);
 
-    constexpr uint32_t size = get_compile_time_arg_val(10);
-
     constexpr auto gamma_args = TensorAccessorArgs<11>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();

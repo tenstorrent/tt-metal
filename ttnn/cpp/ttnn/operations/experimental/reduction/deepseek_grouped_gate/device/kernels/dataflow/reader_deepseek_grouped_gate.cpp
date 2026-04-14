@@ -8,8 +8,6 @@ void kernel_main() {
     constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
     constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
-    constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
-    constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
 
     // Get scores and bias tensor accessors
     constexpr auto scores_args = TensorAccessorArgs<0>();
