@@ -328,15 +328,31 @@ class Molmo2Model(LightweightModule):
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if is_mesh_device else None
 
-        batch_size = pooled_patches_idx.shape[0]  # Total number of frames
+        n_real_frames = pooled_patches_idx.shape[0]  # Actual number of video frames
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
         vit = self.vision_backbone.image_vit
         patch_features = vit.patch_size * vit.patch_size * 3  # 588
 
+        # Pad frames to next multiple of max_frames_per_pool_chunk (16) for consistent
+        # TTNN kernel shapes across videos of different lengths.
+        # LCM(max_frames_per_chunk=8, max_frames_per_pool_chunk=16) = 16
+        # ensures no partial ViT chunks OR partial pool chunks.
+        _pad_to = 16  # LCM(8, 16)
+        if n_real_frames % _pad_to != 0:
+            n_pad = _pad_to - (n_real_frames % _pad_to)
+            pad_pixels = torch.zeros(n_pad, *pixel_values.shape[1:], dtype=pixel_values.dtype)
+            pixel_values = torch.cat([pixel_values, pad_pixels], dim=0)
+            # Use -1 so valid = (pooled_patches_idx >= 0) is False for padded frames
+            pad_pool = torch.full((n_pad, n_out, k_pool), -1, dtype=pooled_patches_idx.dtype)
+            pooled_patches_idx = torch.cat([pooled_patches_idx, pad_pool], dim=0)
+
+        batch_size = pixel_values.shape[0]  # Padded total frames
+
         logger.info(
-            f"embed_image_chunked: Two-stage processing {batch_size} frames in chunks of {max_frames_per_chunk}"
+            f"embed_image_chunked: Two-stage processing {n_real_frames} real frames "
+            f"(padded to {batch_size}) in chunks of {max_frames_per_chunk}"
         )
 
         # ============================================================

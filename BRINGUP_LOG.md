@@ -2,6 +2,38 @@
 
 ## Session Log
 
+### 2026-04-07 — Time-based video frame selection (server matches HF/demo pixels)
+
+**Status:** Server re-tested after device reset; Molmo2ProcessorWrapper now pre-selects frames with HF `sample_times` + `floor(t*fps)` before patchify (`do_sample_frames=False`), matching file-path / demo pixel tensors (verified max diff 0 vs `AutoProcessor` on `d02d399003`).
+
+**Server:** `run.py --model Molmo2-8B --device t3k --workflow server --local-server --skip-system-sw-validation`; log `workflow_logs/local_server/vllm_local_2026-04-07_20-15-53_Molmo2-8B_t3k_server.log`.
+
+**Note:** `run_comparison.py` compares TT to **cached** `test_results.jsonl` (HF PyTorch). d02d rows still report tt=`C.` vs hf=`B.` — needs apples-to-apples check vs **demo.py** on TT, not only HF baseline.
+
+**Block Hash:** `[time-based-frames, norm-fix, padding-fix]`
+
+---
+
+### 2026-04-07 — Accuracy fix + ViT/Pool padding for consistent runtime
+
+**Status:** IN PROGRESS — fixes applied, demo.py verified correct, server not yet re-tested.
+
+**Root causes found and fixed:**
+
+1. **Wrong normalization constants (accuracy bug)** — `generator_vllm.py` was normalizing video frames with CLIP IMAGENET constants (`[0.48145466, 0.4578275, 0.40821073]` / `[0.26862954, ...]`) instead of Molmo2's actual constants (`[0.5, 0.5, 0.5]` / `[0.5, 0.5, 0.5]`). This caused server to produce wrong answers for videos that demo.py answered correctly. Fixed both video and image paths.
+
+2. **Frame padding for consistent TTNN kernel shapes** — `_embed_image_chunked` in `molmo2_model.py` now pads frames to the next multiple of 16 (LCM of ViT chunk=8 and pool chunk=16). This eliminates cold TTNN kernel compilation at runtime for variable-length videos. Warmup updated to compile padded sizes [16, 32, 48, 64, 80] instead of 1..16.
+
+**Verified:** demo.py with test 1 (`d02d399003`, 30 frames, "Which object was taken?") → **Response: B.** ✓ (correct, padding to 32 frames works)
+
+**Files changed:**
+- `models/demos/molmo2/tt/generator_vllm.py` — normalization fix + warmup update
+- `models/demos/molmo2/tt/molmo2_model.py` — padding in `_embed_image_chunked`
+
+**Block Hash:** `[norm-fix, padding-fix]`
+
+---
+
 ### 2026-04-06 — T3K regression verify after DP=4 fix
 
 **Status:** PASS — DP=4 Galaxy changes do not regress T3K.
@@ -1165,6 +1197,32 @@ python models/demos/molmo2/demo/demo.py \
 1. Debug projector scale issue in `image_projector.py` or `vision_backbone.py`
 2. Compare projector output with PyTorch reference
 3. After fixing scale, verify output quality with 72+ frames
+
+---
+
+### 2026-04-08 — Align tt-inference-server with demo.py for Molmo2 Video
+
+**Status:** All four divergence fixes implemented and verified for test 1 (d02d399003).
+
+**Root Causes Fixed:**
+1. **D3 (Timestamps):** `generate_video_tokens()` in `generator_vllm.py` used hardcoded `np.arange(n_frames)/2.0` timestamps. Fixed to read actual timestamps from `hf_processor._video_data["timestamps"]`. For this video (345 frames, 23.98fps, ~14.4s), the last frame timestamp differs: `14.5` (hardcoded) vs `14.39` (actual). Fix resolves 1-token mismatch → **2701/2701 match**.
+
+2. **D2 (mm_token_type_ids silently dropped):** Secondary HF processor call `self.processor(text=text, videos=sf, fps=sf_fps)` raised `"FPS must be provided for video input"` because `VideoMetadata` also requires `frames_indices` to compute per-frame timestamps. Fixed to: `VideoMetadata(total_num_frames=len(sf), fps=sf_fps, frames_indices=frame_indices.tolist())`. Also stored `frame_indices` in `self._video_data`. Fix: `mm_token_type_ids` now produced with **2701/2701 alignment**.
+
+**Files changed:**
+- `models/demos/molmo2/tt/generator_vllm.py`:
+  - Line ~685: Added `"frame_indices": frame_indices.tolist()` to `self._video_data`
+  - Line ~811: Fixed `HF_VideoMetadata(frames_indices=_fi)` in secondary call + `do_sample_frames=False`
+  - Line ~1259: `generate_video_tokens()` now reads `hf_processor._video_data["timestamps"]` as actual timestamps
+
+**New test:** `models/demos/molmo2/tests/test_server_demo_parity.py` — 4 passing tests for test 1:
+- `test_pixel_values_parity`: pixel_values mean/std match ✓
+- `test_timestamps_hardcoded_vs_actual`: actual timestamps match demo ✓
+- `test_token_sequence_parity`: server (actual ts) 2701/2701 match demo ✓, HF full proc length aligned ✓
+- `test_mm_token_type_ids_alignment`: token_type_ids 2701/2701 match demo ✓
+
+**PCC:** N/A (CPU-only preprocessing test, no hardware needed).
+**Next:** Run server end-to-end on hardware (test 1, expected "B.") to confirm output matches demo.
 
 ---
 
