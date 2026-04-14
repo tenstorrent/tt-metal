@@ -7,19 +7,20 @@
 - Target model: Meta-Llama-3.1-8B-Instruct on Tenstorrent Wormhole (N150)
 - Model weights: `HF_HOME=/localdev/proj_sw/user_dev/hf_data`
 
-### Result: same speed, half the KV cache
+### Goal: same speed, half the KV cache
 
-3-bit TurboQuant with BFP4 index cache vs baseline BFP8, on Wormhole N150:
+Target: 3-bit TurboQuant pre-rescaled BFP4 with fused SDPA vs baseline BFP8.
 
 | | Baseline BFP8 | TurboQuant 3-bit BFP4 |
 |--|--|--|
-| **Latency** | 37.0 ms/tok | **37.2 ms/tok** (identical) |
-| **KV cache memory** | 1× | **0.5×** (half) |
-| **Quality** | — | Correct output at all seq lengths 128–131072 |
+| **SDPA latency** | 0.03ms (seq=128) | **0.03ms** (identical) |
+| **KV cache memory** | 1× (~1 byte/elem) | **0.5×** (~0.5 byte/elem) |
+| **Quality** | — | Cosine > 0.999 vs BFP4 roundtrip reference |
 | **MSE vs float32 CPU** | — | 0.034 (matches paper bound) |
+| **Max context** | 128K | **2K** (chunked dequant needed for >2K) |
 
-Latency is flat at 37.2 ms/tok from seq=128 to seq=131072 (128K context).
-KV cache at 128K: 4.6 GB (TurboQuant) vs 9.1 GB (baseline).
+Verified 2026-04-14: fused SDPA passes 128–2048, fails at 4096+ (L1 overflow).
+Chunked dequant is the critical next step — see Section 6.
 
 ### Core Idea
 
@@ -254,9 +255,9 @@ Run: `PYTHONPATH=. python turbo_quant/benchmarks/test_ttnn.py`
 
 ---
 
-## 4. TurboQuant Variants
+## 4. TurboQuant — Main Version
 
-### 4.1 — Baseline BFP8 (no TurboQuant)
+### Baseline BFP8 (no TurboQuant)
 
 Standard Llama-3.1-8B inference path. BFP8 KV cache with paged SDPA.
 No quantization overhead. Used as the performance/memory reference.
@@ -265,43 +266,38 @@ No quantization overhead. Used as the performance/memory reference.
 - **KV memory:** ~1 byte/element (BFP8)
 - **Latency:** 37ms/tok (flat across all seq lengths)
 
-### 4.2 — TurboQuant Performance (paged BF16 pre-rescaled)
+### TurboQuant Pre-Rescaled BFP4 (fused SDPA) — THE MAIN VERSION
 
-Optimised for **latency parity with baseline**. Stores pre-rescaled centroid×norm
-values as BF16 in the model's paged KV cache. Dequantize is a no-op (values are
-already in the format SDPA expects). Rotation absorbed into W_v/W_o weights.
-
-- **Flag:** default mode (no flag needed)
-- **KV memory:** 2 bytes/element (BF16) — 2× baseline
-- **Latency:** 37.2ms/tok (flat, matches baseline)
-- **Max context:** 128K tested, no OOM on N150
-- **Tradeoff:** 2× more KV memory than baseline
-
-### 4.3 — TurboQuant Pre-Rescaled BFP4 (fused SDPA, best of both worlds)
-
-**Combines baseline latency with 4× memory reduction.** Pre-rescales centroid×norm
-at quantize time (O(1) per token), stores as BFP4 (~0.5 bytes/elem). Fused SDPA
-kernel typecasts BFP4→BF16 on-the-fly — no centroid gather or norm multiply needed.
+**This is the only active TurboQuant variant.** All development and testing should
+target this version. Pre-rescales centroid×norm at quantize time (O(1) per token),
+stores as BFP4 (~0.5 bytes/elem). Fused SDPA kernel (`turbo_quant_sdpa_decode`)
+typecasts BFP4→BF16 on-the-fly — no centroid gather or norm multiply needed.
 Rotation absorbed into W_v/W_o weights.
 
 - **Flag:** `pre_rescaled=True` in `turbo_quant_sdpa_decode`
-- **KV memory:** ~0.5 bytes/element (BFP4) — **2× smaller than baseline, 4× smaller than TQ Performance**
+- **KV memory:** ~0.5 bytes/element (BFP4) — **2× smaller than baseline**
 - **Latency:** matches standard SDPA (0.03ms at seq=128, 0.17ms at seq=2048)
 - **Cosine:** > 0.999 vs BFP4 roundtrip reference
 - **Status:** multi-core, integrated into attention.py
+- **Current limitation:** fused SDPA kernel pre-fills full BF16 cache in L1,
+  limiting to ~2K seq. Chunked dequant (see Section 6) would lift this to 128K+.
 
-### 4.4 — TurboQuant Full Dequant (BFP4 indices + norms, fused SDPA)
+### Deprecated Variants
 
-Stores BFP4 quantization indices + BF16 norms separately. Fused SDPA kernel reads
-both, dequantizes on-the-fly (typecast + centroid gather + norm multiply) inside
-the SDPA computation. Higher quality than pre-rescaled (no BFP4 compression of
-continuous values) but significantly slower due to per-tile centroid gather.
+The following variants are **deprecated** and should not be used for future
+development or testing. They are retained here for historical reference only.
 
-- **Flag:** `memory_efficient=True, pre_rescaled=False` in `turbo_quant_sdpa_decode`
-- **KV memory:** ~0.52 bytes/element (BFP4 indices + BF16 norms) — **2× smaller than baseline**
-- **Latency:** ~0.48ms at seq=128, ~7.33ms at seq=2048 (multi-core)
-- **Cosine:** > 0.999 vs CPU centroid_gather×norm reference
-- **Status:** multi-core, numerically correct
+**TQ Performance (paged BF16 pre-rescaled)** — DEPRECATED
+Stored pre-rescaled centroid×norm as BF16 in the model's paged KV cache.
+Achieved latency parity at all seqlens up to 128K, but uses **2× baseline memory**
+(BF16 = 2 bytes/elem vs BFP8 = 1 byte/elem). Superseded by the fused SDPA BFP4
+variant which achieves 0.5× baseline memory instead.
+
+**TQ Full Dequant (BFP4 indices + norms, fused SDPA)** — DEPRECATED
+Stored BFP4 quantization indices + BF16 norms separately. Fused SDPA kernel did
+centroid gather + norm multiply on-the-fly. Higher quality than pre-rescaled but
+~15-35× slower due to per-tile centroid gather (~50 SFPU ops/tile). The quality
+advantage does not justify the latency cost.
 
 ---
 
@@ -309,63 +305,41 @@ continuous values) but significantly slower due to per-tile centroid gather.
 
 All measurements on **Wormhole N150, Llama-3.1-8B-Instruct, batch=1, 3-bit**.
 
-### Performance (ms/tok) — TQ Performance + Baseline
+### Fused TQ SDPA Kernel Benchmark (multi-core) — MAIN VERSION
 
-Measured 2026-04-10, Wormhole N150, greedy decoding, 10 tokens generated.
+Synthetic data, 8Q/8KV heads, hd=128, 3-bit, Wormhole N150.
+Verified 2026-04-14: passes 128–2048, fails 4096+ (L1 overflow at 34MB > 1.5MB).
 
-| max_seq | Baseline BFP8 | TQ Performance |
-|---------|--------------|----------------|
-| 128 | 36.9 | 37.2 |
-| 256 | 36.9 | 37.3 |
-| 512 | 37.0 | 37.2 |
-| 1024 | 37.0 | 37.2 |
-| 2048 | 36.9 | 37.2 |
-| 4096 | 36.9 | 37.2 |
-| 8192 | 37.0 | 37.3 |
-| 16384 | 37.0 | 37.2 |
-| 32768 | 36.9 | 37.2 |
-| 65536 | 37.0 | 37.2 |
-| 131072 | 37.0 | 37.2 |
-
-### Fused TQ SDPA Kernel Benchmark (multi-core)
-
-Measured 2026-04-10, synthetic data, 8Q/8KV heads, hd=128, 3-bit, Wormhole N150.
-
-| Seq Len | Pre-rescaled (ms) | Full dequant (ms) | Std SDPA (ms) | Cosine | BFP4 KV (MB) | BF16 KV (MB) |
-|---------|--------------------|-------------------|---------------|--------|--------------|--------------|
-| 128 | **0.03** | 0.48 | 0.03 | 0.9996 | 0.1 | 0.5 |
-| 256 | **0.04** | 0.93 | 0.04 | 0.9996 | 0.2 | 1.0 |
-| 512 | **0.05** | 1.84 | 0.06 | 0.9996 | 0.5 | 2.0 |
-| 1024 | **0.09** | 3.67 | 0.11 | 0.9997 | 1.0 | 4.0 |
-| 2048 | **0.17** | 7.33 | 0.21 | 0.9997 | 2.0 | 8.0 |
-| 4096 | L1 limit* | L1 limit* | 0.42 | — | 4.0 | 16.0 |
-| 8192 | L1 limit* | L1 limit* | 0.80 | — | 8.0 | 32.0 |
-| 16384 | L1 limit* | L1 limit* | 1.57 | — | 16.0 | 64.0 |
-| 32768 | L1 limit* | L1 limit* | 3.10 | — | 32.0 | 128.0 |
+| Seq Len | Pre-rescaled (ms) | Std SDPA (ms) | Cosine | BFP4 KV (MB) |
+|---------|-------------------|---------------|--------|--------------|
+| 128 | **0.03** | 0.03 | 0.9996 | 0.1 |
+| 256 | **0.04** | 0.04 | 0.9996 | 0.2 |
+| 512 | **0.05** | 0.06 | 0.9996 | 0.5 |
+| 1024 | **0.09** | 0.11 | 0.9997 | 1.0 |
+| 2048 | **0.17** | 0.20 | 0.9997 | 2.0 |
+| 4096 | L1 limit | 0.41 | — | 4.0 |
+| 8192 | L1 limit | 0.80 | — | 8.0 |
+| 16384 | L1 limit | 1.57 | — | 16.0 |
+| 32768 | L1 limit | 3.10 | — | 32.0 |
+| 65536 | L1 limit | 6.21 | — | 64.0 |
+| 131072 | L1 limit | 12.37 | — | 128.0 |
 
 **Key findings:**
 - **Pre-rescaled mode matches standard SDPA latency** — typecast-only path has negligible overhead
-- Full dequant is ~15-35× slower due to centroid gather + norm multiply (~50 SFPU ops/tile)
 - Multi-core gives ~8× speedup over single-core (8 heads on 8 cores)
-- \* Fused SDPA kernel currently limited to 2K seq (full BF16 cache pre-filled in L1); chunked dequant would lift this
-- Standard SDPA comparison uses multi-core `scaled_dot_product_attention` (not decode variant)
-- **Note:** The production TQ Performance path (BFP4 index cache + paged BF16 SDPA) works at all seqlens up to 128K — see sweep below
+- L1 limit at 4K+: fused kernel pre-fills full BF16 cache in L1 CBs. Chunked dequant (Section 6) is the fix
 
 ### KV Cache Memory (per batch, 32 layers × 2 K/V × 8 heads × 128 dim)
 
-| max_seq | Baseline BFP8 (~1 B/elem) | TQ Performance (2 B/elem) | TQ Memory-Efficient (~0.5 B/elem) |
-|---------|--------------------------|--------------------------|-----------------------------------|
-| 128 | 9 MB | 17 MB | **4 MB** |
-| 256 | 18 MB | 34 MB | **9 MB** |
-| 512 | 36 MB | 67 MB | **18 MB** |
-| 1024 | 71 MB | 134 MB | **36 MB** |
-| 2048 | 143 MB | 268 MB | **72 MB** |
-| 4096 | 285 MB | 537 MB | **145 MB** |
-| 8192 | 570 MB | 1.1 GB | **289 MB** |
-| 16384 | 1.1 GB | 2.1 GB | **579 MB** |
-| 32768 | 2.3 GB | 4.3 GB | **1.2 GB** |
-| 65536 | 4.6 GB | 8.6 GB | **2.3 GB** |
-| 131072 | 9.1 GB | 17.2 GB | **4.6 GB** |
+| max_seq | Baseline BFP8 (~1 B/elem) | TQ Pre-Rescaled BFP4 (~0.5 B/elem) | Savings |
+|---------|--------------------------|-------------------------------------|---------|
+| 2,048 | 143 MB | **72 MB** | 2× |
+| 4,096 | 285 MB | **145 MB** | 2× |
+| 8,192 | 570 MB | **289 MB** | 2× |
+| 16,384 | 1.1 GB | **579 MB** | 2× |
+| 32,768 | 2.3 GB | **1.2 GB** | 2× |
+| 65,536 | 4.6 GB | **2.3 GB** | 2× |
+| 131,072 | 9.1 GB | **4.6 GB** | 2× |
 
 ### Quality (real prefill + decode, greedy sampling)
 
@@ -395,105 +369,38 @@ Measured 2026-04-10, synthetic data, 8Q/8KV heads, hd=128, 3-bit, Wormhole N150.
   0.17ms    fused BFP4 SDPA pre-rescaled @ seq=2048 (= baseline, 0.5 bytes/elem)
 ```
 
-### BFP4 Index Cache — Verified across all sequence lengths
-
-Integers 0-7 are exactly representable in BFP4. `paged_update_cache` supports
-BF16 input → BFP4 cache natively. Fused gather kernel handles BFP4 via unpacker.
-
-**Initial verification (2026-04-13):**
-
-| max_seq | Baseline BFP8 | TurboQuant BFP4 | Overhead |
-|---------|--------------|-----------------|----------|
-| 128 | 37.0ms | 37.2ms | 1.005× |
-| 512 | 37.7ms | 37.2ms | 0.99× |
-| 1,024 | 37.7ms | 37.2ms | 0.99× |
-| 2,048 | 37.8ms | 37.2ms | 0.98× |
-| 4,096 | 37.7ms | 37.3ms | 0.99× |
-| 8,192 | — | 37.2ms | — |
-| 16,384 | — | 37.2ms | — |
-| 32,768 | — | 37.2ms | — |
-| 65,536 | — | 37.2ms | — |
-| 131,072 | — | 37.2ms | — |
-
-**Full power-of-2 sweep (2026-04-14):**
-
-All 11 seqlens verified end-to-end with `eval_e2e.py`, 3-bit TQ, traced, 10 generated tokens.
-9/9 TTNN hardware tests pass. No OOM at any sequence length.
-
-| max_seq | TurboQuant BFP4 (ms/tok) | Warm avg (ms/tok) |
-|---------|--------------------------|-------------------|
-| 128 | 37.2 | 37.2 |
-| 256 | 37.2 | 37.2 |
-| 512 | 37.2 | 37.2 |
-| 1,024 | 37.2 | 37.2 |
-| 2,048 | 37.3 | 37.3 |
-| 4,096 | 37.2 | 37.2 |
-| 8,192 | 37.2 | 37.2 |
-| 16,384 | 37.2 | 37.2 |
-| 32,768 | 37.2 | 37.2 |
-| 65,536 | 37.2 | 37.2 |
-| 131,072 | 37.2 | 37.2 |
-
-Quality: MSE=0.034, cosine=0.999 — matches paper's theoretical bounds exactly.
-9/9 hardware tests pass.
-
 ---
 
 ## 6. Constraints & Next Steps
 
-### Why BFP4/BFP8 paged caches don't work for pre-rescaled values
+### Status Summary
 
-**Tested 2026-04-10:** Storing pre-rescaled centroid×norm values as BFP8 in the
-paged `layer_past` (instead of BF16) produces **garbage output** despite synthetic
-tests showing only 0.2% added error (cosine 0.99997). The BFP8 shared exponent
-per 32-element block causes selective precision loss on the specific value patterns
-that attention relies on.
-
-**However:** the fused TQ SDPA kernel bypasses the standard paged SDPA path entirely.
-By reading BFP4 tiles directly and typecasting to BF16 in the compute kernel, the
-pre-rescaled BFP4 mode achieves cosine > 0.999 and baseline-matching latency.
-The key difference is that the fused kernel converts BFP4→BF16 tile-by-tile on-chip
-(in DST registers) rather than storing BFP4/BFP8 in the `layer_past` where the
-standard SDPA reader would misinterpret the shared exponents.
-
-### Current variant tradeoffs
-
-| Variant | Latency | KV Memory | Max Context | Status |
-|---------|---------|-----------|-------------|--------|
-| **TQ Performance (BFP4 idx + BF16 paged)** | **= baseline** | **0.5× baseline** | **128K** | **Production-ready, verified 2026-04-14** |
-| TQ Pre-Rescaled BFP4 (fused SDPA) | = baseline | 0.5× baseline | 2K* | Fast + small, needs chunked dequant for >2K |
-| TQ Full Dequant (fused SDPA) | ~15-35× slower | 0.5× baseline | 2K* | Highest quality, needs chunked dequant for >2K |
-| TQ Performance (BF16) | = baseline | 2× baseline | 128K | Superseded by BFP4 index variant |
+| | Latency | KV Memory | Max Context | Status |
+|--|---------|-----------|-------------|--------|
+| **TQ Pre-Rescaled BFP4 (fused SDPA)** | **= baseline** | **0.5× baseline** | **2K** | **Main version — needs chunked dequant for >2K** |
 | Baseline BFP8 | = baseline | 1× | 128K | Reference |
 
-\* Fused SDPA kernel pre-fills full BF16 cache in L1; chunked dequant (see Remaining optimisations) would lift this to 128K+.
+### Remaining work — Chunked dequant (critical, unlocks >2K context)
 
-### Fused TQ SDPA — Remaining optimisations (priority order)
+**This is the single most important next step for TurboQuant.**
 
-**1. Interleave dequant with SDPA chunk consumption (enables fused SDPA at >2K context)**
+Current: the fused SDPA kernel pre-fills ALL dequantized BF16 K/V into L1
+circular buffers before calling sdpa_standard. At 4K seq the BF16 CB needs
+~34MB which exceeds the 1.5MB L1 limit → `TT_THROW`.
 
-Current: the fused SDPA kernel pre-fills ALL dequantized BF16 K/V into L1 CBs
-before calling sdpa_standard. At 4K seq the BF16 CB exceeds the 1.5MB L1 limit.
+Verified 2026-04-14: fused SDPA passes at 128–2048, fails at 4096+ with
+`Statically allocated circular buffers grow to 33781024 B > 1499136 B`.
 
-Fix: produce 1 K/V chunk of BF16 at a time, let sdpa_standard consume it, then
-produce the next. This would reduce L1 memory from O(full_cache) to O(chunk) =
-~65KB regardless of sequence length, enabling 128K+ context for the fused path.
+Fix: produce 1 K/V chunk of BF16 at a time, let sdpa_standard consume it,
+then produce the next. This reduces L1 memory from O(full_cache) to O(chunk) =
+~65KB regardless of sequence length, enabling 128K+ context.
 
-Note: the production TQ Performance path (BFP4 index cache + paged BF16 SDPA)
-already works at 128K without this fix. This optimisation is for the fused SDPA
-kernel which would combine baseline latency with 4× memory reduction.
-
-**2. Paged K/V reads (for paged cache compatibility)**
+### Remaining work — Paged K/V reads
 
 Current: reads BFP4 from interleaved tensors using `read_chunk_with_padding`.
 The Llama model's standard KV cache uses paged allocation.
 
 Fix: add paged read support to the TQ reader, or store TQ data in paged format.
-
-**3. ~~Multi-core parallelism~~ DONE**
-
-Implemented: batch × heads distributed across compute grid (~8× speedup).
-Pre-rescaled mode now matches standard SDPA latency.
 
 ### Prefill → TQ decode migration (quality issue)
 
@@ -505,20 +412,6 @@ context creates a quality discontinuity that attention amplifies into loops.
 
 Teacher-forced decode (`eval_e2e.py`) doesn't have this issue because all positions
 are TQ-quantized consistently from the start (no prefill → decode quality jump).
-
-**Potential fixes (priority order):**
-
-1. **Use 4-bit TQ for migration** — MSE drops from 0.034 to 0.009, reducing the
-   quality gap between native prefill and TQ decode. May be enough to eliminate
-   the repetition loops.
-
-2. **Sequential prefill through decode path** — feed prompt tokens one-by-one
-   through the decode forward (like teacher-forcing), so every position is
-   TQ-quantized from the start. Slower prefill but guaranteed quality match.
-
-3. **Build the fused TQ SDPA kernel** — the `sdpa/device/` code already written
-   reads BFP4 indices + norms directly and dequantizes on-the-fly, bypassing
-   the layer_past format entirely. This is the proper long-term fix.
 
 ### Other Next Steps
 
