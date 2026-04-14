@@ -574,6 +574,74 @@ def test_bruteforce_sweep_h2w4_480p_t7(
 
 
 # ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
+# ---------------------------------------------------------------------------
+# Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded):
+#   lat(23,20)  mid(46,40)  hi(92,80)  full(184,160)
+#
+# Padded (int_pad=(0,1,1)): lat(25,22) mid(48,42) hi(94,82) full(186,162)
+# (3,1,1): lat(23,20) mid(46,40)
+#
+# Same T flow as all 81-frame configs:
+#   T_res=23, T_tconv=22, T_sp=41, T_res1=43, T_tconv1=42, T_sp1=81, T_res2/3=83
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_720P_FULL_T = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Most-to-least compute (T × H × W)
+    ("up3_res", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 186, 162, 4, 8),
+    ("conv_out", 96, 3, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 186, 162, 4, 8),
+    ("up2_spatial", 192, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 186, 162, 4, 8),
+    ("up2_res", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 83, 94, 82, 4, 8),
+    ("up1_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 81, 94, 82, 4, 8),
+    ("up1_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 48, 42, 4, 8),
+    ("up1_res0", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 43, 48, 42, 4, 8),
+    ("up0_spatial", 384, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 41, 48, 42, 4, 8),
+    ("up1_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 42, 46, 40, 4, 8),
+    ("lat_mid_res", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 25, 22, 4, 8),
+    ("conv_in", 32, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 23, 25, 22, 4, 8),
+    ("up0_tconv", 384, 768, (3, 1, 1), (1, 1, 1), (0, 0, 0), 22, 23, 20, 4, 8),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_720p_full_t_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_720P_FULL_T,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_720P_FULL_T],
+)
+def test_bruteforce_sweep_h4w8_720p_full_t(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_720p_full_t/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        # hw_product=32: avoids BH hang (second T=7 combo with non-32 hw hangs).
+        # Explore T=1 with larger hw separately if needed.
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BH Galaxy 4x8, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
 # ---------------------------------------------------------------------------
 # Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded, same as full-T):
@@ -834,7 +902,10 @@ def test_bruteforce_sweep_h4w8_480p_full_t(
         w_factor=w_factor,
         max_combos=500,
         max_t_block=8,
-        hw_product=32,
+        # hw_product=None: 4x8 480p full-T large stages (W=52-104) benefit from
+        # larger spatial blocks (hw=64-256) — same as 720p full-T which uses
+        # hw=64-256 without hangs. hw_product=32 was causing 9× VAE perf gap.
+        hw_product=None,
     )
 
 
