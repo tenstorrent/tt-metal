@@ -260,9 +260,6 @@ class TtMoe(LightweightModule):
             x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
         scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
-        # x_for_gate no longer needed after gate — free its L1
-        ttnn.deallocate(x_for_gate)
-        x_for_gate = None
 
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
@@ -276,17 +273,13 @@ class TtMoe(LightweightModule):
         #
         # Ensure ROW_MAJOR layout for dispatch compatibility
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
-        # Move scores to DRAM before reshape — reshape returns a view, so moving after
-        # reshape would leave scores holding the L1 reference and the buffer wouldn't free.
-        if scores.memory_config().buffer_type == ttnn.BufferType.L1:
-            scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
 
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
         seq_dim = x.shape[1]
         batch_dim = x.shape[0]
         weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
-        if indices_raw.memory_config().buffer_type == ttnn.BufferType.L1:
-            indices_raw = ttnn.to_memory_config(indices_raw, ttnn.DRAM_MEMORY_CONFIG)
+        if weights.memory_config().buffer_type == ttnn.BufferType.L1:
+            weights = ttnn.to_memory_config(weights, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
 
         logger.debug(f"  weights.shape={weights.shape}")
@@ -337,13 +330,6 @@ class TtMoe(LightweightModule):
         # tt_expert_offsets no longer needed after dispatch — free L1
         ttnn.deallocate(tt_expert_offsets)
         tt_expert_offsets = None
-        # indices: move to DRAM if validation needs it, otherwise free
-        if return_intermediates:
-            if indices is not None and indices.memory_config().buffer_type == ttnn.BufferType.L1:
-                indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            ttnn.deallocate(indices)
-            indices = None
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -388,21 +374,14 @@ class TtMoe(LightweightModule):
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         #                  (1, 1, 256, 4, 2048) per device - 5D tensor, ROW_MAJOR
         #
-        # TtReduceModule uses fused post_combine_reduce kernel:
+        # TtReduceModule uses fused deepseek_moe_post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         # Free L1 tensors before fused reduce — its CBs need ~1MB of L1 per core.
-        # Move to DRAM first if validation needs them later (deallocate frees the buffer).
-        if return_intermediates:
-            if tt_expert_token_counts is not None:
-                tt_expert_token_counts = ttnn.to_memory_config(tt_expert_token_counts, ttnn.DRAM_MEMORY_CONFIG)
-            if gate_logits is not None:
-                gate_logits = ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            ttnn.deallocate(tt_expert_token_counts)
-            tt_expert_token_counts = None
-            ttnn.deallocate(gate_logits)
-            gate_logits = None
+        ttnn.deallocate(tt_expert_token_counts)
+        tt_expert_token_counts = None
+        ttnn.deallocate(gate_logits)
+        gate_logits = None
 
         routed_output = self.reduce_module(combined_output, weights=weights)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
