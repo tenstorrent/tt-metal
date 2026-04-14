@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPTS_PATH,
     create_hf_model,
@@ -49,13 +50,14 @@ PCC_THRESHOLD = 0.99
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
 
 
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
     "input_source",
-    ["json_prompts", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+    ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024, 6400])
@@ -200,6 +202,12 @@ def test_prefill_transformer(
         token_ids = tokenize_prompts_to_isl(tok, PROMPTS_PATH, isl_total, sp_factor)
         profiler.end("tokenization")
         logger.info(f"Tokenized input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+    elif input_source == "abc_1k":
+        profiler.start("tokenization")
+        tok = request.getfixturevalue("tokenizer")
+        token_ids = tokenize_prompts_to_isl(tok, ABC_1K_PATH, isl_total, sp_factor)
+        profiler.end("tokenization")
+        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
     elif input_source in INFINITEBENCH_SUBSET_NAMES:
         profiler.start("tokenization")
         tok = request.getfixturevalue("tokenizer")
@@ -336,6 +344,31 @@ def test_prefill_transformer(
         output_shape == expected_per_device_shape
     ), f"Output shape mismatch: got {output_shape}, expected {expected_per_device_shape}"
     logger.info(f"Output shape: {output_shape} (matches expected)")
+
+    # --- Save final norm output ---
+    if pcc_validation:
+        final_norm_label, final_norm_tensor = tt_snapshots[-1]
+        assert final_norm_label == "norm", f"Expected last snapshot to be 'norm', got '{final_norm_label}'"
+
+        save_norm_output(
+            norm_tensor=final_norm_tensor,
+            test_params={
+                "mesh_shape": mesh_shape,
+                "isl_total": isl_total,
+                "isl_per_chip": isl_per_chip,
+                "num_layers": num_layers,
+                "n_routed_experts": n_routed_experts,
+                "capacity_factor": capacity_factor,
+                "gate_fallback_mode": gate_fallback_mode,
+                "use_pretrained": use_pretrained,
+                "input_source": input_source,
+                "topology": str(topology),
+                "num_links": num_links,
+                "emb_dim": emb_dim,
+                "sp_factor": sp_factor,
+                "tp_factor": tp_factor,
+            },
+        )
 
     # --- PCC check ---
     if pcc_validation:
