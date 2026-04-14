@@ -5,6 +5,58 @@ This document provides several guidelines for achieving high numerical accuracy 
 
 There are many factors that influence the accuracy of a kernel. This guide focuses on a few specific items that were demonstrated to improve op accuracy and how to enable them in tt-metal.
 
+# Execution Unit Precision: FPU vs SFPU
+
+A Tensix core has two distinct compute units that share the Dest registers but have very different precision characteristics.
+
+## FPU (Matrix Unit) — TF32-Limited
+
+The FPU uses **5-bit × 7-bit multipliers** (5 bits from SrcA, 7 bits from SrcB). Math Fidelity controls how many passes are used to consume the input mantissa:
+
+- **LoFi**: SrcA uses 1 hidden bit + 4 MSB; SrcB uses 1 hidden bit + 6 MSB
+- **HiFi4**: Runs the operation multiple times to consume more mantissa bits
+
+Even at HiFi4, the maximum achievable multiplication precision is approximately **TF32 (19 active bits)**, which is less than full FP32. Data flowing through SrcA/SrcB is always truncated to the multiplier widths. See `tech_reports/matrix_engine/matrix_engine.md` for details.
+
+## SFPU (Vector Unit) — Full IEEE 754 FP32
+
+The SFPU is a 32-lane SIMD engine where each lane has 8 general-purpose **32-bit registers** (LREG0-7). On Wormhole and Blackhole, `vFloat` operations use standard IEEE 754 single-precision arithmetic (**1 sign + 8 exponent + 23 mantissa bits**). The SFPU operates at genuine FP32 precision — there is no mantissa truncation in its ALU. (Grayskull used 64-element vectors with 19-bit floating point; this limitation does not apply to Wormhole/Blackhole.)
+
+See `METALIUM_GUIDE.md` (line 450): *"Wormhole and Blackhole generations use 32-element vectors with 32-bit floating point operations."*
+
+## Bypassing FPU Precision Limits with the SFPU
+
+For unary element-wise operations (exp, sigmoid, sqrt, etc.), the SFPU reads from and writes to the Dest registers **directly**, without going through SrcA/SrcB. When `fp32_dest_acc_en=true` and data is unpacked to Dest with `UnpackToDestMode::UnpackToDestFp32`, the entire data path is:
+
+```
+L1 → Unpack → Dest (FP32) → SFPU reads dst_reg (FP32) → SFPU computes (FP32) → writes dst_reg (FP32) → Pack → L1
+```
+
+This bypasses the FPU's 5×7-bit multiplier bottleneck entirely. The `fp32_dest_acc_en` flag controls what happens at the **write-back** stage of SFPU kernels:
+
+```cpp
+// From ckernel_sfpu_sqrt.h:122-129
+if constexpr (fp32_dest_acc_en)
+{
+    dst_reg[0] = tmp;                                              // full FP32 write
+}
+else
+{
+    dst_reg[0] = reinterpret<vFloat>(float_to_fp16b(tmp, 0));      // truncate to bfloat16
+}
+```
+
+When `fp32_dest_acc_en=false`, the result is **explicitly truncated to bfloat16** (`float_to_fp16b`) before being written back to Dest, even though the computation itself was at FP32. This truncation is the precision bottleneck for bfloat16-mode SFPU operations — not the SFPU's arithmetic capability.
+
+## Math Approx Mode vs Data Precision
+
+`APPROXIMATION_MODE` controls the **polynomial degree** used in SFPU function approximations, not the data width. Both modes compute in FP32 arithmetic:
+
+- `APPROXIMATION_MODE=false`: Higher-degree polynomials targeting ~23-bit accuracy (e.g., "Algorithm SQRT_23-bits")
+- `APPROXIMATION_MODE=true`: Lower-degree polynomials targeting ~10-bit accuracy (e.g., "Algorithm SQRT_10-bits")
+
+This is a speed/accuracy tradeoff, not a format tradeoff. See `tech_reports/matrix_engine/matrix_engine.md` (line 73): *"Some SFPU operations come in approximate mode... the operation can either be run as high precision and low performance, or high performance and lower precision."*
+
 # Measuring Numerical Accuracy
 The methods to verify numerical correctness depend on the op under consideration. However, most ops take in several inputs and produce an output tensor. It is good practice to try to construct a simple analytic test case, if possible (that is, a test where the output can be easily calculated by hand). This often exposes obvious bugs or accuracy issues in the underlying kernels.
 
@@ -22,8 +74,9 @@ $$\frac{|t_{ij} - \hat{t}_{ij}|}{ULP(\hat{t}_{ij})} \quad \forall \, i,j$$
 
    where $ULP(x)$ is the distance between $x$ and the next representable value in that data format
    - Says how close you are to the correctly-rounded result in that data format
-   - 1-2 ULP good for eltwise ops, but not clear what threshold to use for fused/composite ops consisting of many FP operations
-   - ULP at higher precisions like FP32 are difficult to reason about
+   - 1-2 ULP good for eltwise ops; for fused/composite ops, 4 ULP is a reasonable upper bound (each composed step can add ~1 ULP)
+   - ULP is most intuitive when measured in the output data format (bfloat16 or FP32). See the "Deriving Error Thresholds for Activation Functions" section for concrete threshold recommendations
+   - Caution: ULP becomes extremely strict near zero and should be combined with allclose for near-zero regions (see "ULP vs Allclose" below)
    - Can be computed with `comp_ulp()` and asserted with `assert_with_ulp` in tt-metal
 3. Allclose:
 
@@ -215,3 +268,158 @@ reciprocals = ttnn.from_torch(
 # Pass into ttnn.group_norm()
 output_tensor = ttnn.group_norm(<other inputs>, reciprocals=reciprocals, use_welford=True)
 ```
+
+# Deriving Error Thresholds for Activation Functions
+
+This section derives concrete error thresholds for SFPU activation function implementations. The thresholds are informed by hardware precision (above), industry framework defaults, NVIDIA's CUDA math library bounds, and empirical data from the tt-metal test suite.
+
+## Data Format Precision Floors
+
+**FP32** (IEEE 754 single-precision):
+- Machine epsilon: $2^{-23} \approx 1.19 \times 10^{-7}$
+- Mantissa: 23 explicit bits (24 with hidden bit)
+- Maximum meaningful ULP threshold: $2^{23} = 8{,}388{,}608$
+
+**bfloat16** (FP16B):
+- Machine epsilon: $2^{-7} = 0.0078125$ (~0.78%)
+- Mantissa: 7 explicit bits (8 with hidden bit)
+- Maximum meaningful ULP threshold: $2^7 = 128$
+
+Beyond the maximum meaningful ULP, the two values differ by more than an order of magnitude and ULP comparison becomes unreliable (see `tests/ttnn/utils_for_testing.py:234-239`).
+
+## Industry Reference Points
+
+### PyTorch Default Tolerances
+
+From `torch.testing.assert_close` ([source](https://github.com/pytorch/pytorch/blob/main/torch/testing/_comparison.py)):
+
+| dtype | rtol | atol |
+|-------|------|------|
+| float16 | 1e-3 | 1e-5 |
+| **bfloat16** | **1.6e-2** | **1e-5** |
+| **float32** | **1.3e-6** | **1e-5** |
+| float64 | 1e-7 | 1e-7 |
+
+The bfloat16 rtol of 1.6e-2 is ~$2 \times$ machine epsilon, accounting for one rounding operation on each of input and output.
+
+### TensorFlow Default Tolerances
+
+From `assertAllCloseAccordingToType` ([source](https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/framework/test_util.py)):
+
+| dtype | rtol | atol |
+|-------|------|------|
+| **bfloat16** | **1e-2** | **1e-2** |
+| **float32** | **1e-6** | **1e-6** |
+
+### NVIDIA CUDA Standard Library — Maximum ULP Error (FP32)
+
+From the CUDA Math Functions Appendix, §17 ([source](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html)):
+
+| Function | Max ULP | Notes |
+|----------|---------|-------|
+| exp | 2 | |
+| tanh | 2 | |
+| erf | 2 | |
+| log | 1 | |
+| erfc | 4 | |
+| atanh | 3 | |
+| sinh | 3 | |
+| pow | 4 | |
+| tan | 4 | |
+| sqrt | 0 | With `-prec-sqrt=true` |
+
+There is no dedicated `sigmoid` in CUDA. It is composed as $1/(1+\exp(-x))$, so its error derives from exp (2 ULP) plus division.
+
+## Derivation of Thresholds
+
+### FP32 Strict (ULP ≤ 2, rtol = 1.3e-6, atol = 1e-5, PCC ≥ 0.9999)
+
+Since the SFPU computes at genuine FP32 with 23-bit mantissa (when `fp32_dest_acc_en=true`, `APPROXIMATION_MODE=false`), there is no hardware reason it cannot match NVIDIA's standard-library ULP targets. The limiting factor is the quality of the polynomial approximation.
+
+- **ULP ≤ 2**: Matches NVIDIA's bound for exp, tanh, erf — the most common activation building blocks.
+- **rtol = 1.3e-6**: PyTorch's FP32 default. This is ~$11 \times$ machine epsilon, tight but achievable.
+- **atol = 1e-5**: PyTorch's universal absolute tolerance floor. Prevents false failures near zero where rtol alone would require sub-subnormal precision.
+- **PCC ≥ 0.9999**: The default threshold in `assert_with_pcc()` (`tests/ttnn/utils_for_testing.py:88`).
+
+### FP32 Acceptable (ULP ≤ 4, rtol = 1e-3, atol = 1e-4, PCC ≥ 0.9996)
+
+Composite activations chain multiple operations. Each step can add ~1 ULP of error:
+- SiLU = $x \cdot \sigma(x)$ = exp → add → reciprocal → multiply (4 operations)
+- GELU ≈ $0.5 x (1 + \text{erf}(x/\sqrt{2}))$ = erf → add → multiply → multiply
+
+- **ULP ≤ 4**: Matches NVIDIA's bound for erfc, pow, tan. Reasonable for 3-4 composed steps.
+- **rtol = 1e-3**: ~$8{,}400 \times$ machine epsilon. Generous but still meaningful — corresponds to ~0.1% relative error.
+- **atol = 1e-4**: Tighter than bfloat16 but allows room for near-zero composition errors.
+- **PCC ≥ 0.9996**: Empirical floor from GELU FP32 tests in the codebase.
+
+### FP16B Strict (ULP ≤ 2, rtol = 1.6e-2, atol = 1e-3, PCC ≥ 0.999)
+
+When `fp32_dest_acc_en=false`, the SFPU still computes at FP32 internally, but `float_to_fp16b()` truncates the result to bfloat16 before writing to Dest. The error budget has two components:
+1. **Computation error**: ≤1 ULP (from the FP32 polynomial approximation, projected into bfloat16 resolution)
+2. **Truncation error**: ≤1 ULP (from the FP32→bfloat16 conversion)
+
+Combined: **≤2 bfloat16-ULP**.
+
+- **rtol = 1.6e-2**: PyTorch's bfloat16 default ($2 \times$ machine epsilon).
+- **atol = 1e-3**: Stricter than TensorFlow's 1e-2, catching near-zero deviations without being too tight for the format.
+- **PCC ≥ 0.999**: Standard threshold for bfloat16 sweep tests.
+
+### FP16B Acceptable (ULP ≤ 4, rtol = 1.6e-2, atol = 1e-2, PCC ≥ 0.99)
+
+Same rtol as strict (the format dominates), but relaxed atol and ULP for composites.
+
+- **ULP ≤ 4**: Each composed operation can add 1 bfloat16-ULP from its own truncation. 4 steps = 4 ULP.
+- **atol = 1e-2**: Matches TensorFlow's bfloat16 default. Near-zero bfloat16 values have granularity on this order.
+- **PCC ≥ 0.99**: The bfloat16 sweep test floor used throughout tt-metal (`tests/ttnn/utils_for_testing.py:88` with `pcc=0.99`).
+
+## ULP vs Allclose: They Are Not Interchangeable
+
+ULP measures $|actual - expected| / ULP(expected)$ — a purely relative metric that scales with magnitude:
+
+| expected | 1 ULP (FP32) | 1 ULP (bfloat16) |
+|----------|-------------|-------------------|
+| 1.0 | 1.19e-7 | 0.0078 |
+| 1000.0 | 6.1e-5 | 8.0 |
+| 0.001 | 1.16e-10 | 9.5e-6 |
+
+Allclose measures $|actual - expected| \leq atol + rtol \times |expected|$ — a hybrid metric where atol dominates near zero and rtol at large magnitudes.
+
+**Near zero**, ULP becomes astronomically strict (for FP32, 2 ULP at $10^{-30}$ requires accuracy to $\sim 10^{-45}$). **At large magnitudes**, allclose with fixed atol becomes irrelevant and only rtol matters. Neither metric alone covers the full activation function domain.
+
+Recommended practice for SFPU activation kernels — use both, split by value range:
+
+```python
+# Large/mid values: ULP catches relative precision regressions
+mask = torch.abs(expected) > 1e-30
+assert_with_ulp(expected[mask], actual[mask], ulp_threshold=2)
+
+# Near-zero values: allclose with atol catches absolute deviations
+mask_zero = torch.abs(expected) <= 1e-30
+assert_allclose(expected[mask_zero], actual[mask_zero], atol=1e-5, rtol=0)
+```
+
+This pattern is already established in `tests/ttnn/unit_tests/operations/eltwise/test_swish.py`, which excludes values below $10^{-30}$ from ULP checks and uses allclose for the near-zero region.
+
+## Hard Failure Boundaries
+
+Below these thresholds, model quality measurably degrades regardless of data format:
+
+| Metric | Threshold | Consequence |
+|--------|-----------|-------------|
+| PCC < 0.99 | Training divergence, inference degradation |
+| Max absolute error > 0.1 | Gradient flow corruption in backpropagation |
+| bfloat16 ULP > 128 | Values differ by more than an order of magnitude |
+
+Reference: Timmons & Rice, "Approximating Activation Functions" ([arXiv:2001.06370](https://arxiv.org/abs/2001.06370))
+
+## Summary Table
+
+| | FP16B Strict | FP16B Acceptable | FP32 Strict | FP32 Acceptable |
+|---|---|---|---|---|
+| **ULP** | ≤ 2 | ≤ 4 | ≤ 2 | ≤ 4 |
+| **rtol** | 1.6e-2 | 1.6e-2 | 1.3e-6 | 1e-3 |
+| **atol** | 1e-3 | 1e-2 | 1e-5 | 1e-4 |
+| **PCC** | ≥ 0.999 | ≥ 0.99 | ≥ 0.9999 | ≥ 0.9996 |
+| **Bottleneck** | bfloat16 output truncation | same | polynomial degree | polynomial degree |
+
+For detailed threshold definitions and all external sources, see `activation_function_error_thresholds.md` in this directory.
