@@ -31,7 +31,11 @@ from typing import Union
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 4
+
+# Second and later JSON files for the same rank get operation ids shifted by this stride
+# so they do not collide (each capture must have fewer than this many ops).
+_OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
 
 
 def _report_rank(report, path: Path) -> int:
@@ -63,7 +67,12 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
     loose = sorted(report_path.glob("graph_capture_*_of_*.json"))
     main_captures = [p for p in loose if re.match(r"^graph_capture_\d+_of_\d+\.json$", p.name, re.IGNORECASE)]
     if main_captures:
-        return main_captures
+
+        def _capture_sort_key(p: Path):
+            m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", p.name, re.IGNORECASE)
+            return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+        return sorted(main_captures, key=_capture_sort_key)
     skip = {"config.json"}
     return sorted(
         p for p in report_path.glob("*.json") if p.name not in skip and not p.name.endswith(".python_io.json")
@@ -147,10 +156,11 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS operations (
-            operation_id int UNIQUE,
+            operation_id int,
             name text,
             duration float,
-            rank int NOT NULL DEFAULT 0
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(operation_id, rank)
         )
     """
     )
@@ -530,6 +540,11 @@ def import_graph(
             Each record has ``name``, ``input_tensor_ids``, and ``output_tensor_ids``.
             When available, these override the heuristic I/O lifting.
         rank: Distributed / SPMD rank for this capture (disambiguates tensor_id and ops when merging).
+        base_operation_id: Added to each per-capture operation index (default 0). Operation rows use
+            ``operation_id = base_operation_id + operation_counter`` with ``operation_counter`` starting at 1.
+            The importer sets this to 0 for the first JSON file per rank, then
+            ``k * _OPERATION_ID_STRIDE_PER_RANK_FILE`` for the k-th additional file with the same rank
+            so ids stay unique when merging multiple captures from one rank.
 
     Returns dict with stats about what was imported.
     """
@@ -687,7 +702,7 @@ def import_graph(
                 all_scope_output_ids = set()
                 all_nested_input_ids = set()
                 first_child_arguments = None
-                nodes_batch.append((base_operation_id, counter, operation_counter, name, r))
+                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, name, r))
 
             else:
                 op_nesting_depth += 1
@@ -1012,7 +1027,7 @@ def import_graph(
                 operation_id = base_operation_id + operation_counter
                 op_name = "ttnn::deallocate"
                 operations_batch.append((operation_id, op_name, 0, r))
-                nodes_batch.append((base_operation_id, counter, operation_counter, op_name, r))
+                nodes_batch.append((base_operation_id + operation_counter, counter, operation_counter, op_name, r))
 
                 if dealloc_tensor_id is not None:
                     input_tensors_batch.append((operation_id, 0, dealloc_tensor_id, r))
@@ -1346,7 +1361,11 @@ def import_report(
             "svgs": 0,
         }
 
-        for idx, rpath in enumerate(report_files):
+        # First JSON file per rank uses operation ids 1..N; each additional file for the same rank
+        # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
+        import_index_by_rank: dict[int, int] = {}
+
+        for rpath in report_files:
             with open(rpath, "r") as f:
                 report = json.load(f)
 
@@ -1357,6 +1376,10 @@ def import_report(
             if version != SUPPORTED_REPORT_VERSION:
                 logger.warning(f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
                 continue
+
+            file_index_for_rank = import_index_by_rank.get(rank, 0)
+            base_operation_id = file_index_for_rank * _OPERATION_ID_STRIDE_PER_RANK_FILE
+            import_index_by_rank[rank] = file_index_for_rank + 1
 
             devices_data = report.get("devices", [])
             # Normalize device IDs to 0-based sequential indices so the visualizer
@@ -1402,7 +1425,7 @@ def import_report(
                 stats = import_graph(
                     cursor,
                     report["graph"],
-                    base_operation_id=idx * 10000,
+                    base_operation_id=base_operation_id,
                     devices=devices_data,
                     python_io=python_io,
                     per_operation_buffers=report.get("per_operation_buffers"),
@@ -1530,10 +1553,11 @@ def import_report(
                     )
                     total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
             elif "buffer_pages" in report and report["buffer_pages"]:
-                base_op_id = idx * 10000
+                # Legacy flat snapshot: attach to first operation id in this file's range when possible.
+                legacy_op_id = base_operation_id + 1 if stats.get("operations", 0) > 0 else base_operation_id
                 buffer_pages_batch = [
                     (
-                        base_op_id,
+                        legacy_op_id,
                         page.get("device_id", 0),
                         page.get("address", 0),
                         page.get("core_y", 0),

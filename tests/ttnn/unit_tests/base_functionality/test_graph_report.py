@@ -95,6 +95,73 @@ def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
             ), f"table {table}: expected rank {expected_rank} on all {cnt} row(s), got min={rmin} max={rmax}"
 
 
+class TestImportReportMultiFileOperationIds:
+    """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
+
+    @staticmethod
+    def _minimal_single_op_graph(op_name="ttnn.relu"):
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": op_name},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": op_name},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    def _import_report_dir(self, reports, tmp_path):
+        """Write JSON reports into a directory and run import_report on that directory."""
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        for filename, report_dict in reports:
+            with open(report_dir / filename, "w") as f:
+                json.dump(report_dict, f)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        return conn, conn.cursor()
+
+    def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
+        """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
+        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (1, 1)]
+        conn.close()
+
+    def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
+        """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
+        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
+        rows = cursor.fetchall()
+        assert rows == [(1, 0), (stride + 1, 0)]
+        conn.close()
+
+    def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
+        """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
+        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+        conn.close()
+
+
 class TestImportGraphUnit:
     """Pure unit tests for import_graph function - no device required."""
 
