@@ -56,7 +56,7 @@ class DeepSeekPrefillConfig:
         num_dispatch_groups: int = 8,
         capacity_factor: float = 2.0,
         seq_len_per_chip: int = 128,
-        num_links: int = 1,
+        num_links: int = 4,
         topology=None,
     ):
         if topology is None:
@@ -173,7 +173,7 @@ def forward_prefill_deepseek(
 
     # Step 1: All-gather x across TP axis
     if mesh_device.shape[1] > 1 and hidden_states.shape[-1] < config.hidden_size:
-        x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
+        x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
     else:
         x_full = hidden_states
 
@@ -288,7 +288,7 @@ def forward_prefill_deepseek(
         summed = ttnn.to_layout(summed, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if mesh_device.shape[1] > 1:
-        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear)
+        output = ttnn.all_reduce(summed, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
     else:
         output = summed
 
