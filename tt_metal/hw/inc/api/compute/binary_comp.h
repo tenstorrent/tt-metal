@@ -93,4 +93,15 @@ ALWI void lt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_uint16_i
 
 ALWI void gt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_uint16_init())); }
 
+ALWI void le_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_le_uint16<APPROX>(idst0, idst1, odst)));
+}
+
+ALWI void ge_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_ge_uint16<APPROX>(idst0, idst1, odst)));
+}
+
+ALWI void le_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_uint16_init<APPROX>())); }
+
+ALWI void ge_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_uint16_init<APPROX>())); }
 }  // namespace ckernel
