@@ -1046,6 +1046,13 @@ class Generator(WarmupForwardMixin):
         else:
             return_logits = False
 
+        # Track sampling mode changes to reset inputs when switching
+        # between host sampling and device sampling (different trace has stale inputs)
+        sampling_on_device = sampling_params is not None
+        prev_sampling_on_device = getattr(self, "_prev_sampling_on_device", None)
+        self._prev_sampling_on_device = sampling_on_device
+        if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
+            reset_inputs = True
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()
