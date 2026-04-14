@@ -169,7 +169,9 @@ protected:
         if (!mesh_device_) {
             return;
         }
-        log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->close()");
+        log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->quiesce_devices()");
+        mesh_device_->quiesce_devices();
+        log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->quiesce_devices() returned, calling mesh_device_->close()");
         mesh_device_->close();
         log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->close() returned, calling mesh_device_.reset()");
         mesh_device_.reset();
