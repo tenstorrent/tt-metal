@@ -1863,19 +1863,23 @@ class TTNNQwen3MoE(TTNNMoE):
         else:
             b, s, h = int(x_shape[0]), int(x_shape[2]), int(x_shape[3])
 
-        seq_chunk = int(os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "1024"))
-        if seq_chunk <= 0:
-            seq_chunk = s + 1
+        seq_chunk_env = int(os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "512"))
+        use_moe_seq_chunks = seq_chunk_env > 0
+        seq_chunk = seq_chunk_env if use_moe_seq_chunks else (s + 1)
 
         # shared_expert_gate uses full activations before the 4D reshape used by experts
         x_full = x
-
-        # Long prefill: chunk along sequence so router + TTNNExperts stay within DRAM (same env as thinker MoE).
-        if s > seq_chunk:
+        # Chunk along seq: TTNNExperts DRAM ~ (dim0 batch × mesh × seq × hidden). If only `s` is large we chunk by
+        # seq_chunk; if dim0 batch b>1, also shrink seq_step so b×seq per slice stays bounded (e.g. b=8, s=512).
+        seq_step = seq_chunk
+        if b > 1:
+            seq_step = max(SPARSITY_BLOCK_SIZE, min(s, seq_chunk // b))
+        if use_moe_seq_chunks and s > seq_step:
+            # Long prefill: chunk along sequence so router + TTNNExperts stay within DRAM (same env as thinker MoE).
             x4d = ttnn.reshape(x, ttnn.Shape((b, 1, s, h))) if len(x_shape) == 3 else x
             routed_parts = []
-            for s0 in range(0, s, seq_chunk):
-                s1 = min(s0 + seq_chunk, s)
+            for s0 in range(0, s, seq_step):
+                s1 = min(s0 + seq_step, s)
                 x_c = ttnn.slice(x4d, (0, 0, s0, 0), (b, 1, s1, h))
                 sc = s1 - s0
                 Tc = b * sc
