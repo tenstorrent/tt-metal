@@ -324,10 +324,10 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 TT_FATAL(target_layout == Layout::TILE, "Unsupported layout conversion");
-                return tensor_impl::convert_layout_row_major_to_tile(physical_shape, tile, input_data);
+                return tensor_impl::to_tile_major_layout(physical_shape, tile, input_data);
             case Layout::TILE:
                 TT_FATAL(target_layout == Layout::ROW_MAJOR, "Unsupported layout conversion");
-                return tensor_impl::convert_layout_tile_to_row_major(physical_shape, tile, input_data);
+                return tensor_impl::to_row_major_layout(physical_shape, tile, input_data);
             case Layout::INVALID: TT_THROW("Invalid layout");
         }
         TT_THROW("Unreachable");
@@ -859,7 +859,7 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tensor_impl::convert_layout_row_major_to_tile(
+                tilized_data = tensor_impl::to_tile_major_layout(
                     input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }

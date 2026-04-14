@@ -182,8 +182,7 @@ std::vector<T> convert_to_logical_data(ttsl::Span<const T> row_major_physical_da
 }  // namespace
 
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile(
-    const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
+std::vector<T> to_tile_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
     }
@@ -246,8 +245,7 @@ std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const Tensor
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), row_major_physical_data_span);
+        return tensor_impl::to_tile_major_layout(physical_shape, tensor_spec.tile(), row_major_physical_data_span);
     }
     if (!row_major_physical_data.empty()) {
         // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
@@ -288,8 +286,7 @@ std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const Tenso
     std::vector<T> row_major_physical_data;
     ttsl::Span<const T> row_major_physical_data_span;
     if (tensor_spec.layout() == Layout::TILE) {
-        row_major_physical_data =
-            tensor_impl::convert_layout_tile_to_row_major(physical_shape, tensor_spec.tile(), physical_data);
+        row_major_physical_data = tensor_impl::to_row_major_layout(physical_shape, tensor_spec.tile(), physical_data);
         row_major_physical_data_span = ttsl::make_const_span(row_major_physical_data);
     } else {
         row_major_physical_data_span = physical_data;

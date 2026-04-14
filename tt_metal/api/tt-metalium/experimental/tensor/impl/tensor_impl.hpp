@@ -14,6 +14,13 @@
 #include <tt_stl/span.hpp>
 #include <vector>
 
+/**
+ * Functions in this file are internal utilities for Runtime Tensors.
+ * They are exported out in the public API area as a transiet state,
+ * many of them are used by ttnn python binding.
+ * We should disperse these functions as public APIs in tensor_apis.hpp or make them private to tt_metal.
+ */
+
 namespace tt::tt_metal::tensor_impl {
 
 // ======================================================================================
@@ -55,8 +62,7 @@ std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const Tenso
 // ======================================================================================
 
 template <typename T>
-std::vector<T> convert_layout_tile_to_row_major(
-    const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
+std::vector<T> to_row_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
@@ -74,8 +80,7 @@ std::vector<T> convert_layout_tile_to_row_major(
 }
 
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile(
-    const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert);
+std::vector<T> to_tile_major_layout(const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert);
 
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
