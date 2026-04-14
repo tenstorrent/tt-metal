@@ -2,6 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Run the TT-only RVC performant runner.
+
+Example:
+    export RVC_CONFIGS_DIR="$PWD/models/demos/rvc/data/configs"
+    export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
+
+    ./python_env/bin/python models/demos/rvc/scripts/run_performant_runner.py \
+      --input-audio models/demos/rvc/data/sample-speech.wav \
+      --device-id 0 \
+      --warmup-runs 1 \
+      --iters 5
+"""
+
 import argparse
 import time
 

@@ -35,7 +35,7 @@ class RVCValidationConfig:
     require_non_silent_output: bool = True
 
 
-def load_ttnn_pipeline(device, model_config: RVCModelConfig) -> object:
+def load_ttnn_pipeline(device, model_config: RVCModelConfig, inference_config: RVCInferenceConfig) -> object:
     from models.demos.rvc.tt_impl.vc.pipeline import Pipeline as TTPipeline
 
     ttnn_pipeline = TTPipeline(
@@ -43,6 +43,13 @@ def load_ttnn_pipeline(device, model_config: RVCModelConfig) -> object:
         if_f0=model_config.if_f0,
         version=model_config.version,
         num=model_config.num,
+        speaker_id=inference_config.speaker_id,
+        f0_up_key=inference_config.f0_up_key,
+        f0_method=inference_config.f0_method,
+        index_rate=inference_config.index_rate,
+        resample_sr=inference_config.resample_sr,
+        rms_mix_rate=inference_config.rms_mix_rate,
+        protect=inference_config.protect,
     )
     return ttnn_pipeline
 
@@ -71,18 +78,7 @@ class RVCTestInfra:
         self.tt_output = None
 
     def _load_pipeline(self):
-        return load_ttnn_pipeline(self.device, self.model_config)
-
-    def _infer_kwargs(self) -> dict:
-        return {
-            "speaker_id": self.inference_config.speaker_id,
-            "f0_up_key": self.inference_config.f0_up_key,
-            "f0_method": self.inference_config.f0_method,
-            "index_rate": self.inference_config.index_rate,
-            "resample_sr": self.inference_config.resample_sr,
-            "rms_mix_rate": self.inference_config.rms_mix_rate,
-            "protect": self.inference_config.protect,
-        }
+        return load_ttnn_pipeline(self.device, self.model_config, self.inference_config)
 
     @staticmethod
     def _to_numpy(audio) -> np.ndarray:
@@ -91,7 +87,7 @@ class RVCTestInfra:
         return np.asarray(audio, dtype=np.float32).reshape(-1)
 
     def run(self) -> np.ndarray:
-        self.tt_output = self._to_numpy(self.ttnn_pipeline.infer(str(self.audio_path), **self._infer_kwargs()))
+        self.tt_output = self._to_numpy(self.ttnn_pipeline.infer(str(self.audio_path)))
         return self.tt_output
 
     def validate(self, output_tensor=None) -> tuple[bool, str]:

@@ -38,21 +38,24 @@ def main() -> None:
     device = None
     try:
         device = ttnn.CreateDevice(device_id=args.device_id, l1_small_size=args.l1_small_size)
-        pipe = Pipeline(tt_device=device, if_f0=True, version="v1", num="48k")
+        pipe = Pipeline(
+            tt_device=device,
+            if_f0=True,
+            version="v1",
+            num="48k",
+            speaker_id=args.speaker_id,
+            f0_up_key=args.f0_up_key,
+            f0_method=args.f0_method,
+            index_rate=args.index_rate,
+            resample_sr=args.resample_sr,
+            rms_mix_rate=args.rms_mix_rate,
+            protect=args.protect,
+        )
         import time
 
         for _ in range(3):
             start_time = time.time()
-            audio = pipe.infer(
-                args.input,
-                speaker_id=args.speaker_id,
-                f0_up_key=args.f0_up_key,
-                f0_method=args.f0_method,
-                index_rate=args.index_rate,
-                resample_sr=args.resample_sr,
-                rms_mix_rate=args.rms_mix_rate,
-                protect=args.protect,
-            )
+            audio = pipe.infer(args.input)
             end_time = time.time()
             print(f"Inference took {end_time - start_time:.2f} seconds.")
         audio = audio.cpu().numpy()
