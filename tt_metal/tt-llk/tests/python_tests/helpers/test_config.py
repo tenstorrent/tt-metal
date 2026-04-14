@@ -346,9 +346,23 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
-        tt_metal_arch_value = TestConfig.ARCH.value
-        if tt_metal_arch_value == "wormhole":
-            tt_metal_arch_value = "wormhole_b0"
+        hw_specific_includes = []
+        if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-1xx/wormhole",
+                "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+            ]
+        if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-1xx/blackhole",
+                "-I../../hw/ckernels/blackhole/metal/llk_api",
+            ]
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-2xx/quasar",
+                "-I../../hw/ckernels/quasar/metal/llk_api",
+            ]
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
@@ -369,12 +383,10 @@ class TestConfig:
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
             "-I../common",
             f"-I{TestConfig.HEADER_DIR}",
-            f"-Ihw_specific/{TestConfig.ARCH.value}",
-            f"-I../../hw/ckernels/{tt_metal_arch_value}/metal/llk_api",
             "-I../../hw/inc",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
-        ]
+        ] + hw_specific_includes
 
     @staticmethod
     def setup_build(
