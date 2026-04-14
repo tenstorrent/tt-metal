@@ -55,7 +55,7 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links and verificat
 
 ### Notes
 - **GLM-4.7** uses the same `glm4_moe` architecture as GLM-4.5 but with extended context (202752 vs 131072). Also has a Flash variant: `zai-org/GLM-4.7-Flash` (`glm4_moe_lite`).
-- **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=6144, expert_hidden_dim=**4096** (not 2048), 128 experts, 1 shared, K=**4** (not 8). The unverified list had incorrect intermediate size and K values. Mistral Small 3.2 is a 24B dense model (no MoE).
+- **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096** (not 2048), 128 experts, 1 shared, K=**4** (not 8). The unverified list had incorrect intermediate size and K values. Mistral Small 3.2 is a 24B dense model (no MoE).
 
 ---
 
@@ -526,7 +526,7 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 
 | Parameter | Value |
 |-----------|-------|
-| `dim` (hidden_size) | **6144** |
+| `dim` (hidden_size) | **7168** |
 | `expert_hidden_dim` (moe intermediate) | **4096** |
 | `hidden_dim` (dense FFN intermediate) | **16384** |
 | `num_experts` | **128** |
@@ -539,7 +539,7 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 | `n_layers` | 61 |
 | Total / Active params | 675B / 41B |
 
-**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing). Has a vision encoder (2.5B). No custom modeling code downloadable — uses `mistral-common` / vLLM format. Config does not specify activation function or scoring method. The unverified list had incorrect intermediate size (2048→4096) and K value (8→4).
+**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing). Has a vision encoder (2.5B). No custom modeling code downloadable — uses `mistral-common` / vLLM format. Config does not specify activation function or scoring method. The unverified list had incorrect hidden size (6144→7168), intermediate size (2048→4096), and K value (8→4).
 
 ---
 
@@ -704,25 +704,25 @@ Based on code exploration of:
 
 ## 5. Cross-Model MoE Parameter Comparison (ALL VERIFIED)
 
-| Parameter | DeepSeek V3 | GPT-OSS 120B | GLM-4.7 | GLM-5 | Kimi K2.5 | Qwen3.5 397B | Qwen3.5 35B | Qwen3 235B | Qwen3-Omni 30B | DS-OCR | Mistral Large 3 | Ling 1T | Gemma 4 26B |
-|-----------|------------|-------------|---------|-------|-----------|-------------|------------|-----------|---------------|--------|-----------------|---------|------------|
-| **hidden_size** | 7168 | 2880 | 5120 | 6144 | 7168 | 4096 | 2048 | 4096 | 2048 | 1280 | 6144 | 8192 | 2816 |
-| **moe_intermediate** | 2048 | 2880 | 1536 | 2048 | 2048 | 1024 | 512 | 1536 | 768 | 896 | 4096 | 2048 | 704 |
-| **shared_expert_interm** | 2048 | — | 1536 | 2048 | 2048 | 1024 | 512 | — | — | 1792 | ? | 2048 | — (parallel dense) |
-| **n_routed_experts** | 256 | 128 | 160 | 256 | 384 | 512 | 256 | 128 | 128 | 64 | 128 | 256 | 128 |
-| **n_shared_experts** | 1 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 2 | 1 | 1 | 0 (parallel dense) |
-| **K (top-k)** | 8 | 4 | 8 | 8 | 8 | 10 | 8 | 8 | 8 | 6 | 4 | 8 | 8 |
-| **activation** | SiLU/SwiGLU | custom GELU-gated | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU? | SiLU/SwiGLU | **GELU/SwiGLU** |
-| **scoring_func** | sigmoid | softmax | (unspec.) | sigmoid | sigmoid | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (greedy) | (unspec.) | sigmoid | softmax |
-| **topk_method** | noaux_tc | simple | (unspec.) | noaux_tc | noaux_tc | (unspec.) | (unspec.) | (unspec.) | (unspec.) | greedy | (unspec.) | (bias-enabled) | simple+per_expert_scale |
-| **n_group/topk_group** | 8/4 | —/— | 1/1 | 1/1 | 1/1 | —/— | —/— | —/— | —/— | 1/1 | 1/1 | 8/4 | —/— |
-| **scaling_factor** | 2.5 | 1.0 | 2.5 | 2.5 | 2.827 | — | — | — | — | — | 1.0 | 2.5 | per-expert learned |
-| **expert_bias** | No | Yes | No | No | No | No | No | No | No | No | No | No | No |
-| **router_bias** | correction | Yes | No | correction | correction | No | No | No | No | No | No | correction | No (has learned scale) |
-| **first_k_dense** | 3 | all MoE | 3 | 3 | 1 | all MoE | all MoE | all MoE | all MoE | 1 | 3 | 4 | all MoE |
-| **num_layers** | 61 | 36 | 92 | 78 | 61 | 60 | 40 | 94 | 48 | 12 | 61 | 80 | 30 |
-| **parallel dense** | No | No | No | No | No | No | No | No | No | No | No | No | **Yes** |
-| **base_arch** | DS V3 | GPT-OSS | GLM4-MoE | DS V3-like | DS V3 | Qwen3.5 | Qwen3.5 | Qwen3 | Qwen3-Omni | DS V2 | Mistral | DS V3-like | Gemma4 |
+| Parameter | DeepSeek V3 | GPT-OSS 120B | GLM-4.7 | GLM-5 | Kimi K2.5 | Qwen3.5 397B | Qwen3.5 35B | Qwen3 235B | Qwen3-Omni Thinker | Qwen3-Omni Talker | DS-OCR | Mistral Large 3 | Ling 1T | Gemma 4 26B |
+|-----------|------------|-------------|---------|-------|-----------|-------------|------------|-----------|-------------------|------------------|--------|-----------------|---------|------------|
+| **hidden_size** | 7168 | 2880 | 5120 | 6144 | 7168 | 4096 | 2048 | 4096 | 2048 | 1024 | 1280 | 7168 | 8192 | 2816 |
+| **moe_intermediate** | 2048 | 2880 | 1536 | 2048 | 2048 | 1024 | 512 | 1536 | 768 | 384 | 896 | 4096 | 2048 | 704 |
+| **shared_expert_interm** | 2048 | — | 1536 | 2048 | 2048 | 1024 | 512 | — | — | 768 | 1792 | ? | 2048 | — (parallel dense) |
+| **n_routed_experts** | 256 | 128 | 160 | 256 | 384 | 512 | 256 | 128 | 128 | 128 | 64 | 128 | 256 | 128 |
+| **n_shared_experts** | 1 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 1 | 2 | 1 | 1 | 0 (parallel dense) |
+| **K (top-k)** | 8 | 4 | 8 | 8 | 8 | 10 | 8 | 8 | 8 | 6 | 6 | 4 | 8 | 8 |
+| **activation** | SiLU/SwiGLU | custom GELU-gated | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU? | SiLU/SwiGLU | **GELU/SwiGLU** |
+| **scoring_func** | sigmoid | softmax | (unspec.) | sigmoid | sigmoid | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (greedy) | (unspec.) | sigmoid | softmax |
+| **topk_method** | noaux_tc | simple | (unspec.) | noaux_tc | noaux_tc | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (unspec.) | greedy | (unspec.) | (bias-enabled) | simple+per_expert_scale |
+| **n_group/topk_group** | 8/4 | —/— | 1/1 | 1/1 | 1/1 | —/— | —/— | —/— | —/— | —/— | 1/1 | 1/1 | 8/4 | —/— |
+| **scaling_factor** | 2.5 | 1.0 | 2.5 | 2.5 | 2.827 | — | — | — | — | — | — | 1.0 | 2.5 | per-expert learned |
+| **expert_bias** | No | Yes | No | No | No | No | No | No | No | No | No | No | No | No |
+| **router_bias** | correction | Yes | No | correction | correction | No | No | No | No | No | No | No | correction | No (has learned scale) |
+| **first_k_dense** | 3 | all MoE | 3 | 3 | 1 | all MoE | all MoE | all MoE | all MoE | all MoE | 1 | 3 | 4 | all MoE |
+| **num_layers** | 61 | 36 | 92 | 78 | 61 | 60 | 40 | 94 | 48 | 20 | 12 | 61 | 80 | 30 |
+| **parallel dense** | No | No | No | No | No | No | No | No | No | No | No | No | No | **Yes** |
+| **base_arch** | DS V3 | GPT-OSS | GLM4-MoE | DS V3-like | DS V3 | Qwen3.5 | Qwen3.5 | Qwen3 | Qwen3-Omni | Qwen3-Omni | DS V2 | Mistral | DS V3-like | Gemma4 |
 
 ---
 
@@ -803,9 +803,10 @@ Using tile_size=32:
 | Qwen3.5 397B | 4096/32=128 × 1024/32=32 | 32 × 128 |
 | Qwen3.5 35B | 2048/32=64 × 512/32=16 | 16 × 64 |
 | Qwen3 235B | 128 × 1536/32=48 | 48 × 128 |
-| Qwen3-Omni 30B | 64 × 768/32=24 | 24 × 64 |
+| Qwen3-Omni Thinker | 2048/32=64 × 768/32=24 | 24 × 64 |
+| Qwen3-Omni Talker | 1024/32=32 × 384/32=12 | 12 × 32 |
 | DS-OCR | 1280/32=40 × 896/32=28 | 28 × 40 |
-| Mistral L3 | 192 × 4096/32=128 | 128 × 192 |
+| Mistral L3 | 7168/32=224 × 4096/32=128 | 128 × 224 |
 | Ling-1T | 8192/32=256 × 64 | 64 × 256 |
 | Gemma 4 26B | 2816/32=88 × 704/32=22 | 22 × 88 |
 
