@@ -12,7 +12,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/cluster.hpp>  // for GetClusterType
 
 using namespace tt::tt_metal;
 
@@ -252,44 +251,22 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
         return std::max(2u, safe_max);
     }
 
-    // Interleaved concat - use empirically determined limits based on dispatch type
-    // N300, T3K, and N300_2x2 clusters default to ETH dispatch which has lower limits
-    auto cluster_type = tt::tt_metal::GetClusterType();
-    bool likely_eth_dispatch =
-        (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-         cluster_type == tt::tt_metal::ClusterType::N300_2x2);
-
+    // Interleaved concat - use a safe limit that works across all dispatch core types.
+    //
+    // Previous code used a cluster-type heuristic to guess the dispatch core type
+    // (N300/T3K/N300_2x2 → ETH dispatch → limit 47, else → WORKER dispatch → limit 49).
+    // This was fragile: N150 (Wormhole B0 single-chip, WORKER dispatch) was not in the
+    // heuristic and hung at N=48 (GitHub issue #42105).
+    //
     // Theoretical limit from formula: 5 + 6N <= 256 => N <= 41.8 => N_max = 41
-    // However, empirical testing shows slightly higher limits work in practice:
-    //
-    // ETH dispatch (Ethernet cores):
-    //   - N=47: PASS
-    //   - N=48: HANG
-    //   ETH cores have smaller buffers for kernel arguments than WORKER cores.
-    //
-    // WORKER dispatch (Tensix cores):
-    //   - N=49: PASS
-    //   - N=50: HANG
-    //
-    // The difference between theoretical (41) and empirical limits (47/49) suggests
-    // some args may be shared or optimized at runtime. We use the empirical limits
-    // as they're more permissive while still being safe.
-    //
-    // Reference: GitHub issue investigating concat hangs on N300 with ETH dispatch.
-    // Test file: tests/ttnn/unit_tests/operations/data_movement/test_concat_hang_repro.py
-    uint32_t max_tensors;
-    if (likely_eth_dispatch) {
-        max_tensors = 47;  // ETH dispatch limit (48+ causes hang)
-    } else {
-        max_tensors = 49;  // WORKER dispatch limit (50+ causes hang)
-    }
+    // Empirical testing shows N=47 is the safe limit for ETH dispatch, and the WORKER
+    // limit of 49 was found to be unreliable on N150. Use 47 as a universal safe limit.
+    constexpr uint32_t max_tensors = 47;
 
     log_debug(
         tt::LogOp,
-        "ttnn.concat: Interleaved concat - max_tensors = {} (cluster_type = {}, likely_eth_dispatch = {}, dim = {})",
+        "ttnn.concat: Interleaved concat - max_tensors = {} (dim = {})",
         max_tensors,
-        static_cast<int>(cluster_type),
-        likely_eth_dispatch,
         dim);
 
     return max_tensors;
