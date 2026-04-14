@@ -79,6 +79,7 @@ void apply_global_overrides_to_entry(
         const auto& vc_override = global_overrides.per_vc[vc];
 
         if (vc_override.has_sender_override()) {
+            log_info(tt::LogFabric, "Applying global sender override for VC{}:", vc);
             apply_vc_override_to_bitfield(
                 entry.sender_channel_used_bitfield_by_vc,
                 sender_offset,
@@ -149,6 +150,7 @@ std::optional<ChannelTrimmingOverrides> resolve_channel_trimming_for_router(
     }
 
     if (has_global_override) {
+        log_info(tt::LogFabric, "has global override");
         apply_global_overrides_to_entry(*result, global_overrides, sender_channels_per_vc, receiver_channels_per_vc);
     }
 
@@ -279,6 +281,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
+    log_info(tt::LogFabric, "actual_sender_channels_per_vc before overrides: {}", actual_sender_channels_per_vc);
+
     // Resolve channel trimming for this router: capture lookup + global override application
     auto channel_trimming_overrides_for_router = resolve_channel_trimming_for_router(
         builder_context.get_channel_trimming_overrides(),
@@ -287,6 +291,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         location.eth_chan,
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc);
+
+    log_info(tt::LogFabric, "actual_sender_channels_per_vc after overrides: {}", actual_sender_channels_per_vc);
 
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(

@@ -182,7 +182,7 @@ def build_all_reduce_test_inputs(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": create_fabric_router_config(2048),
             "trace_region_size": 573440,
         }
     ],

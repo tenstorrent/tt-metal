@@ -1024,6 +1024,47 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    const auto& global_overrides = fabric_context.get_builder_context().get_channel_trimming_global_overrides();
+    std::array<bool, builder_config::MAX_NUM_VCS> forwarding_metadata_trustworthy_by_vc{};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        forwarding_metadata_trustworthy_by_vc[vc] = !global_overrides.per_vc[vc].has_override();
+    }
+
+    // Trim-aware VC0 state used for speedy-mode and deadlock-avoidance decisions.
+    size_t effective_sender_channels_vc0 = actual_sender_channels_vc0;
+    uint16_t vc0_sender_mask = 0;
+    bool vc0_receiver_active = false;
+    bool vc0_has_downstream_forwarding = false;
+    bool vc0_terminal_or_source_only_after_trim = false;
+    bool vc0_worker_only_nonforwarding_after_trim = false;
+    const bool vc0_forwarding_metadata_trustworthy =
+        channel_trimming_overrides_.has_value() && forwarding_metadata_trustworthy_by_vc[0];
+    if (channel_trimming_overrides_.has_value()) {
+        const auto& overrides = *channel_trimming_overrides_;
+        uint16_t used_bitfield = overrides.sender_channel_used_bitfield_by_vc;
+        size_t vc0_width = std::min<size_t>(actual_sender_channels_vc0, 8u * sizeof(uint16_t));
+        uint16_t vc0_mask = vc0_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_width) - 1u);
+        vc0_sender_mask = used_bitfield & vc0_mask;
+        effective_sender_channels_vc0 = static_cast<size_t>(__builtin_popcount(static_cast<unsigned>(vc0_sender_mask)));
+        vc0_receiver_active = overrides.is_receiver_channel_data_forwarded(0);
+
+        if (vc0_forwarding_metadata_trustworthy) {
+            vc0_has_downstream_forwarding = overrides.sender_channel_forwarded_to_bitfield_by_vc[0] != 0;
+            const bool vc0_worker_only = vc0_sender_mask == 0x1u;
+            const bool vc0_worker_only_or_idle = vc0_sender_mask == 0 || vc0_worker_only;
+            const bool vc0_receiver_nonforwarding = !vc0_receiver_active || !vc0_has_downstream_forwarding;
+            vc0_terminal_or_source_only_after_trim = vc0_worker_only_or_idle && vc0_receiver_nonforwarding;
+            vc0_worker_only_nonforwarding_after_trim = vc0_worker_only && vc0_receiver_nonforwarding;
+        }
+    }
+
+    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    const bool final_enable_deadlock_avoidance =
+        base_enable_deadlock_avoidance && !vc0_terminal_or_source_only_after_trim;
+    const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    const bool enable_speedy_vc0 = (actual_sender_channels_vc0 == 1 && !base_enable_deadlock_avoidance) ||
+                                   vc0_worker_only_nonforwarding_after_trim;
+
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
 
@@ -1123,13 +1164,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
-    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = this->enable_first_level_ack;
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
@@ -1272,22 +1314,35 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
-    if (channel_trimming_overrides_.has_value()) {
-        named_args["DISABLE_RX_CH0_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
-        named_args["DISABLE_RX_CH1_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
-    } else {
-        named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
+        if (vc == 0 && enable_speedy_vc0) {
+            return 1;
+        }
+        if (!channel_trimming_overrides_.has_value() || !forwarding_metadata_trustworthy_by_vc[vc]) {
+            return 0;
+        }
+        return channel_trimming_overrides_->sender_channel_forwarded_to_bitfield_by_vc[vc] != 0 ? 0 : 1;
+    };
+    named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
+    named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
+    named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+
+    if (named_args["DISABLE_RX_CH0_FORWARDING"] == 0) {
+        log_info(LogFabric, "Receiver channel 0 data forwarding is ENABLED");
+    }
+
+    if (named_args["DISABLE_RX_CH1_FORWARDING"] == 0) {
+        log_info(LogFabric, "Receiver channel 1 data forwarding is ENABLED");
+    }
+
+    if (named_args["DISABLE_RX_CH2_FORWARDING"] == 0) {
+        log_info(LogFabric, "Receiver channel 2 data forwarding is ENABLED");
     }
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (actual_sender_channels_vc0 == 1) {
+    if (enable_speedy_vc0) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1299,6 +1354,34 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
     named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
     named_args["RECEIVER_CREDIT_AMORTIZATION_FREQUENCY"] = receiver_amort_freq;
+
+    if (enable_speedy_vc0) {
+        log_info(
+            LogFabric,
+            "Speedy VC0 is ENABLED. Sender credit amortization frequency: {}, Receiver credit amortization frequency: "
+            "{}. "
+            "These values are auto-computed based on channel depth to balance throughput and latency.",
+            sender_amort_freq,
+            receiver_amort_freq);
+    }
+
+    log_debug(
+        LogFabric,
+        "actual_sender_channels_vc0: {}, effective_sender_channels_vc0: {}, vc0_sender_mask: 0x{:04X}, "
+        "vc0_receiver_active: {}, vc0_has_downstream_forwarding: {}, vc0_forwarding_metadata_trustworthy: {}, "
+        "enable_speedy_vc0: {}, base_enable_deadlock_avoidance: {}, final_enable_deadlock_avoidance: {}, "
+        "sender_amort_freq: {}, receiver_amort_freq: {}",
+        actual_sender_channels_vc0,
+        effective_sender_channels_vc0,
+        vc0_sender_mask,
+        vc0_receiver_active,
+        vc0_has_downstream_forwarding,
+        vc0_forwarding_metadata_trustworthy,
+        enable_speedy_vc0,
+        base_enable_deadlock_avoidance,
+        final_enable_deadlock_avoidance,
+        named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"],
+        named_args["RECEIVER_CREDIT_AMORTIZATION_FREQUENCY"]);
 
     // ===== Build positional args (channel allocations + downstream data) =====
     std::vector<uint32_t> ct_args;
