@@ -62,8 +62,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
         if (input_is_legacy_sharded && output_is_legacy_sharded) {
             auto memory_layout = input_tensor.memory_config().memory_layout();
-            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-                memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return TilizeWithValPaddingSingleCoreShardedFactory{};
             }
         }
