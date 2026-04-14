@@ -479,12 +479,20 @@ class HostInterface:
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def get_downstream_socket(self):
+        if self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[1]
+        elif self.downstream_mesh_socket is not None:
+            raise ValueError("Downstream receiver socket not available for inter-mesh configuration")
+        else:
+            raise ValueError("Downstream socket not available")
+
+    def get_downstream_sender_socket(self):
         if self.downstream_mesh_socket is not None:
             return self.downstream_mesh_socket
         elif self.downstream_socket_pair is not None:
-            return self.downstream_socket_pair[1]
+            return self.downstream_socket_pair[0]
         else:
-            raise ValueError("Downstream socket not available")
+            raise ValueError("Downstream sender socket not available")
 
     def get_upstream_socket(self):
         if self.upstream_socket_pair is not None:
