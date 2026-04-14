@@ -136,7 +136,6 @@ class TestConfig:
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
     TOOL_PATH: ClassVar[Path]
-    HEADER_DIR: ClassVar[Path]
 
     HELPERS: ClassVar[Path]
     RISCV_SOURCES: ClassVar[Path]
