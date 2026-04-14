@@ -21,7 +21,7 @@ run_dual_galaxy_unit_tests() {
 
   local mpi_args="--host $hosts $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --tag-output"
   local mpirun_args="--host $hosts $mpirun_args_base"
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
 

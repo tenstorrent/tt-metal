@@ -16,9 +16,9 @@ run_quad_galaxy_unit_tests() {
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
-  local hosts="g05glx04,g05glx03,g05glx02,g05glx01"
+  local hosts="UF-EV-C5-GWH02,UF-EV-C5-GWH01,UF-EV-C4-GWH02,UF-EV-C4-GWH01"
   local mpi_host="--host $hosts"
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
