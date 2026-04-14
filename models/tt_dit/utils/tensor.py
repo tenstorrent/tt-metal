@@ -330,6 +330,46 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+def _reassemble_2d(
+    mesh_coords: list,
+    shards: list[torch.Tensor],
+    shard_shape: list[int],
+    mesh_shape: tuple[int, ...],
+    concat_dims: list[int | None],
+) -> torch.Tensor:
+    """Reassemble per-device shards into a single tensor for a 2D mesh.
+
+    For the common case where both axes are concatenated, writes each shard
+    directly into a cached output buffer (avoids torch.cat intermediate
+    allocations whose munmap costs ~42 ms per 448 MB on Linux).
+    """
+    d0, d1 = concat_dims
+
+    if d0 is not None and d1 is not None:
+        s0, s1 = shard_shape[d0], shard_shape[d1]
+        full_shape = list(shard_shape)
+        full_shape[d0] *= mesh_shape[0]
+        full_shape[d1] *= mesh_shape[1]
+        ndim = len(full_shape)
+
+        out = torch.empty(full_shape, dtype=shards[0].dtype)
+        for coord, shard in zip(mesh_coords, shards):
+            r, c = int(coord[0]), int(coord[1])
+            slices = [slice(None)] * ndim
+            slices[d0] = slice(r * s0, (r + 1) * s0)
+            slices[d1] = slice(c * s1, (c + 1) * s1)
+            out[tuple(slices)] = shard
+        return out
+
+    if d0 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
+        return torch.cat([s for _, s in by_pos], dim=d0)
+    if d1 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
+        return torch.cat([s for _, s in by_pos], dim=d1)
+    return shards[0]
+
+
 def fast_device_to_host(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -421,119 +461,36 @@ def fast_device_to_host(
         local_host_tensors = [dt.cpu(blocking=False) for _, dt in unique_pairs]
         ttnn.synchronize_device(mesh_device)
 
-        with ThreadPoolExecutor(max_workers=len(local_host_tensors)) as pool:
-            shards = list(pool.map(_to_torch_zero_copy, local_host_tensors))
-
         logical_shape = list(local_host_tensors[0].shape)
-        shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
+        trim = tuple(slice(0, d) for d in logical_shape)
+        shards = [_to_torch_zero_copy(s)[trim] for s in local_host_tensors]
 
         if concat_dims[intra_host_axis] is not None and len(shards) > 1:
             local_coords = [c for c, _ in unique_pairs]
-            shards_by_intra = {int(c[intra_host_axis]): s for c, s in zip(local_coords, shards)}
-            ordered = [shards_by_intra[k] for k in sorted(shards_by_intra)]
-            return torch.cat(ordered, dim=concat_dims[intra_host_axis])
+            by_intra = sorted(zip(local_coords, shards), key=lambda x: int(x[0][intra_host_axis]))
+            return torch.cat([s for _, s in by_intra], dim=concat_dims[intra_host_axis])
         return shards[0]
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
-    # Save mesh coordinates from the *device* tensor before DMA — topology
-    # maps each shard index to its (row, col) mesh position.
+    # Grab mesh coordinates from the device tensor before DMA.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
 
-    # Single .cpu() call on the full mesh tensor.  This batches all 32 DMA
-    # reads into one C++ dispatch so that:
-    #   - Host buffer allocation is parallelised across shards in C++.
-    #   - A single MeshBufferReadDescriptor is created, enabling the reader
-    #     thread pool to process all completion-queue reads in parallel.
+    # Single .cpu() on the mesh tensor batches all DMA reads into one C++
+    # dispatch — host buffers are allocated in parallel and the reader thread
+    # pool processes all completion-queue reads concurrently.
     host_tensor = tt_tensor.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
 
-    # Extract per-shard host tensors.  For single-host, get_device_tensors
-    # on a host tensor just validates presence and wraps each shard — no copy.
+    # Extract per-shard host tensors (single-host: just wraps each shard).
     host_shard_tensors = ttnn.get_device_tensors(host_tensor)
 
-    # Zero-copy to_torch when available, otherwise standard to_torch
-    shards = [_to_torch_zero_copy(s) for s in host_shard_tensors]
-    # Trim physical (tile-padded) shape to logical shape — view, no copy
+    # Zero-copy to_torch, trimmed to logical (un-padded) shape.
     logical_shape = list(host_shard_tensors[0].shape)
-    shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
+    trim = tuple(slice(0, d) for d in logical_shape)
+    shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    # Validate that topology coordinates and device tensors are consistent.
-    n_coords, n_shards = len(mesh_coords), len(shards)
-    expected = mesh_shape[0] * mesh_shape[1]
-    if n_coords != n_shards:
-        raise ValueError(
-            f"mesh_coords length ({n_coords}) != device shards length ({n_shards}); "
-            "tensor_topology and get_device_tensors are out of sync"
-        )
-    if n_shards != expected:
-        raise ValueError(f"Expected {expected} shards for mesh shape {mesh_shape}, got {n_shards}")
-
-    # Build coord→shard mapping using explicit mesh coordinates rather than
-    # assuming get_device_tensors() returns shards in row-major order.
-    shards_by_coord = {(int(c[0]), int(c[1])): s for c, s in zip(mesh_coords, shards)}
-
-    if len(shards_by_coord) != n_shards:
-        raise ValueError(
-            f"Duplicate mesh coordinates detected: {n_shards} shards but only "
-            f"{len(shards_by_coord)} unique coordinates"
-        )
-
-    # Validate: if a mesh axis is not gathered (concat_dims[axis] is None)
-    # and has more than one device, the tensor must be replicated along that
-    # axis — otherwise we'd silently drop unique shards.
-    placements = list(tt_tensor.tensor_topology().placements())
-    for axis in range(len(concat_dims)):
-        if concat_dims[axis] is None and mesh_shape[axis] > 1:
-            if not isinstance(placements[axis], ttnn.PlacementReplicate):
-                msg = (
-                    f"concat_dims[{axis}] is None (no gather) but mesh axis {axis} "
-                    f"(size {mesh_shape[axis]}) is not replicated — this would drop shards."
-                )
-                raise ValueError(msg)
-
-    # Reassemble from 2D mesh by writing each shard directly into a
-    # pre-allocated output buffer.  This halves memory traffic compared to
-    # two-level torch.cat (one pass of 896 MB vs two passes of 1.8 GB) and
-    # avoids intermediate row-buffer allocations whose munmap costs ~42 ms.
-    if concat_dims[0] is not None and concat_dims[1] is not None:
-        d0, d1 = concat_dims[0], concat_dims[1]
-        s0 = logical_shape[d0]
-        s1 = logical_shape[d1]
-        full_shape = list(logical_shape)
-        full_shape[d0] *= mesh_shape[0]
-        full_shape[d1] *= mesh_shape[1]
-        dtype = shards[0].dtype
-        ndim = len(full_shape)
-
-        buf_key = (tuple(full_shape), dtype)
-        prev = getattr(fast_device_to_host, "_cat_bufs", None)
-        if prev is None or prev[0] != buf_key:
-            out_buf = torch.empty(full_shape, dtype=dtype)
-            fast_device_to_host._cat_bufs = (buf_key, out_buf)
-        else:
-            _, out_buf = prev
-
-        for (r, c), shard in shards_by_coord.items():
-            slices = [slice(None)] * ndim
-            slices[d0] = slice(r * s0, (r + 1) * s0)
-            slices[d1] = slice(c * s1, (c + 1) * s1)
-            out_buf[tuple(slices)] = shard
-        result = out_buf
-    elif concat_dims[0] is not None:
-        result = torch.cat(
-            [shards_by_coord[(r, 0)] for r in range(mesh_shape[0])],
-            dim=concat_dims[0],
-        )
-    elif concat_dims[1] is not None:
-        result = torch.cat(
-            [shards_by_coord[(0, c)] for c in range(mesh_shape[1])],
-            dim=concat_dims[1],
-        )
-    else:
-        result = shards[0]
-
-    return result
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims)
 
 
 def upsample(
