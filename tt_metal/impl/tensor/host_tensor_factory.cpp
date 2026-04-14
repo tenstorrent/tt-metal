@@ -46,7 +46,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
 
     auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
-    return tt::tt_metal::to_dtype(res, spec.data_type());
+    return to_dtype(res, spec.data_type());
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
