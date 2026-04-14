@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 
 using uint32_t = std::uint32_t;
 
@@ -36,6 +38,8 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes);
 
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise
     // We loop through output tiles row wise, and then read one tile row at a tile to form the output tile
@@ -46,7 +50,7 @@ void kernel_main() {
                 uint32_t base_tile_stick_id = base_tile_row_stick_id;
                 for (uint32_t w = 0; w < output_Wt; w++) {
                     uint32_t output_stick_id = base_tile_stick_id;  // Offset tile id of the current sub tile row
-                    cb_reserve_back(cb_id_in0, onetile);
+                    cb_in0.reserve_back(onetile);
                     for (uint32_t tile_h = 0; tile_h < 32; tile_h++) {
                         uint32_t input_tile_row_to_read = output_stick_id / num_sticks_per_input_tile_row;
                         uint32_t input_tile_col_to_read = output_stick_id % input_Wt;
@@ -60,7 +64,7 @@ void kernel_main() {
                              << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
                         banked_addr += ((input_tile_sub_row_to_read & 15) << 5);  // 16 * 2 bytes per face row
 
-                        uint32_t dest_tr0_l1 = get_write_ptr(cb_id_in0);
+                        uint32_t dest_tr0_l1 = cb_in0.get_write_ptr();
                         dest_tr0_l1 +=
                             (((tile_h >> 4) << 1) << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
                         dest_tr0_l1 += ((tile_h & 15) << 5);  // 16 * 2 bytes per face row
@@ -101,7 +105,7 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                     // notifies the unpacker that the buffer is populated
-                    cb_push_back(cb_id_in0, onetile);
+                    cb_in0.push_back(onetile);
 
                     base_tile_stick_id += 1;
                 }

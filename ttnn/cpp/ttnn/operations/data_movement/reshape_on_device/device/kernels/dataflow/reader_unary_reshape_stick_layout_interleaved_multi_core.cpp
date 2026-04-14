@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -19,19 +21,22 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, old_stick_size);
 
+    experimental::CircularBuffer cb_input(cb_in0);
+
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        cb_reserve_back(cb_in0, num_sticks_per_cb_push);
-        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+        cb_input.reserve_back(num_sticks_per_cb_push);
+        uint32_t l1_write_addr = cb_input.get_write_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            // Use legacy NOC API for raw address reads
             noc_async_read(read_noc_addr, l1_write_addr, old_stick_size);
             l1_write_addr += old_stick_size;
             i_stick++;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_in0, num_sticks_per_cb_push);
+        cb_input.push_back(num_sticks_per_cb_push);
     }
 }
