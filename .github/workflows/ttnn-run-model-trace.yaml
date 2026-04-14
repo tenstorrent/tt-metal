@@ -59,7 +59,6 @@ jobs:
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
-      test_file: ${{ steps.validate.outputs.test_file }}
     steps:
       - name: Verify tenstorrent org membership
         env:
@@ -73,6 +72,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Validate test_path exists
         id: validate
@@ -81,7 +82,6 @@ jobs:
         run: |
           # Extract file path (strip ::test_name if present)
           TEST_FILE="${TEST_PATH%%::*}"
-          echo "test_file=$TEST_FILE" >> $GITHUB_OUTPUT
 
           if [[ ! -f "$TEST_FILE" ]]; then
             echo "::error::test_path file not found: $TEST_FILE"
