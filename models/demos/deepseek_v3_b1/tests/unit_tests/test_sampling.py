@@ -28,22 +28,17 @@ def _round_up(value: int, alignment: int) -> int:
 def _mesh_scratch_shape_per_device(mesh_device, k: int = 1):
     mesh_rows, mesh_cols = _mesh_shape(mesh_device)
     total_slots = mesh_rows + mesh_cols
-    if k == 1:
-        slot_bytes = 16  # bf16 score + uint32 index, padded to 16
-        total_bytes = total_slots * slot_bytes
-        scratch_width_uint32 = _round_up(total_bytes, 4) // 4
-        return (1, scratch_width_uint32)
-    else:
-        bf16_tile_size = 2 * 32 * 32
-        uint32_tile_size = 4 * 32 * 32
-        stage1_tiles = (mesh_rows * k + 1023) // 1024
-        stage2_tiles = (mesh_cols * k + 1023) // 1024
-        total_tiles = stage1_tiles + stage2_tiles
-        scores_bytes = total_tiles * bf16_tile_size
-        indices_bytes = total_tiles * uint32_tile_size
-        scores_width_bf16 = _round_up(scores_bytes, 2) // 2
-        indices_width_uint32 = _round_up(indices_bytes, 4) // 4
-        return (1, scores_width_bf16), (1, indices_width_uint32)
+    topk_min_alignment = 32
+    bf16_tile_size = 2 * 32 * 32
+    uint32_tile_size = 4 * 32 * 32
+    stage1_tiles = (mesh_rows * topk_min_alignment + 1023) // 1024
+    stage2_tiles = (mesh_cols * topk_min_alignment + 1023) // 1024
+    total_tiles = stage1_tiles + stage2_tiles
+    scores_bytes = total_tiles * bf16_tile_size
+    indices_bytes = total_tiles * uint32_tile_size
+    scores_width_bf16 = _round_up(scores_bytes, 2) // 2
+    indices_width_uint32 = _round_up(indices_bytes, 4) // 4
+    return (1, scores_width_bf16), (1, indices_width_uint32)
 
 
 def _mesh_device_index(final_mesh_coord, mesh_device):
@@ -596,6 +591,10 @@ def _run_sampling_topk_mesh(
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
     final_core = active_cores[final_core_idx]
 
+    logger.info(f"Final mesh coord: {final_mesh_coord}")
+    logger.info(f"Final core: {final_core}")
+    logger.debug(f"Active cores: {active_cores}")
+
     num_devices = _mesh_num_devices(mesh_device)
     num_cores = len(active_cores)
     scores_shape_per_device = (1, 160 * num_cores)
@@ -624,6 +623,8 @@ def _run_sampling_topk_mesh(
         local_idx = int(gpos) % vocab_per_device
         torch_scores_all[dev_idx, 0, local_idx] = torch.tensor(100.0 - i, dtype=torch.bfloat16)
     winner_indices = set(torch_indices_all.reshape(-1)[winner_global_positions[:k]].tolist())
+    logger.info(f"All rigged global positions: {winner_global_positions}")
+    logger.info(f"Rigged {k} winners: {winner_indices}")
 
     _, golden_topk = SamplingOp.golden(
         torch_scores_all.reshape(1, -1),

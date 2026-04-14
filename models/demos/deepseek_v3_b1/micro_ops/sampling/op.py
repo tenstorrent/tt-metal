@@ -64,11 +64,11 @@ class SamplingOp:
         scores_f32 = scores.float().reshape(-1)
         indices_i64 = indices.to(torch.int64).reshape(-1)
 
-        if k == 1:
-            max_score = torch.max(scores_f32)
-            tied_mask = scores_f32 == max_score
-            selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
-            return selected_index.reshape(1, 1), selected_index.reshape(1, 1).to(torch.int64)
+        # if k == 1:
+        #     max_score = torch.max(scores_f32)
+        #     tied_mask = scores_f32 == max_score
+        #     selected_index = torch.min(indices_i64[tied_mask]).to(torch.uint32)
+        #     return selected_index.reshape(1, 1), selected_index.reshape(1, 1).to(torch.int64)
 
         actual_k = min(k, len(scores_f32))
         topk_values, topk_positions = torch.topk(scores_f32, k=actual_k, sorted=True)
@@ -76,6 +76,7 @@ class SamplingOp:
 
         scaled = (topk_values.to(torch.bfloat16) * torch.tensor(1.0 / temperature, dtype=torch.bfloat16)).float()
         probs = torch.softmax(scaled, dim=-1)
+        logger.debug(f"Raw Probabilities: {probs}")
 
         cum_probs = torch.cumsum(probs, dim=-1)
         logger.debug(f"Cumulative probabilities: {cum_probs}")
