@@ -112,8 +112,8 @@ class SamplingOp:
         scores_tensor,
         indices_tensor,
         output_index_tensor,
-        k: int,
-        p: float,
+        k: int = 32,
+        p: float = 0.95,
         temperature: float = 0.6,
         seed: int = 520,
         rand_output_tensor=None,
@@ -157,50 +157,27 @@ class SamplingOp:
             if mesh_axis != "x":
                 raise NotImplementedError("Sampling mesh mode currently supports only mesh_axis='x'")
             if mesh_device.shape[0] >= 2 and mesh_device.shape[1] == 2:
-                if k == 1:
-                    if fabric_scratch_tensor is None:
-                        raise ValueError("fabric_scratch_tensor is required in mesh mode for k=1")
-                    return SamplingOp._op_mesh_rx2_axis_x(
-                        scores_tensor=scores_tensor,
-                        indices_tensor=indices_tensor,
-                        output_index_tensor=output_index_tensor,
-                        final_core_coord=final_core_coord,
-                        final_mesh_coord=final_mesh_coord,
-                        global_semaphore=global_semaphore,
-                        global_stage2_semaphore=global_stage2_semaphore,
-                        fabric_scratch_tensor=fabric_scratch_tensor,
-                        mesh_axis=mesh_axis,
-                    )
-                else:
-                    if scores_scratch_tensor is None or indices_scratch_tensor is None:
-                        raise ValueError("scores_scratch_tensor and indices_scratch_tensor are required in mesh mode for k>1")
-                    return SamplingOp._op_mesh_topk(
-                        scores_tensor=scores_tensor,
-                        indices_tensor=indices_tensor,
-                        output_index_tensor=output_index_tensor,
-                        k=k,
-                        p=p,
-                        temperature=temperature,
-                        seed=seed,
-                        rand_output_tensor=rand_output_tensor,
-                        final_core_coord=final_core_coord,
-                        final_mesh_coord=final_mesh_coord,
-                        global_semaphore=global_semaphore,
-                        global_stage2_semaphore=global_stage2_semaphore,
-                        scores_scratch_tensor=scores_scratch_tensor,
-                        indices_scratch_tensor=indices_scratch_tensor,
-                        mesh_axis=mesh_axis,
-                        num_internal_iterations=num_internal_iterations,
-                    )
-        elif k == 1:
-            return SamplingOp._op_single_device(
-                scores_tensor=scores_tensor,
-                indices_tensor=indices_tensor,
-                output_index_tensor=output_index_tensor,
-                final_core_coord=final_core_coord,
-                final_mesh_coord=final_mesh_coord,
-            )
-        elif k > 1:
+                if scores_scratch_tensor is None or indices_scratch_tensor is None:
+                    raise ValueError("scores_scratch_tensor and indices_scratch_tensor are required in mesh mode for k>1")
+                return SamplingOp._op_mesh_topk(
+                    scores_tensor=scores_tensor,
+                    indices_tensor=indices_tensor,
+                    output_index_tensor=output_index_tensor,
+                    k=k,
+                    p=p,
+                    temperature=temperature,
+                    seed=seed,
+                    rand_output_tensor=rand_output_tensor,
+                    final_core_coord=final_core_coord,
+                    final_mesh_coord=final_mesh_coord,
+                    global_semaphore=global_semaphore,
+                    global_stage2_semaphore=global_stage2_semaphore,
+                    scores_scratch_tensor=scores_scratch_tensor,
+                    indices_scratch_tensor=indices_scratch_tensor,
+                    mesh_axis=mesh_axis,
+                    num_internal_iterations=num_internal_iterations,
+                )
+        elif mesh_device.shape[0] == 1 and mesh_device.shape[1] == 1:
             return SamplingOp._op_single_device_topk(
                 scores_tensor=scores_tensor,
                 indices_tensor=indices_tensor,
@@ -412,7 +389,7 @@ class SamplingOp:
         num_internal_iterations: int = 1,
     ):
         """
-        Single-device top-K sampling path (k > 1).
+        Single-device top-K sampling path (k >= 1).
 
         Each core finds its local top-K, sends them to the final core, which
         reduces across all gathered candidates. Currently outputs the argmax
@@ -437,8 +414,7 @@ class SamplingOp:
         ), f"Scores/indices shard widths must match, got {scores_shard_spec.shape[1]} and {indices_shard_spec.shape[1]}"
         num_values = int(scores_shard_spec.shape[1])
         assert num_values > 0, "Sampling shard width must be > 0"
-        assert k > 1, f"Top-K path requires k > 1, got {k}"
-        assert k <= num_values, f"k={k} must be <= num_values={num_values} per core"
+        assert k >= 1 and k <= num_values, f"k={k} must be >= 1 and <= num_values={num_values} per core"
         assert _is_singleton_prefix_shape(
             scores_tensor.shape, num_values * num_cores
         ), f"Expected scores shape [1, ..., 1, {num_values * num_cores}], got {scores_tensor.shape}"
@@ -487,6 +463,7 @@ class SamplingOp:
         final_is_sender = any(core.x == output_core.x and core.y == output_core.y for core in sender_cores)
         expected_remote_incs = num_cores - 1 if final_is_sender else num_cores
 
+        topk_min_alignment = 32
         winner_cb = 0
         softmax_in_cb = 2
         softmax_out_cb = 3
@@ -515,12 +492,12 @@ class SamplingOp:
         logger.debug(f"P uint32: {p_uint32_cast}, seed: {seed}")
         # Globally-split gather layout: all scores contiguous, then all indices contiguous.
         # Each per-core region is independently aligned for NOC transfers.
-        topk_scores_stride = _round_up(k * 2, l1_alignment)
-        topk_indices_stride = _round_up(k * 4, l1_alignment)
+        topk_scores_stride = _round_up(topk_min_alignment * 2, l1_alignment)
+        topk_indices_stride = _round_up(topk_min_alignment * 4, l1_alignment)
         winner_page_bytes = topk_scores_stride + topk_indices_stride
 
-        phase1_tiles = (num_values + 1023) // 1024 if k == 32 else 0
-        phase2_tiles = (k * num_cores + 1023) // 1024
+        phase1_tiles = (num_values + 1023) // 1024
+        phase2_tiles = (topk_min_alignment * num_cores + 1023) // 1024
         total_input_tiles = phase1_tiles + phase2_tiles
         phase2_scores_byte_offset = phase1_tiles * bf16_tile_size
         phase2_indices_byte_offset = phase1_tiles * uint32_tile_size
@@ -557,8 +534,8 @@ class SamplingOp:
             ("sampling_inv_temp_bf16", inv_temp_bf16),
             ("sampling_topk_in_scores_cb", topk_in_scores_cb),
             ("sampling_topk_in_indices_cb", topk_in_indices_cb),
-            ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
-            ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_scores_cb", topk_out_scores_cb),
+            ("sampling_topk_out_indices_cb", topk_out_indices_cb),
             ("sampling_phase2_scores_byte_offset", phase2_scores_byte_offset),
             ("sampling_phase2_indices_byte_offset", phase2_indices_byte_offset),
             ("sampling_mesh_stage_scores_cb", 0xFFFFFFFF),
@@ -591,11 +568,11 @@ class SamplingOp:
             ("sampling_stage1_receiver", 0),
             ("sampling_stage2_receiver", 0),
             ("sampling_num_values", num_values),
-            ("sampling_num_senders", num_cores if k == 32 else 0),
+            ("sampling_num_senders", num_cores),
             ("sampling_topk_in_scores_cb", topk_in_scores_cb),
             ("sampling_topk_in_indices_cb", topk_in_indices_cb),
-            ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
-            ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
+            ("sampling_topk_out_scores_cb", topk_out_scores_cb),
+            ("sampling_topk_out_indices_cb", topk_out_indices_cb),
             ("sampling_mesh_stage_scores_cb", 0xFFFFFFFF),
             ("sampling_mesh_stage_indices_cb", 0xFFFFFFFF),
             ("sampling_stage1_row_elements", 0),
@@ -778,29 +755,29 @@ class SamplingOp:
                 ],
             ),
         ]
-        if k == 32:
-            topk_cbs.append(
-                ttnn.CBDescriptor(
-                    total_size=bf16_tile_size,
-                    core_ranges=all_cores,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=topk_out_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
-                        )
-                    ],
-                )
+
+        topk_cbs.append(
+            ttnn.CBDescriptor(
+                total_size=bf16_tile_size,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=topk_out_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                    )
+                ],
             )
-            topk_cbs.append(
-                ttnn.CBDescriptor(
-                    total_size=uint32_tile_size,
-                    core_ranges=all_cores,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=topk_out_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
-                        )
-                    ],
-                )
+        )
+        topk_cbs.append(
+            ttnn.CBDescriptor(
+                total_size=uint32_tile_size,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=topk_out_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
+                    )
+                ],
             )
+        )
 
         receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=semaphore_id,
@@ -928,19 +905,20 @@ class SamplingOp:
         l1_alignment = 16
         bf16_tile_size = 2 * 32 * 32
         uint32_tile_size = 4 * 32 * 32
+        topk_min_alignment = 32
 
         inv_temp_bf16 = float_to_bfloat16_packed(1.0 / temperature)
         p_uint32_cast = float_to_uint32(p)
-        topk_scores_stride = _round_up(k * 2, l1_alignment)
-        topk_indices_stride = _round_up(k * 4, l1_alignment)
+        topk_scores_stride = _round_up(topk_min_alignment * 2, l1_alignment)
+        topk_indices_stride = _round_up(topk_min_alignment * 4, l1_alignment)
         winner_page_bytes = topk_scores_stride + topk_indices_stride
         stage1_num_slots = mesh_rows
         stage2_num_slots = mesh_cols
         mesh_stage_scores_cb = 15
         mesh_stage_indices_cb = 16
 
-        stage1_mesh_tiles = (stage1_num_slots * k + 1023) // 1024
-        stage2_mesh_tiles = (stage2_num_slots * k + 1023) // 1024
+        stage1_mesh_tiles = (stage1_num_slots * topk_min_alignment + 1023) // 1024
+        stage2_mesh_tiles = (stage2_num_slots * topk_min_alignment + 1023) // 1024
         total_mesh_stage_tiles = stage1_mesh_tiles + stage2_mesh_tiles
         stage2_scores_scratch_offset = stage1_mesh_tiles * bf16_tile_size
         stage2_indices_scratch_offset = stage1_mesh_tiles * uint32_tile_size
@@ -1004,8 +982,8 @@ class SamplingOp:
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     sender_link_idx = 0
 
-                phase1_tiles_mesh = (num_values + 1023) // 1024 if k == 32 else 0
-                phase2_tiles_mesh = (k * num_cores + 1023) // 1024
+                phase1_tiles_mesh = (num_values + 1023) // 1024
+                phase2_tiles_mesh = (topk_min_alignment * num_cores + 1023) // 1024
                 total_input_tiles_mesh = phase1_tiles_mesh + phase2_tiles_mesh
                 phase2_scores_byte_offset_mesh = phase1_tiles_mesh * bf16_tile_size
                 phase2_indices_byte_offset_mesh = phase1_tiles_mesh * uint32_tile_size
@@ -1041,12 +1019,12 @@ class SamplingOp:
                     ("sampling_inv_temp_bf16", inv_temp_bf16),
                     ("sampling_topk_in_scores_cb", topk_in_scores_cb),
                     ("sampling_topk_in_indices_cb", topk_in_indices_cb),
-                    ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
-                    ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
+                    ("sampling_topk_out_scores_cb", topk_out_scores_cb),
+                    ("sampling_topk_out_indices_cb", topk_out_indices_cb),
                     ("sampling_phase2_scores_byte_offset", phase2_scores_byte_offset_mesh),
                     ("sampling_phase2_indices_byte_offset", phase2_indices_byte_offset_mesh),
-                    ("sampling_mesh_stage_scores_cb", mesh_stage_scores_cb if k == 32 else 0xFFFFFFFF),
-                    ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb if k == 32 else 0xFFFFFFFF),
+                    ("sampling_mesh_stage_scores_cb", mesh_stage_scores_cb),
+                    ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb),
                     ("sampling_scores_scratch_stage2_offset", stage2_scores_scratch_offset),
                     ("sampling_indices_scratch_stage2_offset", stage2_indices_scratch_offset),
                     ("sampling_loop_mcast_start_x", 0),
@@ -1072,13 +1050,13 @@ class SamplingOp:
                     ("sampling_stage1_receiver", 1 if is_stage1_receiver else 0),
                     ("sampling_stage2_receiver", 1 if is_stage2_receiver else 0),
                     ("sampling_num_values", num_values),
-                    ("sampling_num_senders", num_cores if k == 32 else 0),
+                    ("sampling_num_senders", num_cores),
                     ("sampling_topk_in_scores_cb", topk_in_scores_cb),
                     ("sampling_topk_in_indices_cb", topk_in_indices_cb),
-                    ("sampling_topk_out_scores_cb", topk_out_scores_cb if k == 32 else 0xFFFFFFFF),
-                    ("sampling_topk_out_indices_cb", topk_out_indices_cb if k == 32 else 0xFFFFFFFF),
-                    ("sampling_mesh_stage_scores_cb", mesh_stage_scores_cb if k == 32 else 0xFFFFFFFF),
-                    ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb if k == 32 else 0xFFFFFFFF),
+                    ("sampling_topk_out_scores_cb", topk_out_scores_cb),
+                    ("sampling_topk_out_indices_cb", topk_out_indices_cb),
+                    ("sampling_mesh_stage_scores_cb", mesh_stage_scores_cb),
+                    ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb),
                     ("sampling_stage1_row_elements", stage1_num_slots * k),
                     ("sampling_stage1_num_input_tiles", stage1_mesh_tiles),
                     ("sampling_stage2_row_elements", stage2_num_slots * k),
@@ -1228,31 +1206,30 @@ class SamplingOp:
                 )
                 cbs = [winner_cb_descriptor, topk_in_scores_cb_descriptor, topk_in_indices_cb_descriptor]
 
-                if k == 32:
-                    cbs.append(
-                        ttnn.CBDescriptor(
-                            total_size=bf16_tile_size,
-                            core_ranges=all_cores,
-                            format_descriptors=[
-                                ttnn.CBFormatDescriptor(
-                                    buffer_index=topk_out_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
-                                )
-                            ],
-                        )
+                cbs.append(
+                    ttnn.CBDescriptor(
+                        total_size=bf16_tile_size,
+                        core_ranges=all_cores,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=topk_out_scores_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                            )
+                        ],
                     )
-                    cbs.append(
-                        ttnn.CBDescriptor(
-                            total_size=uint32_tile_size,
-                            core_ranges=all_cores,
-                            format_descriptors=[
-                                ttnn.CBFormatDescriptor(
-                                    buffer_index=topk_out_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
-                                )
-                            ],
-                        )
+                )
+                cbs.append(
+                    ttnn.CBDescriptor(
+                        total_size=uint32_tile_size,
+                        core_ranges=all_cores,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=topk_out_indices_cb, data_format=ttnn.uint32, page_size=uint32_tile_size
+                            )
+                        ],
                     )
+                )
 
-                if k == 32 and (is_stage1_receiver or is_stage2_receiver):
+                if (is_stage1_receiver or is_stage2_receiver):
                     final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
                     mesh_scores_cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
                         mesh_stage_scores_cb,

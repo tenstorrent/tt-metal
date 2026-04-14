@@ -546,17 +546,19 @@ def _run_sampling_topk_single_device(
 
 
 @pytest.mark.parametrize(
-    "seed, final_core_idx, p, temperature, num_internal_iterations",
+    "seed, final_core_idx, p, temperature, num_internal_iterations, k",
     [
-        (2005, 100, 0.95, 0.6, 100),
-        (17, 0, 0.995, 0.4, 1),
-        (1337, 50, 1.0, 0.8, 1),
-        (4242, 73, 0.1, 0.6, 1),
+        (2005, 100, 0.95, 0.6, 100, 32),
+        (17, 0, 0.995, 0.4, 1, 32),
+        (1337, 50, 1.0, 0.8, 1, 32),
+        (4242, 73, 0.1, 0.6, 1, 32),
+        (52098, 100, 0.95, 0.6, 100, 1),
+        (52098, 100, 1.0, 10, 1, 16),
     ],
-    ids=["test_1", "test_2", "test_3", "test_4"],
+    ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx, num_internal_iterations):
+def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx, num_internal_iterations, k):
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
 
@@ -567,7 +569,7 @@ def test_sampling_topk_single_device(device, seed, p, temperature, final_core_id
     _run_sampling_topk_single_device(
         device,
         seed=seed,
-        k=32,
+        k=k,
         p=p,
         temperature=temperature,
         final_core_idx=final_core_idx,
@@ -789,21 +791,21 @@ def create_fabric_router_config(max_payload_size):
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
-    "final_mesh_coord, seed, final_core_idx, p, temperature",
+    "final_mesh_coord, seed, final_core_idx, p, temperature, k",
     [
-        ((1, 1), 2005, 100, 0.95, 0.6),
-        ((1, 0), 52098, 0, 0.995, 0.4),
-        ((2, 1), 1337, 50, 1.0, 0.8),
-        ((2, 0), 4242, 73, 0.1, 0.6),
-        ((0, 0), 999, 0, 1.0, 0.05),
-        ((0, 1), 996, 97, 0.8, 0.01),
-        ((3, 0), 70, 7, 0.9, 0.6),
-        ((3, 1), 5, 39, 0.5, 0.05),
+        ((1, 1), 2005, 100, 0.95, 0.6, 32),
+        ((1, 0), 52098, 0, 0.995, 0.4, 16),
+        ((2, 1), 1337, 50, 1.0, 10.0, 32),
+        ((2, 0), 4242, 73, 0.1, 0.6, 32),
+        ((0, 0), 999, 0, 1.0, 0.05, 32),
+        ((0, 1), 996, 97, 0.8, 50.0, 9),
+        ((3, 0), 70, 7, 0.9, 22.0, 1),
+        ((3, 1), 5, 39, 0.5, 6.0, 1),
     ],
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
+def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature, k):
     """
     Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
 
@@ -824,7 +826,7 @@ def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_cor
     _run_sampling_topk_mesh(
         submesh,
         seed=seed,
-        k=32,
+        k=k,
         p=p,
         temperature=temperature,
         final_core_idx=final_core_idx,

@@ -623,6 +623,8 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
 #endif  // COMPILE_FOR_TRISC
 
+constexpr uint32_t MIN_TOPK_ALIGNMENT = 32;
+
 namespace deepseek_b1_ops {
 
 struct TopKSampling {
@@ -713,13 +715,13 @@ struct TopKSampling {
         static constexpr uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
         static constexpr uint32_t phase2_scores_byte_offset = Phase2ScoresByteOffset;
         static constexpr uint32_t phase2_indices_byte_offset = Phase2IndicesByteOffset;
-        static constexpr uint32_t phase2_num_input_tiles = (NumSenders * TopK + 1023) / 1024;
+        static constexpr uint32_t phase2_num_input_tiles = TopK <= MIN_TOPK_ALIGNMENT ? (NumSenders * MIN_TOPK_ALIGNMENT + 1023) / 1024 : (NumSenders * TopK + 1023) / 1024;
 
         // Per-core gather slot sizes (padded to 16-byte alignment for NOC transfers).
-        static constexpr uint32_t topk_scores_size = TopK * sizeof(uint16_t);
-        static constexpr uint32_t topk_indices_size = TopK * sizeof(uint32_t);
-        static constexpr uint32_t topk_scores_stride = (topk_scores_size + 15u) & ~15u;
-        static constexpr uint32_t topk_indices_stride = (topk_indices_size + 15u) & ~15u;
+        static constexpr uint32_t topk_scores_size = TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT * sizeof(uint16_t) : TopK * sizeof(uint16_t);
+        static constexpr uint32_t topk_indices_size = TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT * sizeof(uint32_t) : TopK * sizeof(uint32_t);
+        static constexpr uint32_t topk_scores_stride = (topk_scores_size + 31u) & ~31u;
+        static constexpr uint32_t topk_indices_stride = (topk_indices_size + 31u) & ~31u;
         static constexpr uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
         static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
         static constexpr uint32_t scores_scratch_stage2_offset = ScoresScratchStage2Offset;
@@ -800,7 +802,7 @@ struct TopKSampling {
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t num_senders = NumSenders;
-        static constexpr uint32_t phase2_row_elements = NumSenders * TopK;
+        static constexpr uint32_t phase2_row_elements = NumSenders * (TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT : TopK);
         static constexpr uint32_t phase2_num_input_tiles = (phase2_row_elements + 1023) / 1024;
         static constexpr uint32_t topk_in_scores_cb = TopKInScoresCBId;
         static constexpr uint32_t topk_in_indices_cb = TopKInIndicesCBId;
@@ -1292,11 +1294,7 @@ struct TopKSampling {
                         scores_cb_base + CTArgs::phase2_scores_byte_offset);
                     auto all_cores_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                         indices_cb_base + CTArgs::phase2_indices_byte_offset);
-                    constexpr uint32_t total_gathered = CTArgs::num_senders * CTArgs::topk_k;
-                    // for (uint32_t i = 0; i < total_gathered; ++i) {
-                    //     DPRINT << "all_cores_scores[" << i << "] = " << BF16(all_cores_scores[i]) << ENDL();
-                    //     DPRINT << "all_cores_indices[" << i << "] = " << all_cores_indices[i] << ENDL();
-                    // }
+
                     cb_reserve_back(CTArgs::topk_in_scores_cb, p2_tiles);
                     cb_push_back(CTArgs::topk_in_scores_cb, p2_tiles);
 
@@ -1493,7 +1491,7 @@ struct TopKSampling {
                     cb_pop_front(CTArgs::winner_cb_id, 1);
                 } else {
                     // Top-P filtering + random categorical selection
-                    if constexpr (CTArgs::topk_k > 1 && (!CTArgs::mesh_mode || CTArgs::stage2_receiver)) {
+                    if constexpr (!CTArgs::mesh_mode || CTArgs::stage2_receiver) {
                         constexpr uint32_t K = CTArgs::topk_k;
                         constexpr uint32_t FACE_ELEMS = 256;
 
@@ -1629,9 +1627,7 @@ struct TopKSampling {
                 softmax_recip_block_inplace(CTArgs::sum_cb, 1);
                 softmax_mul_block_bcast_cols(CTArgs::softmax_sub_cb, CTArgs::sum_cb, CTArgs::softmax_out_cb, 1, 1);
 
-                if constexpr (CTArgs::topk_k > 1) {
-                    generate_rand_tile(CTArgs::rand_cb);
-                }
+                generate_rand_tile(CTArgs::rand_cb);
             }
 #endif
         }
