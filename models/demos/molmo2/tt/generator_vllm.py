@@ -1508,6 +1508,19 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """HF-style multimodal prefill additive mask; ``None`` if not applicable."""
         logger.info(f"_build_mm_prefill_attn_mask: token_type_ids={token_type_ids is not None}, seq_len={seq_len}")
         if token_type_ids is not None:
+            if isinstance(token_type_ids, list):
+                if any(x is None for x in token_type_ids):
+                    logger.info(f"  token_type_ids list contains None, skipping mask")
+                    token_type_ids = None
+                else:
+                    try:
+                        token_type_ids = torch.tensor(token_type_ids).unsqueeze(0)
+                    except Exception as e:
+                        logger.warning(f"  Failed to convert token_type_ids list to tensor: {e}")
+                        token_type_ids = None
+            elif isinstance(token_type_ids, torch.Tensor) and token_type_ids.dim() == 1:
+                token_type_ids = token_type_ids.unsqueeze(0)
+        if token_type_ids is not None:
             logger.info(f"  token_type_ids shape: {token_type_ids.shape}, sum={token_type_ids.sum().item()}")
         if token_type_ids is None or seq_len <= 1:
             logger.info(f"  Returning None (token_type_ids={token_type_ids is not None}, seq_len={seq_len})")
