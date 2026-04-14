@@ -337,6 +337,7 @@ def test_bspm_vs_uniform_5layers_decode(
     cache_path,
     ccl,
     force_recalculate_weight_config,
+    is_ci_env,
 ):
     """Run the deepseek_v3 demo (5 layers, 1 decode step) with uniform bfloat4_b
     weights and with BSPM pre-quantized weights; compare output logits.
@@ -351,6 +352,10 @@ def test_bspm_vs_uniform_5layers_decode(
       compressed expert tiles contribute minimal cross-attention weight so the
       output distribution shifts only slightly.
     """
+
+    if is_ci_env:
+        pytest.skip("Test not designed to be run on CI")
+
     # ── 5-layer config ──────────────────────────────────────────────────────
     hf_config_5 = deepcopy(hf_config)
     hf_config_5.num_hidden_layers = NUM_LAYERS
