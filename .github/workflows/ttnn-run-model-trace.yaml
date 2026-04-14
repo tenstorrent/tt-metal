@@ -212,7 +212,7 @@ jobs:
             exit 1
           fi
 
-          cmd=(python model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
+          cmd=(python3 model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
 
           if [[ "$STORE_RAW_TRACES" == "true" ]]; then
             cmd+=("--store")
