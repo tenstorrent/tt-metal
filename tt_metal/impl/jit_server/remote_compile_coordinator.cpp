@@ -142,19 +142,18 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
     auto it = s_fw_cache_.find(build_key_);
     if (it == s_fw_cache_.end()) {
         const auto& dev_env = BuildEnvManager::get_instance().get_device_build_env(device_build_id_);
-        const auto& fw_root = dev_env.build_env.get_firmware_binary_root();
 
         jit_server::UploadFirmwareRequest req;
         req.build_key = build_key_;
         for (const auto& fw_state : dev_env.firmware_build_states) {
-            const std::string fw_path = fw_root + fw_state.get_target_full_path();
+            const auto& fw_path = fw_state.get_weakened_firmware_name();
             if (!fs::exists(fw_path)) {
                 continue;
             }
             jit_server::FirmwareArtifact artifact;
             artifact.target_name = fw_state.get_target_name();
-            artifact.file_name = fs::path(fw_state.get_target_full_path()).filename().string();
-            artifact.is_kernel_object = false;
+            artifact.file_name = fs::path(fw_path).filename().string();
+            artifact.is_kernel_object = fw_state.get_firmware_is_kernel_object();
             artifact.data = jit_build::utils::read_file_bytes(fw_path);
             req.artifacts.push_back(std::move(artifact));
         }
