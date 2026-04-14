@@ -398,7 +398,9 @@ def test_sampling_topk_topp_distribution():
     ), "Top-1 token should be sampled more often than the average of the bottom half"
 
 
-def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, num_internal_iterations: int):
+def _run_sampling_topk_single_device(
+    device, seed: int, k: int, p: float, temperature: float, final_core_idx: int, num_internal_iterations: int
+):
     """
     Run the top-K sampling kernel (k>1 path) on a single device with rigged
     scores: 32 random vocabulary positions are set to distinct high values so
@@ -546,11 +548,12 @@ def _run_sampling_topk_single_device(device, seed: int, k: int, p: float, temper
 @pytest.mark.parametrize(
     "seed, final_core_idx, p, temperature, num_internal_iterations",
     [
-        (2005, 100, 0.95, 0.6, 2),
+        (2005, 100, 0.95, 0.6, 100),
         (17, 0, 0.995, 0.4, 1),
         (1337, 50, 1.0, 0.8, 1),
         (4242, 73, 0.1, 0.6, 1),
-    ],ids = ["test_1", "test_2", "test_3", "test_4"],
+    ],
+    ids=["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_single_device(device, seed, p, temperature, final_core_idx, num_internal_iterations):
@@ -562,7 +565,13 @@ def test_sampling_topk_single_device(device, seed, p, temperature, final_core_id
     full pipeline (local top-K, global merge, softmax, temperature) works.
     """
     _run_sampling_topk_single_device(
-        device, seed=seed, k=32, p=p, temperature=temperature, final_core_idx=final_core_idx, num_internal_iterations=num_internal_iterations
+        device,
+        seed=seed,
+        k=32,
+        p=p,
+        temperature=temperature,
+        final_core_idx=final_core_idx,
+        num_internal_iterations=num_internal_iterations,
     )
 
 
@@ -607,7 +616,7 @@ def _run_sampling_topk_mesh(
     )
 
     winner_rng = torch.Generator().manual_seed(seed)
-    winner_global_positions = torch.randperm(global_vocab_size, generator=winner_rng)[:k * num_devices]
+    winner_global_positions = torch.randperm(global_vocab_size, generator=winner_rng)[: k * num_devices]
     for i, gpos in enumerate(winner_global_positions):
         dev_idx = int(gpos) // vocab_per_device
         local_idx = int(gpos) % vocab_per_device
@@ -645,17 +654,13 @@ def _run_sampling_topk_mesh(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(final_core_grid, output_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    scores_scratch_shard_spec = ttnn.ShardSpec(
-        final_core_grid, scores_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
+    scores_scratch_shard_spec = ttnn.ShardSpec(final_core_grid, scores_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR)
     scores_scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         scores_scratch_shard_spec,
     )
-    indices_scratch_shard_spec = ttnn.ShardSpec(
-        final_core_grid, indices_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR
-    )
+    indices_scratch_shard_spec = ttnn.ShardSpec(final_core_grid, indices_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR)
     indices_scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -766,6 +771,7 @@ def _run_sampling_topk_mesh(
 
     logger.info(f"Sampling top-K mesh test passed. seed={seed}, k={k}, " f"selected={result_idx}, rand={rand_value}")
 
+
 def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
@@ -774,8 +780,12 @@ def create_fabric_router_config(max_payload_size):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-    "fabric_router_config": create_fabric_router_config(15232),}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
@@ -790,7 +800,7 @@ def create_fabric_router_config(max_payload_size):
         ((3, 0), 70, 7, 0.9, 0.6),
         ((3, 1), 5, 39, 0.5, 0.05),
     ],
-    ids = ["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
+    ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature):
@@ -807,8 +817,10 @@ def test_sampling_topk_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_cor
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    logger.debug(f"Testing sampling top-K mesh: seed={seed}, k=32, p={p}, temperature={temperature}, "
-                 f"final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}")
+    logger.debug(
+        f"Testing sampling top-K mesh: seed={seed}, k=32, p={p}, temperature={temperature}, "
+        f"final_core_idx={final_core_idx}, final_mesh_coord={final_mesh_coord}"
+    )
     _run_sampling_topk_mesh(
         submesh,
         seed=seed,
