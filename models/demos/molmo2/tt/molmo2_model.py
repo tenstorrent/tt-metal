@@ -26,6 +26,22 @@ from models.demos.molmo2.tt.text_model import TextModel
 from models.demos.molmo2.tt.vision_backbone import VisionBackbone
 
 
+def _torch_host_contiguous(t: torch.Tensor) -> torch.Tensor:
+    """CPU contiguous storage for ``ttnn.from_torch`` / ``ttnn.as_tensor`` (avoids ndarray_import failures)."""
+    x = t.detach()
+    if x.is_cuda:
+        x = x.cpu()
+    return x.contiguous()
+
+
+def _input_ids_for_ttnn_uint32(input_ids: torch.Tensor) -> torch.Tensor:
+    """Token IDs as CPU int32 contiguous for ``ttnn.from_torch(..., dtype=ttnn.uint32)``."""
+    x = _torch_host_contiguous(input_ids)
+    if x.dtype not in (torch.int32, torch.uint32):
+        x = x.to(torch.int32)
+    return x
+
+
 class Molmo2Model(LightweightModule):
     """
     Full Molmo2-8B multimodal model.
@@ -203,7 +219,7 @@ class Molmo2Model(LightweightModule):
         valid_mask = valid.reshape(1, 1, -1, 1).float()
 
         idx_ttnn = ttnn.from_torch(
-            flat_idx,
+            _torch_host_contiguous(flat_idx),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -211,7 +227,7 @@ class Molmo2Model(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
         valid_mask_ttnn = ttnn.from_torch(
-            valid_mask,
+            _torch_host_contiguous(valid_mask),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -219,7 +235,7 @@ class Molmo2Model(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
         valid_token_ttnn = ttnn.from_torch(
-            valid_token.flatten().float(),
+            _torch_host_contiguous(valid_token.flatten().float()),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -339,7 +355,7 @@ class Molmo2Model(LightweightModule):
             valid_mask = valid.reshape(1, 1, -1, 1).float()
 
             idx_ttnn = ttnn.from_torch(
-                flat_idx,
+                _torch_host_contiguous(flat_idx),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -347,7 +363,7 @@ class Molmo2Model(LightweightModule):
                 mesh_mapper=mesh_mapper,
             )
             valid_mask_ttnn = ttnn.from_torch(
-                valid_mask,
+                _torch_host_contiguous(valid_mask),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -355,7 +371,7 @@ class Molmo2Model(LightweightModule):
                 mesh_mapper=mesh_mapper,
             )
             valid_token_ttnn = ttnn.from_torch(
-                valid_token.flatten().float(),
+                _torch_host_contiguous(valid_token.flatten().float()),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -407,7 +423,7 @@ class Molmo2Model(LightweightModule):
 
         # Move back to device
         visual_embeddings = ttnn.from_torch(
-            combined_embeddings,
+            _torch_host_contiguous(combined_embeddings),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -440,14 +456,14 @@ class Molmo2Model(LightweightModule):
         # Note: batch_size > 1 is now supported
         hidden_dim = self.text_hidden_dim
 
-        # DEBUG: Track request count
         if not hasattr(self, "_multimodal_request_count"):
             self._multimodal_request_count = 0
         self._multimodal_request_count += 1
-        logger.info(f"prepare_inputs_for_multimodal: REQUEST #{self._multimodal_request_count}")
-        logger.info(f"  input_ids.shape={input_ids.shape}, seq_len={seq_len}")
-        logger.info(f"  visual_embeddings_ttnn shape={visual_embeddings_ttnn.shape}")
-        logger.info(f"  valid_token.shape={valid_token.shape}, sum={valid_token.sum().item()}")
+        logger.info(
+            f"prepare_inputs_for_multimodal #{self._multimodal_request_count}: "
+            f"input_ids={tuple(input_ids.shape)}, visual={tuple(visual_embeddings_ttnn.shape)}, "
+            f"valid_token={tuple(valid_token.shape)} sum={valid_token.sum().item()}"
+        )
 
         # FIX: vLLM places image tokens BEFORE the chat template (wrong position)
         # We need to reorder: move image tokens to after <|im_start|>user\n
@@ -501,7 +517,7 @@ class Molmo2Model(LightweightModule):
 
         # Get text embeddings on device
         input_ids_ttnn = ttnn.from_torch(
-            input_ids,
+            _input_ids_for_ttnn_uint32(input_ids),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -519,7 +535,7 @@ class Molmo2Model(LightweightModule):
             return text_embeddings_ttnn
 
         valid_indices_ttnn = ttnn.from_torch(
-            valid_indices.unsqueeze(0),
+            _torch_host_contiguous(valid_indices.unsqueeze(0)),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -538,36 +554,44 @@ class Molmo2Model(LightweightModule):
 
         # Build selector matrix on CPU (fast, input_ids-sized sparse matrix)
         image_positions = (input_ids[0] == self.image_patch_id).nonzero(as_tuple=True)[0]
+        _row = input_ids[0]
         logger.info(
-            f"prepare_inputs_for_multimodal: image_patch_id={self.image_patch_id}, found {len(image_positions)} image positions, num_valid={num_valid}"
+            f"prepare_inputs_for_multimodal: image_patch_id={self.image_patch_id}, "
+            f"image_positions={len(image_positions)}, num_valid={num_valid}, seq_len={seq_len}"
         )
-        logger.info(f"  input_ids first 20: {input_ids[0][:20].tolist()}")
-        logger.info(f"  input_ids LAST 20: {input_ids[0][-20:].tolist()}")
-        logger.info(f"  input_ids ALL: {input_ids[0].tolist()}")
-        logger.info(f"  input_ids unique tokens: {input_ids[0].unique().tolist()[:20]}...")
+        # Token dumps and stats are verbose / expensive on long video sequences; use DEBUG only.
+        logger.opt(lazy=True).debug("  input_ids first 20: {}", lambda: _row[:20].tolist())
+        logger.opt(lazy=True).debug("  input_ids last 20: {}", lambda: _row[-20:].tolist())
+        logger.opt(lazy=True).debug(
+            "  padding token_id=0 count: {}",
+            lambda: int((_row == 0).sum().item()) if _row.numel() else 0,
+        )
+        logger.opt(lazy=True).debug(
+            "  sample unique token IDs (up to 32): {}...",
+            lambda: _row.unique()[:32].tolist(),
+        )
         if len(image_positions) != num_valid:
             logger.warning(
                 f"  MISMATCH! len(image_positions)={len(image_positions)} != num_valid={num_valid}, returning text-only embeddings!"
             )
             ttnn.deallocate(valid_visual_ttnn)
             return text_embeddings_ttnn
-        logger.info(f"  image_positions (first 10): {image_positions[:10].tolist()}")
+        logger.opt(lazy=True).debug("  image_positions (first 10): {}", lambda: image_positions[:10].tolist())
 
         selector = torch.zeros(seq_len, num_valid, dtype=torch.bfloat16)
         for i, pos in enumerate(image_positions):
             selector[pos, i] = 1.0
 
-        # DEBUG: Synchronize device before creating new tensor
-        logger.info(f"  DEBUG: About to create selector_ttnn, syncing device first...")
+        logger.debug("  About to create selector_ttnn, syncing device first...")
         try:
             ttnn.synchronize_device(self.mesh_device)
-            logger.info(f"  DEBUG: Device sync completed successfully")
+            logger.debug("  Device sync completed before selector_ttnn")
         except Exception as e:
-            logger.error(f"  DEBUG: Device sync FAILED: {e}")
+            logger.error("  Device sync FAILED before selector_ttnn: {}", e)
             raise
 
         selector_ttnn = ttnn.from_torch(
-            selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+            _torch_host_contiguous(selector.unsqueeze(0).unsqueeze(0)),  # [1, 1, seq_len, num_valid]
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -590,20 +614,27 @@ class Molmo2Model(LightweightModule):
             else:
                 vis_contrib = ttnn.to_torch(visual_contribution)
                 text_emb = ttnn.to_torch(text_embeddings_ttnn)
-            logger.info(f"prepare_inputs_for_multimodal DEBUG: visual_contribution shape={vis_contrib.shape}")
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: visual_contribution stats: min={vis_contrib.min().item():.4f}, max={vis_contrib.max().item():.4f}, mean={vis_contrib.mean().item():.4f}"
+            logger.debug("prepare_inputs_for_multimodal: visual_contribution shape={}", vis_contrib.shape)
+            logger.debug(
+                "prepare_inputs_for_multimodal: visual_contribution min={:.4f} max={:.4f} mean={:.4f}",
+                vis_contrib.min().item(),
+                vis_contrib.max().item(),
+                vis_contrib.mean().item(),
             )
-            logger.info(f"prepare_inputs_for_multimodal DEBUG: text_embeddings shape={text_emb.shape}")
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: text_embeddings stats: min={text_emb.min().item():.4f}, max={text_emb.max().item():.4f}, mean={text_emb.mean().item():.4f}"
+            logger.debug("prepare_inputs_for_multimodal: text_embeddings shape={}", text_emb.shape)
+            logger.debug(
+                "prepare_inputs_for_multimodal: text_embeddings min={:.4f} max={:.4f} mean={:.4f}",
+                text_emb.min().item(),
+                text_emb.max().item(),
+                text_emb.mean().item(),
             )
-            # Check visual contrib at image positions
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: visual_contrib at pos 0: first 5 = {vis_contrib[0,0,0,:5].tolist()}"
+            logger.opt(lazy=True).debug(
+                "prepare_inputs_for_multimodal: visual_contrib[0,0,0,:5]={}",
+                lambda: vis_contrib[0, 0, 0, :5].tolist(),
             )
-            logger.info(
-                f"prepare_inputs_for_multimodal DEBUG: text_emb at pos 0: first 5 = {text_emb[0,0,0,:5].tolist()}"
+            logger.opt(lazy=True).debug(
+                "prepare_inputs_for_multimodal: text_emb[0,0,0,:5]={}",
+                lambda: text_emb[0, 0, 0, :5].tolist(),
             )
         except Exception as e:
             logger.warning(f"prepare_inputs_for_multimodal DEBUG: Failed to inspect: {e}")
@@ -652,7 +683,7 @@ class Molmo2Model(LightweightModule):
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh_device else None
 
             input_ids_ttnn = ttnn.from_torch(
-                input_ids,
+                _input_ids_for_ttnn_uint32(input_ids),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,

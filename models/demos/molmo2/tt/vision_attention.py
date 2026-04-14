@@ -111,16 +111,16 @@ class VisionAttention(LightweightModule):
 
         # Transpose weights for linear: [hidden_dim, qkv_dim] -> [qkv_dim, hidden_dim]
         # Then concatenate Q, K, V
-        wq_t = torch.transpose(wq, -2, -1)
-        wk_t = torch.transpose(wk, -2, -1)
-        wv_t = torch.transpose(wv, -2, -1)
+        wq_t = torch.transpose(wq, -2, -1).contiguous()
+        wk_t = torch.transpose(wk, -2, -1).contiguous()
+        wv_t = torch.transpose(wv, -2, -1).contiguous()
 
         # Fused QKV: [hidden_dim, 3 * num_heads * padded_head_dim]
         wqkv = torch.cat([wq_t, wk_t, wv_t], dim=-1)
         bqkv = torch.cat([bq, bk, bv], dim=-1)
 
         self.wqkv = ttnn.as_tensor(
-            wqkv.unsqueeze(0).unsqueeze(0),
+            wqkv.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -150,10 +150,10 @@ class VisionAttention(LightweightModule):
             wo_padded = torch.nn.functional.pad(wo_reshaped, (0, self.padded_head_dim - self.head_dim))
             wo = wo_padded.reshape(-1, self.num_heads * self.padded_head_dim)
 
-        wo_t = torch.transpose(wo, -2, -1)
+        wo_t = torch.transpose(wo, -2, -1).contiguous()
 
         self.wo = ttnn.as_tensor(
-            wo_t.unsqueeze(0).unsqueeze(0),
+            wo_t.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,

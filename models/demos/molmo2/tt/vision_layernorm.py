@@ -60,8 +60,13 @@ class VisionLayerNorm(LightweightModule):
         self.dim = dim
 
         # Prepare weight and bias tensors (TILE-high shard for sharded LN gamma/beta)
-        torch_weight = state_dict[f"{state_dict_prefix}.weight"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim])
-        torch_bias = state_dict[f"{state_dict_prefix}.bias"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim])
+        # expand() is non-contiguous; ttnn.as_tensor requires contiguous storage.
+        torch_weight = (
+            state_dict[f"{state_dict_prefix}.weight"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim]).contiguous()
+        )
+        torch_bias = (
+            state_dict[f"{state_dict_prefix}.bias"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim]).contiguous()
+        )
 
         if weight_cache_path is None:
             cache_name = lambda *_: None

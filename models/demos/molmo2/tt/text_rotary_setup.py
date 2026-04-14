@@ -56,7 +56,7 @@ def compute_cos_sin_cache(
     cos = cos.unsqueeze(0).unsqueeze(0).to(dtype)
     sin = sin.unsqueeze(0).unsqueeze(0).to(dtype)
 
-    return cos, sin
+    return cos.contiguous(), sin.contiguous()
 
 
 class TextRotarySetup(LightweightModule):
@@ -110,7 +110,7 @@ class TextRotarySetup(LightweightModule):
         # ttnn.experimental.rotary_embedding expects the FULL cache in shape [1, 1, max_seq_len, head_dim]
         # and performs position slicing internally using the token_index parameter
         self.cos_matrix = ttnn.from_torch(
-            cos_cache,  # [1, 1, max_seq_len, head_dim]
+            cos_cache.contiguous(),  # [1, 1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
             layout=ttnn.TILE_LAYOUT,
@@ -119,7 +119,7 @@ class TextRotarySetup(LightweightModule):
         )
 
         self.sin_matrix = ttnn.from_torch(
-            sin_cache,  # [1, 1, max_seq_len, head_dim]
+            sin_cache.contiguous(),  # [1, 1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
             layout=ttnn.TILE_LAYOUT,
@@ -129,7 +129,7 @@ class TextRotarySetup(LightweightModule):
 
         # Create cos/sin matrices for prefill mode (TILE_LAYOUT)
         self.cos_matrix_prefill = ttnn.from_torch(
-            cos_cache.squeeze(0),  # [1, max_seq_len, head_dim]
+            cos_cache.squeeze(0).contiguous(),  # [1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
             layout=ttnn.TILE_LAYOUT,
@@ -138,7 +138,7 @@ class TextRotarySetup(LightweightModule):
         )
 
         self.sin_matrix_prefill = ttnn.from_torch(
-            sin_cache.squeeze(0),  # [1, max_seq_len, head_dim]
+            sin_cache.squeeze(0).contiguous(),  # [1, max_seq_len, head_dim]
             device=mesh_device,
             dtype=datatype,
             layout=ttnn.TILE_LAYOUT,
@@ -184,7 +184,7 @@ class TextRotarySetup(LightweightModule):
         end_pos = start_pos + seq_len
 
         # Create position indices tensor
-        positions = torch.arange(start_pos, end_pos, dtype=torch.int32).unsqueeze(0)
+        positions = torch.arange(start_pos, end_pos, dtype=torch.int32).unsqueeze(0).contiguous()
         pos_ttnn = ttnn.from_torch(
             positions,
             device=self.mesh_device,
@@ -242,7 +242,7 @@ class TextRotarySetup(LightweightModule):
         """
         # Update position tensor if provided
         if pos_tensor is not None:
-            positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.int32).unsqueeze(0)
+            positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.int32).unsqueeze(0).contiguous()
             pos_new = ttnn.from_torch(
                 positions,
                 device=self.mesh_device,
@@ -288,7 +288,7 @@ class TextRotarySetup(LightweightModule):
             Dict with pre-allocated tensors
         """
         # Allocate position tensor
-        positions = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0)
+        positions = torch.arange(0, seq_len, dtype=torch.int32).unsqueeze(0).contiguous()
         pos_tensor = ttnn.from_torch(
             positions,
             device=self.mesh_device,
@@ -322,7 +322,7 @@ class TextRotarySetup(LightweightModule):
         batch = self.batch_size
         pad_size = ((batch + 31) // 32) * 32 - batch
         pos_val = int(position_idxs.reshape(-1)[0].item())
-        idx = torch.full((1, batch + pad_size), pos_val, dtype=torch.int32)
+        idx = torch.full((1, batch + pad_size), pos_val, dtype=torch.int32).contiguous()
         rot_ttnn = ttnn.from_torch(
             idx,
             dtype=ttnn.uint32,
@@ -390,7 +390,7 @@ class TextRotarySetup(LightweightModule):
         # Pad to multiple of 32
         batch = self.batch_size
         pad_size = ((batch + 31) // 32) * 32 - batch
-        position_idxs = torch.full((1, batch + pad_size), initial_pos, dtype=torch.int32)
+        position_idxs = torch.full((1, batch + pad_size), initial_pos, dtype=torch.int32).contiguous()
 
         return ttnn.from_torch(
             position_idxs,

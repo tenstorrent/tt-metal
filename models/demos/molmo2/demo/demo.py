@@ -36,6 +36,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.molmo2.tt.model_loader import create_model, load_model_weights, load_processor
+from models.demos.molmo2.tt.molmo2_model import _input_ids_for_ttnn_uint32, _torch_host_contiguous
 
 # Import shared utilities from tt module
 from models.demos.molmo2.tt.utils import (
@@ -324,7 +325,7 @@ class Molmo2Generator:
             ttnn.deallocate(visual_embeddings_ttnn)
         else:
             input_ids_ttnn = ttnn.from_torch(
-                input_ids,
+                _input_ids_for_ttnn_uint32(input_ids),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -400,7 +401,7 @@ class Molmo2Generator:
 
             full_embedded_torch = torch.cat(embedded_torch_parts, dim=2)
             embedded_ttnn = ttnn.from_torch(
-                full_embedded_torch,
+                _torch_host_contiguous(full_embedded_torch),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -431,7 +432,7 @@ class Molmo2Generator:
         # 3. Convert remaining tensors to TTNN (embedded_ttnn already on device)
 
         idx_ttnn = ttnn.from_torch(
-            flat_idx,
+            _torch_host_contiguous(flat_idx),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -441,7 +442,7 @@ class Molmo2Generator:
         logger.info(f"idx_ttnn: {idx_ttnn.shape}")
 
         valid_mask_ttnn = ttnn.from_torch(
-            valid_mask,
+            _torch_host_contiguous(valid_mask),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -450,7 +451,7 @@ class Molmo2Generator:
         )
         logger.info(f"valid_mask_ttnn: {valid_mask_ttnn.shape}")
         valid_token_ttnn = ttnn.from_torch(
-            valid_token.flatten().float(),  # Must convert bool to float before bfloat16
+            _torch_host_contiguous(valid_token.flatten().float()),  # Must convert bool to float before bfloat16
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -587,7 +588,7 @@ class Molmo2Generator:
 
         # 1. Get text embeddings on device
         input_ids_ttnn = ttnn.from_torch(
-            input_ids,
+            _input_ids_for_ttnn_uint32(input_ids),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -605,7 +606,7 @@ class Molmo2Generator:
         if num_valid > 0:
             # Use ttnn.embedding as gather to select valid visual embeddings
             valid_indices_ttnn = ttnn.from_torch(
-                valid_indices.unsqueeze(0),  # [1, num_valid]
+                _torch_host_contiguous(valid_indices.unsqueeze(0)),  # [1, num_valid]
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -635,7 +636,7 @@ class Molmo2Generator:
 
                 # Transfer selector to device
                 selector_ttnn = ttnn.from_torch(
-                    selector.unsqueeze(0).unsqueeze(0),  # [1, 1, seq_len, num_valid]
+                    _torch_host_contiguous(selector.unsqueeze(0).unsqueeze(0)),  # [1, 1, seq_len, num_valid]
                     device=self.mesh_device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
@@ -1062,7 +1063,7 @@ class Molmo2Generator:
 
         # Convert input_ids to TTNN (embed_tokens called inside trace)
         input_ids_ttnn = ttnn.from_torch(
-            input_ids,
+            _input_ids_for_ttnn_uint32(input_ids),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1073,7 +1074,7 @@ class Molmo2Generator:
         # Convert other tensors to TTNN
         # embedded_ttnn already on device from patch_embed_ttnn above
         idx_ttnn = ttnn.from_torch(
-            flat_idx,
+            _torch_host_contiguous(flat_idx),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1081,7 +1082,7 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
         valid_mask_ttnn = ttnn.from_torch(
-            valid_mask,
+            _torch_host_contiguous(valid_mask),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -1089,7 +1090,7 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
         valid_token_ttnn = ttnn.from_torch(
-            valid_token.flatten().float(),
+            _torch_host_contiguous(valid_token.flatten().float()),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1097,7 +1098,7 @@ class Molmo2Generator:
             mesh_mapper=self.mesh_mapper,
         )
         selector_ttnn = ttnn.from_torch(
-            selector_matrix,  # [1, 1, seq_len, num_visual_tokens]
+            _torch_host_contiguous(selector_matrix),  # [1, 1, seq_len, num_visual_tokens]
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -2089,7 +2090,7 @@ class Molmo2Generator:
         # Replicate to batch_size for batch processing (all batch items get same token)
         token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
         tt_next_token = ttnn.from_torch(
-            token_batch,
+            _input_ids_for_ttnn_uint32(token_batch),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2238,7 +2239,7 @@ class Molmo2Generator:
         # Replicate to batch_size for batch processing (all batch items get same token)
         token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
         tt_next_token = ttnn.from_torch(
-            token_batch,
+            _input_ids_for_ttnn_uint32(token_batch),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2402,7 +2403,7 @@ class Molmo2Generator:
         tokens_list = first_tokens + [first_tokens[0]] * (self.batch_size - batch_size)
         token_batch = torch.tensor([tokens_list], dtype=torch.long)
         tt_next_token = ttnn.from_torch(
-            token_batch,
+            _input_ids_for_ttnn_uint32(token_batch),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,

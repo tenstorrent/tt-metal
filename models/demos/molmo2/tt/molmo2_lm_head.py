@@ -110,7 +110,7 @@ def build_lm_head_chunks(
                 device_splits.append(w_full[:, cs : cs + subw])
             combined = torch.cat(device_splits, dim=-1)
             col += n_cols
-            t = combined.unsqueeze(0).unsqueeze(0)
+            t = combined.unsqueeze(0).unsqueeze(0).contiguous()
             name = f"lm_head.weight.chunk_{i}_n{n_cols}_meshshard"
             chunks.append(
                 ttnn.as_tensor(
@@ -132,7 +132,7 @@ def build_lm_head_chunks(
     for i, n_cols in enumerate(split_sizes):
         piece = w_full[:, col : col + n_cols]
         col += n_cols
-        t = piece.unsqueeze(0).unsqueeze(0)
+        t = piece.unsqueeze(0).unsqueeze(0).contiguous()
         name = f"lm_head.weight.chunk_{i}_n{n_cols}"
         chunks.append(
             ttnn.as_tensor(

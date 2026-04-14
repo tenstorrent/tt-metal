@@ -17,14 +17,14 @@ from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
 from transformers import BatchFeature
-
-import ttnn
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_grid_size, select_tiling
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
 from vllm.multimodal.parse import MultiModalDataItems
 from vllm.multimodal.processing import BaseMultiModalProcessor, PromptReplacement, PromptUpdate
+
+import ttnn
 
 # BaseDummyInputsBuilder location varies between vLLM versions
 try:
@@ -210,7 +210,7 @@ def allocate_molmo2_kv_cache(
         List of [K cache, V cache] pairs for each layer
     """
     kv_cache = []
-    cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+    cache_kv = torch.zeros(kv_cache_shape, dtype=dtype).contiguous()
 
     for layer_num in tqdm(range(num_layers), desc="Allocating TT KV caches for Molmo2"):
         kv_tt_i = [

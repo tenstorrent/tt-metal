@@ -125,9 +125,10 @@ class TextAttention(LightweightModule):
         wv = att_proj[q_dim + kv_dim :, :]
 
         # Transpose for TTNN linear: [out, in] -> [1, 1, in, out]
-        wq_t = torch.transpose(wq, -2, -1).unsqueeze(0).unsqueeze(0)
-        wk_t = torch.transpose(wk, -2, -1).unsqueeze(0).unsqueeze(0)
-        wv_t = torch.transpose(wv, -2, -1).unsqueeze(0).unsqueeze(0)
+        # transpose() is non-contiguous; ttnn.as_tensor / from_torch requires contiguous storage.
+        wq_t = torch.transpose(wq, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+        wk_t = torch.transpose(wk, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+        wv_t = torch.transpose(wv, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
 
         # Fused QKV weights only (prefill + decode). Per-device Q/K/V slices are concatenated on dim=-1.
         # Format: per-device concatenation of [Q_heads, K_heads, V_heads]
@@ -139,14 +140,14 @@ class TextAttention(LightweightModule):
                 wk_chunk = torch.chunk(wk, self.num_devices, dim=0)[i]
                 wv_chunk = torch.chunk(wv, self.num_devices, dim=0)[i]
 
-                wq_chunk_t = torch.transpose(wq_chunk, -2, -1)
-                wk_chunk_t = torch.transpose(wk_chunk, -2, -1)
-                wv_chunk_t = torch.transpose(wv_chunk, -2, -1)
+                wq_chunk_t = torch.transpose(wq_chunk, -2, -1).contiguous()
+                wk_chunk_t = torch.transpose(wk_chunk, -2, -1).contiguous()
+                wv_chunk_t = torch.transpose(wv_chunk, -2, -1).contiguous()
 
                 qkv_chunk = torch.cat([wq_chunk_t, wk_chunk_t, wv_chunk_t], dim=-1)
                 qkv_list.append(qkv_chunk)
 
-            wqkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+            wqkv_cat = torch.cat(qkv_list, dim=-1).contiguous().unsqueeze(0).unsqueeze(0)
 
             self.wqkv = ttnn.as_tensor(
                 wqkv_cat,
@@ -159,7 +160,7 @@ class TextAttention(LightweightModule):
             )
         else:
             # Single device: simple concatenation
-            wqkv_t = torch.cat([wq_t, wk_t, wv_t], dim=-1)
+            wqkv_t = torch.cat([wq_t, wk_t, wv_t], dim=-1).contiguous()
             self.wqkv = ttnn.as_tensor(
                 wqkv_t,
                 dtype=dtype,
@@ -175,7 +176,7 @@ class TextAttention(LightweightModule):
 
         # Load output projection: attn_out
         wo = state_dict[f"{prefix}.attn_out.weight"]
-        wo_t = torch.transpose(wo, -2, -1).unsqueeze(0).unsqueeze(0)
+        wo_t = torch.transpose(wo, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
 
         self.wo = ttnn.as_tensor(
             wo_t,
@@ -198,7 +199,7 @@ class TextAttention(LightweightModule):
             norm_mesh_mapper = None
 
         self.q_norm_weight = ttnn.as_tensor(
-            q_norm.reshape(1, 1, 1, -1),
+            q_norm.reshape(1, 1, 1, -1).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=norm_mesh_mapper,
@@ -208,7 +209,7 @@ class TextAttention(LightweightModule):
         )
 
         self.k_norm_weight = ttnn.as_tensor(
-            k_norm.reshape(1, 1, 1, -1),
+            k_norm.reshape(1, 1, 1, -1).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=norm_mesh_mapper,

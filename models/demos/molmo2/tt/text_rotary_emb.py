@@ -67,12 +67,12 @@ class TextRotaryEmbedding(LightweightModule):
 
         # Compute cos/sin with interleaved pattern for apply_rotary
         # Shape: [max_seq_len, head_dim]
-        cos = torch.cos(freqs).repeat_interleave(2, dim=-1)
-        sin = torch.sin(freqs).repeat_interleave(2, dim=-1)
+        cos = torch.cos(freqs).repeat_interleave(2, dim=-1).contiguous()
+        sin = torch.sin(freqs).repeat_interleave(2, dim=-1).contiguous()
 
         # Reshape for broadcast: [1, 1, max_seq_len, head_dim]
-        cos = cos.unsqueeze(0).unsqueeze(0)
-        sin = sin.unsqueeze(0).unsqueeze(0)
+        cos = cos.unsqueeze(0).unsqueeze(0).contiguous()
+        sin = sin.unsqueeze(0).unsqueeze(0).contiguous()
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None

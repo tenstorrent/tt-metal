@@ -117,7 +117,7 @@ class TextModel(LightweightModule):
 
         # Store as single tensor for trace-compatible embed_tokens
         self.full_embedding = ttnn.as_tensor(
-            full_embedding.unsqueeze(0).unsqueeze(0),  # [1, 1, full_vocab_size, hidden_dim]
+            full_embedding.unsqueeze(0).unsqueeze(0).contiguous(),  # [1, 1, full_vocab_size, hidden_dim]
             dtype=ttnn.bfloat16,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -442,7 +442,7 @@ def init_kv_cache(
         # Pre-allocate K cache: [batch, num_kv_heads, max_seq_len, head_dim]
         # With tensor parallelism, this gets sharded to [batch, num_kv_heads_per_device, max_seq_len, head_dim]
         k_cache = ttnn.as_tensor(
-            torch.zeros((batch_size, num_kv_heads, max_seq_len, head_dim)),
+            torch.zeros((batch_size, num_kv_heads, max_seq_len, head_dim)).contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -452,7 +452,7 @@ def init_kv_cache(
 
         # Pre-allocate V cache: [batch, num_kv_heads, max_seq_len, head_dim]
         v_cache = ttnn.as_tensor(
-            torch.zeros((batch_size, num_kv_heads, max_seq_len, head_dim)),
+            torch.zeros((batch_size, num_kv_heads, max_seq_len, head_dim)).contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -538,7 +538,7 @@ def init_paged_kv_cache(
     for layer_idx in range(num_layers):
         # Paged KV cache shape: [num_blocks, num_kv_heads, block_size, head_dim]
         k_cache = ttnn.as_tensor(
-            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)),
+            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)).contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -547,7 +547,7 @@ def init_paged_kv_cache(
         )
 
         v_cache = ttnn.as_tensor(
-            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)),
+            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)).contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,

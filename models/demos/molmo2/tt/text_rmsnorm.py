@@ -70,7 +70,7 @@ class TextRMSNorm(LightweightModule):
         weight = state_dict[weight_key_full]
 
         self.weight = ttnn.as_tensor(
-            weight.reshape(1, 1, 1, -1),
+            weight.reshape(1, 1, 1, -1).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,

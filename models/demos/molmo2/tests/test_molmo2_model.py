@@ -8,10 +8,65 @@ End-to-end tests for Molmo2-8B model.
 Tests the full model integration including text-only and multimodal forward passes.
 """
 
+import os
+
+import numpy as np
+import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+
+
+def _molmo2_logits_to_torch(logits, device):
+    """Squeeze TTNN logits to [batch, seq, vocab]."""
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+    if is_mesh:
+        logits_torch = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0]
+    else:
+        logits_torch = ttnn.to_torch(logits)
+    while logits_torch.dim() > 3:
+        logits_torch = logits_torch.squeeze(0)
+    return logits_torch
+
+
+def _single_frame_inputs_like_preprocess_simple():
+    """
+    Same geometry as ``preprocess_image_molmo2(..., use_simple=True)`` without loading a file.
+
+    Returns ``pixel_values`` [1,3,H,W], ``image_token_pooling`` [N_out,K], pooled_h, pooled_w.
+    """
+    from models.demos.molmo2.tt.utils import IMAGENET_MEAN, IMAGENET_STD, arange_for_pooling
+
+    crop_patches = 27
+    pool_h, pool_w = 2, 2
+    resize_idx = np.arange(crop_patches * crop_patches).reshape(crop_patches, crop_patches)
+    resize_idx = arange_for_pooling(resize_idx, pool_h, pool_w)
+    pooled_h, pooled_w = int(resize_idx.shape[0]), int(resize_idx.shape[1])
+    resize_idx = resize_idx.reshape(-1, pool_h * pool_w)
+    pool = torch.from_numpy(resize_idx).long()
+    mean = torch.tensor(IMAGENET_MEAN, dtype=torch.float32).view(3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
+    pixel_values = (torch.zeros(1, 3, 378, 378, dtype=torch.float32) - mean) / std
+    return pixel_values, pool, pooled_h, pooled_w
+
+
+def _expand_simple_frame_to_video(
+    pixel_values_1: torch.Tensor,
+    pool_1: torch.Tensor,
+    n_frames: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Build ``preprocess_video_molmo2``-style tensors: pixel_values [T,3,H,W],
+    pooled_patches_idx [T,N_out,K] with per-frame patch index offsets.
+    """
+    patches_per_frame = 27 * 27
+    pixel_values = pixel_values_1.repeat(n_frames, 1, 1, 1)
+    rows = []
+    for fi in range(n_frames):
+        rows.append(torch.where(pool_1 >= 0, pool_1 + fi * patches_per_frame, pool_1))
+    pooled_patches_idx = torch.stack(rows, dim=0)
+    return pixel_values, pooled_patches_idx
 
 
 def get_model_weights(model_id: str = "allenai/Molmo2-8B"):
@@ -284,6 +339,109 @@ def test_vision_adapter_integration(device):
     print(f"Pooling input: [{num_queries}, {pool_input_dim}] query, [{pool_size}, {pool_input_dim}] kv")
     print(f"Pooled output: [{num_queries}, {adapter_hidden_dim}]")
     print(f"Final output: {output_torch.shape}")
+
+
+@pytest.mark.slow
+def test_molmo2_full_model_text_forward_all_layers(device):
+    """
+    Load the full Molmo2-8B checkpoint and run ``Molmo2Model.forward``.
+
+    1. **Text-only:** all **36** LM layers + LM head.
+    2. **Video (default 384 frames):** ``pixel_values`` ``[T,3,H,W]`` + ``pooled_patches_idx`` ``[T,N_out,K]``
+       as in ``preprocess_video_molmo2`` / ``run_video_inference`` — chunked **25-layer ViT**,
+       adapter fusion, then **36** LM layers + LM head.
+
+    Frame count: ``MOLMO2_TEST_VIDEO_FRAMES`` (default ``384``). Long prompts need a large
+    ``max_seq_len``; override with ``MOLMO2_TEST_VIDEO_MAX_SEQ_LEN`` (default ``131072``).
+
+    Base frame pixels: optional ``demo/dog.jpg`` via ``preprocess_image_molmo2``; if missing,
+    a zero tensor with the same normalization/pooling layout is used.
+    """
+    try:
+        from transformers import AutoTokenizer
+
+        from models.demos.molmo2.tt.model_loader import MODEL_ID, create_model, load_model_weights
+        from models.demos.molmo2.tt.utils import VIDEO_PROMPT, get_video_tokens
+
+        state_dict = load_model_weights()
+    except Exception as exc:
+        pytest.skip(f"Full checkpoint or dependencies unavailable: {exc}")
+
+    n_video_frames = int(os.environ.get("MOLMO2_TEST_VIDEO_FRAMES", "384"))
+    max_seq_cap = int(os.environ.get("MOLMO2_TEST_VIDEO_MAX_SEQ_LEN", "131072"))
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_ID,
+        trust_remote_code=True,
+        local_files_only=os.getenv("CI") == "true",
+    )
+    model = create_model(device, state_dict, num_layers=36, max_seq_len=max_seq_cap)
+
+    assert model.text_model.num_layers == 36
+    assert model.vision_backbone.image_vit.num_layers == 25
+
+    # --- Text-only prefill (all decoder layers) ---
+    prompt = "Hello"
+    input_ids = tokenizer(prompt, return_tensors="pt", add_special_tokens=True)["input_ids"]
+    _, seq_len = input_ids.shape
+
+    logits, new_kv_caches = model.forward(input_ids=input_ids)
+
+    assert new_kv_caches is not None
+    assert len(new_kv_caches) == 36, "Prefill should return KV tensors for each decoder layer"
+
+    logits_torch = _molmo2_logits_to_torch(logits, device)
+    assert logits_torch.shape[-1] == 152064
+    assert logits_torch.shape[-2] == seq_len
+    assert torch.isfinite(logits_torch).all()
+
+    # --- Video prefill: T frames (default 384), same tensor layout as preprocess_video_molmo2 ---
+    from models.demos.molmo2.tt.utils import arange_for_pooling
+
+    pv1, pool1, _, _ = _single_frame_inputs_like_preprocess_simple()
+    logger.info(f"Using single frame inputs")
+    logger.info(f"pv1 shape: {pv1.shape}")
+    logger.info(f"pool1 shape: {pool1.shape}")
+
+    resize_idx = np.arange(27 * 27).reshape(27, 27)
+    resize_idx = arange_for_pooling(resize_idx, 2, 2)
+    pooled_h, pooled_w = int(resize_idx.shape[0]), int(resize_idx.shape[1])
+
+    pixel_values, pooled_patches_idx = _expand_simple_frame_to_video(pv1, pool1, n_video_frames)
+    timestamps = np.arange(n_video_frames, dtype=np.float64) / 30.0
+
+    user_prompt = f"{VIDEO_PROMPT} Briefly describe the video."
+    video_tokens_str = get_video_tokens(n_video_frames, pooled_h, pooled_w, timestamps)
+    content_with_video = user_prompt.replace(VIDEO_PROMPT, video_tokens_str)
+    messages = [{"role": "user", "content": content_with_video}]
+    full_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    mm_input_ids = tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
+    mm_seq_len = mm_input_ids.shape[1]
+
+    if mm_seq_len > max_seq_cap:
+        pytest.skip(
+            f"Video prompt encodes to {mm_seq_len} tokens; increase MOLMO2_TEST_VIDEO_MAX_SEQ_LEN "
+            f"(current {max_seq_cap}) or lower MOLMO2_TEST_VIDEO_FRAMES."
+        )
+
+    logits_mm, new_kv_mm = model.forward(
+        input_ids=mm_input_ids,
+        pixel_values=pixel_values,
+        pooled_patches_idx=pooled_patches_idx,
+    )
+    logits_mm, new_kv_mm = model.forward(
+        input_ids=mm_input_ids,
+        pixel_values=pixel_values,
+        pooled_patches_idx=pooled_patches_idx,
+    )
+
+    assert new_kv_mm is not None
+    assert len(new_kv_mm) == 36
+
+    logits_mm_torch = _molmo2_logits_to_torch(logits_mm, device)
+    assert logits_mm_torch.shape[-1] == 152064
+    assert logits_mm_torch.shape[-2] == mm_seq_len
+    assert torch.isfinite(logits_mm_torch).all()
 
 
 if __name__ == "__main__":

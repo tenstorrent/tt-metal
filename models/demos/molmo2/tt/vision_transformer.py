@@ -102,12 +102,13 @@ class VisionTransformer(LightweightModule):
 
         # Reshape conv weight for linear: [hidden_dim, 3*patch_size*patch_size]
         # Original shape: [hidden_dim, 3, patch_size, patch_size]
-        self.patch_embed_weight_torch = patch_embed_weight.reshape(hidden_dim, -1).transpose(-2, -1)
+        # transpose() is non-contiguous; ttnn.as_tensor / from_torch requires contiguous storage.
+        self.patch_embed_weight_torch = patch_embed_weight.reshape(hidden_dim, -1).transpose(-2, -1).contiguous()
         self.patch_embed_bias_torch = patch_embed_bias
 
         # Store on device for TTNN operations
         self.patch_embed_weight = ttnn.as_tensor(
-            self.patch_embed_weight_torch.unsqueeze(0).unsqueeze(0),
+            self.patch_embed_weight_torch.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -117,7 +118,7 @@ class VisionTransformer(LightweightModule):
         )
 
         self.patch_embed_bias = ttnn.as_tensor(
-            patch_embed_bias,
+            patch_embed_bias.contiguous(),
             dtype=ttnn.bfloat16,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -132,7 +133,7 @@ class VisionTransformer(LightweightModule):
         self.base_num_patches_per_side = self.num_patches_per_side  # For interpolation
 
         self.positional_embedding = ttnn.as_tensor(
-            self.positional_embedding_torch.unsqueeze(0).unsqueeze(0),
+            self.positional_embedding_torch.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=ttnn.bfloat16,
             device=mesh_device,
             mesh_mapper=mesh_mapper,

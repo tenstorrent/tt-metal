@@ -189,10 +189,10 @@ class ImageProjector(LightweightModule):
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
 
         # Load w1 (gate): input_dim -> intermediate_dim (no bias)
-        w1_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w1.weight"], -2, -1)
+        w1_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w1.weight"], -2, -1).contiguous()
 
         self.w1_weight = ttnn.as_tensor(
-            w1_weight.unsqueeze(0).unsqueeze(0),
+            w1_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -202,10 +202,10 @@ class ImageProjector(LightweightModule):
         )
 
         # Load w3 (up): input_dim -> intermediate_dim (no bias)
-        w3_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w3.weight"], -2, -1)
+        w3_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w3.weight"], -2, -1).contiguous()
 
         self.w3_weight = ttnn.as_tensor(
-            w3_weight.unsqueeze(0).unsqueeze(0),
+            w3_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -215,10 +215,10 @@ class ImageProjector(LightweightModule):
         )
 
         # Load w2 (down): intermediate_dim -> output_dim (no bias)
-        w2_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w2.weight"], -2, -1)
+        w2_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w2.weight"], -2, -1).contiguous()
 
         self.w2_weight = ttnn.as_tensor(
-            w2_weight.unsqueeze(0).unsqueeze(0),
+            w2_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,

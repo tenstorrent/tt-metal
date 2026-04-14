@@ -109,8 +109,8 @@ class TextMLP(LightweightModule):
         gate_proj = ff_proj[intermediate_dim:, :]
 
         # Transpose for TTNN linear: [1, 1, hidden_dim, intermediate_dim]
-        gate_proj_t = torch.transpose(gate_proj, -2, -1).unsqueeze(0).unsqueeze(0)
-        up_proj_t = torch.transpose(up_proj, -2, -1).unsqueeze(0).unsqueeze(0)
+        gate_proj_t = torch.transpose(gate_proj, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+        up_proj_t = torch.transpose(up_proj, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
 
         # For multi-device: store weights as bfloat16 (sharded across devices, fits in memory)
         # For single device: store as bfloat8_b + CPU copies for on-demand conversion
@@ -118,7 +118,7 @@ class TextMLP(LightweightModule):
         if use_sharded_bf16:
             # Store directly as bfloat16, sharded across devices
             self.gate_proj = ttnn.from_torch(
-                gate_proj_t.to(torch.bfloat16),
+                gate_proj_t.to(torch.bfloat16).contiguous(),
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -126,7 +126,7 @@ class TextMLP(LightweightModule):
                 mesh_mapper=col_mesh_mapper,
             )
             self.up_proj = ttnn.from_torch(
-                up_proj_t.to(torch.bfloat16),
+                up_proj_t.to(torch.bfloat16).contiguous(),
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -142,7 +142,7 @@ class TextMLP(LightweightModule):
             self._col_mesh_mapper = col_mesh_mapper
 
             self.gate_proj = ttnn.as_tensor(
-                gate_proj_t,
+                gate_proj_t.contiguous(),
                 dtype=dtype,
                 device=mesh_device,
                 mesh_mapper=col_mesh_mapper,
@@ -151,7 +151,7 @@ class TextMLP(LightweightModule):
                 cache_file_name=cache_name("gate_proj.weight"),
             )
             self.up_proj = ttnn.as_tensor(
-                up_proj_t,
+                up_proj_t.contiguous(),
                 dtype=dtype,
                 device=mesh_device,
                 mesh_mapper=col_mesh_mapper,
@@ -163,11 +163,11 @@ class TextMLP(LightweightModule):
         # Load ff_out (down projection): [intermediate_dim, hidden_dim]
         # Transpose: [1, 1, intermediate_dim, hidden_dim]
         ff_out = state_dict[f"{prefix}.ff_out.weight"]
-        ff_out_t = torch.transpose(ff_out, -2, -1).unsqueeze(0).unsqueeze(0)
+        ff_out_t = torch.transpose(ff_out, -2, -1).contiguous().unsqueeze(0).unsqueeze(0)
 
         if use_sharded_bf16:
             self.down_proj = ttnn.from_torch(
-                ff_out_t.to(torch.bfloat16),
+                ff_out_t.to(torch.bfloat16).contiguous(),
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -180,7 +180,7 @@ class TextMLP(LightweightModule):
             self._row_mesh_mapper = row_mesh_mapper
 
             self.down_proj = ttnn.as_tensor(
-                ff_out_t,
+                ff_out_t.contiguous(),
                 dtype=dtype,
                 device=mesh_device,
                 mesh_mapper=row_mesh_mapper,

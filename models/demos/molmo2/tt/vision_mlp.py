@@ -76,11 +76,11 @@ class VisionMLP(LightweightModule):
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
 
         # Load w1: hidden_dim -> intermediate_dim
-        w1_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w1.weight"], -2, -1)
+        w1_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w1.weight"], -2, -1).contiguous()
         w1_bias = state_dict[f"{state_dict_prefix}.w1.bias"]
 
         self.w1_weight = ttnn.as_tensor(
-            w1_weight.unsqueeze(0).unsqueeze(0),
+            w1_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
@@ -100,11 +100,11 @@ class VisionMLP(LightweightModule):
         )
 
         # Load w2: intermediate_dim -> hidden_dim
-        w2_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w2.weight"], -2, -1)
+        w2_weight = torch.transpose(state_dict[f"{state_dict_prefix}.w2.weight"], -2, -1).contiguous()
         w2_bias = state_dict[f"{state_dict_prefix}.w2.bias"]
 
         self.w2_weight = ttnn.as_tensor(
-            w2_weight.unsqueeze(0).unsqueeze(0),
+            w2_weight.unsqueeze(0).unsqueeze(0).contiguous(),
             dtype=dtype,
             device=mesh_device,
             mesh_mapper=mesh_mapper,
