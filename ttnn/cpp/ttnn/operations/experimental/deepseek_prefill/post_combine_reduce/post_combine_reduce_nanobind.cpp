@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "deepseek_moe_post_combine_reduce_nanobind.hpp"
+#include "post_combine_reduce_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/experimental/deepseek_moe_post_combine_reduce/deepseek_moe_post_combine_reduce.hpp"
+#include "post_combine_reduce.hpp"
 
-namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail {
 
-void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
-    ttnn::bind_function<"deepseek_moe_post_combine_reduce", "ttnn.experimental.">(
+void bind_post_combine_reduce(nb::module_& mod) {
+    ttnn::bind_function<"post_combine_reduce", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
             Fused post-combine reduce operation for DeepSeek MoE.
 
             Replaces the inefficient sequence of:
-            1. ttnn.to_layout() - ROW_MAJOR → TILE_LAYOUT with fillpad (8→32 experts)
+            1. ttnn.to_layout() - ROW_MAJOR -> TILE_LAYOUT with fillpad (8->32 experts)
             2. ttnn.mul() - broadcast weights across embedding dimension
             3. ttnn.sum() - reduce over expert dimension
 
@@ -47,11 +47,11 @@ void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
             Example:
                 >>> combine_output = ttnn.zeros([1, 1, 3200, 8, 7168], layout=ttnn.ROW_MAJOR_LAYOUT)
                 >>> weights = ttnn.ones([1, 1, 3200, 8])
-                >>> result = ttnn.experimental.deepseek_moe_post_combine_reduce(combine_output, weights)
+                >>> result = ttnn.experimental.deepseek_prefill.post_combine_reduce(combine_output, weights)
                 >>> print(result.shape)
                 [1, 1, 3200, 7168]
         )doc",
-        &ttnn::experimental::deepseek_moe_post_combine_reduce,
+        &ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::post_combine_reduce,
         nb::arg("combine_output").noconvert(),
         nb::arg("weights").noconvert(),
         nb::kw_only(),
@@ -59,4 +59,10 @@ void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
         nb::arg("output_memory_config") = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce::detail
+
+namespace ttnn::operations::experimental::deepseek_prefill::detail {
+
+void bind_post_combine_reduce(::nanobind::module_& mod) { post_combine_reduce::detail::bind_post_combine_reduce(mod); }
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::detail

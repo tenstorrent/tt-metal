@@ -388,7 +388,7 @@ class TtMoe(LightweightModule):
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         #                  (1, 1, 256, 4, 2048) per device - 5D tensor, ROW_MAJOR
         #
-        # TtReduceModule uses fused deepseek_moe_post_combine_reduce kernel:
+        # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         # Free L1 tensors before fused reduce — its CBs need ~1MB of L1 per core.

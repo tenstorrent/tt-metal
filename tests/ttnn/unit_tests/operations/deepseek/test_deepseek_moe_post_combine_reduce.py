@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for deepseek_moe_post_combine_reduce fused kernel.
+Tests for post_combine_reduce fused kernel.
 
 Validates correctness against:
 - PyTorch reference (weighted sum across experts)
@@ -41,7 +41,7 @@ def old_implementation(combine_tt, weights_tt):
 
 def new_implementation(combine_tt, weights_tt):
     """Fused kernel: reads ROW_MAJOR, produces TILE output."""
-    return ttnn.experimental.deepseek_moe_post_combine_reduce(
+    return ttnn.experimental.deepseek_prefill.post_combine_reduce(
         combine_tt, weights_tt, expert_dim=EXPERT_DIM, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
@@ -170,29 +170,3 @@ def test_output_layout(device):
 
 
 # ============================================================================
-# Entry point
-# ============================================================================
-
-
-if __name__ == "__main__":
-    device = ttnn.open_device(device_id=0)
-    try:
-        logger.info("=== Structured data ===")
-        test_structured_data(device)
-
-        logger.info("\n=== Random data ===")
-        test_random_data(device)
-
-        logger.info("\n=== vs old implementation ===")
-        test_vs_old_implementation(device)
-
-        for k in [6, 4, 2, 1]:
-            logger.info(f"\n=== Sparse {k}/{NUM_EXPERTS} ===")
-            test_sparse_weights(device, k)
-
-        logger.info("\n=== Output layout ===")
-        test_output_layout(device)
-
-        logger.info("\nAll tests passed!")
-    finally:
-        ttnn.close_device(device)

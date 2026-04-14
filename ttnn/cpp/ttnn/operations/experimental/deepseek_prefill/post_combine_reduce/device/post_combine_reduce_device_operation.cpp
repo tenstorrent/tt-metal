@@ -5,14 +5,14 @@
 #include <cstdint>
 #include <optional>
 
-#include "deepseek_moe_post_combine_reduce_device_operation.hpp"
+#include "post_combine_reduce_device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
-void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_hit(
+void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const ttnn::Tensor& weights = tensor_args.weights;
@@ -53,7 +53,7 @@ void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_hit(
     }
 }
 
-void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_miss(
+void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
@@ -66,7 +66,7 @@ void DeepseekMoEPostCombineReduceDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
 }
 
-ttnn::TensorSpec DeepseekMoEPostCombineReduceDeviceOperation::compute_output_specs(
+ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const auto& input_shape = combine_output.padded_shape();
@@ -91,26 +91,27 @@ ttnn::TensorSpec DeepseekMoEPostCombineReduceDeviceOperation::compute_output_spe
             combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
-ttnn::Tensor DeepseekMoEPostCombineReduceDeviceOperation::create_output_tensors(
+ttnn::Tensor PostCombineReduceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.combine_output.device());
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce
 
 namespace ttnn::prim {
 
-ttnn::Tensor deepseek_moe_post_combine_reduce(
+ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
-    using OperationType = ttnn::experimental::prim::DeepseekMoEPostCombineReduceDeviceOperation;
+    namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
+    using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        ttnn::experimental::prim::DeepseekMoEPostCombineReduceParams{expert_dim, output_memory_config},
-        ttnn::experimental::prim::DeepseekMoEPostCombineReduceInputs{combine_output, weights});
+        pcr::PostCombineReduceParams{expert_dim, output_memory_config},
+        pcr::PostCombineReduceInputs{combine_output, weights});
 }
 
 }  // namespace ttnn::prim

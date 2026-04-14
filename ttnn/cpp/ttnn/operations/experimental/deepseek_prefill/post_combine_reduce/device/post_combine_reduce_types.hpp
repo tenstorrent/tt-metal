@@ -7,16 +7,16 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
-struct DeepseekMoEPostCombineReduceParams {
+struct PostCombineReduceParams {
     uint32_t expert_dim;
     tt::tt_metal::MemoryConfig output_memory_config;
 };
 
-struct DeepseekMoEPostCombineReduceInputs {
+struct PostCombineReduceInputs {
     ttnn::Tensor combine_output;
     ttnn::Tensor weights;
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

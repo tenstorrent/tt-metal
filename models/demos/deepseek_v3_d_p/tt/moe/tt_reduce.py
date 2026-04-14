@@ -84,7 +84,7 @@ class TtReduceModule(LightweightModule):
 
             # Fused weighted sum: multiply by weights and reduce over topk in a single kernel
             # Input: ROW_MAJOR, Output: TILE_LAYOUT
-            summed = ttnn.experimental.deepseek_moe_post_combine_reduce(
+            summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
                 combine_output,
                 weights,
                 expert_dim=self.topk_dim,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "deepseek_moe_post_combine_reduce_program_factory.hpp"
+#include "post_combine_reduce_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -10,18 +10,18 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
 namespace {
 
 struct CreatedProgram {
     tt::tt_metal::Program program;
-    DeepseekMoEPostCombineReduceProgramFactory::shared_variables_t shared_variables;
+    PostCombineReduceProgramFactory::shared_variables_t shared_variables;
 };
 
 CreatedProgram create_program(
-    const DeepseekMoEPostCombineReduceParams& operation_attributes,
-    const DeepseekMoEPostCombineReduceInputs& tensor_args,
+    const PostCombineReduceParams& operation_attributes,
+    const PostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -41,7 +41,7 @@ CreatedProgram create_program(
         num_tokens *= combine_shape[i];
     }
 
-    constexpr uint32_t TILE_SIZE = 1024;  // 32 × 32
+    constexpr uint32_t TILE_SIZE = 1024;  // 32 x 32
     const uint32_t emb_dim_tiles = emb_dim / TILE_SIZE;
 
     TT_FATAL(
@@ -139,14 +139,14 @@ CreatedProgram create_program(
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
         "deepseek_moe_post_combine_reduce_reader.cpp",
         core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
         "deepseek_moe_post_combine_reduce_compute.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
@@ -158,7 +158,7 @@ CreatedProgram create_program(
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/"
         "deepseek_moe_post_combine_reduce_writer.cpp",
         core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -203,11 +203,10 @@ CreatedProgram create_program(
 
 }  // namespace
 
-DeepseekMoEPostCombineReduceProgramFactory::cached_mesh_workload_t
-DeepseekMoEPostCombineReduceProgramFactory::create_mesh_workload(
-    const DeepseekMoEPostCombineReduceParams& operation_attributes,
+PostCombineReduceProgramFactory::cached_mesh_workload_t PostCombineReduceProgramFactory::create_mesh_workload(
+    const PostCombineReduceParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const DeepseekMoEPostCombineReduceInputs& tensor_args,
+    const PostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -222,10 +221,10 @@ DeepseekMoEPostCombineReduceProgramFactory::create_mesh_workload(
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
 }
 
-void DeepseekMoEPostCombineReduceProgramFactory::override_runtime_arguments(
+void PostCombineReduceProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    [[maybe_unused]] const DeepseekMoEPostCombineReduceParams& operation_attributes,
-    const DeepseekMoEPostCombineReduceInputs& tensor_args,
+    [[maybe_unused]] const PostCombineReduceParams& operation_attributes,
+    const PostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     auto* combine_buffer = tensor_args.combine_output.buffer();
     auto* weight_buffer = tensor_args.weights.buffer();
@@ -245,4 +244,4 @@ void DeepseekMoEPostCombineReduceProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

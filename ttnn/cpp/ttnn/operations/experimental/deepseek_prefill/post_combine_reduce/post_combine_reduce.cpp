@@ -5,15 +5,15 @@
 #include <cstdint>
 #include <optional>
 
-#include "ttnn/operations/experimental/deepseek_moe_post_combine_reduce/deepseek_moe_post_combine_reduce.hpp"
-#include "ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/deepseek_moe_post_combine_reduce_device_operation.hpp"
+#include "post_combine_reduce.hpp"
+#include "device/post_combine_reduce_device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::experimental {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
-ttnn::Tensor deepseek_moe_post_combine_reduce(
+ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
     uint32_t expert_dim,
@@ -21,12 +21,7 @@ ttnn::Tensor deepseek_moe_post_combine_reduce(
     // Use default L1 memory config if not specified
     auto memory_config = output_memory_config.value_or(ttnn::L1_MEMORY_CONFIG);
 
-    return ttnn::prim::deepseek_moe_post_combine_reduce(
-        combine_output,
-        weights,
-        expert_dim,
-        memory_config
-    );
+    return ttnn::prim::post_combine_reduce(combine_output, weights, expert_dim, memory_config);
 }
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Minimal repro for L1 memory clash in deepseek_moe_post_combine_reduce.
+Minimal repro for L1 memory clash in post_combine_reduce.
 
 The fused reduce kernel uses ~1MB of static CBs per core. On linear-8 mesh
 topology, something allocates ~459KB of L1 per core BEFORE the reduce runs,
@@ -62,7 +62,7 @@ def run_reduce(device, tt_combine, tt_weights, expert_dim=3):
         f"  weights:        shape={tt_weights.shape} mem={tt_weights.memory_config().buffer_type} addr={tt_weights.buffer_address()}"
     )
 
-    result = ttnn.experimental.deepseek_moe_post_combine_reduce(
+    result = ttnn.experimental.deepseek_prefill.post_combine_reduce(
         tt_combine,
         tt_weights,
         expert_dim=expert_dim,
@@ -357,7 +357,7 @@ def test_reduce_mesh_no_preceding_ops(mesh_device, device_params, seq_len, topk,
     logger.info(f"  weights: shape={tt_weights.shape} mem={tt_weights.memory_config().buffer_type}")
 
     # Run fused reduce op directly
-    result = ttnn.experimental.deepseek_moe_post_combine_reduce(
+    result = ttnn.experimental.deepseek_prefill.post_combine_reduce(
         tt_combine,
         tt_weights,
         expert_dim=3,
@@ -551,7 +551,7 @@ def test_reduce_mesh_after_dispatch_combine(mesh_device, device_params):
     )
 
     logger.info("  Running reduce op (expecting possible L1 clash)...")
-    result = ttnn.experimental.deepseek_moe_post_combine_reduce(
+    result = ttnn.experimental.deepseek_prefill.post_combine_reduce(
         combined_output,
         tt_reduce_weights,
         expert_dim=3,
@@ -749,7 +749,7 @@ def test_reduce_mesh_full_pipeline(mesh_device, device_params):
     )
 
     logger.info("  Running reduce (expecting possible L1 clash)...")
-    result = ttnn.experimental.deepseek_moe_post_combine_reduce(
+    result = ttnn.experimental.deepseek_prefill.post_combine_reduce(
         combined_output,
         tt_reduce_weights,
         expert_dim=3,

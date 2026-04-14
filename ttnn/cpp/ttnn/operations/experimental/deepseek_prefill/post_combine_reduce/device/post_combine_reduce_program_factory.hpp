@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "deepseek_moe_post_combine_reduce_device_operation_types.hpp"
+#include "post_combine_reduce_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce {
 
-struct DeepseekMoEPostCombineReduceProgramFactory {
+struct PostCombineReduceProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle compute_kernel_id;
@@ -23,16 +23,16 @@ struct DeepseekMoEPostCombineReduceProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const DeepseekMoEPostCombineReduceParams& operation_attributes,
+        const PostCombineReduceParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const DeepseekMoEPostCombineReduceInputs& tensor_args,
+        const PostCombineReduceInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const DeepseekMoEPostCombineReduceParams& operation_attributes,
-        const DeepseekMoEPostCombineReduceInputs& tensor_args,
+        const PostCombineReduceParams& operation_attributes,
+        const PostCombineReduceInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce

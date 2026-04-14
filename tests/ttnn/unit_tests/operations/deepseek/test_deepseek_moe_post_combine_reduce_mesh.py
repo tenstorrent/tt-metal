@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-2-device mesh tests for deepseek_moe_post_combine_reduce.
+2-device mesh tests for post_combine_reduce.
 
 Validates that the MeshWorkloadFactoryConcept migration works correctly.
 Each device gets a replicated copy of the input; both independently compute
 the weighted reduce and should produce identical results matching PyTorch.
 
 Usage (with 2+ devices available):
-    pytest tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce_mesh.py -v
+    pytest tests/ttnn/unit_tests/operations/deepseek/test_post_combine_reduce_mesh.py -v
 """
 
 import pytest
@@ -76,7 +76,7 @@ def from_mesh(tensor_tt, mesh_device):
 
 
 def run_fused_op(combine_tt, weights_tt):
-    return ttnn.experimental.deepseek_moe_post_combine_reduce(
+    return ttnn.experimental.deepseek_prefill.post_combine_reduce(
         combine_tt,
         weights_tt,
         expert_dim=EXPERT_DIM,
@@ -156,32 +156,3 @@ def test_mesh_output_shape_and_layout(two_device_mesh):
 
     result = from_mesh(result_tt, two_device_mesh)
     assert list(result.shape) == [1, NUM_TOKENS, EMB_DIM], f"Wrong shape: {result.shape}"
-
-
-# ============================================================================
-# Entry point
-# ============================================================================
-
-if __name__ == "__main__":
-    num_devices = ttnn.get_num_pcie_devices()
-    if num_devices < NUM_DEVICES:
-        print(f"Need at least {NUM_DEVICES} devices, found {num_devices}")
-        exit(1)
-
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, NUM_DEVICES))
-    try:
-        logger.info("=== Mesh: random data ===")
-        test_mesh_random_data(mesh)
-
-        logger.info("\n=== Mesh: structured data ===")
-        test_mesh_structured_data(mesh)
-
-        logger.info("\n=== Mesh: sparse weights ===")
-        test_mesh_sparse_weights(mesh)
-
-        logger.info("\n=== Mesh: output shape/layout ===")
-        test_mesh_output_shape_and_layout(mesh)
-
-        logger.info("\nAll mesh tests passed!")
-    finally:
-        ttnn.close_mesh_device(mesh)
