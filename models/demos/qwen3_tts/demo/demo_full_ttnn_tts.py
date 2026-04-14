@@ -33,7 +33,7 @@ import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -468,8 +468,123 @@ def sample_token(
         indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
         logits[indices_to_remove] = float("-inf")
     probs = F.softmax(logits, dim=-1)
-    next_token = torch.multinomial(probs, num_samples=1)
-    return next_token.item()
+    return int(torch.multinomial(probs, num_samples=1).item())
+
+
+def build_cp_decode_trace_h2d_constants(
+    cp_cos_table: torch.Tensor,
+    cp_sin_table: torch.Tensor,
+    num_cp_heads: int,
+    max_cp_seq_len: int,
+    num_decode_traces: int,
+) -> Tuple[list, list, list]:
+    """Pre-build TILE-layout host tensors for CP decode trace H2D (cos, sin, mask per trace index).
+
+    Masks match the cumulative attention pattern used in the generation loop for each
+    decode position (cp_pos = 2 .. num_decode_traces+1).
+    """
+    cos_hosts: list = []
+    sin_hosts: list = []
+    mask_hosts: list = []
+    for trace_i in range(num_decode_traces):
+        cp_pos = 2 + trace_i
+        mh = torch.full((1, num_cp_heads, 1, max_cp_seq_len), float("-inf"), dtype=torch.float32)
+        mh[0, :, 0, : cp_pos + 1] = 0.0
+        cs = cp_cos_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sn = cp_sin_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        cos_hosts.append(ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        sin_hosts.append(ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        mask_hosts.append(ttnn.from_torch(mh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT))
+    return cos_hosts, sin_hosts, mask_hosts
+
+
+def build_talker_decode_trace_h2d_constants(
+    talker_cos_table: torch.Tensor,
+    talker_sin_table: torch.Tensor,
+    num_talker_heads: int,
+    max_talker_seq_len: int,
+    real_seq_len: int,
+) -> Tuple[list, list, list, list]:
+    """Pre-build TILE/RM host tensors for Talker decode H2D: cos, sin, mask, cur_pos per absolute T.
+
+    For each decode position ``T`` in ``[real_seq_len, max_talker_seq_len)``, the mask matches
+    the incremental pattern: prefill columns ``0:real_seq_len`` plus decode columns
+    ``real_seq_len : T+1`` set to 0; remainder ``-inf``.
+    """
+    cos_h: list = []
+    sin_h: list = []
+    mask_h: list = []
+    pos_h: list = []
+    for T in range(real_seq_len, max_talker_seq_len):
+        mh = torch.full((1, num_talker_heads, 1, max_talker_seq_len), float("-inf"), dtype=torch.float32)
+        mh[0, :, 0, :real_seq_len] = 0.0
+        mh[0, :, 0, real_seq_len : T + 1] = 0.0
+        cs = talker_cos_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sn = talker_sin_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        cos_h.append(ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        sin_h.append(ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        mask_h.append(ttnn.from_torch(mh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT))
+        pos_h.append(
+            ttnn.from_torch(torch.tensor([T], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        )
+    return cos_h, sin_h, mask_h, pos_h
+
+
+def sample_from_tt_vocab_logits(
+    logits_tt: ttnn.Tensor,
+    *,
+    temperature: float,
+    top_k: int,
+    greedy: bool,
+    repetition_penalty: float = 1.0,
+    generated_tokens: Optional[List[int]] = None,
+    prof_acc: Optional[Dict[str, float]] = None,
+) -> int:
+    """Argmax or sample from on-device logits [..., seq, vocab].
+
+    **Greedy** with a single sequence position uses ``untilize`` + on-device ``argmax``
+    and only D2H's the token id (see ``generator.sample_tokens_on_device``).
+
+    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
+    :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
+    logits D2H for this demo's vocab width and trace count).
+
+    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (untilize/argmax/D2H
+    id or full logits ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
+    """
+    sh = tuple(logits_tt.shape)
+    seq_len = int(sh[-2]) if len(sh) >= 2 else 1
+    _pc = time.perf_counter
+
+    if greedy and seq_len == 1:
+        t0 = _pc() if prof_acc is not None else 0.0
+        u = ttnn.untilize(logits_tt, use_multicore=True)
+        tid = ttnn.argmax(u, dim=-1, keepdim=False, use_multicore=True)
+        ttnn.deallocate(u)
+        out = int(ttnn.to_torch(tid).squeeze().item())
+        ttnn.deallocate(tid)
+        if prof_acc is not None:
+            prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (_pc() - t0)
+        return out
+
+    t0 = _pc() if prof_acc is not None else 0.0
+    th = ttnn.to_torch(logits_tt, dtype=torch.bfloat16)
+    if th.ndim >= 3 and th.shape[-2] > 1:
+        th = th[:, :, -1, :]
+    th1d = th.reshape(-1)
+    t1 = _pc() if prof_acc is not None else 0.0
+    out = sample_token(
+        th1d,
+        temperature,
+        top_k,
+        greedy,
+        repetition_penalty,
+        generated_tokens,
+    )
+    if prof_acc is not None:
+        prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
+        prof_acc["cpu_sample"] = prof_acc.get("cpu_sample", 0.0) + (_pc() - t1)
+    return out
 
 
 SUPPORTED_PREFILL_LENS = [32, 64, 96, 128, 192, 256, 384, 512, 1024]
@@ -848,9 +963,6 @@ def generate_codes_ttnn(
     talker_pos = real_seq_len
     talker_hidden_tt = prefill_hidden_out
 
-    talker_decode_mask_host = torch.full((1, _talker_num_heads, 1, max_talker_seq_len), float("-inf"))
-    talker_decode_mask_host[0, :, 0, :real_seq_len] = 0.0
-
     ttnn.deallocate(prefill_cos_tt)
     ttnn.deallocate(prefill_sin_tt)
 
@@ -1085,17 +1197,18 @@ def generate_codes_ttnn(
     h2d_cq = 1 if use_2cq else 0
 
     # Preallocated host buffers (generation hot loop): avoids per-step torch/tensor churn.
-    cp_decode_mask_host = torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf"), dtype=torch.float32)
     token_id_buf = torch.zeros((1, 1), dtype=torch.long)
     cp_prefill_embed_cpu = torch.empty(1, 1, 2, talker_h, dtype=torch.bfloat16)
-    talker_pos_cpu = torch.zeros((1,), dtype=torch.int32)
     talker_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
-    cos_cpu = torch.empty(1, 1, 1, head_dim, dtype=torch.bfloat16)
-    sin_cpu = torch.empty(1, 1, 1, head_dim, dtype=torch.bfloat16)
     cp_decode_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
-    cp_cos_cpu = torch.empty(1, 1, 1, cp_head_dim, dtype=torch.bfloat16)
-    cp_sin_cpu = torch.empty(1, 1, 1, cp_head_dim, dtype=torch.bfloat16)
     acc_code_embed = torch.zeros(1, 1, talker_h, dtype=torch.float32)
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
+    )
+    talker_cos_h2d, talker_sin_h2d, talker_mask_h2d, talker_cur_pos_h2d = build_talker_decode_trace_h2d_constants(
+        talker_cos_table, talker_sin_table, _talker_num_heads, max_talker_seq_len, real_seq_len
+    )
 
     try:
         # --- Generation loop ---
@@ -1137,16 +1250,16 @@ def generate_codes_ttnn(
 
             _pf_vocab = cp_prefill_logits_tt.shape[3]
             last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
-            logits_torch = ttnn.to_torch(last_prefill_logits).squeeze().float()
+            token = sample_from_tt_vocab_logits(
+                last_prefill_logits,
+                temperature=config.temperature,
+                top_k=config.top_k,
+                greedy=config.greedy,
+            )
             ttnn.deallocate(last_prefill_logits)
-            token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
             code_row.append(token)
 
-            cp_pos = 2
-            cp_decode_mask_host.fill_(float("-inf"))
-            cp_decode_mask_host[0, :, 0, 0:2] = 0.0
-
-            # CP decode traces x13
+            # CP decode traces (len = num_code_groups - 2)
             for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
                 prev_embed_idx = code_idx - 2
                 token_id_buf[0, 0] = token
@@ -1156,15 +1269,11 @@ def generate_codes_ttnn(
                     next_embed = F.embedding(token_id_buf, codec_embed_torch)
                 next_embed = next_embed.unsqueeze(1).bfloat16()
 
-                cp_cos_cpu.copy_(cp_cos_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-                cp_sin_cpu.copy_(cp_sin_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-                cp_decode_mask_host[0, :, 0, cp_pos] = 0.0
-
                 cp_decode_embed_cpu.copy_(next_embed)
                 e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                c_h = ttnn.from_torch(cp_cos_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                s_h = ttnn.from_torch(cp_sin_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                m_h = ttnn.from_torch(cp_decode_mask_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+                c_h = cp_decode_cos_h2d[_trace_i]
+                s_h = cp_decode_sin_h2d[_trace_i]
+                m_h = cp_decode_mask_h2d[_trace_i]
                 if use_2cq:
                     ttnn.wait_for_event(1, trace_cq0_idle)
                 ttnn.copy_host_to_device_tensor(e_h, cp_trace_decode_embed_tt, cq_id=h2d_cq)
@@ -1177,13 +1286,14 @@ def generate_codes_ttnn(
                 ttnn.execute_trace(device, cp_decode_trace_ids[_trace_i], cq_id=0, blocking=False)
                 if use_2cq:
                     trace_cq0_idle = ttnn.record_event(device, 0)
-                else:
-                    ttnn.synchronize_device(device)
 
-                logits_torch = ttnn.to_torch(cp_decode_logits_tts[_trace_i]).squeeze().float()
-                token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
+                token = sample_from_tt_vocab_logits(
+                    cp_decode_logits_tts[_trace_i],
+                    temperature=config.temperature,
+                    top_k=config.top_k,
+                    greedy=config.greedy,
+                )
                 code_row.append(token)
-                cp_pos += 1
 
             all_codes.append(code_row)
             if not use_2cq:
@@ -1213,18 +1323,14 @@ def generate_codes_ttnn(
             next_embed = next_embed.unsqueeze(1)
 
             # === Talker decode trace ===
-            talker_decode_mask_host[0, :, 0, talker_pos] = 0.0
-
-            cos_cpu.copy_(talker_cos_table[talker_pos : talker_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-            sin_cpu.copy_(talker_sin_table[talker_pos : talker_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
+            _talker_h2d_i = talker_pos - real_seq_len
+            cos_host = talker_cos_h2d[_talker_h2d_i]
+            sin_host = talker_sin_h2d[_talker_h2d_i]
+            mask_host = talker_mask_h2d[_talker_h2d_i]
+            cur_pos_host = talker_cur_pos_h2d[_talker_h2d_i]
 
             talker_embed_cpu.copy_(next_embed.bfloat16())
             embed_host = ttnn.from_torch(talker_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            cos_host = ttnn.from_torch(cos_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            sin_host = ttnn.from_torch(sin_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            talker_pos_cpu[0] = talker_pos
-            cur_pos_host = ttnn.from_torch(talker_pos_cpu, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            mask_host = ttnn.from_torch(talker_decode_mask_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             if use_2cq:
                 ttnn.wait_for_event(1, trace_cq0_idle)
             ttnn.copy_host_to_device_tensor(embed_host, trace_embed_tt, cq_id=h2d_cq)
@@ -1246,15 +1352,14 @@ def generate_codes_ttnn(
             talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
-            # Get next code 0 from trace output
-            codec_logits_torch = ttnn.to_torch(trace_codec_logits_out)[:, :, -1, :].squeeze().float()
-            token_0 = sample_token(
-                codec_logits_torch,
-                config.temperature,
-                config.top_k,
-                config.greedy,
-                config.repetition_penalty,
-                generated_code0_tokens,
+            # Get next code 0 from trace output (on-device argmax for greedy)
+            token_0 = sample_from_tt_vocab_logits(
+                trace_codec_logits_out,
+                temperature=config.temperature,
+                top_k=config.top_k,
+                greedy=config.greedy,
+                repetition_penalty=config.repetition_penalty,
+                generated_tokens=generated_code0_tokens,
             )
             generated_code0_tokens.append(token_0)
 
@@ -1582,6 +1687,9 @@ class TTSServerContext:
     max_cp_seq_len: int
     _talker_num_heads: int
     _cp_num_heads: int
+    cp_decode_cos_h2d: list
+    cp_decode_sin_h2d: list
+    cp_decode_mask_h2d: list
 
 
 def init_server_context(device, model, config, main_weights: dict) -> "TTSServerContext":
@@ -1843,6 +1951,11 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
 
     print("Server context initialized. CP traces pre-captured.")
 
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
+    )
+
     return TTSServerContext(
         cp_kv_caches_persistent=cp_kv_caches_persistent,
         cp_kv_zero_hosts=cp_kv_zero_hosts,
@@ -1872,6 +1985,9 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         max_cp_seq_len=max_cp_seq_len,
         _talker_num_heads=_talker_num_heads,
         _cp_num_heads=_cp_num_heads,
+        cp_decode_cos_h2d=cp_decode_cos_h2d,
+        cp_decode_sin_h2d=cp_decode_sin_h2d,
+        cp_decode_mask_h2d=cp_decode_mask_h2d,
     )
 
 
@@ -2052,11 +2168,12 @@ def run_inference(
             ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
         ttnn.synchronize_device(device)
 
-        # Decode mask (host-side, updated per step)
-        talker_decode_mask_host = torch.full((1, ctx._talker_num_heads, 1, max_talker_seq_len), float("-inf"))
-        talker_decode_mask_host[0, :, 0, :real_seq_len] = 0.0
         talker_pos = real_seq_len
         talker_hidden_tt = prefill_hidden_out
+
+        talker_cos_h2d, talker_sin_h2d, talker_mask_h2d, talker_cur_pos_h2d = build_talker_decode_trace_h2d_constants(
+            ctx.talker_cos_table, ctx.talker_sin_table, ctx._talker_num_heads, max_talker_seq_len, real_seq_len
+        )
 
         # === Generation loop ===
         decode_step_times = []
@@ -2066,20 +2183,10 @@ def run_inference(
         h2d_cq = 1 if use_2cq else 0
 
         _th = model.talker_config.hidden_size
-        _hd = model.talker_config.head_dim
-        _cp_hd = model.code_predictor_config.head_dim
-        cp_decode_mask_host = torch.full(
-            (1, ctx._cp_num_heads, 1, ctx.max_cp_seq_len), float("-inf"), dtype=torch.float32
-        )
         token_id_buf = torch.zeros((1, 1), dtype=torch.long)
         cp_prefill_embed_cpu = torch.empty(1, 1, 2, _th, dtype=torch.bfloat16)
-        talker_pos_cpu = torch.zeros((1,), dtype=torch.int32)
         talker_embed_cpu = torch.empty(1, 1, 1, _th, dtype=torch.bfloat16)
-        cos_cpu = torch.empty(1, 1, 1, _hd, dtype=torch.bfloat16)
-        sin_cpu = torch.empty(1, 1, 1, _hd, dtype=torch.bfloat16)
         cp_decode_embed_cpu = torch.empty(1, 1, 1, _th, dtype=torch.bfloat16)
-        cp_cos_cpu = torch.empty(1, 1, 1, _cp_hd, dtype=torch.bfloat16)
-        cp_sin_cpu = torch.empty(1, 1, 1, _cp_hd, dtype=torch.bfloat16)
         acc_code_embed = torch.zeros(1, 1, _th, dtype=torch.float32)
 
         t_decode_start = time.time()
@@ -2125,10 +2232,6 @@ def run_inference(
             token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
             code_row.append(token)
 
-            cp_pos = 2
-            cp_decode_mask_host.fill_(float("-inf"))
-            cp_decode_mask_host[0, :, 0, 0:2] = 0.0
-
             # CP decode traces x14
             for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
                 prev_embed_idx = code_idx - 2
@@ -2139,15 +2242,11 @@ def run_inference(
                     next_embed = F.embedding(token_id_buf, ctx.codec_embed_torch)
                 next_embed = next_embed.unsqueeze(1).bfloat16()
 
-                cp_cos_cpu.copy_(ctx.cp_cos_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-                cp_sin_cpu.copy_(ctx.cp_sin_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-                cp_decode_mask_host[0, :, 0, cp_pos] = 0.0
-
                 cp_decode_embed_cpu.copy_(next_embed)
                 e_h = ttnn.from_torch(cp_decode_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                c_h = ttnn.from_torch(cp_cos_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                s_h = ttnn.from_torch(cp_sin_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                m_h = ttnn.from_torch(cp_decode_mask_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+                c_h = ctx.cp_decode_cos_h2d[_trace_i]
+                s_h = ctx.cp_decode_sin_h2d[_trace_i]
+                m_h = ctx.cp_decode_mask_h2d[_trace_i]
                 if use_2cq:
                     ttnn.wait_for_event(1, trace_cq0_idle)
                 ttnn.copy_host_to_device_tensor(e_h, ctx.cp_trace_decode_embed_tt, cq_id=h2d_cq)
@@ -2166,7 +2265,6 @@ def run_inference(
                 logits_torch = ttnn.to_torch(ctx.cp_decode_logits_tts[_trace_i]).squeeze().float()
                 token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
                 code_row.append(token)
-                cp_pos += 1
 
             all_codes.append(code_row)
             if not use_2cq:
@@ -2195,17 +2293,14 @@ def run_inference(
             next_embed = next_embed.unsqueeze(1)
 
             # --- Talker decode trace ---
-            talker_decode_mask_host[0, :, 0, talker_pos] = 0.0
-            cos_cpu.copy_(ctx.talker_cos_table[talker_pos : talker_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
-            sin_cpu.copy_(ctx.talker_sin_table[talker_pos : talker_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16())
+            _talker_h2d_i = talker_pos - real_seq_len
+            cos_host = talker_cos_h2d[_talker_h2d_i]
+            sin_host = talker_sin_h2d[_talker_h2d_i]
+            mask_host = talker_mask_h2d[_talker_h2d_i]
+            cur_pos_host = talker_cur_pos_h2d[_talker_h2d_i]
 
             talker_embed_cpu.copy_(next_embed.bfloat16())
             embed_host = ttnn.from_torch(talker_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            cos_host = ttnn.from_torch(cos_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            sin_host = ttnn.from_torch(sin_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            talker_pos_cpu[0] = talker_pos
-            cur_pos_host = ttnn.from_torch(talker_pos_cpu, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            mask_host = ttnn.from_torch(talker_decode_mask_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             if use_2cq:
                 ttnn.wait_for_event(1, trace_cq0_idle)
             ttnn.copy_host_to_device_tensor(embed_host, trace_embed_tt, cq_id=h2d_cq)
@@ -2227,15 +2322,14 @@ def run_inference(
             talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
-            # Get next code 0 from trace output
-            codec_logits_torch = ttnn.to_torch(trace_codec_logits_out)[:, :, -1, :].squeeze().float()
-            token_0 = sample_token(
-                codec_logits_torch,
-                config.temperature,
-                config.top_k,
-                config.greedy,
-                config.repetition_penalty,
-                generated_code0_tokens,
+            # Get next code 0 from trace output (on-device argmax for greedy)
+            token_0 = sample_from_tt_vocab_logits(
+                trace_codec_logits_out,
+                temperature=config.temperature,
+                top_k=config.top_k,
+                greedy=config.greedy,
+                repetition_penalty=config.repetition_penalty,
+                generated_tokens=generated_code0_tokens,
             )
             generated_code0_tokens.append(token_0)
 
@@ -2512,6 +2606,94 @@ def run_full_ttnn_tts(
         cut_samples = int(ref_codes_len / total_codes_len * len(audio_np))
         audio_np = audio_np[cut_samples:]
         print(f"  HF-style trim: removed {cut_samples} samples ({cut_samples/24000:.2f}s) of reference")
+
+        # #region agent log
+        try:
+            import json as _agent_json
+            import os as _agent_os
+            import subprocess as _agent_sp
+
+            _ttm_root = Path(__file__).resolve().parents[4]
+            _gh, _dirty = "unknown", None
+            try:
+                _gh = _agent_sp.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=str(_ttm_root),
+                    text=True,
+                    stderr=_agent_sp.DEVNULL,
+                ).strip()
+                _dirty = (
+                    _agent_sp.run(
+                        ["git", "diff-index", "--quiet", "HEAD", "--"],
+                        cwd=str(_ttm_root),
+                    ).returncode
+                    != 0
+                )
+            except Exception:
+                pass
+            _gn = int(codes.shape[0])
+            _c0h = codes[: min(12, _gn), 0].tolist() if codes is not None else []
+            _c0 = codes[:, 0].long() if codes is not None and _gn > 0 else None
+            _rep = {"hypothesisId_tags": ["H_codec_stutter", "H_model_logits"]}
+            if _c0 is not None and _c0.numel() >= 2:
+                _adj = int((_c0[1:] == _c0[:-1]).sum().item())
+                _mr = 1
+                _cr = 1
+                for _i in range(1, _c0.numel()):
+                    if _c0[_i] == _c0[_i - 1]:
+                        _cr += 1
+                        _mr = max(_mr, _cr)
+                    else:
+                        _cr = 1
+                _row_adj = int((codes[1:] == codes[:-1]).all(dim=1).sum().item()) if codes.shape[0] >= 2 else 0
+                _rep.update(
+                    {
+                        "code0_adjacent_equal_frames": _adj,
+                        "code0_max_consecutive_run": _mr,
+                        "full_codec_row_adjacent_equal": _row_adj,
+                    }
+                )
+                print(
+                    f"  Codec repetition (generated): code0 adjacent duplicate frames={_adj}, "
+                    f"code0 max consecutive same token run={_mr}, full-row repeats={_row_adj}"
+                )
+            with open("/home/ubuntu/rtp/.cursor/debug-2af538.log", "a") as _agent_logf:
+                _agent_logf.write(
+                    _agent_json.dumps(
+                        {
+                            "sessionId": "2af538",
+                            "runId": "audio_metrics",
+                            "hypothesisId": "H_duration_listen",
+                            "location": "demo_full_ttnn_tts.py:after_hf_trim",
+                            "message": "audio_output_metrics",
+                            "data": {
+                                "git_head": _gh,
+                                "worktree_dirty": _dirty,
+                                "compare_run": _agent_os.environ.get("TTS_COMPARE_RUN", ""),
+                                "seed": seed,
+                                "greedy": greedy,
+                                "temperature": config.temperature,
+                                "top_k": config.top_k,
+                                "repetition_penalty": repetition_penalty,
+                                "max_new_tokens": max_new_tokens,
+                                "use_2cq": use_2cq,
+                                "ref_codes_len": int(ref_codes_len),
+                                "gen_codec_frames": _gn,
+                                "total_codec_frames": int(total_codes_len),
+                                "cut_samples": int(cut_samples),
+                                "output_audio_samples": int(len(audio_np)),
+                                "output_audio_sec": float(len(audio_np) / 24000.0),
+                                "code0_head": _c0h,
+                                "repetition": _rep,
+                            },
+                            "timestamp": int(time.time() * 1000),
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
 
         # Save trimmed audio
         sf.write(output_path, audio_np, 24000)
