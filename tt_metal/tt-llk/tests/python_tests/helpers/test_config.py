@@ -273,9 +273,6 @@ class TestConfig:
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
-        TestConfig.HEADER_DIR = (
-            TestConfig.TESTS_WORKING_DIR / f"hw_specific/{TestConfig.ARCH.value}/inc"
-        )
 
         TestConfig.HELPERS = TestConfig.TESTS_WORKING_DIR / "helpers"
         TestConfig.RISCV_SOURCES = TestConfig.TESTS_WORKING_DIR / "helpers/src"
@@ -382,7 +379,6 @@ class TestConfig:
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
             "-I../common",
-            f"-I{TestConfig.HEADER_DIR}",
             "-I../../hw/inc",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
