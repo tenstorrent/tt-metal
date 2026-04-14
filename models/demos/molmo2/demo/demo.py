@@ -24,18 +24,16 @@ Usage:
     # Run with tracing enabled
     python -m models.demos.molmo2.demo.demo --use-trace
 
-    # Video (recommended flags — matches eval harness; paged KV + traces):
+    # Video (paged attention + decode trace ON by default for all modes):
     python -m models.demos.molmo2.demo.demo \\
         --video 'https://.../clip.mp4' \\
         --prompt $'<|video|>\\nYour question...' \\
-        --max-tokens 16 \\
-        --paged-attention --use-decode-trace
+        --max-tokens 16
 
-    # Video defaults: decode trace ON, vision trace ON, prefill trace ON (prefill trace is
-    # auto-disabled when HF multimodal token_type_ids are used — see run_prefill warning).
-    # Opt out: --no-use-vision-trace, --no-use-trace, --no-use-decode-trace
+    # Defaults: paged attention ON, decode trace ON.
+    # Opt out: --no-paged-attention, --no-use-decode-trace, --no-use-vision-trace, --no-use-trace
 
-    # Video: decode trace is ON by default (~30+ tok/s). Debug without trace:
+    # Debug without decode trace:
     python -m models.demos.molmo2.demo.demo --video URL --prompt "..." --no-use-decode-trace
 """
 
@@ -3446,6 +3444,50 @@ class Molmo2Generator:
             next_token_logits = logits_torch
             logger.info(f"  Using 1D logits directly")
 
+        # #region agent log
+        try:
+            import json as _agent_json
+            import time as _agent_time
+
+            _tl = next_token_logits
+            _tv, _ti = torch.topk(_tl, 8)
+            _ts = timestamps
+            if hasattr(_ts, "tolist"):
+                _ts_list = _ts.tolist()[:40]
+            else:
+                _ts_list = list(_ts)[:40]
+            _payload = {
+                "sessionId": "a8bccf",
+                "timestamp": int(_agent_time.time() * 1000),
+                "hypothesisId": "H1-H4",
+                "location": "demo.py:run_video_inference:first_token_logits",
+                "message": "demo_prefill_first_token_compare",
+                "data": {
+                    "source": "demo",
+                    "seq_len": int(input_ids.shape[1]),
+                    "original_seq_len": int(original_seq_len),
+                    "tokens_head24": input_ids[0, :24].tolist(),
+                    "tokens_tail24": input_ids[0, -24:].tolist(),
+                    "pv_shape": list(pixel_values.shape),
+                    "pv_mean": float(pixel_values.detach().float().mean().item()),
+                    "pv_std": float(pixel_values.detach().float().std().item()),
+                    "pooling_shape": list(pooled_patches_idx.shape),
+                    "timestamps_head": _ts_list,
+                    "top8_token_ids": _ti.tolist(),
+                    "top8_logits": [float(x) for x in _tv.tolist()],
+                    "letter_logits_32_36": {str(i): float(_tl[i].item()) for i in range(32, 37)},
+                },
+            }
+            with open(
+                "/home/ttuser/ssinghal/PR-fix/tt-metal/.cursor/debug-a8bccf.log",
+                "a",
+                encoding="utf-8",
+            ) as _df:
+                _df.write(_agent_json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
         logger.info(
             f"  next_token_logits stats: mean={next_token_logits.mean().item():.4f}, std={next_token_logits.std().item():.4f}, min={next_token_logits.min().item():.4f}, max={next_token_logits.max().item():.4f}"
         )
@@ -3932,7 +3974,7 @@ def run_demo(
     # Regular prefill traces (--use-trace) work because they don't include the unified vision+prefill path.
     if use_paged_attention and use_unified_trace:
         logger.warning(
-            "WARNING: --paged-attention and --use-unified-trace are incompatible. "
+            "WARNING: paged attention and --use-unified-trace are incompatible. "
             "Paged attention writes during prefill cannot be captured in traces. Disabling unified trace."
         )
         use_unified_trace = False
@@ -4232,8 +4274,7 @@ def main():
         "--video",
         type=str,
         default=None,
-        help="Path or URL to input video (.mp4, .webm). Video mode always uses paged "
-        "attention internally; pass --paged-attention to acknowledge / quiet the info log. "
+        help="Path or URL to input video (.mp4, .webm). Paged attention is ON by default. "
         "Use with --use-decode-trace for the throughput decode path (also default for video).",
     )
     parser.add_argument(
@@ -4289,7 +4330,7 @@ def main():
         "--use-decode-trace",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Decode trace: video defaults to ON (~30+ tok/s). Use --no-use-decode-trace for debug / HF-like greedy without trace. Image/text default OFF unless --use-decode-trace.",
+        help="Decode trace (default: ON for all modes). Use --no-use-decode-trace for debug / HF-like greedy without trace.",
     )
     parser.add_argument(
         "--use-vision-trace",
@@ -4317,9 +4358,9 @@ def main():
     )
     parser.add_argument(
         "--paged-attention",
-        action="store_true",
-        help="Video: optional — paged attention is always on for video; set this for explicit "
-        "CLI parity with harness / to skip the auto-enable info line.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Paged attention (default: ON). Use --no-paged-attention to disable.",
     )
     parser.add_argument(
         "--batch-size",
@@ -4359,11 +4400,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Decode trace: video defaults ON (throughput); image/text/batched default OFF unless --use-decode-trace.
-    # Use --no-use-decode-trace on video for debug when trace logits look wrong.
+    # Decode trace: ON by default for all modes (throughput).
+    # Use --no-use-decode-trace for debug when trace logits look wrong.
     _dt = args.use_decode_trace
     decode_trace_video = True if _dt is None else _dt
-    decode_trace_image_text = False if _dt is None else _dt
+    decode_trace_image_text = True if _dt is None else _dt
 
     # Prefill + vision trace: video defaults OFF for now (memory pressure during warmup)
     _ut = args.use_trace
@@ -4401,10 +4442,8 @@ def main():
         # - paged_attention: Required for chunked prefill with long sequences
         # - decode_trace: Required for good decode throughput (30+ tok/s)
         # - data_parallel: Always use DP=8 (handled in embed_image routing)
-        use_paged_attention_video = True
+        use_paged_attention_video = True  # Video always requires paged attention
         use_decode_trace_video = decode_trace_video
-        if not args.paged_attention:
-            logger.info("Video: Auto-enabling paged attention (required for long sequences)")
         if use_decode_trace_video:
             logger.info("Video: decode trace ON (default; ~30+ tok/s). For debug without trace: --no-use-decode-trace")
         else:
