@@ -106,6 +106,7 @@ jobs:
             cmd: |
               pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
               pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
+              pytest tests/nightly/blackhole/ccl/test_exp_ring_joint_sdpa.py -svv
             timeout: 60
             test-type: slow
           - name: sdpa nightly tests
