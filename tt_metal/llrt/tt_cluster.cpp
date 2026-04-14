@@ -432,6 +432,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
+#ifdef TT_METAL_USE_EMULE
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
         auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -439,6 +441,9 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
+#else
+        TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
+#endif
     }
 
     this->driver_ = std::move(device_driver);
