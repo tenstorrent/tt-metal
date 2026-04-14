@@ -59,12 +59,19 @@ jobs:
         run: |
           MAX_ATTEMPTS=2
           CURRENT_HOUR=$(date +"%H")
-          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
+          read original_trigger conclusion head_branch <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion + " " + .head_branch')
+
+          # Check if head_branch is allowed (main, stable, or v* tag)
+          is_allowed_ref=false
+          if [[ "$head_branch" == "main" || "$head_branch" == "stable" || "$head_branch" =~ ^v.* ]]; then
+            is_allowed_ref=true
+          fi
+
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
+          elif [[ "$original_trigger" == "workflow_dispatch" && "$is_allowed_ref" != "true" ]]; then
+            echo "::notice title=no-continue-is-on-branch::This workflow was dispatched on branch '$head_branch' which is not in the allowlist (main, stable, v*). Not re-trying"
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
