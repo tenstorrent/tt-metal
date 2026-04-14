@@ -2271,31 +2271,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
-                auto check_connection_status =
-                    !channel_connection_established[0] ||
-                    local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
-                if (check_connection_status) {
-                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                        local_sender_channel_worker_interfaces.template get<0>(),
-                        channel_connection_established[0],
-                        local_sender_channel_free_slots_stream_ids[0]);
-                }
-            }
-#if defined(FABRIC_2D_VC2_SERVICED)
-            if constexpr (is_sender_channel_serviced[VC2_SENDER_CHANNEL_START]) {
-                auto check_connection_status =
-                    !channel_connection_established[VC2_SENDER_CHANNEL_START] ||
-                    local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>()
-                        .has_worker_teardown_request();
-                if (check_connection_status) {
-                    check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                        local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>(),
-                        channel_connection_established[VC2_SENDER_CHANNEL_START],
-                        local_sender_channel_free_slots_stream_ids[VC2_SENDER_CHANNEL_START]);
-                }
-            }
-#endif
             for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
                 if constexpr (super_speedy_mode) {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -2315,6 +2290,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state);
+
+                        auto check_connection_status =
+                            !channel_connection_established[0] ||
+                            local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
+                        if (check_connection_status) {
+                            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                                local_sender_channel_worker_interfaces.template get<0>(),
+                                channel_connection_established[0],
+                                local_sender_channel_free_slots_stream_ids[0]);
+                        }
                     }
 
                     if constexpr (is_receiver_channel_serviced[0]) {
@@ -2539,6 +2524,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state_vc2);
+
+                        auto check_connection_status =
+                            !channel_connection_established[VC2_SENDER_CHANNEL_START] ||
+                            local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>()
+                                .has_worker_teardown_request();
+                        if (check_connection_status) {
+                            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                                local_sender_channel_worker_interfaces.template get<VC2_SENDER_CHANNEL_START>(),
+                                channel_connection_established[VC2_SENDER_CHANNEL_START],
+                                local_sender_channel_free_slots_stream_ids[VC2_SENDER_CHANNEL_START]);
+                        }
                     }
                     if constexpr (is_receiver_channel_serviced[VC2_RECEIVER_CHANNEL]) {
                         constexpr size_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL_VC2 = 1;
