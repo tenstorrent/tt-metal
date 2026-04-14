@@ -869,6 +869,11 @@ inline std::uint32_t get_pack_dest_max_tiles()
     const std::uint32_t w_stride =
         (cfg_read(PCK0_ADDR_CTRL_ZW_REG_0_Wstride_ADDR32) & PCK0_ADDR_CTRL_ZW_REG_0_Wstride_MASK) >> PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT;
 
+    if ((w_stride == 0U) || ((w_stride & (w_stride - 1U)) != 0U))
+    {
+        return 0U;
+    }
+
     return DEST_PHYSICAL_SIZE >> __builtin_ctz(w_stride);
 }
 
