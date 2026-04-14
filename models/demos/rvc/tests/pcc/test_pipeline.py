@@ -55,7 +55,7 @@ def test_pipeline_real_file_usage(device) -> None:
     )
 
     torch_out = np.asarray(torch_pipe.infer(str(input_path), **common_kwargs))
-    tt_out = np.asarray(tt_pipe.infer(str(input_path), **common_kwargs))
+    tt_out = np.asarray(tt_pipe.infer(str(input_path)))
 
     # assert torch_out.size > 0
     # assert tt_out.size > 0

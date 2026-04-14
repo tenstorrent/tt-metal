@@ -9,6 +9,7 @@ import math
 import os
 
 import librosa
+import numpy as np
 import parselmouth
 import torch
 import torch.nn.functional as F
@@ -22,6 +23,63 @@ from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF, Synthes
 from models.demos.rvc.tt_impl.vc.utils import load_hubert
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
+
+
+def _frame_signal(
+    y: np.ndarray,
+    *,
+    frame_length: int,
+    hop_length: int,
+    center: bool,
+    pad_mode: str,
+) -> np.ndarray:
+    if y.ndim != 1:
+        raise ValueError(f"Expected a 1D audio signal, got shape {y.shape}")
+    if frame_length <= 0:
+        raise ValueError("frame_length must be positive")
+    if hop_length <= 0:
+        raise ValueError("hop_length must be positive")
+
+    if center:
+        pad = frame_length // 2
+        y = np.pad(y, (pad, pad), mode=pad_mode)
+    elif y.shape[0] < frame_length:
+        raise ValueError("len(y) must be at least frame_length when center=False")
+
+    if y.shape[0] < frame_length:
+        raise ValueError("Padded signal is shorter than frame_length")
+
+    n_frames = 1 + (y.shape[0] - frame_length) // hop_length
+    frame_starts = hop_length * np.arange(n_frames)
+    frames = np.lib.stride_tricks.sliding_window_view(y, frame_length)[frame_starts]
+    return frames
+
+
+def rms_numpy(
+    y,
+    *,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    center: bool = True,
+    pad_mode: str = "constant",
+    dtype=np.float32,
+) -> np.ndarray:
+    """NumPy reimplementation of ``librosa.feature.rms(y=...)`` for 1D audio.
+
+    Returns an array of shape ``(1, num_frames)`` to match librosa.
+    """
+
+    y = np.asarray(y, dtype=dtype)
+    frames = _frame_signal(
+        y,
+        frame_length=frame_length,
+        hop_length=hop_length,
+        center=center,
+        pad_mode=pad_mode,
+    )
+    power = np.mean(np.square(frames), axis=1, dtype=np.float64)
+    rms = np.sqrt(power, dtype=np.float64).astype(dtype, copy=False)
+    return rms[np.newaxis, :]
 
 
 def _interpolate_1d(
@@ -105,8 +163,8 @@ def _get_model_and_config_paths(version: str, num: str, if_f0: bool) -> tuple[st
 
 
 def _change_rms(source_audio, source_sr, target_audio, target_sr, rate):
-    source_rms = librosa.feature.rms(y=source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
-    target_rms = librosa.feature.rms(y=target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
+    source_rms = rms_numpy(source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
+    target_rms = rms_numpy(target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
     source_rms = torch.from_numpy(source_rms)
     source_rms = F.interpolate(source_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
     target_rms = torch.from_numpy(target_rms)
@@ -364,6 +422,21 @@ class Pipeline:
             )
 
         audio_output = torch.cat(audio_output)
+
+        # post-process
+        if self.rms_mix_rate != 1:
+            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, self.rms_mix_rate)
+        if self.tgt_sr != self.resample_sr and self.resample_sr >= 16000:
+            audio_output_np = audio_output.numpy()
+            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=self.resample_sr)
+            audio_output = torch.from_numpy(audio_output_np)
+        audio_max = torch.abs(audio_output).max().item() / 0.99
+        max_int16 = 32768
+        if audio_max > 1:
+            max_int16 /= audio_max
+        # use torch
+        audio_output = (audio_output * max_int16).to(torch.int16)
+
         return audio_output
 
     def infer(self, audio_path: str):
@@ -379,19 +452,4 @@ class Pipeline:
         audio = signal.filtfilt(bh, ah, audio)
         audio = torch.from_numpy(audio.copy())
 
-        audio_output = self._run_pipeline(audio)
-
-        # post-process
-        if self.rms_mix_rate != 1:
-            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, self.rms_mix_rate)
-        if self.tgt_sr != self.resample_sr and self.resample_sr >= 16000:
-            audio_output_np = audio_output.numpy()
-            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=self.resample_sr)
-            audio_output = torch.from_numpy(audio_output_np)
-        audio_max = torch.abs(audio_output).max().item() / 0.99
-        max_int16 = 32768
-        if audio_max > 1:
-            max_int16 /= audio_max
-        # use torch
-        audio_output = (audio_output * max_int16).to(torch.int16)
-        return audio_output
+        return self._run_pipeline(audio)
