@@ -232,6 +232,27 @@ class Pipeline:
         f0_continuous = f0_continuous.unsqueeze(0).float()
         return f0_coarse, f0_continuous
 
+    def _get_time_stamps(self, audio, num_frames):
+        audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
+        opt_ts = []
+        if audio_padded.shape[0] > self.t_max:
+            audio_avg = F.avg_pool1d(
+                audio_padded.abs().view(1, 1, -1),
+                kernel_size=self.window,
+                stride=1,
+            ).view(-1)
+            for t in range(self.t_center, audio.shape[0], self.t_center):
+                segment = audio_avg[t - self.t_query : t + self.t_query]
+                opt_ts.append(t - self.t_query + torch.argmin(segment).item())
+        s = 0
+        idx_list = []
+        for t in opt_ts:
+            idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
+            s = t
+        idx_list.append((s // self.window, num_frames))
+
+        return idx_list
+
     def _vc(
         self,
         audio,
@@ -310,28 +331,6 @@ class Pipeline:
         output_torch = ttnn.to_torch(output).to(torch.float32)
         output = output_torch[0, :, 0].contiguous()
         return output
-
-    def _get_time_stamps(self, audio, num_frames):
-        audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
-        opt_ts = []
-        if audio_padded.shape[0] > self.t_max:
-            audio_avg = F.avg_pool1d(
-                audio_padded.abs().view(1, 1, -1),
-                kernel_size=self.window,
-                stride=1,
-            ).view(-1)
-            for t in range(self.t_center, audio.shape[0], self.t_center):
-                segment = audio_avg[t - self.t_query : t + self.t_query]
-                opt_ts.append(t - self.t_query + torch.argmin(segment).item())
-        audio_output = []
-        s = 0
-        idx_list = []
-        for t in opt_ts:
-            idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
-            s = t
-        idx_list.append((s // self.window, num_frames))
-
-        return idx_list
 
     def _run_pipeline(
         self,
