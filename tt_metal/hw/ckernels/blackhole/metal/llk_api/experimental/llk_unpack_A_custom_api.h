@@ -14,6 +14,12 @@ inline void llk_unpack_A_custom(const std::uint32_t operand, const std::uint32_t
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
+    LLK_ASSERT(
+        get_local_cb_interface(operand_id).fifo_rd_ptr +
+                (tile_index + 1) * get_local_cb_interface(operand_id).fifo_page_size <=
+            get_local_cb_interface(operand_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+
     WAYPOINT("UPAW");
     _llk_unpack_A_custom_(address);
     WAYPOINT("UPAD");

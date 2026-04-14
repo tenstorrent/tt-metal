@@ -41,6 +41,17 @@ inline void llk_unpack_AB(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     LLK_ASSERT(
+        get_local_cb_interface(operandA_id).fifo_rd_ptr +
+                (tile_index_a + 1) * get_local_cb_interface(operandA_id).fifo_page_size <=
+            get_local_cb_interface(operandA_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(
+        get_local_cb_interface(operandB_id).fifo_rd_ptr +
+                (tile_index_b + 1) * get_local_cb_interface(operandB_id).fifo_page_size <=
+            get_local_cb_interface(operandB_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+
+    LLK_ASSERT(
         (are_unpackers_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],

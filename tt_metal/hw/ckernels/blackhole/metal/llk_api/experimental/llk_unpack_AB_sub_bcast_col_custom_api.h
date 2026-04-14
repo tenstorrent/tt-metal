@@ -39,5 +39,16 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
     const std::uint32_t address_b = base_address_b + offset_address_b;
 
+    LLK_ASSERT(
+        get_local_cb_interface(operandA_id).fifo_rd_ptr +
+                (tile_index_a + 1) * get_local_cb_interface(operandA_id).fifo_page_size <=
+            get_local_cb_interface(operandA_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(
+        get_local_cb_interface(operandB_id).fifo_rd_ptr +
+                (tile_index_b + 1) * get_local_cb_interface(operandB_id).fifo_page_size <=
+            get_local_cb_interface(operandB_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+
     _llk_unpack_AB_sub_bcast_col_custom_<BType>(address_a, address_b, ct_dim);
 }

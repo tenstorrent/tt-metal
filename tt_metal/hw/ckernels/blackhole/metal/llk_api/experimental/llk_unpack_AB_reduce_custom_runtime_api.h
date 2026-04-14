@@ -80,6 +80,12 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
+    LLK_ASSERT(
+        get_local_cb_interface(operandA_id).fifo_rd_ptr +
+                (row_start_index + 1) * get_local_cb_interface(operandA_id).fifo_page_size <=
+            get_local_cb_interface(operandA_id).fifo_limit,
+        "Indexed tile read exceeds CB boundary");
+
     _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
 }
 
