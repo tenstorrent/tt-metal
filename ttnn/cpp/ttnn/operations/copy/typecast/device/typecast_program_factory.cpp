@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/cb_utils.hpp"
 
 namespace ttnn::prim {
 
@@ -88,19 +89,11 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     }
 
     // ── Circular Buffers ─────────────────────────────────────────────────
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    constexpr uint32_t num_input_pages = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_pages * input_page_size, {{src0_cb_index, cb_data_format_input}})
-            .set_page_size(src0_cb_index, input_page_size);
-    CreateCircularBuffer(program, all_cores, cb_src0_config);
+    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    create_cb(src0_cb_index, program, all_cores, input_page_size, 2, cb_data_format_input);
 
-    constexpr uint32_t output_cb_index = CBIndex::c_2;
-    constexpr uint32_t num_output_pages = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_pages * output_page_size, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_page_size);
-    CreateCircularBuffer(program, all_cores, cb_output_config);
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    create_cb(output_cb_index, program, all_cores, output_page_size, 2, cb_data_format_output);
 
     // ── Reader/Writer kernels ────────────────────────────────────────────
     std::vector<uint32_t> reader_ct_args;
