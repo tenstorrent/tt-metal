@@ -69,6 +69,10 @@ void kernel_main() {
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
 #if defined(NP_PROGRESS_SEM)
     const size_t progress_sem = get_common_arg_val<uint32_t>(4);
+    // Number of conv3d reader cores to signal and their NOC (x,y) coordinates.
+    // Packed as: [num_reader_cores, x0, y0, x1, y1, ...]
+    const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(5);
+    // Reader core NOC coords start at CRTA index 6: x0=6, y0=7, x1=8, y1=9, ...
 #endif
 
     // Per-core runtime args

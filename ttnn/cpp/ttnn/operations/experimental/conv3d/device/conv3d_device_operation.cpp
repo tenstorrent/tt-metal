@@ -54,21 +54,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         "Activation tensor must be bfloat16 or float32. got {}",
         input_tensor_a.dtype());
 
-    if (input_tensor_a.is_sharded()) {
-        const auto& shard_spec = input_tensor_a.memory_config().shard_spec().value();
-        const uint32_t page_size_bytes = input_tensor_a.buffer()->page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
-        const uint32_t shard_width = shard_spec.shape[1];
-        TT_FATAL(
-            page_size_bytes == input_tensor_a.buffer()->aligned_page_size(),
-            "Input row-major shard width {} with data type {} gives page size {} bytes, which must be aligned to {} "
-            "bytes",
-            shard_width,
-            input_tensor_a.dtype(),
-            page_size_bytes,
-            alignment_requirement);
-    }
-
     const auto& weight_tensor = tensor_args.weight_tensor;
     TT_FATAL(
         weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32,
@@ -336,7 +321,7 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     const std::array<uint32_t, 3> default_dilation = {1, 1, 1};
 

@@ -45,7 +45,7 @@ class CCLManager:
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
 
-    def _init_subdevice(self, num_fabric_cores: int = 4):
+    def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -333,8 +333,9 @@ class CCLManager:
         Get or create a ping-pong compact halo buffer for fabric-only NeighborPad.
         Handles H halo and optionally W halo.
 
-        Layout: [H-top | H-bot | W-left | W-right] where each section is
-        outer_dim × padding × num_sticks sticks.
+        Layout: [H-top | H-bot | W-left | W-right] where H sections are
+        outer_dim × padding_h × W_dev sticks, and W sections are
+        outer_dim × padding_w × (H_dev + 2*padding_h) sticks (extended for corner fix).
         """
         import torch
 
@@ -345,8 +346,8 @@ class CCLManager:
         h_sticks = 1
         for d in range(dim + 1, len(input_shape) - 1):
             h_sticks *= input_shape[d]
-        # W sticks per halo col = H_dev (product of dims between dim and dim2, excluding C)
-        w_sticks = input_shape[dim] if dim2 is not None else 0
+        # W sticks per halo col = H_dev + 2*padding_h (extended to include H-padded rows for corner fix)
+        w_sticks = (input_shape[dim] + 2 * padding) if dim2 is not None else 0
 
         h_halo_total = outer_dim_size * 2 * padding * h_sticks
         w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0
@@ -402,9 +403,11 @@ class CCLManager:
         Returns the compact halo tensor. Conv3d reads interior from the original tensor.
         Handles both H and W halos (dims can have 1 or 2 elements).
 
-        Loads the 2-sub-device halo manager (SD0=fabric, SD1=compute) and dispatches NP to
-        CQ1 on SD0. Records a CQ1 completion event so that the caller can order conv3d on
-        CQ0 after NP completes before deactivating the halo manager.
+        Dispatches NP on CQ0 targeting SD0 (fabric cores), same CQ as conv3d (SD1).
+        Like all_gather_matmul: single CQ drives both CCL writers (SD0) and compute (SD1)
+        concurrently. Dispatch fires go to SD0 then SD1; they run on different cores.
+        In-kernel semaphore handles T-batch ordering. Deactivate then correctly waits for
+        BOTH NP and conv3d completions before sending the reset go_signal to SD0.
         """
         # Load halo sub-device manager (SD0=fabric, SD1=compute).
         fabric_sd_id, _ = self.activate_halo_sub_devices()
@@ -416,9 +419,19 @@ class CCLManager:
             tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
         )
 
-        # Dispatch NeighborPad to CQ1 targeting SD0 (4 fabric cores).
+        # When progress semaphore is active, force num_links=1 so a SINGLE direction-0
+        # fabric core handles all T outer_dims. This ensures local outer_dim == global
+        # T-slice: the signal condition (outer_dim+1)%T_batch==0 fires at correct boundaries.
+        # With num_links=2, two direction-0 cores split outer_dims; core 1's
+        # outer_dim_offset_start_id is in sticks (not T-slices) making global T-batch
+        # computation wrong — core 1 never fires signals, causing reader deadlock.
+        effective_num_links = [1] * len(num_links) if progress_t_batch_size > 0 else num_links
+
+        # Dispatch NeighborPad on CQ0 (same CQ as conv3d) targeting SD0 (fabric cores).
+        # Single-CQ dispatch: NP (SD0) and conv3d (SD1) run concurrently on device.
+        # deactivate_halo_sub_devices() naturally waits for both NP+conv3d before reset.
         result = self.dispatch_on_cq(
-            1,
+            0,
             ttnn.experimental.neighbor_pad_async,
             tensor,
             dims,
@@ -428,7 +441,7 @@ class CCLManager:
             axes,
             neighbor_sems,
             [barrier_sem],
-            num_links=num_links,
+            num_links=effective_num_links,
             topology=self.topology,
             persistent_output_buffer=halo_buf,
             progress_semaphore=progress_semaphore,

@@ -8,6 +8,14 @@
 // before signaling the Phase 2 barrier semaphore, guaranteeing DRAM writes are committed.
 //
 // DRAM writes are handled by the paired writer (minimal_default_writer).
+//
+// fabric_only mode: in this mode the output tensor is the compact halo buffer. The W reader
+// must gather W-boundary sticks from three sources per T-slice:
+//   - H-top halo rows  (h_ext < padding_h):     read from compact halo buffer H-top section
+//   - Interior rows    (h_ext in [ph, ph+H_dev)): read from the input tensor directly
+//   - H-bot halo rows  (h_ext >= ph + H_dev):    read from compact halo buffer H-bot section
+// The gathered sticks feed the W writer, which sends them to the neighbor and writes the
+// extended W halo section of the compact buffer.
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -15,11 +23,11 @@
 
 using address_t = uint32_t;
 
-// Compile-time args (uniform across all W fabric reader cores)
+// Compile-time args (uniform across all W reader cores)
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
 constexpr uint32_t stick_size = get_compile_time_arg_val(2);
-// Output TensorAccessorArgs start at index 3 (variable length)
+// Output (compact halo) buffer TensorAccessorArgs start at index 3 (variable length)
 constexpr auto dst_args = TensorAccessorArgs<3>();
 constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 // Input tensor TensorAccessorArgs start right after dst_args (used in fabric_only mode)
@@ -98,7 +106,8 @@ void kernel_main() {
 
     const bool is_fabric_only = (input_buffer_addr != 0);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_args, input_buffer_addr, stick_size);
 
     const uint32_t h_total = h_dev + 2u * h_padding;
 

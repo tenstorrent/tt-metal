@@ -143,6 +143,10 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_links = static_cast<uint32_t>(op.np_num_links);
     uint32_t pad2_num_links = static_cast<uint32_t>(op.np_pad2_num_links);
+    num_links = 1;
+    if (is_2d) {
+        pad2_num_links = 1;
+    }
 
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;
     uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
@@ -462,7 +466,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
                 uint32_t padding_this_dir = direction ? op.np_padding_h : op.np_padding_h;
                 writer_rt_args[0] = direction ? top_halo_sticks : 0;  // outer_dim_offset_start_id
                 writer_rt_args[3] = padding_this_dir;                 // output_halo_dim_size (compact)
+                writer_rt_args[1] = 0;                                // stick_start_id (no W-offset in compact)
                 writer_rt_args[6] = 0;                                // padding_left (no W-offset in compact)
+                writer_rt_args[8] = num_sticks_per_halo_dim;          // stride = W_dev (20), not padded (22)
                 // arg[40] = num_phase2_signal_targets — already set correctly above
                 // (is_2d ? num_w_fabric_cores : 0 at index 14+2*8=30... wait, let's recalculate)
                 // The 14 fixed args (indices 0-13) + is_2d targets at index 14:
