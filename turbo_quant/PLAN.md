@@ -536,23 +536,28 @@ O(full_cache) to O(chunk) ~65KB. Reference: `sdpa_flash_decode.cpp`.
 This is a development track to compare against the BFP4 paged approach.
 The BFP4 paged path already achieves the target (= baseline, 0.5× memory, 128K).
 
-### Prefill → TQ decode migration (quality issue)
+### ~~Prefill → TQ decode migration (quality issue)~~ RESOLVED
 
-`eval_e2e_prefill.py` migrates prefill KV from native BFP8 into TQ pre-rescaled
-format (centroid×norm in BF16). The migration works mechanically but produces
-**repetitive output** (e.g. "France's capital of France's... Paris.") because
-TQ 3-bit quantization (MSE=0.034) applied retroactively to a high-quality prefill
-context creates a quality discontinuity that attention amplifies into loops.
+Previously, migrating prefill BFP8 KV into TQ format produced repetitive output.
+**Fixed as of 2026-04-14:** `eval_e2e_prefill.py --bfp4-cache` produces correct,
+coherent output ("The capital of France is Paris.") with no repetition. The fix
+was storing centroid×norm (not just centroids) and using BFP4/BF16 cache.
 
-Teacher-forced decode (`eval_e2e.py`) doesn't have this issue because all positions
-are TQ-quantized consistently from the start (no prefill → decode quality jump).
+### ~~Quality benchmarks~~ DONE (2026-04-14)
 
-### Other Next Steps
+All completed:
+- **WikiText-2 perplexity:** baseline 9.91, 3-bit KV cosine 0.983, MSE 0.138
+- **Needle-in-a-haystack:** 100% retrieval across all variants (2/3/4-bit) up to 64K
+- **31-prompt quality comparison:** all factually correct, 81% avg word overlap vs baseline
 
-**Quality benchmarks:**
-- LongBench passkey-retrieval at 3-bit vs FP16 baseline
-- WikiText-2 perplexity measurement
-- Multi-turn conversation quality at 16K+ context
+### Remaining Next Steps
+
+**Paged prefill → paged decode (for 37ms decode after prefill):**
+Currently prefill uses non-paged model (43ms decode). Paged prefill fails with
+block_size mismatch — model-level issue, not TQ-specific.
+
+**Fused SDPA kernel chunking (development track):**
+Add Flash Attention-style online softmax to the custom TQ kernel for comparison.
 
 **Multi-batch / Multi-device:**
 - Batch > 1: TQ's compressed cache enables more concurrent sequences
@@ -560,5 +565,4 @@ are TQ-quantized consistently from the start (no prefill → decode quality jump
 
 **True 3-bit packing:**
 Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
-Requires custom pack/unpack kernels + ROW_MAJOR scatter. CPU implementation
-in `bitpack.py`. Only worthwhile after fused SDPA reader is implemented.
+Requires custom pack/unpack kernels + ROW_MAJOR scatter.
