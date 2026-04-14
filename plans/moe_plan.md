@@ -146,13 +146,15 @@ Based on the verified configs, the models cluster into clear families:
 ### 5.1 Parameters that MUST be configurable
 1. `hidden_size` — ranges from 1024 (Qwen3-Omni Talker) to 8192 (Ling-1T)
 2. `moe_intermediate_size` — ranges from 384 to 4096 (Qwen3-Omni talker: 384, Mistral: 4096)
-3. `n_routed_experts` — ranges from 64 to 512
+3. `n_routed_experts` — ranges from 64 to 512. All values are divisible by 8, 16, and 32 — ring distribution can always be done exactly across standard device counts.
 4. `n_shared_experts` — 0, 1, or 2
-5. `num_experts_per_tok` (K) — 4, 6, 8, or 10
-6. `shared_expert_intermediate_size` — usually `moe_intermediate * n_shared`, but Qwen3.5 has explicit field
-7. `routed_scaling_factor` — 1.0, 2.5, or 2.827
-8. Expert bias (on/off)
-9. Router bias / bias correction (on/off)
+5. `num_experts_per_tok` (K) — 4, 6, 8, or 10. Note: K=6 only appears in DS-OCR and Qwen3-Omni Talker; neither existing TT-Metal implementation (K=8 or K=4) handles K=6, so new kernel work is needed if these are in scope for v1.
+6. `shared_expert_intermediate_size` — usually `moe_intermediate * n_shared`, but Qwen3.5 has an explicit field. In all Qwen3/Qwen3.5 models, the shared expert is always 1 MLP with `intermediate_size = shared_expert_intermediate_size` (not N smaller experts). The Qwen3-Omni Talker's 768 = 2×384 is a single wider expert, not two experts.
+7. `shared_expert_gate` (on/off) — Qwen3.5 (397B, 35B) applies `sigmoid(gate(x)) * shared_output` before adding to routed output (modeling code L788). This requires an additional weight: `shared_expert_gate` projection `[hidden_size, 1]`. Other models add shared expert output directly.
+8. `routed_scaling_factor` — 1.0, 2.5, or 2.827
+9. Expert bias (on/off)
+10. Router bias / bias correction (on/off)
+11. `moe_layer_freq` — all current models use 1 (every layer after `first_k_dense_replace` is MoE). Listed for completeness; if a future model uses freq > 1 (only every Nth layer is MoE), the interface needs to handle it.
 
 ### 5.2 Activation function strategy
 - **12/14 models use SiLU/SwiGLU** (all confirmed from config or modeling code): `down(silu(gate(x)) * up(x))`
@@ -215,10 +217,10 @@ Using tile_size=32:
 ### Open design questions
 - For Qwen3.5 397B/35B, should `n_shared_experts` be a first-class config param only when present in JSON, or always derived from `shared_expert_intermediate_size` in HF modeling code?
 - For DeepSeek-OCR, is `greedy` routing (softmax scoring + greedy top-k) a first-class mode for the generalized op, or out of scope for v1?
-- Should Qwen3-Omni Talker (different K, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile?
-- Qwen3.5 uses a **sigmoid gate on shared expert output** before adding to routed output (L788) — should the generalized module support this gated shared expert pattern?
+- Should Qwen3-Omni Talker (different K=6, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile? K=6 requires new kernel work — neither existing TT-Metal implementation handles it.
 
 ### Resolved from earlier revisions
+- ~~Qwen3.5 sigmoid gate on shared expert — open question?~~ → **Resolved**: promoted to §5.1 item 7 as a required configurable parameter (`shared_expert_gate` on/off + weight shape `[hidden_size, 1]`)
 - ~~Confirm Qwen-family scoring/routing from modeling code~~ → **Resolved**: all use softmax (Qwen3 L266, Qwen3.5 L765)
 - ~~Confirm Mistral Large 3 activation and shared expert intermediate~~ → **Resolved**: SiLU/SwiGLU (transformer_layers.py L106), shared_expert_intermediate=4096 (vLLM weight remapping), softmax routing (moe.py L27)
 - ~~Confirm DS-OCR scoring_func~~ → **Resolved**: softmax (V2 default from configuration_deepseek_v2.py L142)
@@ -842,6 +844,7 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 4. **Router has learned input+output scaling**: Pre-routing RMSNorm + learned scale, plus per-expert output scaling — more complex than simple softmax.
 5. **No shared experts**: MoE output is combined with the parallel dense MLP instead.
 6. **Unusual dimensions**: hidden=2816, intermediate=704 — not powers of 2.
+7. **`use_double_wide_mlp`**: False in this model. Only affects KV-shared attention layers (doubles dense MLP intermediate_size for those layers) — has no effect on MoE expert dimensions. Irrelevant to MoE generalization.
 
 #### Weight Shapes (per MoE layer)
 
