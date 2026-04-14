@@ -351,12 +351,18 @@ def build_gather_reduce_program(device, input_tensor, anchor_tensor, output_tens
     )
 
     # --- Compute kernels ---
-    # Sender compute (no-op)
+    # Sender compute (no-op, but must pass TRISC args for constexpr resolution)
     sender_compute = ttnn.KernelDescriptor(
         kernel_source=GATHER_REDUCE_KERNEL_PATH,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=sender_core_range,
-        named_compile_time_args=[("is_sender_core", 1), ("is_receiver_core", 0)],
+        named_compile_time_args=[
+            ("is_sender_core", 1),
+            ("is_receiver_core", 0),
+            ("scratch_cb", scratch_cb_id),
+            ("out_cb", out_cb_id),
+            ("num_tiles", NUM_REDUCE_TILES),
+        ],
         config=ttnn.ComputeConfigDescriptor(),
     )
 
