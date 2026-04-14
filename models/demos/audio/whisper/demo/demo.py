@@ -139,7 +139,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     task: str = "transcribe",
     prompt: Optional[str] = None,
     batch_size_per_device=WHISPER_BATCH_SIZE,
-    use_batched_decoder_prefill: bool = True,
 ):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
@@ -154,8 +153,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         language: Language code for transcription (batch-homogeneous)
         task: Task type ("transcribe" or "translate") (batch-homogeneous)
         prompt: Optional prompt to guide style/spelling (batch-homogeneous)
-        use_batched_decoder_prefill: If True, one decoder forward over the forced prefix with causal SDPA KV
-            prefill; if False, legacy token-by-token KV prefill (parity / timing comparison).
     """
     if generation_params is None:
         generation_params = GenerationParams()
@@ -185,7 +182,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         kv_cache_per_batch_size=kv_cache_per_batch_size,
         cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
-        use_batched_decoder_prefill=use_batched_decoder_prefill,
         enable_encoder_trace=True,
     )
 
@@ -335,7 +331,6 @@ def run_demo_whisper_for_conditional_generation_inference(
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
     run_both_batch_sizes=False,
-    use_batched_decoder_prefill: bool = True,
 ):
     torch.manual_seed(0)
 
@@ -352,7 +347,6 @@ def run_demo_whisper_for_conditional_generation_inference(
         task=task,
         prompt=prompt,
         batch_size_per_device=effective_max_batch_size,
-        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     # load data
@@ -518,7 +512,6 @@ def run_demo_whisper_for_translation_dataset(
     task: str = "translate",
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
-    use_batched_decoder_prefill=True,
 ):
     torch.manual_seed(0)
 
@@ -553,7 +546,6 @@ def run_demo_whisper_for_translation_dataset(
         language=language,
         task=task,
         batch_size_per_device=batch_size_per_device,
-        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     logger.info(f"Loading FLEURS dataset for {language} (code: {source_lang_code_full})")
@@ -791,10 +783,6 @@ def test_demo_for_audio_classification_dataset(
     "run_both_batch_sizes",
     [True],
 )
-@pytest.mark.parametrize(
-    "use_batched_decoder_prefill",
-    [True],
-)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
@@ -820,7 +808,6 @@ def test_demo_for_conditional_generation(
     use_per_request_params,
     run_both_batch_sizes,
     request,
-    use_batched_decoder_prefill,
 ):
     # Skip test in CI when using generate_kwargs
     if (
@@ -869,7 +856,6 @@ def test_demo_for_conditional_generation(
         batch_size_per_device=batch_size_per_device,
         stream=stream,
         run_both_batch_sizes=run_both_batch_sizes,
-        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
 
     if (
@@ -1025,10 +1011,6 @@ def test_demo_for_conditional_generation_dataset(
     "stream",
     [True],
 )
-@pytest.mark.parametrize(
-    "use_batched_decoder_prefill",
-    [True],
-)
 def test_demo_for_translation_dataset(
     mesh_device,
     model_repo,
@@ -1043,7 +1025,6 @@ def test_demo_for_translation_dataset(
     return_timestamps,
     stream,
     request,
-    use_batched_decoder_prefill,
 ):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
@@ -1064,5 +1045,4 @@ def test_demo_for_translation_dataset(
         task="translate",
         batch_size_per_device=batch_size_per_device,
         stream=stream,
-        use_batched_decoder_prefill=use_batched_decoder_prefill,
     )
