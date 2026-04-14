@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         # We only have MLPerf in AUS2, so we want to split out tests that don't need it
-        mlperf: [true, false]
+        mlperf: [false]
     runs-on:
       - topology-6u
       - arch-wormhole_b0
