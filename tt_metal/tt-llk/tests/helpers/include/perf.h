@@ -20,7 +20,12 @@
 #ifndef MEASURE_PERF_COUNTERS
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
+#define PERF_COUNTER_FLATTEN
 #else
+// Counter RAII adds call instructions to run_kernel that cause the compiler
+// to de-inline LLK functions inside profiler zones. flatten forces all
+// callees to be inlined (counter functions are noinline, so unaffected).
+#define PERF_COUNTER_FLATTEN __attribute__((flatten))
 
 // Guards to prevent redefinition when counters.h is included later (via trisc.cpp)
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
@@ -56,7 +61,7 @@ public:
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zone) : m_zone(zone)
+    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
     {
         start_perf_counters(m_zone);
     }
@@ -68,10 +73,9 @@ public:
 };
 } // namespace llk_perf
 
-#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
-#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
-#define MEASURE_PERF_COUNTERS(zone_name) \
-    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+#define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
+#define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::detail::zone_name_hash(zone_name));
 
 #endif // PERF_COUNTERS_COMPILED
 
