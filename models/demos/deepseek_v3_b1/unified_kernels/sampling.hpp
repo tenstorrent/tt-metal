@@ -1210,25 +1210,28 @@ struct TopKSampling {
                     indices_cb_base + CTArgs::phase2_indices_byte_offset +
                     CTArgs::sender_idx * CTArgs::topk_indices_stride;
 
-                if constexpr (CTArgs::topk_k == 32) {
+                if constexpr (CTArgs::topk_k <= 32) {
                     constexpr uint32_t num_input_tiles = CTArgs::phase1_num_input_tiles;
-                    auto scores_src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
-                    auto indices_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
+                    auto scores_src = scores_addr;
+                    auto indices_src = args.indices_addr;
 
                     cb_reserve_back(CTArgs::topk_in_scores_cb, num_input_tiles);
-                    auto scores_dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                        get_write_ptr(CTArgs::topk_in_scores_cb));
-                    for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
-                        scores_dst[i] = scores_src[i];
-                    }
-                    cb_push_back(CTArgs::topk_in_scores_cb, num_input_tiles);
-
                     cb_reserve_back(CTArgs::topk_in_indices_cb, num_input_tiles);
-                    auto indices_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        get_write_ptr(CTArgs::topk_in_indices_cb));
-                    for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
-                        indices_dst[i] = indices_src[i];
-                    }
+                    auto scores_dst = get_write_ptr(CTArgs::topk_in_scores_cb);
+                    auto indices_dst = get_write_ptr(CTArgs::topk_in_indices_cb);
+                    // for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
+                    //     scores_dst[i] = scores_src[i];
+                    // }
+                    // use NoC to copy sorces_src to scores_dst
+                    noc_async_read(get_noc_addr(scores_src), scores_dst, CTArgs::num_values * sizeof(uint16_t));
+                    // for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
+                    //     indices_dst[i] = indices_src[i];
+                    // }
+                    // use NoC to copy indices_src to indices_dst
+                    noc_async_read(get_noc_addr(indices_src), indices_dst, CTArgs::num_values * sizeof(uint32_t));
+
+                    noc_async_read_barrier();
+                    cb_push_back(CTArgs::topk_in_scores_cb, num_input_tiles);
                     cb_push_back(CTArgs::topk_in_indices_cb, num_input_tiles);
 
                     cb_wait_front(CTArgs::topk_out_scores_cb, 1);
@@ -1269,22 +1272,14 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
-                while (*recv_sem_ptr != CTArgs::expected_remote_incs + 1) {
-                    invalidate_l1_cache();
-                    DPRINT << "Recv semaphore value: " << *recv_sem_ptr << ENDL();
-                }
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
 
-                const uint32_t winner_addr = get_write_ptr(CTArgs::winner_cb_id);
-                auto global_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(winner_addr);
-                auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    winner_addr + CTArgs::topk_scores_stride);
+                const uint32_t global_scores = get_write_ptr(CTArgs::winner_cb_id);
+                const uint32_t global_indices = global_scores + CTArgs::topk_scores_stride;
 
                 // DPRINT scores and indices
 
-                if constexpr (CTArgs::topk_k == 32) {
+                if constexpr (CTArgs::topk_k <= 32) {
                     constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
                     
                     auto all_cores_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
@@ -1306,24 +1301,23 @@ struct TopKSampling {
                     cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
 
-
-                    auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                        get_read_ptr(CTArgs::topk_out_scores_cb));
-                    auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        get_read_ptr(CTArgs::topk_out_indices_cb));
-                    for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
-                        global_scores[i] = llk_scores[i];
-                        global_indices[i] = llk_indices[i];
-                    }
+                    auto llk_scores_addr = get_read_ptr(CTArgs::topk_out_scores_cb);
+                    auto llk_indices_addr = get_read_ptr(CTArgs::topk_out_indices_cb);
+                    noc_async_read(get_noc_addr(llk_scores_addr), global_scores, CTArgs::topk_k * sizeof(uint16_t));
+                    noc_async_read(get_noc_addr(llk_indices_addr), global_indices, CTArgs::topk_k * sizeof(uint32_t));
+                    noc_async_read_barrier();
 
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
                 } else {
+                    auto global_scores_addr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
+                    auto global_indices_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        global_indices);
                     const uint32_t p2_scores_base =
                         scores_cb_base + CTArgs::phase2_scores_byte_offset;
                     const uint32_t p2_indices_base =
                         indices_cb_base + CTArgs::phase2_indices_byte_offset;
-                    phase2_merge_global_topk(p2_scores_base, p2_indices_base, global_scores, global_indices);
+                    phase2_merge_global_topk(p2_scores_base, p2_indices_base, global_scores_addr, global_indices_addr);
                 }
 
                 // Mesh inter-device reduction stages via LLK (k==32) or scalar merge.
@@ -1339,7 +1333,7 @@ struct TopKSampling {
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
 
-                        if constexpr (CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                        if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                             constexpr uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
                             constexpr uint32_t s1_input_tiles = (s1_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
@@ -1350,14 +1344,13 @@ struct TopKSampling {
                             cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                             cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
-                            auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                                get_read_ptr(CTArgs::topk_out_scores_cb));
-                            auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_read_ptr(CTArgs::topk_out_indices_cb));
-                            for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
-                                global_scores[i] = llk_scores[i];
-                                global_indices[i] = llk_indices[i];
-                            }
+                            auto llk_scores =
+                                get_read_ptr(CTArgs::topk_out_scores_cb);
+                            auto llk_indices =
+                                get_read_ptr(CTArgs::topk_out_indices_cb);
+                            noc_async_read(get_noc_addr(llk_scores), global_scores, CTArgs::topk_k * sizeof(uint16_t));
+                            noc_async_read(get_noc_addr(llk_indices), global_indices, CTArgs::topk_k * sizeof(uint32_t));
+                            noc_async_read_barrier();
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
@@ -1389,7 +1382,7 @@ struct TopKSampling {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
 
-                        if constexpr (CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                        if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                             constexpr uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
                             constexpr uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
@@ -1400,14 +1393,13 @@ struct TopKSampling {
                             cb_wait_front(CTArgs::topk_out_scores_cb, 1);
                             cb_wait_front(CTArgs::topk_out_indices_cb, 1);
 
-                            auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                                get_read_ptr(CTArgs::topk_out_scores_cb));
-                            auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_read_ptr(CTArgs::topk_out_indices_cb));
-                            for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
-                                global_scores[i] = llk_scores[i];
-                                global_indices[i] = llk_indices[i];
-                            }
+                            auto llk_scores =
+                                get_read_ptr(CTArgs::topk_out_scores_cb);
+                            auto llk_indices =
+                                get_read_ptr(CTArgs::topk_out_indices_cb);
+                            noc_async_read(get_noc_addr(llk_scores), global_scores, CTArgs::topk_k * sizeof(uint16_t));
+                            noc_async_read(get_noc_addr(llk_indices), global_indices, CTArgs::topk_k * sizeof(uint32_t));
+                            noc_async_read_barrier();
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
@@ -1430,8 +1422,9 @@ struct TopKSampling {
                     constexpr uint16_t BF16_ONE = 0x3F80;
 
                     DPRINT << "Top-" << K << " scores (before softmax):" << ENDL();
+                    auto global_scores_addr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
                     for (uint32_t i = 0; i < K; ++i) {
-                        DPRINT << "  [" << i << "] " << BF16(global_scores[i]) << ENDL();
+                        DPRINT << "  [" << i << "] " << BF16(global_scores_addr[i]) << ENDL();
                     }
 
                     cb_reserve_back(CTArgs::scaler_cb, 1);
@@ -1457,10 +1450,10 @@ struct TopKSampling {
                     auto tile_u16 =
                         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
                     for (uint32_t i = 0; i < 16 && i < K; ++i) {
-                        tile_u16[i] = global_scores[i];
+                        tile_u16[i] = global_scores_addr[i];
                     }
                     for (uint32_t i = 0; i < 16 && (i + 16) < K; ++i) {
-                        tile_u16[FACE_ELEMS + i] = global_scores[16 + i];
+                        tile_u16[FACE_ELEMS + i] = global_scores_addr[16 + i];
                     }
                     cb_push_back(CTArgs::softmax_in_cb, 1);
                 }
@@ -1563,7 +1556,7 @@ struct TopKSampling {
             }
 #elif defined(COMPILE_FOR_TRISC)
             // Phase 1: LLK top-32 sort (all active cores, k==32 only)
-            if constexpr (IsActiveCore && CTArgs::topk_k == 32) {
+            if constexpr (IsActiveCore && CTArgs::topk_k <= 32) {
                 run_top32_llk<
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb>(
@@ -1572,7 +1565,7 @@ struct TopKSampling {
 
             // Non-final cores: consume dummy pages pushed by NCRISC to keep
             // the topk_in CB write pointer synchronized with the final core.
-            if constexpr (IsActiveCore && !IsFinalCore && CTArgs::topk_k == 32) {
+            if constexpr (IsActiveCore && !IsFinalCore && CTArgs::topk_k <= 32) {
                 constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
                 cb_wait_front(CTArgs::topk_in_scores_cb, p2_tiles);
                 cb_pop_front(CTArgs::topk_in_scores_cb, p2_tiles);
@@ -1582,7 +1575,7 @@ struct TopKSampling {
             }
 
             // Phase 2: global merge via LLK (final core only, k==32)
-            if constexpr (IsFinalCore && CTArgs::topk_k == 32) {
+            if constexpr (IsFinalCore && CTArgs::topk_k <= 32) {
                 run_top32_llk_presorted_1024_opt<
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb>(
@@ -1591,7 +1584,7 @@ struct TopKSampling {
 
             // Mesh stage 1 merge via LLK (stage1_receiver, final core, k==32)
             if constexpr (IsFinalCore && CTArgs::mesh_mode && CTArgs::stage1_receiver &&
-                          CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                          CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                 run_top32_llk<
                     CTArgs::mesh_stage_scores_cb, CTArgs::mesh_stage_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
@@ -1600,7 +1593,7 @@ struct TopKSampling {
 
             // Mesh stage 2 merge via LLK (stage2_receiver, final core, k==32)
             if constexpr (IsFinalCore && CTArgs::mesh_mode && CTArgs::stage2_receiver &&
-                          CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                          CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
                 run_top32_llk<
                     CTArgs::mesh_stage_scores_cb, CTArgs::mesh_stage_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
