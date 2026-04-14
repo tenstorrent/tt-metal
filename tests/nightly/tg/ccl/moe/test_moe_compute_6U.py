@@ -40,14 +40,17 @@ def validate_per_expert_tokens(
     # L1 alignment constant (16 bytes)
     l1_alignment = 16
 
-    # Validate shape: [num_devices, aligned_row_elements]
-    # Row is experts_per_device uint32s, aligned to 16 bytes
+    # Validate shape: [num_devices, num_cores, aligned_row_elements]
+    # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    expected_per_expert_shape = (num_devices, per_expert_row_elements)
+    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
+    core_range = mesh_device.compute_with_storage_grid_size()
+    num_cores = core_range.x * core_range.y
+    expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
 
     # Convert per_expert_total_tokens tensor to torch
-    # Shape per device: [1, aligned_elements] as uint32
+    # Shape per device: [num_cores (70), aligned_elements] as uint32
     per_expert_total_tokens_torch = ttnn.to_torch(
         per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     )
@@ -58,21 +61,25 @@ def validate_per_expert_tokens(
         f"got {per_expert_total_tokens_torch.shape}"
     )
 
+    per_expert_total_tokens_torch = per_expert_total_tokens_torch.reshape(
+        (num_devices, num_cores, per_expert_row_elements)
+    )
     for device_idx in range(num_devices):
-        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
+        for c in range(num_cores):
+            device_counts = per_expert_total_tokens_torch[device_idx][c]
 
-        for local_exp_idx in range(experts_per_device):
-            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-            actual_count = device_counts[local_exp_idx].item()
+            for local_exp_idx in range(experts_per_device):
+                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                actual_count = device_counts[local_exp_idx].item()
 
-            if actual_count != expected_count:
-                logger.warning(
-                    f"  Device {device_idx}, Expert {local_exp_idx}: "
-                    f"count mismatch - expected {expected_count}, got {actual_count}"
-                )
-                per_expert_tokens_all_passed = False
-            else:
-                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+                if actual_count != expected_count:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"count mismatch - expected {expected_count}, got {actual_count}"
+                    )
+                    per_expert_tokens_all_passed = False
+                else:
+                    logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
 
     return per_expert_tokens_all_passed
 

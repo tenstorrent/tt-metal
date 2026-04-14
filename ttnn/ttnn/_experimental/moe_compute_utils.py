@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from typing import Sequence
 
 import ttnn
 
@@ -26,7 +26,7 @@ def cluster_distance(d0: int, d1: int, mesh_shape: tuple[int, int], cluster_axis
 def map_shared_experts(
     expert_mapping_tensor: "torch.Tensor",
     shared_expert_ids_to_devices: dict[int, list[int]],
-    mesh_shape: Iterable[int],
+    mesh_shape: Sequence[int],
     cluster_axis: int,
 ) -> "torch.Tensor":
     """
@@ -55,7 +55,6 @@ def map_shared_experts(
 
     Raises:
         RuntimeError: If shared experts are not distributed evenly across devices.
-        RuntimeError: If more than 3 experts per device would result (current limitation).
         RuntimeError: If shared expert IDs are not contiguous with routed expert IDs.
 
     Notes:
@@ -85,7 +84,7 @@ def map_shared_experts(
     if list(range(routed_experts)) + sorted([se for se in shared_expert_ids_to_devices]) != list(
         range(routed_experts + shared_experts)
     ):
-        raise RuntimeError("Shared expert IDs should be a contigious continuation of routed expert IDs ")
+        raise RuntimeError("Shared expert IDs should be a contiguous continuation of routed expert IDs ")
 
     routed_and_shared_expert_mapping = torch.cat(
         [expert_mapping_tensor, torch.zeros((devices, shared_experts), dtype=expert_mapping_tensor.dtype)], dim=1
