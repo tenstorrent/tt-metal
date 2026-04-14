@@ -995,7 +995,7 @@ def main():
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
 
-    if os.environ.get("TT_TRIAGE_RESET_AFTER_RUN", "0") == "1":
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
         utils.INFO("Resetting devices after tt-triage run...")
         try:
             subprocess.run(["tt-smi", "-r"], check=True)
