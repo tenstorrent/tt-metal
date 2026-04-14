@@ -21,6 +21,7 @@ from .tile_constants import (
     SRCS_SLICE_32B_ROW_DIM,
     SRCS_SLICE_ELEMENT_COUNT,
     SRCS_SLICE_ROW_DIM,
+    DataFormat,
 )
 
 
