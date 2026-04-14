@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -104,12 +103,11 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
 
-    // On Blackhole, NOC DRAM reads require src and dst addresses to match mod
-    // NOC_DRAM_READ_ALIGNMENT_BYTES (64). Aligning CB page sizes to DRAM alignment
-    // ensures all CB page addresses share the same 64-byte residue as DRAM page starts.
-    const uint32_t dram_alignment = hal::get_dram_alignment();
-    const uint32_t aligned_input_page_size = tt::round_up(input_full_chunk_size_bytes, dram_alignment);
-    const uint32_t aligned_output_page_size = tt::round_up(output_full_chunk_size_bytes, dram_alignment);
+    // NOC DRAM reads require src and dst addresses to have matching alignment
+    // (e.g., mod 64 on Blackhole). Aligning CB page sizes to the buffer's alignment
+    // ensures all CB page addresses share the same residue as DRAM page starts.
+    const uint32_t aligned_input_page_size = tt::align(input_full_chunk_size_bytes, src_buffer->alignment());
+    const uint32_t aligned_output_page_size = tt::align(output_full_chunk_size_bytes, dst_buffer->alignment());
 
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(
