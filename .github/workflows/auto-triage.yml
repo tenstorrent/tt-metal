@@ -31,6 +31,11 @@ on:
         required: false
         default: ""
         type: string
+      slack_test_only:
+        description: "Skip analysis and send a canned Slack message (for testing)"
+        required: false
+        default: false
+        type: boolean
 
 
 jobs:
@@ -57,6 +62,7 @@ jobs:
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
           cutoff-commit: ${{ inputs.cutoff_commit }}
+          slack-test-only: ${{ inputs.slack_test_only }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
