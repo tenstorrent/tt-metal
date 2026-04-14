@@ -39,7 +39,7 @@ extern "C" void wzerorange(uint32_t* start, uint32_t* end) {
 }
 
 // Let the LTO decide if this needs to be inline.
-void (uint32_t* dst, uint32_t __attribute__((rvtt_l1_ptr))* src, int32_t len) {
+void l1_to_local_mem_copy(uint32_t* dst, uint32_t __attribute__((rvtt_l1_ptr))* src, int32_t len) {
 #pragma GCC unroll 0
     while (len >= 3) {
         auto v0 = src[0], v1 = src[1], v2 = src[2];
