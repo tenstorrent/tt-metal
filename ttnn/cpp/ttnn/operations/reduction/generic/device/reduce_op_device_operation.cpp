@@ -57,16 +57,42 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             tt::tt_metal::PageConfig(Layout::TILE),
             MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
 
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            return tensor_spec.height_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
+    TensorMemoryLayout mem_layout = operation_attributes.output_mem_config.memory_layout();
 
-        auto nd_shard_spec_copy = nd_shard_spec;
+    if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED || mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // Grid and orientation are identical in both spec formats (nd_shard_spec and shard_spec)
+        // when both are populated. Pick whichever is available.
+        const auto& nd = operation_attributes.output_mem_config.nd_shard_spec();
+        const auto& legacy = operation_attributes.output_mem_config.shard_spec();
+        TT_FATAL(
+            nd.has_value() || legacy.has_value(),
+            "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set",
+            mem_layout);
+        const CoreRangeSet& grid = nd ? nd->grid : legacy->grid;
+        ShardOrientation orientation = nd ? nd->orientation : legacy->orientation;
+
+        // For width/height/block sharding modes, the output shard shape is fully determined
+        // by the output physical shape and the core grid. Just delegate to the
+        // appropriate TensorSpec builder.
+        if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            return tensor_spec.width_sharded(grid, orientation);
+        }
+        if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            return tensor_spec.height_sharded(grid, orientation);
+        }
+        TT_FATAL(
+            grid.ranges().size() == 1,
+            "Block sharding requires a single CoreRange, got {} ranges",
+            grid.ranges().size());
+        return tensor_spec.block_sharded(grid.bounding_box(), orientation);
+    }
+
+    // ND sharding: adjust per-logical-dimension shard shape for reduced dims.
+    if (mem_layout == TensorMemoryLayout::ND_SHARDED) {
+        const auto& nd_shard_spec = operation_attributes.output_mem_config.nd_shard_spec();
+        TT_FATAL(nd_shard_spec.has_value(), "ND_SHARDED memory layout requires nd_shard_spec to be set");
+        auto nd_shard_spec_copy = *nd_shard_spec;
         if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
             operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
             nd_shard_spec_copy.shard_shape[-1] = 1;
@@ -80,6 +106,9 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
+    // Guard against unexpected new memory layouts.
+    TT_FATAL(mem_layout == TensorMemoryLayout::INTERLEAVED, "Unexpected memory layout: {}", mem_layout);
+    // Interleaved tensor: tensor_spec already has everything we need.
     return tensor_spec;
 }
 
