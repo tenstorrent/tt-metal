@@ -1067,11 +1067,11 @@ DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uin
 
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_config_reader.cpp";
 
-    auto producer_kernel = CreateKernel(
-        program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0});
+    auto producer_kernel =
+        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0});
 
-    auto consumer_kernel = CreateKernel(
-        program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1});
+    auto consumer_kernel =
+        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1});
 
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = entry_size,
