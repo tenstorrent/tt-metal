@@ -76,16 +76,12 @@ ttsl::Span<const T> get_as(const HostTensor& tensor) {
 
 template <typename T>
 ttsl::Span<const T> get_as(const Tensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
-    HostBuffer buffer = get_host_buffer(tensor);
-    return buffer.template view_as<T>();
+    return get_as<T>(tensor.host_tensor());
 }
 
 template <typename T>
 ttsl::Span<T> get_as(Tensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
-    HostBuffer buffer = get_host_buffer(tensor);
-    return buffer.template view_as<T>();
+    return get_as<T>(tensor.host_storage().host_tensor());
 }
 
 // Explicit template instantiations
