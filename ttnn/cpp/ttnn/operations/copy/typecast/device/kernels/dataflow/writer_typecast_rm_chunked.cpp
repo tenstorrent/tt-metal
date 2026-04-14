@@ -19,7 +19,7 @@ void kernel_main() {
 
     constexpr uint32_t onepage = 1;
 
-    // Create TensorAccessor with row page size (buffer's actual layout)
+    // Create TensorAccessor using layout/aligned_page_size metadata carried in TensorAccessorArgs.
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t end_row_id = start_row_id + num_rows;

@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr uint32_t GROUP_PAGES = (operation_type == OperationType::Scatter) ? 2 : 4;
 
     const uint32_t src_base = get_arg_val<uint32_t>(0);
-    // Use ALIGNED_PAGE_SIZE for address calculation (buffer spacing)
     const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base);
 
     uint32_t sent = 0;
