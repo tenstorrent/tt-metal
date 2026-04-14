@@ -10,6 +10,7 @@ import pytest
 import torch
 import ttnn
 
+from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
@@ -19,9 +20,8 @@ def run_eltwise_logit_test(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     torch.manual_seed(data_seed)
     x = gen_rand(size=input_shape, low=0, high=0.99)
 
-    # compute ref value using the golden function that correctly handles eps > 0.5
-    golden_function = ttnn.get_golden_function(ttnn.logit)
-    ref_value = golden_function(x, eps=eps)
+    # compute ref value
+    ref_value = pytorch_ops.logit(x=x, eps=eps)
 
     tt_result = tt_lib_ops.eltwise_logit(
         x=x,
