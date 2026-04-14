@@ -9,7 +9,6 @@
 #include "modules/dropout_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rotary_embedding.hpp"
-#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 
@@ -104,21 +103,8 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    // Apply attention: use ring_attention_sdpa if CP is enabled, otherwise regular SDPA
-    autograd::TensorPtr attention;
-    auto& pctx = autograd::ctx().get_parallelism_context();
-    if (pctx.is_cp_enabled() && pctx.get_cp_size() > 1) {
-        /*
-         * TODO: add support for non-causal mask
-         */
-        TT_FATAL(
-            !mask.has_value(),
-            "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
-        attention = ops::distributed::ring_attention_sdpa(
-            query_with_heads, key_with_heads, value_with_heads, std::nullopt, ttml::metal::AttentionMaskType::Causal);
-    } else {
-        attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
-    }
+    // Apply attention (ring_attention_sdpa removed — always use regular SDPA)
+    auto attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
 
     attention = ops::heads_fusion(attention);
 
