@@ -511,6 +511,18 @@ uint32_t Device::dram_size_per_channel() const {
 
 int Device::get_clock_rate_mhz() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_device_aiclk(id_); }
 
+uint32_t Device::get_input_power_watts() const {
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_device_input_power(id_);
+}
+
+double Device::get_asic_temperature() const {
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_device_asic_temperature(id_);
+}
+
+double Device::get_board_temperature() const {
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_device_board_temperature(id_);
+}
+
 CoreCoord Device::grid_size() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).grid_size; }
 
 CoreCoord Device::logical_grid_size() const {

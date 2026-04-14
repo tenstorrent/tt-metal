@@ -250,10 +250,39 @@ void py_module(nb::module_& mod) {
         .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
+    nb::class_<distributed::DeviceTelemetry>(mod, "DeviceTelemetry")
+        .def_ro("chip_id", &distributed::DeviceTelemetry::chip_id)
+        .def_ro("aiclk_mhz", &distributed::DeviceTelemetry::aiclk_mhz)
+        .def_ro("input_power_w", &distributed::DeviceTelemetry::input_power_w)
+        .def_ro("asic_temperature_c", &distributed::DeviceTelemetry::asic_temperature_c)
+        .def_ro("board_temperature_c", &distributed::DeviceTelemetry::board_temperature_c)
+        .def("__repr__", [](const distributed::DeviceTelemetry& t) {
+            return fmt::format(
+                "DeviceTelemetry(chip_id={}, aiclk_mhz={}, input_power_w={}, "
+                "asic_temperature_c={:.1f}, board_temperature_c={:.1f})",
+                t.chip_id,
+                t.aiclk_mhz,
+                t.input_power_w,
+                t.asic_temperature_c,
+                t.board_temperature_c);
+        });
+
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
+        .def(
+            "get_device_telemetry",
+            &MeshDevice::get_device_telemetry,
+            R"doc(
+               Get real-time telemetry for every device in the mesh.
+
+               Each call reads fresh values from the hardware via ARC telemetry.
+
+               Returns:
+                   List[DeviceTelemetry]: Per-device telemetry containing AICLK (MHz),
+                       input power (W), ASIC temperature (°C), and board temperature (°C).
+           )doc")
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
@@ -293,11 +322,11 @@ void py_module(nb::module_& mod) {
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
         .def_prop_ro(
-          "core_grid",
-          [](const MeshDevice& device) {
-            const auto& sz = device.compute_with_storage_grid_size();
-            return ttnn::CoreGrid(sz.x, sz.y);
-          })
+            "core_grid",
+            [](const MeshDevice& device) {
+                const auto& sz = device.compute_with_storage_grid_size();
+                return ttnn::CoreGrid(sz.x, sz.y);
+            })
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,

@@ -40,6 +40,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/telemetry.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <unistd.h>
 
@@ -714,6 +715,23 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
 }
 
 int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
+
+uint32_t Cluster::get_device_input_power(const ChipId& chip_id) const {
+    auto* telemetry = this->driver_->get_chip(chip_id)->get_tt_device()->get_arc_telemetry_reader();
+    return telemetry->read_entry(tt::umd::TelemetryTag::INPUT_POWER);
+}
+
+double Cluster::get_device_asic_temperature(const ChipId& chip_id) const {
+    return this->driver_->get_chip(chip_id)->get_tt_device()->get_firmware_info_provider()->get_asic_temperature();
+}
+
+double Cluster::get_device_board_temperature(const ChipId& chip_id) const {
+    return this->driver_->get_chip(chip_id)
+        ->get_tt_device()
+        ->get_firmware_info_provider()
+        ->get_board_temperature()
+        .value_or(0.0);
+}
 
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
