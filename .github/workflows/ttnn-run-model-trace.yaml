@@ -217,10 +217,29 @@ jobs:
           MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
           echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
 
-          # Extract trace_uid from the metadata file (most recent trace dir)
-          TRACE_DIR=$(ls -td generated/ttnn/reports/operation_parameters/*/ 2>/dev/null | head -1)
-          if [[ -n "$TRACE_DIR" && -f "$TRACE_DIR/_trace_metadata.json" ]]; then
-            TRACE_UID=$(python3 -c "import json; print(json.load(open('$TRACE_DIR/_trace_metadata.json'))['trace_uid'])")
+          # Extract trace_uid from the persisted master JSON rather than the
+          # per-trace metadata file, which generic_ops_tracer.py deletes unless
+          # --store is set.
+          if [[ -f "$MASTER_JSON" ]]; then
+            TRACE_UID=$(MASTER_JSON="$MASTER_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for execution in cfg.get("executions", []):
+                      trace_uid = execution.get("trace_uid")
+                      if trace_uid:
+                          print(trace_uid)
+                          raise SystemExit(0)
+          PY
+            )
+          fi
+
+          if [[ -n "$TRACE_UID" ]]; then
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
 
