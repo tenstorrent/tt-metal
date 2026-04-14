@@ -77,6 +77,12 @@ run_profiling_test() {
     # Cross-reference real-time profiler durations against device profiler
     # kernel durations (manages its own device; env vars set before open_device)
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_profiler_cross_reference.py --timeout 300
+
+    # Real-time profiler callback sanity: register callback, run matmul, verify records
+    pytest tests/ttnn/tracy/test_realtime_callback.py --timeout 120
+
+    # Trace capture with real-time profiler: verify profiler works across trace replay
+    pytest tests/ttnn/tracy/test_trace_runs.py --timeout 120
 }
 
 main() {
