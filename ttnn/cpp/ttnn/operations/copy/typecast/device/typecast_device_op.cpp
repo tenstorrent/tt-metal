@@ -51,10 +51,21 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     return !args.sub_core_grids
                 .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
 }
+
+bool is_cross_layout(const TypecastParams& args, const TypecastInputs& tensor_args) {
+    const auto target_layout = args.output_layout.value_or(tensor_args.input.layout());
+    return target_layout != tensor_args.input.layout();
+}
 }  // namespace
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
+    // Cross-layout: TILE<->ROW_MAJOR transformation
+    if (is_cross_layout(args, tensor_args)) {
+        log_debug(tt::LogOp, "Using TypecastCrossLayoutProgramFactory");
+        return TypecastCrossLayoutProgramFactory{};
+    }
+
     if (tensor_args.input.is_sharded()) {
         if (can_use_sharded_optimized_factory(args, tensor_args)) {
             log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
@@ -81,6 +92,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    const bool cross_layout = is_cross_layout(args, tensor_args);
 
     auto out_memory_config = args.output_memory_config;
     if (preallocated_output_tensor.has_value()) {
@@ -107,12 +119,30 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape());
     }
 
-    const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
-    TT_FATAL(
-        input_tensor_memory_layout == out_memory_config.memory_layout(),
-        "Typecast operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        input_tensor_memory_layout,
-        out_memory_config.memory_layout());
+    // For cross-layout, memory layout matching is not required (handled by composition at higher level
+    // or future sharded cross-layout support). For same-layout, enforce matching.
+    if (!cross_layout) {
+        const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
+        TT_FATAL(
+            input_tensor_memory_layout == out_memory_config.memory_layout(),
+            "Typecast operation requires Input and Output memory layout to match when layouts are the same. "
+            "Input layout: {}, Output layout: {}",
+            input_tensor_memory_layout,
+            out_memory_config.memory_layout());
+    }
+
+    if (cross_layout) {
+        TT_FATAL(
+            !preallocated_output_tensor.has_value(),
+            "Preallocated output tensor is not supported for cross-layout typecast.");
+        TT_FATAL(!args.sub_core_grids.has_value(), "sub_core_grids is not supported for cross-layout typecast.");
+        // Cross-layout currently requires interleaved memory
+        TT_FATAL(
+            !input_tensor.is_sharded(), "Cross-layout typecast currently requires interleaved (non-sharded) input.");
+        TT_FATAL(
+            out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Cross-layout typecast currently requires interleaved output memory config.");
+    }
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
@@ -145,8 +175,7 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    const Layout output_layout = tensor_args.input.layout();
-
+    const Layout output_layout = args.output_layout.value_or(tensor_args.input.layout());
     const Shape output_shape = tensor_args.input.logical_shape();
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
@@ -206,7 +235,8 @@ Tensor typecast(
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     return ttnn::device_operation::launch<TypecastDeviceOperation>(
         TypecastParams{
             .input_dtype = input.dtype(),
@@ -216,6 +246,7 @@ Tensor typecast(
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
+            .output_layout = output_layout,
         },
         TypecastInputs{.input = input, .preallocated_output = preallocated_output});
 }
