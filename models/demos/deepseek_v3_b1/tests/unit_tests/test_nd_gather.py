@@ -453,27 +453,36 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
     torch.manual_seed(42)
     torch_input = torch.randn(1, TOTAL_WIDTH, dtype=torch.bfloat16)
 
+    # Allocate tensors ONCE — reuse across all iterations to keep L1 addresses stable
+    anchor = create_scratch_anchor(device, full_grid_set, num_grid_cores)
+    ttnn_input = create_sharded_input(device, torch_input, sender_grid, shard_shape)
+    ttnn_output = create_reduce_output_tensor(device, RECEIVER_CORE)
+    logger.info(
+        f"  L1 addrs: anchor=0x{anchor.buffer_address():x}, "
+        f"input=0x{ttnn_input.buffer_address():x}, output=0x{ttnn_output.buffer_address():x}"
+    )
+
     reference_output = None
     all_pass = True
     pcc_values = []
 
     for i in range(num_iterations):
-        ttnn_input = create_sharded_input(device, torch_input, sender_grid, shard_shape)
-        anchor = create_scratch_anchor(device, full_grid_set, num_grid_cores)
-        ttnn_output = create_reduce_output_tensor(device, RECEIVER_CORE)
-
         program = build_gather_reduce_program(device, ttnn_input, anchor, ttnn_output, sender_grid, RECEIVER_CORE)
         result = ttnn.generic_op([ttnn_input, anchor, ttnn_output], program)
 
-        result_torch = ttnn.to_torch(result)
+        result_torch = ttnn.to_torch(ttnn_output)
 
-        # Debug: print shape and first values on first 3 iterations
-        if i < 3:
-            logger.info(f"  [{i+1:>2}] result shape={result_torch.shape}, dtype={result_torch.dtype}")
-            logger.info(f"  [{i+1:>2}] result[:5]={result_torch.flatten()[:5].tolist()}")
-            logger.info(
-                f"  [{i+1:>2}] result nonzero count={result_torch.count_nonzero().item()}/{result_torch.numel()}"
-            )
+        # Diagnostic: check if scratch CB (anchor) has data on receiver core
+        # Receiver core (12,9) is shard index 129 (last) in the full grid
+        anchor_torch = ttnn.to_torch(anchor)
+        receiver_scratch = anchor_torch[129]  # uint32 data
+
+        # Debug: print shape and first values on first 5 iterations
+        if i < 5:
+            logger.info(f"  [{i+1:>2}] output[:5]={result_torch.flatten()[:5].tolist()}")
+            logger.info(f"  [{i+1:>2}] output nonzero={result_torch.count_nonzero().item()}/{result_torch.numel()}")
+            scratch_nonzero = (receiver_scratch != 0).sum().item()
+            logger.info(f"  [{i+1:>2}] scratch(receiver) nonzero={scratch_nonzero}/{receiver_scratch.numel()}")
 
         if reference_output is None:
             reference_output = result_torch.clone()
@@ -490,9 +499,9 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
             if not passing:
                 all_pass = False
 
-        ttnn_input.deallocate()
-        anchor.deallocate()
-        ttnn_output.deallocate()
+    anchor.deallocate()
+    ttnn_input.deallocate()
+    ttnn_output.deallocate()
 
     # Summary
     if pcc_values:
