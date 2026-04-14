@@ -4,6 +4,7 @@ Molmo2-8B Video Evaluation Script
 Runs batch inference on test.jsonl video entries and reports:
   - Per-video: frames, TTFT, tok/s, predicted answer
   - Aggregate: avg frames/sec, avg TTFT, avg tok/s, total processed
+  - Optional ``--output-jsonl``: one JSON object per line with question and answer letter
 """
 
 import argparse
@@ -119,6 +120,7 @@ def run_eval(
     skip_download: bool = False,
     exact_jsonl: bool = True,
     unique_video_urls_only: bool = False,
+    output_jsonl: Optional[str] = None,
 ):
     """
     Run batch video evaluation.
@@ -144,6 +146,8 @@ def run_eval(
             prompt and ``max_tokens`` (matches ``verification/test.jsonl`` harness).
         unique_video_urls_only: If True, one run per unique video URL and global
             ``max_new_tokens`` (legacy / faster smoke path).
+        output_jsonl: If set, append one JSON object per run with ``question``,
+            ``answer_letter`` (predicted, or null on failure), and ``jsonl_line``.
     """
     import ttnn
 
@@ -305,6 +309,12 @@ def run_eval(
         logger.info("Starting video evaluation")
         logger.info("=" * 70)
 
+        jsonl_file = None
+        if output_jsonl:
+            jsonl_path = Path(output_jsonl)
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            jsonl_file = open(jsonl_path, "w", encoding="utf-8")
+
         for idx, item in enumerate(runnable):
             video_path = item["local_path"]
             question_text = item["prompt_text"]
@@ -373,6 +383,19 @@ def run_eval(
                 }
                 results.append(result)
 
+                if jsonl_file:
+                    jsonl_file.write(
+                        json.dumps(
+                            {
+                                "jsonl_line": line_idx,
+                                "question": question_text,
+                                "answer_letter": predicted,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+
                 compile_vision_ms = perf.get("compile_vision_ms", 0)
                 compile_str = f" [compile:{compile_vision_ms:.0f}ms]" if compile_vision_ms > 0 else ""
                 total_e2e_ms = extract_ms + perf["vision_ms"] + perf["ttft_ms"] + perf["total_decode_ms"]
@@ -399,6 +422,23 @@ def run_eval(
                         "error": str(e),
                     }
                 )
+                if jsonl_file:
+                    jsonl_file.write(
+                        json.dumps(
+                            {
+                                "jsonl_line": line_idx,
+                                "question": question_text,
+                                "answer_letter": None,
+                                "error": str(e),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+
+        if jsonl_file:
+            jsonl_file.close()
+            logger.info(f"Question / answer JSONL written to {output_jsonl}")
 
         # Aggregate report
         logger.info("\n" + "=" * 70)
@@ -514,6 +554,12 @@ def main():
         default=None,
         help="Save per-video results to JSON file",
     )
+    parser.add_argument(
+        "--output-jsonl",
+        type=str,
+        default=None,
+        help="Save one JSON object per line: question, answer_letter, jsonl_line (and error if failed)",
+    )
 
     args = parser.parse_args()
 
@@ -533,6 +579,7 @@ def main():
         skip_download=args.skip_download,
         exact_jsonl=not args.unique_video_urls_only,
         unique_video_urls_only=args.unique_video_urls_only,
+        output_jsonl=args.output_jsonl,
     )
 
     if results and args.output_json:
