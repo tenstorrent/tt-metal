@@ -6,6 +6,7 @@ import pytest
 import ttnn
 
 from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
+from ...pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from ...pipelines.mochi.pipeline_mochi import MochiPipeline
 from ...pipelines.motif.pipeline_motif import MotifPipeline
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
@@ -61,6 +62,21 @@ targets_setup = {
             },
             "500": {"fid_valid_range": [77.21976, 81.9965743536], "clip_valid_range": [30.19901, 32.067120758600005]},
             "100": {"fid_valid_range": [171.065611, 181.64772969646], "clip_valid_range": [30.41629, 32.2978416994]},
+        },
+    },
+    "flux.2-dev": {
+        "hf_id": "black-forest-labs/FLUX.2-dev",
+        "num_inference_steps": 28,
+        "pipeline": Flux2Pipeline,
+        "device_params": {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": 32768,
+            "trace_region_size": 50000000,
+        },
+        "accuracy": {
+            "5000": {"fid_valid_range": [20.0, 35.0], "clip_valid_range": [28.0, 33.0]},
+            "500": {"fid_valid_range": [70.0, 100.0], "clip_valid_range": [28.0, 33.0]},
+            "100": {"fid_valid_range": [160.0, 200.0], "clip_valid_range": [28.0, 33.0]},
         },
     },
     "motif-image-6b-preview": {

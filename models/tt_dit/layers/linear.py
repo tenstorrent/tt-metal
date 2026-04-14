@@ -14,6 +14,7 @@ from .module import Module, Parameter
 
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.bfloat8_b: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
@@ -200,6 +201,10 @@ class ColParallelLinear(Module):
             weight = self.weight.data
 
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            needs_reshape = len(x.shape) <= 3
+            if needs_reshape:
+                x = ttnn.unsqueeze(x, 0)
+
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
@@ -211,6 +216,8 @@ class ColParallelLinear(Module):
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
             )
+            per_device_k = x.padded_shape[-1]
+            num_buffers = min(48, max(8, 49152 // max(per_device_k, 1)))
             outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
@@ -226,14 +233,18 @@ class ColParallelLinear(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                num_buffers_per_channel=num_buffers,
                 chunks=self.chunks if self.chunks is not None else 1,
             )
 
             if self.chunks is not None and (self.chunks > 1):
+                if needs_reshape:
+                    return [_apply_activation_fn(ttnn.squeeze(o, 0), self.activation_fn) for o in outputs]
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
             else:
                 output = outputs[0]
+                if needs_reshape:
+                    output = ttnn.squeeze(output, 0)
         else:
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)

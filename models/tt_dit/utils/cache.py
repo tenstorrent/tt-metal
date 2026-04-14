@@ -149,4 +149,7 @@ def model_cache_dir(
 
 
 def _cache_root() -> str | None:
-    return os.environ.get("TT_DIT_CACHE_DIR")
+    cache_dir = os.environ.get("TT_DIT_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "tt_dit")
+    return cache_dir
