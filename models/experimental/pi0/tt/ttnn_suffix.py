@@ -23,7 +23,11 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import SuffixConfig
-from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, precompute_sinusoidal_scaling_factor, tensor_1d_to_2d_ttnn
+from .ttnn_common import (
+    create_sinusoidal_pos_embedding_ttnn,
+    precompute_sinusoidal_scaling_factor,
+    tensor_1d_to_2d_ttnn,
+)
 
 
 class SuffixEmbeddingTTNN:
@@ -139,11 +143,20 @@ class SuffixEmbeddingTTNN:
         Create timestep embedding.
 
         Args:
-            timestep: TTNN tensor (batch_size,)
+            timestep: TTNN tensor — either (batch_size,) scalar or a
+                pre-computed embedding (batch_size, expert_width). When the
+                caller passes a pre-computed embedding (shape rank ≥ 2 and
+                last dim == expert_width) it is returned as-is, avoiding the
+                bf16 precision loss that results from multiplying large
+                sinusoidal scaling factors on device.
 
         Returns:
             TTNN tensor (batch_size, expert_width)
         """
+        # Fast path: pre-computed embedding already supplied by PI0ModelTTNN.
+        if len(timestep.shape) >= 2 and timestep.shape[-1] == self.config.expert_width:
+            return timestep
+
         return create_sinusoidal_pos_embedding_ttnn(
             timestep,
             self.config.expert_width,
@@ -326,13 +339,25 @@ def convert_suffix_weights_to_ttnn(
     Args:
         torch_weights: Dictionary of PyTorch weight tensors
         device: TTNN device
-        dtype: TTNN data type (default: bfloat8_b for weights, bfloat16 for bias)
+        dtype: TTNN data type (default: bfloat16 for both weights and bias)
 
     Returns:
         Dictionary of TTNN weight tensors
+
+    Note:
+        Suffix weights (action_in_proj, action_out_proj, state_proj,
+        action_time_mlp) are tiny (<1 MB total) and only run once per
+        denoise step (and once at the end for action_out_proj). They have
+        no speed impact on the hot loop. Previously stored as bfloat8_b,
+        which catastrophically quantized `action_out_proj.weight` (32×1024)
+        and destroyed the gripper dim's tight near-constant output: on the
+        LIBERO frozen input, torch gripper ∈ [0.974, 0.998] but TTNN gripper
+        ∈ [-0.516, 0.969], giving a per-dim PCC of only 0.36 and breaking
+        closed-loop task success. Storing them in bfloat16 recovers the
+        precision with no measurable speed cost.
     """
     if dtype is None:
-        weight_dtype = ttnn.bfloat8_b
+        weight_dtype = ttnn.bfloat16
         bias_dtype = ttnn.bfloat16
     else:
         weight_dtype = dtype
