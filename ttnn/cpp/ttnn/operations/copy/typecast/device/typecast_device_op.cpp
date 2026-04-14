@@ -119,29 +119,11 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape());
     }
 
-    // For cross-layout, memory layout matching is not required (handled by composition at higher level
-    // or future sharded cross-layout support). For same-layout, enforce matching.
-    if (!cross_layout) {
-        const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
-        TT_FATAL(
-            input_tensor_memory_layout == out_memory_config.memory_layout(),
-            "Typecast operation requires Input and Output memory layout to match when layouts are the same. "
-            "Input layout: {}, Output layout: {}",
-            input_tensor_memory_layout,
-            out_memory_config.memory_layout());
-    }
-
     if (cross_layout) {
         TT_FATAL(
             !preallocated_output_tensor.has_value(),
             "Preallocated output tensor is not supported for cross-layout typecast.");
         TT_FATAL(!args.sub_core_grids.has_value(), "sub_core_grids is not supported for cross-layout typecast.");
-        // Cross-layout currently requires interleaved memory
-        TT_FATAL(
-            !input_tensor.is_sharded(), "Cross-layout typecast currently requires interleaved (non-sharded) input.");
-        TT_FATAL(
-            out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Cross-layout typecast currently requires interleaved output memory config.");
     }
 
     if (input_tensor.is_sharded()) {
