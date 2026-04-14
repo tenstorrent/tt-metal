@@ -497,14 +497,8 @@ def rsqrt(x, *args, **kwargs):
 
 
 def logit(x, *args, eps, **kwargs):
-    if eps is not None and eps > 0.5:
-        # Manual implementation to avoid platform-dependent UB in torch.special.logit
-        # when eps > 0.5 (std::clamp with lo > hi is undefined behavior).
-        lo = 1.0 - eps
-        hi = eps
-        x = torch.clamp(x, lo, hi)
-        return torch.log(x / (1.0 - x))
-    return torch.special.logit(x, eps=eps)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    return golden_function(x, eps=eps)
 
 
 def polygamma(x, *args, k, **kwargs):
