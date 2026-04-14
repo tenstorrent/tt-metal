@@ -17,7 +17,7 @@ inline void llk_math_eltwise_unary_sfpu_expm1_init() {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_expm1(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_expm1<APPROXIMATE, is_fp32_dest_acc_en, 8>, dst_index, vector_mode);
 }
 

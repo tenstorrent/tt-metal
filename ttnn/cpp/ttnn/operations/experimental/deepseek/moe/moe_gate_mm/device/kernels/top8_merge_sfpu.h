@@ -437,8 +437,7 @@ inline void _llk_math_top8_merge_init_() {
 
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
-    _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_top8_merge_<column_idx>, 0, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_top8_merge_<column_idx>, 0, VectorMode::RC_custom);
 }
 
 #endif
