@@ -15,7 +15,13 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
+#include <cmath>
+#include <numeric>
 
 namespace ttnn::operations::reduction {
 
@@ -29,7 +35,8 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool use_legacy = false);
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -200,7 +207,7 @@ static Tensor reduce_impl(
             TT_THROW("Unsupported dim");
         }
 
-        int reduced_volume = 1;
+        uint64_t reduced_volume = 1;
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
         }
@@ -266,21 +273,33 @@ static Tensor std_var_impl(
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_legacy) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    // If the input tensor is a rank 0 tensor, return NaN
-    if (rank == 0) {
+    uint64_t reduced_volume = 1;
+    if (rank != 0) {
+        for (int axis : dim) {
+            reduced_volume *= input_shape[axis];
+        }
+    }
+
+    if (rank == 0 || reduced_volume == 1) {
+        // If the input tensor is a rank 0 tensor (i.e. scalar), or reduction would produce a scalar,
+        // return NaN or 0.0, depending on correction. This matches PyTorch behavior.
+        float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
-        auto output_tensor = ttnn::full_like(
-            input_tensor_arg,
-            std::numeric_limits<float>::quiet_NaN(),
-            /*dtype=*/std::nullopt,
-            /*layout=*/std::nullopt,
-            /*device=*/std::nullopt,
+        // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
+        auto output_tensor = ttnn::full(
+            input_tensor_arg.logical_shape(),
+            fill_value,
+            input_tensor_arg.dtype(),
+            Layout::TILE,
+            std::ref(*input_tensor_arg.device()),
             memory_config);
+
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
@@ -289,44 +308,160 @@ static Tensor std_var_impl(
         return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
-    int reduced_volume = 1;
-    for (int axis : dim) {
-        reduced_volume *= input_shape[axis];
+    // Validate that the divisor is positive (Bessel's correction subtracts 1).
+    // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
+    uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
+    TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
+
+    if (use_legacy) {
+        // Classical two-pass variance via the identity  Var = E[X^2] - (E[X])^2.
+        // Let N = reduced_volume,  D = divisor  (D = N-1 when correction=true, D = N otherwise).
+        // The target formula is:
+        //   Var = Sum(X^2) / D  -  Sum(X)^2 / (N * D)
+        // This gives population variance when D = N, and sample variance
+        // (Bessel-corrected) when D = N-1.
+        // We bake the correction into the reduction scalars to minimize number of
+        // operations. The code computes:
+        //   mean_sq_tensor = Sum(X^2) * sq_scalar          ... (A)
+        //   mean_tensor    = Sum(X)   * mean_scalar         ... (B)
+        //   output         = (A) - (B)^2
+        //                  = Sum(X^2) * sq_scalar  -  Sum(X)^2 * mean_scalar^2
+        //
+        // Matching term-by-term against the target formula:
+        //   sq_scalar       = 1 / D
+        //   mean_scalar^2   = 1 / (N * D)   =>   mean_scalar = 1 / sqrt(N * D)
+        //
+        // For correction=false  (D = N):
+        //   sq_scalar   = 1/N and mean_scalar = 1/sqrt(N^2) = 1/N
+        //   (both equal -> population variance)
+        // For correction=true   (D = N-1):
+        //   sq_scalar   = 1/(N-1)
+        //   mean_scalar = 1/sqrt(N*(N-1))
+        //   output      = Sum(X^2)/(N-1) - Sum(X)^2/(N*(N-1))  (sample variance)
+        float N = static_cast<float>(reduced_volume);
+        float D = static_cast<float>(divisor);
+        float sq_scalar = scalar / D;
+        float mean_scalar = scalar / std::sqrt(N * D);
+
+        auto mean_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
+            input_tensor_arg,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            mean_scalar,
+            non_height_width_dims,
+            sub_core_grids);
+
+        auto mean_square_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
+            ttnn::pow(input_tensor_arg, 2.0f, memory_config),
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            sq_scalar,
+            non_height_width_dims,
+            sub_core_grids);
+
+        Tensor output_tensor = ttnn::subtract(
+            mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
+
+        // The two-pass formula can yield slightly negative values due to
+        // catastrophic cancellation, especially in low-precision (bfloat16).
+        // Clamp to zero because negative variance is meaningless, and sqrt of
+        // a negative value would produce inf when computing std.
+        output_tensor = ttnn::relu(output_tensor, memory_config);
+
+        if constexpr (reduce_type == reduction_common::ReduceType::Std) {
+            output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
+        }
+        return output_tensor;
     }
 
-    // Bessel's correction (i.e. divisor of N-1)
-    if (correction) {
-        reduced_volume -= 1;
+    // Welford single-pass algorithm
+    bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
+    bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
+
+    // Determine the reduce dimension and prepare the input tensor.
+    //   single H or W:      direct H-reduce or W-reduce kernel
+    //   single non-H/W dim: permute to H position, H-reduce, inverse permute
+    //   2+ dims:            unified HW path with reduce_batch_size
+    tt::tt_metal::ReduceOpDim reduce_dim;
+    ttnn::Tensor input_tensor = input_tensor_arg;
+    uint32_t reduce_batch_size = 1;
+    bool needs_inverse_permute = false;
+    ttnn::SmallVector<int64_t> permute_swap;
+
+    if (single_h || single_w) {
+        reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
+        // 1D tensors need reshaping to 2D because the kernel requires at least 2 dimensions.
+        if (rank == 1) {
+            input_tensor = ttnn::reshape(input_tensor, ttnn::Shape{1, input_shape[0]});
+        }
+    } else if (dim.size() == 1) {
+        // Single non-H/W dim: permute to H position, H-reduce, inverse permute.
+        reduce_dim = tt::tt_metal::ReduceOpDim::H;
+        int target_dim = dim[0];
+        permute_swap.resize(rank);
+        std::iota(permute_swap.begin(), permute_swap.end(), 0);
+        std::swap(permute_swap[target_dim], permute_swap[rank - 2]);
+        input_tensor = ttnn::permute(input_tensor, permute_swap, memory_config);
+        needs_inverse_permute = true;  // swap is its own inverse
+    } else {
+        // 2+ dims: unified HW path.  Permute all reduction dims to the end,
+        // last two become H and W.  Extra reduction dims (if any) fold into
+        // the NC batch dimension; reduce_batch_size tells the writer kernel
+        // how many consecutive NC slices to group per output element.
+        reduce_dim = tt::tt_metal::ReduceOpDim::HW;
+
+        // Build permutation: kept dims first (in original order), then all
+        // reduction dims.  dim is already sorted ascending by generate_reduce_dim.
+        ttnn::SmallVector<int64_t> perm;
+        perm.reserve(rank);
+        for (uint32_t i = 0; i < rank; ++i) {
+            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
+                perm.push_back(static_cast<int64_t>(i));
+            }
+        }
+        for (int d : dim) {
+            perm.push_back(static_cast<int64_t>(d));
+        }
+
+        // ttnn::permute checks for identity internally and skips data movement if not needed.
+        input_tensor = ttnn::permute(input_tensor, perm, memory_config);
+
+        // Extra reduction dims beyond the last two contribute to reduce_batch_size.
+        for (size_t i = 0; i < dim.size() - 2; ++i) {
+            reduce_batch_size *= input_shape[dim[i]];
+        }
     }
-    TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
 
-    scalar /= reduced_volume;
+    if (input_tensor.layout() != Layout::TILE) {
+        ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        input_tensor = ttnn::tilize_with_val_padding(
+            input_tensor, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+    }
 
-    auto mean_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
-        input_tensor_arg,
-        dim,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
+    auto reduce_math = (reduce_type == reduction_common::ReduceType::Std) ? tt::tt_metal::ReduceOpMath::STD
+                                                                          : tt::tt_metal::ReduceOpMath::VAR;
+    ttnn::Tensor output_tensor = ttnn::prim::welford_reduce(
+        input_tensor,
+        reduce_math,
+        reduce_dim,
         scalar,
-        non_height_width_dims,
-        sub_core_grids);
-
-    auto mean_square_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
-        ttnn::pow(input_tensor_arg, 2.0f, memory_config),
-        dim,
-        keepdim,
-        memory_config_arg,
+        memory_config,
+        std::nullopt,
         compute_kernel_config,
-        scalar,
-        non_height_width_dims,
-        sub_core_grids);
-    Tensor output_tensor =
-        ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
-    if constexpr (reduce_type == reduction_common::ReduceType::Std) {
-        output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
+        correction,
+        sub_core_grids,
+        reduce_batch_size);
+
+    if (needs_inverse_permute) {
+        output_tensor = ttnn::permute(output_tensor, permute_swap, memory_config);
     }
-    return output_tensor;
+
+    // Compensate for any shape adjustments applied to the input tensor.
+    return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
 }
 
 template <reduction_common::ReduceType reduce_type>
@@ -341,7 +476,8 @@ Tensor non_height_width_reduce(
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<int> dims,
     const std::optional<MemoryConfig>& memory_config_arg,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
@@ -351,12 +487,18 @@ Tensor non_height_width_reduce(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         arch,
         std::nullopt,
-        is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
+        is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+    auto tensor_to_reduce = input_tensor;
+    if (tensor_to_reduce.layout() != Layout::TILE) {
+        auto padded_shape = data_movement::pad_to_tile_shape(tensor_to_reduce.padded_shape());
+        tensor_to_reduce = ttnn::tilize_with_val_padding(
+            tensor_to_reduce, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+    }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-        input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
+        tensor_to_reduce, dims, /*output=*/std::nullopt, memory_config, config, sub_core_grids);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
@@ -372,14 +514,33 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_legacy) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-    if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
+
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Std || reduce_type == reduction_common::ReduceType::Var) {
+        return std_var_impl<reduce_type>(
+            input_tensor_arg,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            non_height_width_dims,
+            correction,
+            sub_core_grids,
+            use_legacy);
+    }
+
+    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
+    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+
+    // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
+    if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
@@ -399,8 +560,8 @@ Tensor reduce(
                 return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
             }
 
-            input_tensor =
-                non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
+            input_tensor = non_height_width_reduce(
+                input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config, sub_core_grids);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(
@@ -408,19 +569,6 @@ Tensor reduce(
             }
             dim = height_width_dims;
         }
-    }
-    if constexpr (
-        reduce_type == reduction_common::ReduceType::Std || reduce_type == reduction_common::ReduceType::Var) {
-        return std_var_impl<reduce_type>(
-            input_tensor,
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            correction,
-            sub_core_grids);
     }
     return reduce_impl<reduce_type>(
         input_tensor,
@@ -542,7 +690,8 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_legacy) {
     return operations::reduction::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -551,7 +700,8 @@ Tensor std(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        use_legacy);
 }
 
 Tensor var(
@@ -562,7 +712,8 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_legacy) {
     return operations::reduction::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
@@ -571,7 +722,8 @@ Tensor var(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        use_legacy);
 }
 
 }  // namespace ttnn

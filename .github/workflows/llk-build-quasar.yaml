@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 env:
-  LLK_PATH: tt_metal/third_party/tt_llk
+  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   generate-matrix:
@@ -60,8 +60,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -93,7 +91,7 @@ jobs:
 
       # Step 4: Upload JUnit report for compiling elfs
       - name: Upload JUnit report for compiling elfs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: >-

@@ -35,11 +35,11 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import StateDictWeightProv
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
 )
+from models.demos.deepseek_v3_b1.weights.prepare import prepare_embedding_weights, prepare_lm_head_weights
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # Synthetic weight provider: same layout as prepare_* (state dict + move_to_device); used for pipeline tests.

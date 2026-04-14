@@ -5,22 +5,24 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x32 or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts
+    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
     --image <docker-image>              Docker image to use
 
 Optional:
-    --config <4x32|8x16>                Mesh configuration (default: 4x32)
+    --config <4x8|4x32|8x16>           Mesh configuration (default: 4x32)
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
+                                        4x8 default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default: tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+    --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --help                              Display this help message and exit
 
 Example:
@@ -33,6 +35,7 @@ EOF
 HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="fabric_test_logs"
+MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 CONFIG="4x32"
@@ -40,6 +43,7 @@ MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
+FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -65,8 +69,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            if [[ "$CONFIG" != "4x32" && "$CONFIG" != "8x16" ]]; then
-                echo "Error: --config must be either '4x32' or '8x16'"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" ]]; then
+                echo "Error: --config must be one of '4x8', '4x32', or '8x16'"
                 echo ""
                 show_help
                 exit 1
@@ -106,6 +110,14 @@ while [[ $# -gt 0 ]]; do
             TEST_CONFIG="$2"
             shift 2
             ;;
+        --filter)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --filter requires a non-empty value"
+                exit 1
+            fi
+            FILTER="$2"
+            shift 2
+            ;;
         --help)
             show_help
             exit 0
@@ -136,7 +148,9 @@ fi
 
 # Set mesh graph descriptor path based on config if not explicitly provided
 if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
-    if [[ "$CONFIG" == "4x32" ]]; then
+    if [[ "$CONFIG" == "4x8" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8"
+    elif [[ "$CONFIG" == "4x32" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x16"
@@ -157,34 +171,61 @@ echo "Output directory: $OUTPUT_DIR"
 echo "Mesh graph descriptor: $MESH_GRAPH_DESC_PATH"
 echo "Test binary: $TEST_BINARY"
 echo "Test config: $TEST_CONFIG"
+if [[ -n "$FILTER" ]]; then
+    echo "Filter: $FILTER"
+fi
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
 
-./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-    --empty-entrypoint \
-    --bind-to none \
-    --host "$HOSTS" \
-    -np 1 \
-    -x TT_MESH_ID=0 \
-    -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-    -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
-    -np 1 \
-    -x TT_MESH_ID=0 \
-    -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-    -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
-    -np 1 \
-    -x TT_MESH_ID=0 \
-    -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-    -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" : \
-    -np 1 \
-    -x TT_MESH_ID=0 \
-    -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-    -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
-    --test_config "$TEST_CONFIG" |& tee "$LOG_FILE"
+EXTRA_BINARY_ARGS=""
+if [[ "$TEST_BINARY" == *test_tt_fabric ]]; then
+    EXTRA_BINARY_ARGS="--show-progress --show-workers"
+fi
+if [[ -n "$FILTER" ]]; then
+    EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
+fi
+
+if [[ "$CONFIG" == "4x8" ]]; then
+    SINGLE_HOST="${HOSTS%%,*}"
+    echo "Running single-host 4x8 on: $SINGLE_HOST"
+    echo ""
+
+    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+        --empty-entrypoint \
+        --bind-to none \
+        --host "$SINGLE_HOST" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+else
+    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+        --empty-entrypoint \
+        --bind-to none \
+        --host "$HOSTS" \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
+        -np 1 \
+        -x TT_MESH_ID=0 \
+        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+fi
 
 echo ""
 echo "=========================================="
