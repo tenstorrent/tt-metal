@@ -25,7 +25,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import profiler
+from conftest import is_galaxy
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -53,6 +54,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
 ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
 
 
+@pytest.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
@@ -61,7 +63,13 @@ ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024, 6400])
-@pytest.mark.parametrize("num_layers", [12])
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        12,
+        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+    ],
+)
 @pytest.mark.parametrize(
     "n_routed_experts, capacity_factor, gate_fallback_mode",
     [
