@@ -4,107 +4,62 @@
 
 #pragma once
 
-#include <atomic>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 
-inline std::int32_t amomin(std::int32_t volatile *ptr, std::int32_t const against)
+inline std::int32_t amomin(std::int32_t *ptr, std::int32_t const against)
 {
-    std::int32_t old_val;
-    asm volatile("amomin.w %[ret], %[against_val], (%[addr_val])\n" : [ret] "=r"(old_val) : [against_val] "r"(against), [addr_val] "r"(ptr));
+    std::int32_t old;
+    asm volatile("amomin.w %[old], %[against], (%[ptr])\n" : [old] "=r"(old), "+m"(*ptr) : [against] "r"(against), [ptr] "r"(ptr));
 
-    return old_val;
+    return old;
 }
 
-inline std::uint32_t amominu(std::uint32_t volatile *ptr, std::uint32_t const against)
+inline std::uint32_t amominu(std::uint32_t *ptr, std::uint32_t const against)
 {
-    std::uint32_t old_val;
-    asm volatile("amominu.w %[ret], %[against_val], (%[addr_val])\n" : [ret] "=r"(old_val) : [against_val] "r"(against), [addr_val] "r"(ptr));
+    std::uint32_t old;
+    asm volatile("amominu.w %[old], %[against], (%[ptr])\n" : [old] "=r"(old), "+m"(*ptr) : [against] "r"(against), [ptr] "r"(ptr));
 
-    return old_val;
+    return old;
 }
 
-inline std::int32_t amomax(std::int32_t volatile *ptr, std::int32_t const against)
+inline std::int32_t amomax(std::int32_t *ptr, std::int32_t const against)
 {
-    std::int32_t old_val;
-    asm volatile("amomax.w %[ret], %[against_val], (%[addr_val])\n" : [ret] "=r"(old_val) : [against_val] "r"(against), [addr_val] "r"(ptr));
+    std::int32_t old;
+    asm volatile("amomax.w %[old], %[against], (%[ptr])\n" : [old] "=r"(old), "+m"(*ptr) : [against] "r"(against), [ptr] "r"(ptr));
 
-    return old_val;
+    return old;
 }
 
-inline std::uint32_t amomaxu(std::uint32_t volatile *ptr, std::uint32_t const against)
+inline std::uint32_t amomaxu(std::uint32_t *ptr, std::uint32_t const against)
 {
-    std::uint32_t old_val;
-    asm volatile("amomaxu.w %[ret], %[against_val], (%[addr_val])\n" : [ret] "=r"(old_val) : [against_val] "r"(against), [addr_val] "r"(ptr));
+    std::uint32_t old;
+    asm volatile("amomaxu.w %[old], %[against], (%[ptr])\n" : [old] "=r"(old), "+m"(*ptr) : [against] "r"(against), [ptr] "r"(ptr));
 
-    return old_val;
+    return old;
 }
 
-template <typename T>
-inline std::atomic<T> *mk_atomic_ptr(T *ptr)
+template <typename T, std::enable_if_t<std::is_trivially_copyable_v<T>, int> = 0>
+inline T load_acquire(T *ptr)
 {
-    // C++ is very persnickety... only way to get around a compile error
-    // was to invite satan into our living room and use reinterpret_cast
-    std::atomic<T> *p_ato = reinterpret_cast<std::atomic<std::uint32_t> *>(ptr);
-    return p_ato;
+    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_acquire: operand must be 32bit");
+
+    std::uint32_t ret;
+    asm volatile("amoadd.w.aq %[ret], zero, (%[ptr])" : [ret] "=r"(ret), "+m"(*ptr) : [ptr] "r"(ptr));
+
+    T result;
+    std::memcpy(&result, &ret, sizeof(result));
+    return result;
 }
 
-// Only meant to be used with 32-bit types
-template <typename T>
-inline T load_acquire(std::atomic<T> *p_ato)
+template <typename T, std::enable_if_t<std::is_trivially_copyable_v<T>, int> = 0>
+inline void store_release(T *ptr, T val)
 {
-    T ret;
-    T volatile *addr = reinterpret_cast<T volatile *>(p_ato);
-    asm volatile("amoadd.w.aq %[ret], zero, (%[addr])\n" : [ret] "=r"(ret) : [addr] "r"(addr));
+    static_assert(sizeof(T) == sizeof(std::uint32_t), "store_release: operand must be 32bit");
 
-    return ret;
+    std::uint32_t val_raw;
+    std::memcpy(&val_raw, &val, sizeof(val_raw));
+
+    asm volatile("amoswap.w.rl x0, %[val], (%[ptr])" : "+m"(*ptr) : [val] "r"(val_raw), [ptr] "r"(ptr));
 }
-
-// Only meant to be used with 32-bit types
-// Returns original value from before store
-template <typename T>
-inline T store_release(std::atomic<T> *p_ato, T val)
-{
-    T ret;
-    T volatile *addr = reinterpret_cast<T volatile *>(p_ato);
-    asm volatile("amoswap.w.rl %[ret], %[val], (%[addr])\n" : [ret] "=r"(ret) : [val] "r"(val), [addr] "r"(addr));
-
-    return ret;
-}
-
-#if 0
-//I started working on this to amuse myself while my tests were running.
-//None of this is tested
-typedef std::atomic<std::int32_t>* semaphore;
-
-semaphore create_semaphore_at(std::int32_t *l1_addr) {
-    semaphore ret = reinterpret_cast<std::atomic<std::int32_t> *>(l1_addr);
-    store_release(ret, std::int32_t(0));
-    return ret;
-}
-
-inline void semaphore_inc(semaphore s) {
-    std::atomic_fetch_add(s, std::int32_t(1));
-}
-
-inline void semaphore_dec(semaphore s) {
-    std::atomic_fetch_add(s, std::int32_t(-1));
-}
-
-void spinlock_on_nonzero_semaphore(semaphore s) {
-    while (load_acquire(s) != 0);
-}
-
-struct mutex {
-    enum {
-        AVAIL = 0,
-        LOCKED
-    };
-
-    std::uint32_t val = AVAIL;
-
-    std::atomic<std::uint32_t>* operator&() {
-        return reinterpret_cast<std::atomic<std::int32_t> *>(&val);
-    }
-};
-
-#endif
