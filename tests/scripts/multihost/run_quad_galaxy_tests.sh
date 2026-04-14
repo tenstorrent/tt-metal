@@ -17,7 +17,7 @@ run_quad_galaxy_unit_tests() {
   # tt-run --tcp-interface handles tcp and tag flags
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
-  local mpi_host="--host g05glx04,g05glx03,g05glx02,g05glx01"
+  local mpi_host="--host UF-EV-C5-GWH02,UF-EV-C5-GWH01,UF-EV-C4-GWH02,UF-EV-C4-GWH01"
   local mpi_args="$mpi_host $mpi_args_base"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
@@ -92,7 +92,7 @@ setup_dual_galaxy_env() {
 
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
-    export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    export HOSTS="UF-EV-C5-GWH02,UF-EV-C5-GWH01,UF-EV-C4-GWH02,UF-EV-C4-GWH01"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
