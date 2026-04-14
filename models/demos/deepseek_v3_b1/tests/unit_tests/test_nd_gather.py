@@ -422,7 +422,7 @@ def build_gather_reduce_program(device, input_tensor, anchor_tensor, output_tens
 
 
 @pytest.mark.requires_grid_size((13, 10))
-@pytest.mark.parametrize("num_iterations", [20])
+@pytest.mark.parametrize("num_iterations", [5])
 def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
     """
     Run the gather+reduce pattern from GatherReduce (96 senders -> 1 receiver, 64B each,

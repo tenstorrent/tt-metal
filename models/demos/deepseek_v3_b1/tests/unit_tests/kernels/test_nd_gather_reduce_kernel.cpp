@@ -100,24 +100,9 @@ void kernel_main() {
         constexpr uint32_t out_cb = get_named_compile_time_arg_val("out_cb");
         constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
 
-        // WORKAROUND: Full CB state reset — firmware may not reinitialize
-        // all LocalCBInterface fields between generic_op program executions.
-        // Mirrors what setup_local_cb_read_write_interfaces does at program load.
-#if defined(UCK_CHLKC_UNPACK)
-        // TRISC0 (unpack) owns fifo_rd_ptr for both scratch_cb and out_cb
-        {
-            LocalCBInterface& si = get_local_cb_interface(scratch_cb);
-            si.fifo_rd_ptr = si.fifo_limit - si.fifo_size;
-            si.tiles_acked_received_init = 0;
-        }
-        {
-            LocalCBInterface& oi = get_local_cb_interface(out_cb);
-            oi.fifo_rd_ptr = oi.fifo_limit - oi.fifo_size;
-            oi.tiles_acked_received_init = 0;
-        }
-#endif
+        // WORKAROUND: Reset out_cb pack state on TRISC2 — firmware may not
+        // fully reinitialize LocalCBInterface between generic_op executions.
 #if defined(UCK_CHLKC_PACK)
-        // TRISC2 (pack) owns fifo_wr_ptr for out_cb
         {
             LocalCBInterface& oi = get_local_cb_interface(out_cb);
             oi.fifo_wr_ptr = oi.fifo_limit - oi.fifo_size;
