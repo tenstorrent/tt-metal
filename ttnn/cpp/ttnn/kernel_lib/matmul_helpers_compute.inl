@@ -197,7 +197,7 @@ ALWI void matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles) {
 // Layer 4: Compound patterns
 // =============================================================================
 
-template <MatmulMode mode>
+template <MatmulMode mode, typename PostComputeFn>
 ALWI void matmul_accumulate_and_pack(
     const MatmulConfig& cfg,
     uint32_t in0_index_start,
@@ -206,12 +206,14 @@ ALWI void matmul_accumulate_and_pack(
     uint32_t in1_stride,
     uint32_t dest_cb_id,
     uint32_t num_tiles,
-    bool reload) {
+    bool reload,
+    PostComputeFn post_compute) {
     tile_regs_acquire();
     if (reload) {
         matmul_reload_partials<mode>(cfg, num_tiles);
     }
     matmul_accumulate<mode>(cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
+    post_compute(num_tiles);
     matmul_pack_to_cb(dest_cb_id, num_tiles);
 }
 
@@ -297,6 +299,18 @@ ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uin
         detail::matmul_single<mode>(cfg, 0, 0, dst_idx);
         cb_pop_front(cfg.in0_cb_id, 1);
     }
+}
+
+template <MatmulMode mode>
+ALWI void matmul_reduce_w_and_pack(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx, uint32_t out_cb) {
+    tile_regs_acquire();
+    matmul_reduce_w<mode>(cfg, count, dst_idx);
+    tile_regs_commit();
+    cb_reserve_back(out_cb, 1);
+    tile_regs_wait();
+    pack_tile(dst_idx, out_cb);
+    tile_regs_release();
+    cb_push_back(out_cb, 1);
 }
 
 template <MatmulMode mode>
@@ -389,13 +403,13 @@ ALWI void matmul_and_pack_absolute(
     uint32_t in1_start,
     uint32_t inner_dim,
     uint32_t in1_stride,
-    uint32_t out_cb,
-    uint32_t subblock_h,
-    uint32_t subblock_w,
     uint32_t out_num_cols,
     uint32_t row_offset,
     uint32_t col_offset,
     PostPackFn post_pack) {
+
+    const uint32_t subblock_h = cfg.rt_dim;
+    const uint32_t subblock_w = cfg.ct_dim;
 
     tile_regs_acquire();
 #ifdef ARCH_BLACKHOLE
@@ -411,7 +425,7 @@ ALWI void matmul_and_pack_absolute(
     if constexpr (blocked_pack) {
         for (uint32_t r = 0; r < subblock_h; r++) {
             uint32_t out_row_offset = (r + row_offset) * out_num_cols;
-            pack_tile<true>(dst_idx, out_cb, out_row_offset + col_offset);
+            pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + col_offset);
             dst_idx += subblock_w;
         }
     } else
@@ -420,7 +434,7 @@ ALWI void matmul_and_pack_absolute(
         for (uint32_t r = 0; r < subblock_h; r++) {
             uint32_t out_row_offset = (r + row_offset) * out_num_cols;
             for (uint32_t c = 0; c < subblock_w; c++) {
-                pack_tile<true>(dst_idx, out_cb, out_row_offset + col_offset + c);
+                pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + col_offset + c);
                 dst_idx++;
             }
         }
@@ -437,9 +451,10 @@ ALWI void matmul_blocks_absolute(
     uint32_t K,
     uint32_t in0_num_subblocks,
     uint32_t in1_num_subblocks,
-    uint32_t subblock_h,
-    uint32_t subblock_w,
     PostComputeFn post_compute) {
+
+    const uint32_t subblock_h = cfg.rt_dim;
+    const uint32_t subblock_w = cfg.ct_dim;
 
     matmul_init_short<mode>(cfg);
 

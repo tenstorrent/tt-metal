@@ -175,6 +175,78 @@ struct MatmulBlockShape {
 };
 
 // =============================================================================
+// Functor types for helper callbacks
+// =============================================================================
+//
+// Several helpers accept callback functors that fire at specific points in the
+// DST lifecycle. These let callers fuse operations into the matmul pipeline
+// without breaking DST or CB encapsulation.
+//
+// ── PostComputeFn ───────────────────────────────────────────────────────────
+//
+// Fires AFTER matmul accumulation, BEFORE tile_regs_commit. The matmul result
+// tiles sit in DST[0..num_tiles-1] and can be modified in place.
+//
+//   tile_regs_acquire()               // helper owns this
+//   matmul_accumulate(...)            // tiles now in DST
+//   post_compute(num_tiles)           // <── YOUR CODE RUNS HERE
+//   tile_regs_commit()                // helper owns this
+//   ...pack...
+//   tile_regs_release()               // helper owns this
+//
+// SAFE operations inside PostComputeFn:
+//   - SFPU tile ops:  relu_tile(i), gelu_tile(i), recip_tile(i), exp_tile(i)
+//   - Elementwise:    add_tiles(src_a_cb, src_b_cb, a_idx, b_idx, dst_idx)
+//   - Init calls:     recip_tile_init(), add_tiles_init(), etc.
+//   - CB reads:       cb_wait_front(some_cb, n) — ONLY if tiles are guaranteed
+//                     to already be produced. If they are not yet produced,
+//                     the kernel WILL hang with DST locked. The helper cannot
+//                     prevent or detect this.
+//
+// FORBIDDEN inside PostComputeFn (will deadlock or corrupt DST state):
+//   - tile_regs_acquire / tile_regs_commit / tile_regs_wait / tile_regs_release
+//     The helper already holds the DST lock. Nested locking WILL deadlock.
+//   - pack_tile / cb_push_back / cb_reserve_back on the matmul output CB.
+//     The helper manages packing after PostComputeFn returns.
+//   - matmul_single / matmul_accumulate or any matmul LLK call.
+//     DST already contains the matmul result; a second matmul would corrupt it.
+//
+// PATTERN — define a struct, capture what you need, keep it simple:
+//
+//   struct MyPostCompute {
+//       uint32_t bias_cb;
+//       ALWI void operator()(uint32_t num_tiles) const {
+//           cb_wait_front(bias_cb, num_tiles);      // bias must be pre-produced
+//           add_tiles_init(bias_cb, bias_cb, true);
+//           for (uint32_t i = 0; i < num_tiles; i++) {
+//               add_tiles(bias_cb, bias_cb, 0, i, i);
+//           }
+//       }
+//   };
+//   matmul_blocks_absolute<BLOCK>(cfg, M, N, K, ..., MyPostCompute{bias_cb});
+//
+// ── PostPackFn ──────────────────────────────────────────────────────────────
+//
+// Fires AFTER the pack loop, BEFORE tile_regs_release. Used for side effects
+// that must happen while DST is still held (e.g., hardware semaphore posting).
+// Same FORBIDDEN rules as PostComputeFn: no DST locking, no packing, no matmul.
+//
+// ── Default functors ────────────────────────────────────────────────────────
+//
+// NoPostCompute and NoPostPack are no-ops that the compiler optimizes away
+// entirely. Pass them (or omit the argument) when no fused operation is needed.
+
+// Default no-op post-pack functor.
+struct NoPostPack {
+    ALWI void operator()() const {}
+};
+
+// Default no-op post-compute functor.
+struct NoPostCompute {
+    ALWI void operator()(uint32_t /* num_tiles */) const {}
+};
+
+// =============================================================================
 // Layer 0: Initialization
 // =============================================================================
 
@@ -341,13 +413,29 @@ ALWI void matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles);
 // =============================================================================
 
 /**
- * @brief Acquire + optional reload + accumulate + pack to output
+ * @brief Acquire + optional reload + accumulate + post_compute + pack to output
  *
- * Combines: tile_regs_acquire → [reload_partials] → accumulate → pack_to_cb
+ * Sequence: acquire → [reload_partials] → accumulate → post_compute(num_tiles) →
+ *           commit → reserve(dest_cb) → wait → pack → release → push(dest_cb)
  *
- * Used by conv_bmm_tilize, conv3d, minimal_matmul, all_gather_minimal_matmul.
+ * Manages the full DST lifecycle and output CB reserve/pack/push.
+ * Do NOT call tile_regs_acquire/release around this — the helper owns DST.
+ *
+ * @tparam mode           TILE or BLOCK matmul mode.
+ * @tparam PostComputeFn  Functor called after accumulation, before commit.
+ *                        See functor rules above. (default: no-op)
+ *
+ * @param cfg             Matmul configuration.
+ * @param in0_index_start Starting in0 tile index (inputs must be waited by caller).
+ * @param in1_index_start Starting in1 tile index (inputs must be waited by caller).
+ * @param inner_dim       Number of accumulation iterations.
+ * @param in1_stride      Stride between in1 tile indices per iteration.
+ * @param dest_cb_id      Output CB to pack result into.
+ * @param num_tiles       Number of output tiles (must fit in DST).
+ * @param reload          If true, reload partials from cfg.partials_cb_id first.
+ * @param post_compute    PostComputeFn instance (default: no-op).
  */
-template <MatmulMode mode>
+template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
 ALWI void matmul_accumulate_and_pack(
     const MatmulConfig& cfg,
     uint32_t in0_index_start,
@@ -356,7 +444,8 @@ ALWI void matmul_accumulate_and_pack(
     uint32_t in1_stride,
     uint32_t dest_cb_id,
     uint32_t num_tiles,
-    bool reload = false);
+    bool reload = false,
+    PostComputeFn post_compute = {});
 
 /**
  * @brief Compute one output tile with per-tile CB management
@@ -413,6 +502,19 @@ template <MatmulMode mode>
 ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
 
 /**
+ * @brief Reduce-W via matmul with full DST lifecycle and output CB management.
+ *
+ * Sequence: acquire → [per-tile: wait(in0,1) → matmul → pop(in0,1)] →
+ *           commit → reserve(out_cb,1) → wait → pack → release → push(out_cb,1)
+ *
+ * Caller must wait on in1 (scaler/identity) before calling. The helper manages
+ * in0 CB wait/pop per tile, DST lifecycle, and output CB reserve/pack/push.
+ * Do NOT call tile_regs_acquire/release around this — the helper owns DST.
+ */
+template <MatmulMode mode>
+ALWI void matmul_reduce_w_and_pack(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx, uint32_t out_cb);
+
+/**
  * @brief SDPA reduce subblock inplace
  *
  * Per-subblock: acquire → matmul(0,0,0) → commit → pop(out,n) → pack(n) → release → push(n)
@@ -436,78 +538,6 @@ ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_s
  */
 template <MatmulMode mode>
 ALWI void matmul(const MatmulConfig& cfg, const MatmulBlockShape& shape);
-
-// =============================================================================
-// Functor types for helper callbacks
-// =============================================================================
-//
-// Several helpers accept callback functors that fire at specific points in the
-// DST lifecycle. These let callers fuse operations into the matmul pipeline
-// without breaking DST or CB encapsulation.
-//
-// ── PostComputeFn ───────────────────────────────────────────────────────────
-//
-// Fires AFTER matmul accumulation, BEFORE tile_regs_commit. The matmul result
-// tiles sit in DST[0..num_tiles-1] and can be modified in place.
-//
-//   tile_regs_acquire()               // helper owns this
-//   matmul_accumulate(...)            // tiles now in DST
-//   post_compute(num_tiles)           // <── YOUR CODE RUNS HERE
-//   tile_regs_commit()                // helper owns this
-//   ...pack...
-//   tile_regs_release()               // helper owns this
-//
-// SAFE operations inside PostComputeFn:
-//   - SFPU tile ops:  relu_tile(i), gelu_tile(i), recip_tile(i), exp_tile(i)
-//   - Elementwise:    add_tiles(src_a_cb, src_b_cb, a_idx, b_idx, dst_idx)
-//   - Init calls:     recip_tile_init(), add_tiles_init(), etc.
-//   - CB reads:       cb_wait_front(some_cb, n) — ONLY if tiles are guaranteed
-//                     to already be produced. If they are not yet produced,
-//                     the kernel WILL hang with DST locked. The helper cannot
-//                     prevent or detect this.
-//
-// FORBIDDEN inside PostComputeFn (will deadlock or corrupt DST state):
-//   - tile_regs_acquire / tile_regs_commit / tile_regs_wait / tile_regs_release
-//     The helper already holds the DST lock. Nested locking WILL deadlock.
-//   - pack_tile / cb_push_back / cb_reserve_back on the matmul output CB.
-//     The helper manages packing after PostComputeFn returns.
-//   - matmul_single / matmul_accumulate or any matmul LLK call.
-//     DST already contains the matmul result; a second matmul would corrupt it.
-//
-// PATTERN — define a struct, capture what you need, keep it simple:
-//
-//   struct MyPostCompute {
-//       uint32_t bias_cb;
-//       ALWI void operator()(uint32_t num_tiles) const {
-//           cb_wait_front(bias_cb, num_tiles);      // bias must be pre-produced
-//           add_tiles_init(bias_cb, bias_cb, true);
-//           for (uint32_t i = 0; i < num_tiles; i++) {
-//               add_tiles(bias_cb, bias_cb, 0, i, i);
-//           }
-//       }
-//   };
-//   matmul_blocks_absolute<BLOCK>(cfg, M, N, K, ..., MyPostCompute{bias_cb});
-//
-// ── PostPackFn ──────────────────────────────────────────────────────────────
-//
-// Fires AFTER the pack loop, BEFORE tile_regs_release. Used for side effects
-// that must happen while DST is still held (e.g., hardware semaphore posting).
-// Same FORBIDDEN rules as PostComputeFn: no DST locking, no packing, no matmul.
-//
-// ── Default functors ────────────────────────────────────────────────────────
-//
-// NoPostCompute and NoPostPack are no-ops that the compiler optimizes away
-// entirely. Pass them (or omit the argument) when no fused operation is needed.
-
-// Default no-op post-pack functor.
-struct NoPostPack {
-    ALWI void operator()() const {}
-};
-
-// Default no-op post-compute functor.
-struct NoPostCompute {
-    ALWI void operator()(uint32_t /* num_tiles */) const {}
-};
 
 // =============================================================================
 // Layer 7: Single-tile matmul with DST+CB encapsulation
@@ -553,9 +583,12 @@ ALWI void matmul_single_and_pack(
  * Manages DST lifecycle and absolute-offset pack loop.
  * On Blackhole, uses matmul_block_no_mop automatically.
  *
+ * Subblock dimensions are taken from cfg: cfg.rt_dim = subblock_h, cfg.ct_dim = subblock_w.
+ * Output CB is cfg.out_cb_id.
+ *
  * Caller responsibilities:
- *   - cb_reserve_back(out_cb, total_region) BEFORE the first call
- *   - cb_push_back(out_cb, ...) AFTER all subblocks are packed
+ *   - cb_reserve_back(cfg.out_cb_id, total_region) BEFORE the first call
+ *   - cb_push_back(cfg.out_cb_id, ...) AFTER all subblocks are packed
  *   - cb_wait_front on input CBs before calling
  *   - cb_pop_front on input CBs after all subblocks for this block are done
  *   - matmul init (mm_block_init_short or similar) before first call and
@@ -569,14 +602,12 @@ ALWI void matmul_single_and_pack(
  * @tparam PostPackFn     Functor called after pack, before release. See functor
  *                        rules above. Forbidden: DST locking, pack_tile, matmul.
  *
- * @param cfg             Matmul configuration (CB IDs, block dims, transpose).
+ * @param cfg             Matmul configuration. rt_dim = subblock_h, ct_dim = subblock_w,
+ *                        out_cb_id = output CB (must be pre-reserved by caller).
  * @param in0_start       Starting tile index in in0 CB.
  * @param in1_start       Starting tile index in in1 CB.
  * @param inner_dim       Number of accumulation iterations along inner dimension.
  * @param in1_stride      Stride between in1 tile indices per iteration.
- * @param out_cb          Output CB (must be pre-reserved by caller).
- * @param subblock_h      Output subblock height in tiles.
- * @param subblock_w      Output subblock width in tiles.
  * @param out_num_cols    Total columns in the output region (for offset calc).
  * @param row_offset      Row offset for this subblock in the output region.
  * @param col_offset      Column offset for this subblock in the output region.
@@ -589,9 +620,6 @@ ALWI void matmul_and_pack_absolute(
     uint32_t in1_start,
     uint32_t inner_dim,
     uint32_t in1_stride,
-    uint32_t out_cb,
-    uint32_t subblock_h,
-    uint32_t subblock_w,
     uint32_t out_num_cols,
     uint32_t row_offset,
     uint32_t col_offset,
@@ -631,9 +659,9 @@ ALWI void matmul_and_pack_absolute(
  * @param K               Full inner dimension in tiles (for in1 CB sizing).
  * @param in0_num_subblocks  Number of subblocks along M dimension.
  * @param in1_num_subblocks  Number of subblocks along N dimension.
- * @param subblock_h      Output subblock height in tiles.
- * @param subblock_w      Output subblock width in tiles.
  * @param post_compute    PostComputeFn instance (default: no-op).
+ *
+ * Subblock dimensions are taken from cfg: cfg.rt_dim = subblock_h, cfg.ct_dim = subblock_w.
  */
 template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
 ALWI void matmul_blocks_absolute(
@@ -643,8 +671,6 @@ ALWI void matmul_blocks_absolute(
     uint32_t K,
     uint32_t in0_num_subblocks,
     uint32_t in1_num_subblocks,
-    uint32_t subblock_h,
-    uint32_t subblock_w,
     PostComputeFn post_compute = {});
 
 }  // namespace compute_kernel_lib

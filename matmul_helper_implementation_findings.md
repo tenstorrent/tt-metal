@@ -41,16 +41,14 @@ Replaces the local `blocked_matmul_and_pack` function in `compute_streaming.hpp`
 - Input CB wait/pop — SDPA streaming manages these at a higher level
 - Matmul init — caller re-inits between subblocks when data format changes (e.g., after sub_exp)
 
-**Signature:**
+**Signature (simplified — subblock dims and out_cb derived from MatmulConfig):**
 ```cpp
 template <MatmulMode mode, bool blocked_pack = false, typename PostPackFn = NoPostPack>
 ALWI void matmul_and_pack_absolute(
-    const MatmulConfig& cfg,
+    const MatmulConfig& cfg,           // rt_dim=subblock_h, ct_dim=subblock_w, out_cb_id=output CB
     uint32_t in0_start, uint32_t in1_start,
     uint32_t inner_dim, uint32_t in1_stride,
-    uint32_t out_cb,
-    uint32_t subblock_h, uint32_t subblock_w,
-    uint32_t out_num_cols,
+    uint32_t out_num_cols,             // total columns in output region
     uint32_t row_offset, uint32_t col_offset,
     PostPackFn post_pack = {});
 ```
@@ -74,14 +72,13 @@ Replaces the local `matmul_blocks` function in `compute_common.hpp`.
 - `in0`: progressive wait per M-subblock, NOT popped (caller manages)
 - `out`: reserve upfront, push per M-subblock
 
-**Signature:**
+**Signature (simplified — subblock dims derived from MatmulConfig):**
 ```cpp
 template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
 ALWI void matmul_blocks_absolute(
-    const MatmulConfig& cfg,
+    const MatmulConfig& cfg,           // rt_dim=subblock_h, ct_dim=subblock_w, kt_dim=inner block width
     uint32_t M, uint32_t N, uint32_t K,
     uint32_t in0_num_subblocks, uint32_t in1_num_subblocks,
-    uint32_t subblock_h, uint32_t subblock_w,
     PostComputeFn post_compute = {});
 ```
 
@@ -123,6 +120,19 @@ The reciprocal operation is now a `RecipPostCompute` functor.
 - `matmul_blocks` now delegates to `matmul_blocks_absolute`
 - `CausalMaskPostCompute` functor defined locally for mask addition
 - Retained wrapper function signatures for backward compatibility
+
+### 6. Higher-level absorption (round 2)
+
+**`matmul_reduce_w_and_pack`** — New helper absorbing the `acquire → reduce_w → pack → release` cycle. Updated `reduce_w.cpp` to use it.
+
+**`matmul_accumulate_and_pack` + PostComputeFn** — Added `PostComputeFn` template param (backward compatible, default NoPostCompute). This lets fused_bias and conv kernels eventually use it for per-subblock SFPU without manual DST management.
+
+### 7. API simplification (round 2)
+
+- `matmul_and_pack_absolute`: removed 3 params (`out_cb`, `subblock_h`, `subblock_w`) — derived from `cfg.out_cb_id`, `cfg.rt_dim`, `cfg.ct_dim`. Reduces from 11 to 8 runtime params.
+- `matmul_blocks_absolute`: removed 2 params (`subblock_h`, `subblock_w`) — derived from `cfg.rt_dim`, `cfg.ct_dim`. Reduces from 8 to 6 runtime params.
+- Moved functor types (`NoPostCompute`, `NoPostPack`) before Layer 0 so all layers can reference them.
+- Fixed forward-declaration ordering issue caught by JIT compilation.
 
 ---
 
@@ -172,9 +182,19 @@ All Tier 3 building blocks that serve non-experimental production call sites:
 | moreh matmul + mean + sum | 392 | 311 | **0** | 8m22s |
 | **TOTAL** | **404** | **313** | **0** | **~10m** |
 
-All skip counts match the pre-existing baseline.
-Zero regressions across all test suites in both runs.
-Combined unique tests verified: **1,505 passed, 0 failed.**
+### Run 3: After absorption + simplification + functor ordering fix
+
+| Suite | Passed | Skipped | Failed | Time |
+|-------|--------|---------|--------|------|
+| SDPA decode + prefill | 12 | 2 | **0** | 2m01s |
+| test_matmul.py (unit) | 557 | 136 | **0** | 18m02s |
+| conv2d | 161 | 48 | **0** | 4m29s |
+| moreh matmul + mean + sum | 392 | 311 | **0** | 6m50s |
+| reduce sum | 383 | 0 | **0** | 1m47s |
+| **TOTAL** | **1,505** | **497** | **0** | **~33m** |
+
+All skip counts match the pre-existing baseline across all three runs.
+**Zero regressions. 1,505 passed, 0 failed.**
 
 ---
 

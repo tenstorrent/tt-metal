@@ -1226,17 +1226,9 @@ ALWI void matmul_blocks(
 
     if (add_mask) {
         matmul_blocks_absolute<BLOCK>(
-            cfg,
-            M,
-            N,
-            K,
-            in0_num_subblocks,
-            in1_num_subblocks,
-            subblock_h,
-            subblock_w,
-            CausalMaskPostCompute{mask_cb, zero_cb});
+            cfg, M, N, K, in0_num_subblocks, in1_num_subblocks, CausalMaskPostCompute{mask_cb, zero_cb});
     } else {
-        matmul_blocks_absolute<BLOCK>(cfg, M, N, K, in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w);
+        matmul_blocks_absolute<BLOCK>(cfg, M, N, K, in0_num_subblocks, in1_num_subblocks);
     }
 }
 

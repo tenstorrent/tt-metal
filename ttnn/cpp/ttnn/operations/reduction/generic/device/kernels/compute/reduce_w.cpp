@@ -40,21 +40,20 @@ void kernel_main() {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            acquire_dst();
 #ifndef REDUCE_ROW_SUM_VIA_MM
+            acquire_dst();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 cb0.wait_front(onetile);
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
                 cb0.pop_front(onetile);
             }
-#else
-            matmul_reduce_w<TILE>(mm_cfg, Wt, 0);
-#endif
-
             cb3.reserve_back(onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_3);
             cb3.push_back(onetile);
             release_dst();
+#else
+            matmul_reduce_w_and_pack<TILE>(mm_cfg, Wt, 0, tt::CBIndex::c_3);
+#endif
         }
     }
 }
