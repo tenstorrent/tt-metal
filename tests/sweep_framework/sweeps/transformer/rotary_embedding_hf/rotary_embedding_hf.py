@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -73,6 +73,59 @@ def apply_rotary_pos_emb_hf(x, cos, sin):
     return (x * cos) + (rotate_half(x) * sin)
 
 
+def _decode_qk_heads_mem_config(head_dim: int) -> ttnn.MemoryConfig:
+    """Match ``ModelArgs.get_attn_create_head_output_mem_config(Mode.DECODE, None)`` (``test_attention`` decode path)."""
+    if is_blackhole():
+        return ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, head_dim),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+
+
+def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin_torch, *, dtype):
+    """Match ``HfRotarySetupNew.get_rot_mats`` sharding: HEIGHT (TILE_SIZE, head_dim) on a batch core grid."""
+    core_grid = device.compute_with_storage_grid_size()
+    num_cores = min(batch, core_grid.x * core_grid.y)
+    batch_grid = ttnn.num_cores_to_corerangeset(num_cores, core_grid, row_wise=True)
+    mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # TILE row padding on the singleton head row (same as transpose path in ``HfRotarySetupNew``).
+    pad_h = ttnn.TILE_SIZE - cos_torch.shape[2]
+    if pad_h > 0:
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=cos_torch.dtype, device=cos_torch.device)
+        cos_torch = torch.cat([cos_torch, z], dim=2)
+        sin_torch = torch.cat([sin_torch, z], dim=2)
+    cos_interleaved = ttnn.from_torch(
+        cos_torch,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sin_interleaved = ttnn.from_torch(
+        sin_torch,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if batch % ttnn.TILE_SIZE != 0:
+        cos_interleaved = cos_interleaved[:, :batch, :, :]
+        sin_interleaved = sin_interleaved[:, :batch, :, :]
+    cos_tensor = ttnn.interleaved_to_sharded(cos_interleaved, mem_config)
+    sin_tensor = ttnn.interleaved_to_sharded(sin_interleaved, mem_config)
+    return cos_tensor, sin_tensor
+
+
 def run(
     prefill_spec,
     decode_spec,
@@ -130,60 +183,28 @@ def run(
         sin_sliced = torch_sin_cache_tensor[:, :, :seq_len, :]
         torch_output_tensor = apply_rotary_pos_emb_hf(torch_input_tensor, cos_sliced, sin_sliced)
 
-    # For decode mode, we need HEIGHT_SHARDED memory config
+    # Decode: match ``test_attention`` / ``Attention.forward_decode`` — Q/K from
+    # ``nlp_create_qkv_heads_decode`` use ``get_attn_create_head_output_mem_config``; cos/sin from
+    # ``HfRotarySetupNew.get_rot_mats`` (DRAM interleaved → HEIGHT shard on batch grid).
     if is_decode:
-        # Create sharded memory config
         batch = input_shape[1]
-        num_heads = input_shape[2]
         head_dim = input_shape[3]
-
-        # Each core handles one batch element
-        # Input tensor: [1, batch, num_heads, head_dim] -> shard_height = num_heads * TILE_HEIGHT
-        input_shard_height = num_heads * 32  # 32 is TILE_HEIGHT
-        input_shard_width = head_dim
-
-        # Cos/sin tensors: [1, batch, 1, head_dim] -> shard_height = 1 * TILE_HEIGHT
-        cos_sin_shard_height = 32  # 32 is TILE_HEIGHT
-        cos_sin_shard_width = head_dim
-
-        num_cores = min(batch, device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y)
-        core_grid = ttnn.CoreGrid(x=num_cores, y=1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
-
-        input_shard_spec = ttnn.ShardSpec(
-            shard_grid, [input_shard_height, input_shard_width], ttnn.ShardOrientation.ROW_MAJOR, False
-        )
-        input_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
-        )
-
-        cos_sin_shard_spec = ttnn.ShardSpec(
-            shard_grid, [cos_sin_shard_height, cos_sin_shard_width], ttnn.ShardOrientation.ROW_MAJOR, False
-        )
-        cos_sin_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
-        )
+        qk_mem_config = _decode_qk_heads_mem_config(head_dim)
 
         input_tensor = ttnn.from_torch(
             torch_input_tensor,
             dtype=input_dtype,
             layout=input_layout,
             device=device,
-            memory_config=input_sharded_mem_config,
+            memory_config=qk_mem_config,
         )
-        cos_cache_tensor = ttnn.from_torch(
+        cos_cache_tensor, sin_cache_tensor = _decode_hf_cos_sin_sharded(
+            device,
+            batch,
+            head_dim,
             torch_cos_cache_tensor,
-            dtype=input_dtype,
-            layout=input_layout,
-            device=device,
-            memory_config=cos_sin_sharded_mem_config,
-        )
-        sin_cache_tensor = ttnn.from_torch(
             torch_sin_cache_tensor,
             dtype=input_dtype,
-            layout=input_layout,
-            device=device,
-            memory_config=cos_sin_sharded_mem_config,
         )
     else:
         input_tensor = ttnn.from_torch(
