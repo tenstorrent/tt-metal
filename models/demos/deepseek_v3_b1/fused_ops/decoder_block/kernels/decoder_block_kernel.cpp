@@ -2764,15 +2764,27 @@ void kernel_main() {
             }
         }
 #endif
-        unified_kernels::reconfig_cb_interfaces(mla_cb_config);
-        setup_mla_sharded_buffers();
-        mla_body();
-        unified_kernels::reconfig_cb_interfaces(moe_cb_config);
+        {
+            DeviceZoneScopedN("MLA_CB_RECONFIG");
+            unified_kernels::reconfig_cb_interfaces(mla_cb_config);
+            setup_mla_sharded_buffers();
+        }
+        {
+            DeviceZoneScopedN("MLA");
+            mla_body();
+        }
+        {
+            DeviceZoneScopedN("MOE_CB_RECONFIG");
+            unified_kernels::reconfig_cb_interfaces(moe_cb_config);
 #if defined(COMPILE_FOR_BRISC)
-        *pos_ptr += 1;
+            *pos_ptr += 1;
 #endif
-        setup_moe_sharded_buffers();
-        moe_body();
+            setup_moe_sharded_buffers();
+        }
+        {
+            DeviceZoneScopedN("MOE");
+            moe_body();
+        }
         iteration++;
         if constexpr (!persistent_mode) {
             if (iteration >= num_iterations) {
