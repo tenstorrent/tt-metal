@@ -188,6 +188,7 @@ def run_test_forward_pass_mla2d(
     state_dict,
     decode_position_ids: int | None = None,
     perf_mode=False,
+    trace_mode=False,
     num_iters=20,
 ):
     # Check params
@@ -285,15 +286,42 @@ def run_test_forward_pass_mla2d(
     # Forward pass
     logger.info("Running TTNN forward pass")
     if perf_mode:
-        if mode == "prefill":
-            tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
-            tt_output.deallocate()
-        else:
-            for _ in range(num_iters):
-                tt_output = MLA2D.forward_decode(
+        if trace_mode:
+            # Prime compile/runtime state before capture. Without this, first decode pass can
+            # trigger host->device writes that are forbidden during trace capture.
+            if mode == "prefill":
+                warmup_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+            else:
+                warmup_output = MLA2D.forward_decode(
                     tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
                 )
+            ttnn.synchronize_device(mesh_device)
+            warmup_output.deallocate()
+
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            if mode == "prefill":
+                traced_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
+            else:
+                traced_output = MLA2D.forward_decode(
+                    tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
+                )
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            for _ in range(num_iters):
+                ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            ttnn.release_trace(mesh_device, trace_id)
+            traced_output.deallocate()
+        else:
+            if mode == "prefill":
+                tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
                 tt_output.deallocate()
+            else:
+                for _ in range(num_iters):
+                    tt_output = MLA2D.forward_decode(
+                        tt_input, position_ids_tensor, run_config, tt_rope_tensors, tt_page_table
+                    )
+                    tt_output.deallocate()
     else:
         if mode == "prefill":
             tt_output = MLA2D.forward_prefill(tt_input, user_id, run_config, tt_rope_tensors, tt_page_table)
