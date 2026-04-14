@@ -26,7 +26,9 @@ from ...tests.test_factory import (
 
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq(configs=[(1, 1), (1, 32)], ids=["decode", "prefill_32"])
+@parametrize_batch_seq(
+    configs=[(1, 1), (1, 32), (1, 128), (1, 1024)], ids=["decode", "prefill_32", "prefill_128", "prefill_1024"]
+)
 def test_experts(batch_size, seq_len, mesh_device):
     """Test MoE experts against HF reference.
 
