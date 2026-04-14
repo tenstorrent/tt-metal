@@ -307,18 +307,6 @@ def run_demo_whisper_for_audio_classification_inference(
             logger.info(log_msg)
 
 
-def format_conditional_generation_inference_perf_metrics(
-    mesh_device, batch_size_per_device: int, ttft: float, decode_throughput: float
-) -> dict:
-    """Same shape as perf checks in ``test_demo_for_conditional_generation`` (prefill_time_to_token, decode_t/s, decode_t/s/u)."""
-    total_batch = mesh_device.get_num_devices() * batch_size_per_device
-    return {
-        "prefill_time_to_token": ttft,
-        "decode_t/s": decode_throughput * total_batch,
-        "decode_t/s/u": decode_throughput,
-    }
-
-
 def run_demo_whisper_for_conditional_generation_inference(
     input_path,
     mesh_device,
