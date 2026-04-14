@@ -24,7 +24,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    create_hf_model,
+    extract_layer_state_dict,
+    tokenize_prompts_to_isl,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD_DENSE = 0.999
@@ -32,8 +36,11 @@ PCC_THRESHOLD_MOE_GATE_HOST = 0.993
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.980
 PCC_THRESHOLD_KVPE = 0.99
 
+ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
+
 
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("input_source", ["random", "abc_1k"])
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024])
 @pytest.mark.parametrize(
@@ -83,7 +90,9 @@ def test_prefill_block(
     num_links,
     topology,
     pcc_validation,
+    input_source,
     return_kv_cache,
+    request,
 ):
     profiler.clear()
     profiler.start("total_test_time")
@@ -104,7 +113,8 @@ def test_prefill_block(
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}")
     logger.info(
         f"isl_total={isl_total}, isl_per_chip={isl_per_chip}, "
-        f"layer_type={layer_type}, layer_idx={layer_idx}, gate_fallback_mode={gate_fallback_mode}"
+        f"layer_type={layer_type}, layer_idx={layer_idx}, gate_fallback_mode={gate_fallback_mode}, "
+        f"input_source={input_source}"
     )
 
     # --- Build HF reference model and extract weights ---
@@ -117,8 +127,18 @@ def test_prefill_block(
     profiler.end("weights_creation")
 
     # --- Create input ---
-    torch.manual_seed(123)
-    torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
+    if input_source == "abc_1k":
+        profiler.start("tokenization")
+        tok = request.getfixturevalue("tokenizer")
+        token_ids = tokenize_prompts_to_isl(tok, ABC_1K_PATH, isl_total, sp_factor)
+        profiler.end("tokenization")
+        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+        with torch.no_grad():
+            torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
+        logger.info(f"Embedded input shape: {torch_input.shape}")
+    else:
+        torch.manual_seed(123)
+        torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
 
     # --- Torch reference (only when pcc_validation is enabled) ---
     torch_output = None
