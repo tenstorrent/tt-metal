@@ -22,9 +22,9 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.qwen3_vl.tt.common import (
     get_pad_embedding,
-    merge_vision_tokens_ttnn,
-    multimodal_rope_from_hf,
-    preprocess_inputs_prefill_ttnn,
+    merge_vision_tokens_single_user_ttnn,
+    multimodal_rope_single_user_from_hf,
+    preprocess_inputs_prefill_single_user_ttnn,
 )
 from models.demos.qwen3_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
@@ -189,123 +189,266 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         enable_trace,
         **kwargs,  # pixel_values and image_grid_thw
     ):
+        """
+        Prefill forward pass that processes users one at a time to reduce memory pressure
+        and avoid expensive concat/stack operations.
+        """
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
         ), f"Prefix caching is not supported for Qwen3VL, got start_pos: {start_pos}"
-        # Must add this so that vLLM can call without errors
         enable_trace = False
         logger.warning("Tracing in prefill mode is not supported for Qwen3VL")
 
-        # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
-        padded_seq_len = tokens.shape[-1]
-        for i in range(tokens.shape[0]):  # for each user, fix their padding
+        batch_size = tokens.shape[0]
+
+        # Fix padding for all users
+        for i in range(batch_size):
             tokens[i][prompt_lens[i] :] = pad_token_id
 
-        # reconstruct the inputs that Qwen3VL expects
-        inputs = CustomNamespace()
-
-        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
-        # Construct inputs.attention_mask with shape [batch_size, padded_seq_len] like tokens,
-        # where each row has ones in the first prompt_lens[i] positions and zeros elsewhere
-        inputs.attention_mask = torch.zeros(
-            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+        # Check if we have image inputs
+        has_images = (
+            "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None
         )
-        for i, plen in enumerate(prompt_lens):
-            inputs.attention_mask[i, :plen] = 1
 
-        if (
-            "pixel_values" in kwargs
-            and len(kwargs["pixel_values"]) > 0
-            and kwargs["pixel_values"][0] is not None
-            # kwargs["pixel_values"] is a list,
-            # each element is a list of images for one user
-            # We only check if the first user's pixel_values is not None
-            # as we currently do not support mixed inputs of text-only
-            # users and text-image users
-        ):
-            inputs.pixel_values = torch.concat(
-                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
-            )
-            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-            # vLLM Qwen3VL provides per-image `image_grid_thw` as a length-3
-            # 1D tensor (t, h, w). Stack into (num_images, 3).
-            assert _grid_items and all(
-                im is not None for im in _grid_items
-            ), "Expected non-empty image_grid_thw for image inputs."
-            for g in _grid_items:
-                assert (
-                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
-            inputs.image_grid_thw = torch.stack(
-                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
-                dim=0,
-            )
-            # Vision prefill
-            image_embeds, deepstack_visual_embeds = self.visual_model(
-                inputs.pixel_values, grid_thw=inputs.image_grid_thw
-            )
-        else:
-            # text-only users
-            image_embeds, deepstack_visual_embeds = (
-                ttnn.from_torch(
-                    torch.tensor([], dtype=torch.bfloat16), device=self.model_args.mesh_device, dtype=ttnn.bfloat16
-                ),
-                None,
-            )
-
-        # Prepare text + vision inputs for decoder model
-        text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        text_embeds_tt = ttnn.from_torch(
-            text_embeds,
-            device=self.model_args.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.model_args.mesh_device, dims=(None, 2), mesh_shape=self.model_args.cluster_shape
-            ),
-        )
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
-            inputs.input_ids,
-            text_embeds_tt,
-            image_embeds,
-            self.reference_model.config,
-            deepstack_visual_embeds,
-            self.model_args,
-        )
-        ttnn.deallocate(text_embeds_tt)
-        ttnn.deallocate(image_embeds)
+        # Get pad embedding once (reused for all users)
         pad_embedding_tt = get_pad_embedding(self.reference_model, pad_token_id, self.model_args)
-        (
-            input_prefill_pt,
-            deepstack_visual_embeds,
-            decoding_pos,  # Position where decoding should start for each user
-            _prefill_lens,  # [INFO] _prefill_lens is post-padding number of tokens after text-image processing
-        ) = preprocess_inputs_prefill_ttnn(
-            input_embeds,
-            self.model_args,
-            inputs.attention_mask,
-            pad_embedding=pad_embedding_tt,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-        )
-        ttnn.deallocate(pad_embedding_tt)
-        # Get user-specific rotary position embeddings
-        cos, sin, rope_deltas = multimodal_rope_from_hf(
-            inputs, self.reference_model, self.model_args, pad_token_id=pad_token_id
-        )
-        rot_mats = (cos, sin)
 
-        logits = self.prefill_forward_text(
-            input_prefill_pt,
-            rot_mats=rot_mats,
-            deepstack_visual_embeds=deepstack_visual_embeds,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        return logits, rope_deltas
+        # Output storage
+        output_logits = torch.zeros(batch_size, 1, self.model_args.vocab_size)
+        all_rope_deltas = []
+
+        # Process each user one at a time
+        for user_id in range(batch_size):
+            logger.info(f"Processing User {user_id + 1}/{batch_size}")
+
+            # Get this user's input_ids and attention_mask
+            user_input_ids = tokens[user_id].to(torch.int64)
+            user_prompt_len = prompt_lens[user_id]
+            user_attention_mask = torch.zeros(user_input_ids.shape[0], dtype=torch.int64, device=tokens.device)
+            user_attention_mask[:user_prompt_len] = 1
+
+            # Process vision for this user if they have images
+            if has_images and kwargs["pixel_values"][user_id] is not None:
+                # Get this user's pixel_values and image_grid_thw
+                user_pixel_values = kwargs["pixel_values"][user_id]
+                user_image_grid_thw = kwargs["image_grid_thw"][user_id]
+
+                # Concatenate all images for this user (if multiple images per user)
+                if isinstance(user_pixel_values, list) and len(user_pixel_values) > 0:
+                    user_pixel_values = torch.concat(user_pixel_values, dim=0)
+                    # Stack grid_thw for all images of this user
+                    user_image_grid_thw = torch.stack(
+                        [g.to(device=tokens.device, dtype=torch.int32) for g in user_image_grid_thw],
+                        dim=0,
+                    )
+
+                # Run vision model for this single user
+                image_embeds, deepstack_visual_embeds = self.visual_model.forward_single_user(
+                    user_pixel_values, grid_thw=user_image_grid_thw
+                )
+            else:
+                # Text-only user
+                image_embeds = ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=self.model_args.mesh_device, dtype=ttnn.bfloat16
+                )
+                deepstack_visual_embeds = None
+                user_image_grid_thw = None
+
+            # Compute text embeddings for this user
+            user_text_embeds = self.reference_model.model.language_model.embed_tokens(user_input_ids.unsqueeze(0))
+            user_text_embeds_tt = ttnn.from_torch(
+                user_text_embeds.squeeze(0),  # Remove batch dim for single-user processing
+                device=self.model_args.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.model_args.mesh_device, dims=(None, 1), mesh_shape=self.model_args.cluster_shape
+                ),
+            )
+
+            # Merge vision tokens for this user
+            input_embeds, deepstack_visual_embeds = merge_vision_tokens_single_user_ttnn(
+                user_input_ids,
+                user_text_embeds_tt,
+                image_embeds,
+                self.reference_model.config,
+                deepstack_visual_embeds,
+                self.model_args,
+            )
+            ttnn.deallocate(user_text_embeds_tt)
+            ttnn.deallocate(image_embeds)
+
+            # Preprocess for this user
+            (
+                input_prefill,
+                deepstack_visual_embeds,
+                decoding_pos,
+                prefill_len,
+            ) = preprocess_inputs_prefill_single_user_ttnn(
+                input_embeds,
+                self.model_args,
+                user_attention_mask,
+                pad_embedding=pad_embedding_tt,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            # Compute rope embeddings for this user
+            cos, sin, rope_deltas = multimodal_rope_single_user_from_hf(
+                user_input_ids,
+                user_image_grid_thw,
+                self.reference_model,
+                self.model_args,
+                pad_token_id=pad_token_id,
+            )
+            rot_mats = (cos, sin)
+            all_rope_deltas.append(rope_deltas)
+
+            # Get page table for this user
+            if page_table is not None:
+                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, decoding_pos)
+            else:
+                page_table_user = None
+
+            # Run text prefill for this single user
+            logits = self._prefill_forward_single_user_text(
+                input_prefill,
+                page_table=page_table_user,
+                user_id=user_id,
+                last_token_idx=decoding_pos - 1,
+                rot_mats=rot_mats,
+                kv_cache=kv_cache,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            # Store output
+            output_logits[user_id] = logits
+
+            # Deallocate tensors for this user to free memory
+            ttnn.deallocate(input_prefill)
+            if deepstack_visual_embeds is not None:
+                for dsve in deepstack_visual_embeds:
+                    ttnn.deallocate(dsve)
+
+        # Deallocate pad embedding
+        ttnn.deallocate(pad_embedding_tt)
+
+        # Stack rope_deltas from all users
+        rope_deltas = torch.stack([rd.squeeze(0) for rd in all_rope_deltas], dim=0)
+
+        logger.info(f"Finished prefill for all {batch_size} users")
+        return output_logits, rope_deltas
+
+    def _prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
+    ):
+        """
+        Single-user text prefill forward. Adapted from generator.py but simplified for the
+        single-user loop approach.
+        """
+        # Add batch dimension if needed
+        if tokens.dim() == 2:
+            tokens = ttnn.unsqueeze(tokens, 0)
+
+        seq_len = tokens.shape[1]
+        use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
+
+        if use_chunked_prefill:
+            from models.demos.qwen3_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+
+            assert page_table is not None, "page_table must be provided for chunked prefill"
+            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
+            block_size = get_block_size(kv_cache)
+            last_token_idx_in_chunk = last_token_idx % chunk_size
+            last_chunk_start = (last_token_idx // chunk_size) * chunk_size
+            page_table_user = page_table[0:1, :]  # Already sliced for this user
+            num_padding_blocks = num_blocks_in_seq(seq_len, block_size) - page_table_user.shape[1]
+            page_table_user_padded = torch.cat(
+                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+            )
+            CHUNK_USER_ID = 0
+
+            for chunk_start in range(0, seq_len, chunk_size):
+                chunk_end = chunk_start + chunk_size
+                chunk_tokens = tokens[:, chunk_start:chunk_end]
+                if deepstack_visual_embeds is not None:
+                    deepstack_visual_embeds_chunk = [
+                        deepstack_visual_embeds[i][chunk_start:chunk_end] for i in range(len(deepstack_visual_embeds))
+                    ]
+                else:
+                    deepstack_visual_embeds_chunk = None
+                chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
+
+                (
+                    chunk_prefill_input,
+                    chunk_rot_mats_prefill,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                    deepstack_visual_embeds_chunk,
+                ) = self.model.prepare_inputs_prefill(
+                    chunk_tokens,
+                    rot_mats=rot_mats,
+                    start_pos=chunk_start,
+                    page_table=page_table_user_padded,
+                    chunk_page_table=chunk_page_table,
+                    deepstack_visual_embeds=deepstack_visual_embeds_chunk,
+                )
+                tt_logits = self.model.ttnn_prefill_forward(
+                    chunk_prefill_input,
+                    rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats_prefill],
+                    user_id=CHUNK_USER_ID,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    kv_cache=kv_cache,
+                    deepstack_visual_embeds=deepstack_visual_embeds_chunk,
+                )
+
+                if chunk_start == last_chunk_start:
+                    logits = self.model.process_output_prefill(
+                        tt_logits.cpu(),
+                        last_token_idx=(last_token_idx_in_chunk % 32),
+                    )
+                    return logits
+                else:
+                    del tt_logits
+        else:
+            (
+                prefill_input,
+                rot_mats_prefill,
+                page_table_tt,
+                _,
+                deepstack_visual_embeds,
+            ) = self.model.prepare_inputs_prefill(
+                tokens,
+                rot_mats=rot_mats,
+                page_table=page_table,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            tt_logits = self.model.ttnn_prefill_forward(
+                prefill_input,
+                rot_mats_global=[rm[0:1, ...] for rm in rot_mats_prefill],
+                user_id=user_id,
+                page_table=page_table_tt,
+                get_last_token=(last_token_idx // 32) * 32,
+                kv_cache=kv_cache,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+            )
+
+            logits = self.model.process_output_prefill(tt_logits.cpu(), last_token_idx=(last_token_idx % 32))
+
+            # Deallocate device tensors
+            ttnn.deallocate(tt_logits)
+            ttnn.deallocate(prefill_input)
+            if page_table is not None:
+                ttnn.deallocate(page_table_tt)
+
+            return logits
 
     def decode_forward(self, *args, **kwargs):
         rope_deltas_list: list = kwargs.pop(
