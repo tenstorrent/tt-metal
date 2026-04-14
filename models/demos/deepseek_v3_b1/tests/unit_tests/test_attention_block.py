@@ -637,13 +637,16 @@ def test_attention_block(
 
     # Per-core dimensions
     n1_per_core = post_sdpa_intermediate // num_matmul1_cores  # 8192 / 64 = 128
-    n2_per_core = output_size // num_matmul2_cores  # 7168 / 112 = 64
+    per_device_out_w = output_size // mesh_rows  # 7168 / 4 = 1792
+    n2_per_core = per_device_out_w // (num_matmul2_cores // 2)  # 1792 / 56 = 32
 
     logger.info(f"Testing post_sdpa fused op with SDPA reduce-to-all phase:")
     logger.info(f"  SDPA: [{SDPA_L_HEIGHT}, {SDPA_L_WIDTH}] L tensor, [{SDPA_L_HEIGHT}, {SDPA_MS_WIDTH}] MS tensor")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {post_sdpa_intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
-    logger.info(f"  TP All-Reduce: [{M}, {output_size}] across {num_devices} devices")
+    logger.info(
+        f"  Matmul2 (KNSliced): [{M}, {K2}] x [{K2//2}, {n2_per_core}] per core, {num_matmul2_cores} cores (2x{num_matmul2_cores//2} halves)"
+    )
+    logger.info(f"  TP All-Reduce: [{M}, {per_device_out_w}] per device across {num_devices} devices")
 
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
@@ -725,9 +728,9 @@ def test_attention_block(
     # Create CCL tensors
     # ========================================================================
     # Final output: receiver core (12,9) — all-reduce output + residual add
-    output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
+    output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, per_device_out_w), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-    mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
+    mesh_output_torch = torch.cat([torch.zeros((M, per_device_out_w), dtype=torch.bfloat16)] * num_devices, dim=0)
     ttnn_attention_block_output = ttnn.from_torch(
         mesh_output_torch,
         device=submesh,
@@ -1104,17 +1107,26 @@ def test_attention_block(
 
     # ========================================================================
     # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
+    # Without AllGather, each device has [1, per_device_out_w] = [1, 1792] (its row's slice)
+    # Column partners (same row) should have identical output. Different rows have different slices.
     # ========================================================================
-    ref_device_idx = 0
-    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
+    slot_size = per_device_out_w  # 1792
     for device_idx in range(mesh_rows * mesh_cols):
-        received = output_torch[device_idx : device_idx + 1, :]
-        if device_idx != ref_device_idx:
-            dev_eq = torch.equal(received, ref_device_output)
-            assert dev_eq, f"Device {device_idx} output mismatch"
+        sp_group = device_idx // mesh_cols  # which row = which slice
+        tp_group = device_idx % mesh_cols
 
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
-        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
+        received = output_torch[device_idx : device_idx + 1, :]
+        expected_slice = torch_output_expected[:, sp_group * slot_size : (sp_group + 1) * slot_size]
+
+        # Column partners should be identical
+        col_partner_idx = sp_group * mesh_cols  # first device in this row
+        if device_idx != col_partner_idx:
+            partner_output = output_torch[col_partner_idx : col_partner_idx + 1, :]
+            dev_eq = torch.equal(received, partner_output)
+            assert dev_eq, f"Device {device_idx} output differs from column partner {col_partner_idx}"
+
+        passing, pcc = comp_pcc(expected_slice, received, 0.997)
+        max_diff = torch.max(torch.abs(expected_slice - received)).item()
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 

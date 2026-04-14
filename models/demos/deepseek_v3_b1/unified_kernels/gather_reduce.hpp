@@ -72,6 +72,8 @@ struct GatherReduce {
         uint32_t gather_reduce_half_num_cores;
         uint32_t dst_cb_id;
         uint32_t half_size_bytes;
+        uint32_t sender_idx =
+            0;  // explicit per-core index; 0 means compute from grid (only valid for rectangular grids)
     };
 
     struct ComputeArgs {
@@ -101,8 +103,8 @@ struct GatherReduce {
         for (uint32_t i = 0; i < num_tiles; i++) {
             pack_tile(i, out_cb);
         }
-        cb_push_back(out_cb, num_tiles);
         tile_regs_release();
+        cb_push_back(out_cb, num_tiles);
 
         cb_pop_front(in_cb, 2 * num_tiles);
     }
@@ -116,7 +118,7 @@ struct GatherReduce {
     // IsReduceCore: compile-time flag for reduce cores
     // pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool IsReduceCore, bool pop_src>
+    template <bool IsSenderCore, bool IsReceiverCore, bool IsReduceCore, bool pop_src, bool UsePerCoreSenderIdx = false>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -128,12 +130,19 @@ struct GatherReduce {
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
-                const auto half_info = unified_kernels::get_split_half_core_info<true>(
-                    args.gather_reduce_grid_start_x,
-                    args.gather_reduce_grid_start_y,
-                    args.gather_reduce_grid_end_x,
-                    args.gather_reduce_grid_end_y,
-                    args.gather_reduce_half_num_cores);
+                unified_kernels::SplitHalfCoreInfo half_info;
+                if constexpr (UsePerCoreSenderIdx) {
+                    const bool is_half0 = args.sender_idx < args.gather_reduce_half_num_cores;
+                    half_info = {
+                        is_half0, is_half0 ? args.sender_idx : (args.sender_idx - args.gather_reduce_half_num_cores)};
+                } else {
+                    half_info = unified_kernels::get_split_half_core_info<true>(
+                        args.gather_reduce_grid_start_x,
+                        args.gather_reduce_grid_start_y,
+                        args.gather_reduce_grid_end_x,
+                        args.gather_reduce_grid_end_y,
+                        args.gather_reduce_half_num_cores);
+                }
                 uint32_t dst_base_addr = get_write_ptr(args.dst_cb_id);
                 uint32_t dst_offset =
                     (half_info.is_half0 ? 0 : args.half_size_bytes) + half_info.half_local_idx * args.data_size_bytes;
@@ -148,10 +157,13 @@ struct GatherReduce {
                 // Get source address from CB
                 uint32_t src_addr = get_read_ptr(args.src_cb);
 
-                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes);
-                // BH does not support posted atomics due to a bug
+                // Non-posted write with barrier: guarantees data is at destination
+                // L1 before the semaphore increment fires. Posted writes are
+                // insufficient because the atomic semaphore increment can overtake
+                // the data on the NOC, causing the receiver to read stale memory.
+                noc_async_write(src_addr, dst_data_noc_addr, args.data_size_bytes);
+                noc_async_write_barrier();
                 noc_semaphore_inc(dst_sem_noc_addr, 1);
-                noc_async_posted_writes_flushed();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

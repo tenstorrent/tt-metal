@@ -418,30 +418,26 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast3_dst_num_pages"),
     };
 
-    // Matmul5 CTArgs
-    using Matmul5CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul5_args{};
+    // Matmul5 (KNSlicedMatmul) reader args - NCRISC is no-op
+    using Matmul5CTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
+    deepseek_b1_ops::KNSlicedMatmul::ReaderArgs matmul5_args{};
 
-    // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
-    deepseek_b1_ops::Gather::DMArgs gather3_args{
-        .sender =
-            {
-                get_named_compile_time_arg_val("gather3_dest_noc_x"),
-                get_named_compile_time_arg_val("gather3_dest_noc_y"),
-                get_named_compile_time_arg_val("gather3_data_size_bytes"),
-                get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
-                get_named_compile_time_arg_val("gather3_src_cb"),
-                get_named_compile_time_arg_val("gather3_src_num_pages"),
-                get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
-                get_named_compile_time_arg_val("gather3_sender_grid_start_y"),
-                get_named_compile_time_arg_val("gather3_sender_grid_end_x"),
-                get_named_compile_time_arg_val("gather3_sender_grid_end_y"),
-                get_named_compile_time_arg_val("gather3_row_major"),
-                get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 3),  // gather3_receiver_data_addr
-                get_named_compile_time_arg_val("gather3_sender_idx"),
-            },
-        .receiver = {},
+    // GatherReduce3 sender args
+    deepseek_b1_ops::GatherReduce::SenderArgs gather3_args{
+        get_named_compile_time_arg_val("gather3_dest_noc_x"),
+        get_named_compile_time_arg_val("gather3_dest_noc_y"),
+        get_named_compile_time_arg_val("gather3_data_size_bytes"),
+        get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_addr")),
+        get_named_compile_time_arg_val("gather3_src_cb"),
+        get_named_compile_time_arg_val("gather3_src_num_pages"),
+        get_named_compile_time_arg_val("gather3_grid_start_x"),
+        get_named_compile_time_arg_val("gather3_grid_start_y"),
+        get_named_compile_time_arg_val("gather3_grid_end_x"),
+        get_named_compile_time_arg_val("gather3_grid_end_y"),
+        get_named_compile_time_arg_val("gather3_half_num_cores"),
+        get_named_compile_time_arg_val("gather3_dst_cb_id"),
+        get_named_compile_time_arg_val("gather3_half_size_bytes"),
+        get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 
     // ========================================================================o
@@ -715,11 +711,12 @@ void kernel_main() {
 
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
-    // Matmul4/2 CTArgs (BRISC is no-op for matmul)
+    // Matmul4 CTArgs (BRISC is no-op for matmul)
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    using Matmul5CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul4_args{};
-    deepseek_b1_ops::Matmul::WriterArgs matmul5_args{};
+    // Matmul5 (KNSlicedMatmul) writer args - BRISC is no-op
+    using Matmul5CTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
+    deepseek_b1_ops::KNSlicedMatmul::WriterArgs matmul5_args{};
 
     // Gather2 receiver args
     deepseek_b1_ops::Gather::DMArgs gather2_args{
@@ -752,18 +749,14 @@ void kernel_main() {
         get_write_ptr(mcast3_dst_cb),  // CB 4 address (now allocated on gather core too)
     };
 
-    // Gather3 receiver args (on sender core 11,9 instead of gather core 12,9)
-    deepseek_b1_ops::Gather::DMArgs gather3_args{
-        .sender = {},
-        .receiver =
-            {
-                get_named_compile_time_arg_val("gather3_noc0_num_senders"),
-                get_named_compile_time_arg_val("gather3_noc1_num_senders"),
-                get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
-                get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
-                get_named_compile_time_arg_val("gather3_dst_cb"),
-                get_named_compile_time_arg_val("gather3_dst_num_pages"),
-            },
+    // GatherReduce3 receiver args (on sender core 11,9)
+    deepseek_b1_ops::GatherReduce::ReceiverArgs gather3_args{
+        get_named_compile_time_arg_val("gather3_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather3_noc1_num_senders"),
+        get_semaphore(get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
+        get_named_compile_time_arg_val("gather3_dst_cb"),
+        get_named_compile_time_arg_val("gather3_dst_num_tiles"),
     };
 
     // ========================================================================o
@@ -1111,19 +1104,27 @@ void kernel_main() {
     // Mcast3 CTArgs (no-op)
     deepseek_b1_ops::Mcast::ComputeArgs mcast3_args{};
 
-    // Matmul5 CTArgs
+    // Matmul5 (KNSlicedMatmul) CTArgs + compute args
+    constexpr uint32_t matmul5_k_offset = get_named_compile_time_arg_val("matmul5_k_offset");
+
     using Matmul5CTArgs =
-        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul5_out_w_per_core")>;
-    deepseek_b1_ops::Matmul::ComputeArgs matmul5_args{
+        deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul5_out_w_per_core")>;
+    deepseek_b1_ops::KNSlicedMatmul::ComputeArgs matmul5_args{
         get_named_compile_time_arg_val("matmul5_in0"),
         get_named_compile_time_arg_val("matmul5_in1"),
         get_named_compile_time_arg_val("matmul5_out"),
-        get_named_compile_time_arg_val("matmul5_k_num_tiles"),
+        matmul5_k_offset,
+        get_named_compile_time_arg_val("matmul5_k_per_core"),
+        get_named_compile_time_arg_val("matmul5_act_total_tiles"),
         get_common_arg_val<uint32_t>(14),  // matmul5_weights_addr
     };
 
-    // Gather3 compute args (no-op)
-    deepseek_b1_ops::Gather::ComputeArgs gather3_args{};
+    // GatherReduce3 compute args
+    deepseek_b1_ops::GatherReduce::ComputeArgs gather3_args{
+        get_named_compile_time_arg_val("gather3_scratch_cb"),
+        get_named_compile_time_arg_val("gather3_out_cb"),
+        get_named_compile_time_arg_val("gather3_dst_num_tiles"),
+    };
 
     // CCL Broadcast CTArgs (no-op for TRISC)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
@@ -1518,24 +1519,25 @@ void kernel_main() {
         }
 
         // ========================================================================
-        // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
+        // Matmul5 (KNSlicedMatmul): [1, 8192] x [4096, 32] -> [1, 32] per core (112 active cores)
         // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
-        // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
+        // K-split: 2 halves of 56 cores, each core does [1, 4096] @ [4096, 32] -> [1, 32]
         // ========================================================================
         {
             DeviceZoneScopedN("MATMUL5");
-            // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
-            deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
+            deepseek_b1_ops::KNSlicedMatmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
             matmul5(matmul5_args);
         }
 
         // ========================================================================
-        // Gather3: 112 active matmul5 cores -> sender core (11, 9)
-        // Collects [1, 64] * 112 = [1, 7168]
+        // GatherReduce3: 112 matmul5 cores (2x56 halves) -> sender core (11, 9)
+        // Reduces [1, 32] * 56 from each half -> [1, 1792] per device
         // ========================================================================
         {
             DeviceZoneScopedN("GATHER3");
-            deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, true, true> gather3;
+            deepseek_b1_ops::GatherReduce::
+                Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
+                    gather3;
             gather3(gather3_args);
         }
 
@@ -1564,8 +1566,24 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_receiver_core) {
             DeviceZoneScopedN("CCL_RECEIVER");
 #if defined(COMPILE_FOR_NCRISC)
-            // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
-            // Should avoid this and not pop in RMSNorm
+            // TP4 outer-dim: NOC-copy the correct [1, per_device_out_w] slice of the
+            // input tensor into the residual CB (2 tiles of 32x32) before AllReduce.
+            {
+                constexpr uint32_t residual_offset = get_named_compile_time_arg_val("residual_byte_offset");
+                constexpr uint32_t residual_size = get_named_compile_time_arg_val("residual_copy_size");
+                constexpr uint32_t residual_cb = get_named_compile_time_arg_val("residual_cb_id");
+                constexpr uint32_t residual_num_tiles = get_named_compile_time_arg_val("residual_num_tiles");
+                constexpr uint32_t inp_noc_x = get_named_compile_time_arg_val("input_noc_coord_x");
+                constexpr uint32_t inp_noc_y = get_named_compile_time_arg_val("input_noc_coord_y");
+                uint32_t input_l1_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 4);
+                cb_reserve_back(residual_cb, residual_num_tiles);
+                uint32_t residual_dst = get_write_ptr(residual_cb);
+                uint64_t src_noc_addr = get_noc_addr(inp_noc_x, inp_noc_y, input_l1_addr + residual_offset);
+                noc_async_read(src_noc_addr, residual_dst, residual_size);
+                noc_async_read_barrier();
+                cb_push_back(residual_cb, residual_num_tiles);
+            }
+
             deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> ccl_reader;
             ccl_reader(ccl_receiver_args);
 #elif defined(COMPILE_FOR_TRISC)

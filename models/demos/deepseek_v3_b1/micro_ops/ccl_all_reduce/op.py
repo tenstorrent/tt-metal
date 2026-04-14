@@ -242,6 +242,8 @@ class AllReduceConfig:
         residual_cb_id=None,
         skip_local_push=False,
         sender_core=None,
+        num_tiles_override=None,
+        page_size_override=None,
     ):
         self.mesh_device = mesh_device
         self.cluster_axis = int(cluster_axis)
@@ -298,9 +300,14 @@ class AllReduceConfig:
         if num_pages % 32 != 0:
             raise ValueError(f"Tile count must be divisible by 32 for 32x32 reinterpretation, got {num_pages}")
 
-        self.total_num_tiles = num_pages // 32
-        self.element_size = 2
-        self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
+        if num_tiles_override is not None and page_size_override is not None:
+            self.total_num_tiles = int(num_tiles_override)
+            self.element_size = 2
+            self.tile_size_bytes = int(page_size_override)
+        else:
+            self.total_num_tiles = num_pages // 32
+            self.element_size = 2
+            self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
         self.chunk = resolve_chunk_config(self.total_num_tiles, self.tile_size_bytes, chunk_num_tiles)
 
         self.data_format = metadata_sample.dtype
@@ -798,6 +805,8 @@ class DeepseekMinimalAllReduce:
         skip_local_push=False,
         skip_ccl=False,
         sender_core=None,
+        num_tiles_override=None,
+        page_size_override=None,
     ):
         if skip_ccl:
             return BypassAllReduceConfig(
@@ -833,6 +842,8 @@ class DeepseekMinimalAllReduce:
             residual_cb_id=residual_cb_id,
             skip_local_push=skip_local_push,
             sender_core=sender_core,
+            num_tiles_override=num_tiles_override,
+            page_size_override=page_size_override,
         )
 
     @staticmethod
