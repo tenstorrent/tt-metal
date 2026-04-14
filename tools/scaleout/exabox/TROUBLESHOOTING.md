@@ -235,7 +235,7 @@ Node: bh-glx-d01u08
 while attempting to start process rank 0.
 ```
 
-**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.py`), they don't use containers.
 
 **Solution**:
 
@@ -733,7 +733,7 @@ export TT_METAL_DISABLE_MULTI_AERISC=1
 
 ### Fabric Test Fails with "Graph could not fit in physical topology"
 
-**Symptom**: Running `run_fabric_tests.sh --config 4x32` fails with:
+**Symptom**: Running `run_fabric_tests.py --config 4x32` fails with:
 
 ```text
 TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology for mesh 0.
@@ -786,7 +786,7 @@ Hosts are connected in a ring: 1-2, 2-3, 3-4, 4-1. There are no diagonal connect
 **Example**: For a pod with hosts `b02u08`, `b02u02`, `b09u02`, `b09u08`:
 
 - Log onto `b02u08` (Host 1)
-- Run: `./run_fabric_tests.sh --config 4x32 --hosts b02u08,b02u02,b09u02,b09u08 --image <docker-image>`
+- Run: `./run_fabric_tests.py --config 4x32 --hosts b02u08,b02u02,b09u02,b09u08 --image <docker-image>`
 
 The host order must follow the physical ring topology.
 
@@ -844,7 +844,7 @@ The error originates from `tt_metal/impl/context/metal_context.cpp` during `Meta
    ./run_validation.sh --hosts <hosts> --image <docker-image>
 
    # Only proceed if validation passes
-   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
+   ./run_fabric_tests.py --config 4x32 --hosts <hosts> --image <docker-image>
    ```
 
 3. **Pipeline best practice**: Implement retry logic with reset on failure. Early exit if reset + validation fails multiple times.
@@ -890,7 +890,7 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
    ./run_validation.sh --hosts <hosts> --image <docker-image> || exit 1
 
    # Run fabric tests
-   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
+   ./run_fabric_tests.py --config 4x32 --hosts <hosts> --image <docker-image>
    ```
 
 **Note**: These clusters are not 100% stable. Running reset + validation before every test batch significantly improves reliability.
