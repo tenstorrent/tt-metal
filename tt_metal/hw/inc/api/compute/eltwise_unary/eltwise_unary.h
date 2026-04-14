@@ -20,7 +20,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));

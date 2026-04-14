@@ -11,31 +11,23 @@
  * LLK ELTWISE UNARY DATACOPY
  *************************************************************************/
 
-template <
-    DataCopyType type,
-    bool is_fp32_dest_acc_en,
-    BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool unpack_to_dest = false>
+template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
+    _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type>(
         dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
-template <
-    DataCopyType type,
-    bool is_fp32_dest_acc_en,
-    BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool unpack_to_dest = false>
+template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint ntiles, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
-        _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
+        _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type>(
             dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     }
 }
@@ -63,7 +55,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
 #endif
 }
 
-template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <BroadcastType src_b_bcast_type = BroadcastType::NONE>
 inline void llk_math_eltwise_unary_datacopy_uninit() {
-    _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
+    _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type>();
 }
