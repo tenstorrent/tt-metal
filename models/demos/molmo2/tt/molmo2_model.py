@@ -905,6 +905,7 @@ class Molmo2Model(LightweightModule):
 
         # Reshape back to 4D and convert to TILE_LAYOUT
         fused_ttnn = ttnn.reshape(fused_3d, [1, 1, seq_len, hidden_dim])
+        ttnn.deallocate(fused_3d)
         fused_ttnn = ttnn.to_layout(fused_ttnn, ttnn.TILE_LAYOUT)
 
         return fused_ttnn
