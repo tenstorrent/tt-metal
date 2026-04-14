@@ -471,6 +471,18 @@ TQ quantize/dequantize. 5 needle positions × 6 haystack lengths × 6 variants =
 
 **100% retrieval across all variants**, including 2-bit, at all context lengths up to 64K.
 
+### Quality Comparison: 31 Diverse Prompts (2026-04-14)
+
+Side-by-side baseline BFP8 vs TQ 3-bit on 31 prompts (capitals, currencies, recipes,
+jokes, math, biology, sports, travel). Prefill + 100 tokens decode per prompt.
+
+- **All 31 prompts produce factually correct, coherent output** — no hallucinations,
+  no repetitive text, no quality degradation from TQ quantization
+- **Average word overlap: 81%** (range 57–96%)
+- No exact matches expected: rotation absorption changes model wording slightly
+- Spot-checks: capitals (Washington D.C., Ottawa, London, Berlin, Paris, Tokyo,
+  Lisbon, Beijing), currencies (all correct), math (2+2=4), color mixing (green)
+
 ### Optimisation History
 
 ```

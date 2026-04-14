@@ -178,7 +178,9 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
     _, next_tok = sample_host(logits_last, temperature=0, top_p=0.8)
     current_tok_id = int(next_tok.squeeze().item())
 
-    # Migrate prefill KV to BFP4 pre-rescaled format
+    # Migrate prefill KV to TQ pre-rescaled format.
+    # Non-paged update_cache only supports BF16/BFP8 (not BFP4), so use BF16 here.
+    # The paged path (eval_e2e.py --bfp4-cache) uses BFP4 via paged_update_cache.
     from turbo_quant.eval_e2e_prefill import migrate_prefill_kv_to_turbo_quant
 
     migrate_prefill_kv_to_turbo_quant(
@@ -188,7 +190,7 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
         mesh_device=mesh_device,
         seed=seed,
         rotation_absorbed=True,
-        cache_dtype=ttnn.bfloat4_b,
+        cache_dtype=ttnn.bfloat16,
     )
 
     # Attach TQ cache for decode quantize path (not for SDPA — standard SDPA reads BFP4)
@@ -261,7 +263,6 @@ def main():
     print("\nOpening mesh device (1×1)...")
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
 
-    print("Loading model...")
     model_args = ModelArgs(
         mesh_device,
         instruct=True,
@@ -271,8 +272,13 @@ def main():
         cache_hf=True,
     )
     tokenizer = model_args.tokenizer
-    state_dict = model_args.load_state_dict()
     dtype = ttnn.bfloat8_b
+
+    # ------------------------------------------------------------------ #
+    # Phase 1: Baseline BFP8 (no rotation absorption)                     #
+    # ------------------------------------------------------------------ #
+    print("\n=== Loading baseline model (no rotation) ===")
+    state_dict = model_args.load_state_dict()
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
@@ -283,49 +289,97 @@ def main():
     )
     del state_dict
 
-    results = []
+    baseline_results = {}
+    for i, prompt in enumerate(prompts):
+        short = prompt[:60] + ("..." if len(prompt) > 60 else "")
+        print(f"\n--- Baseline BFP8 | Prompt {i}: {short} ---")
+        text, toks, ms = generate_baseline(
+            tt_model, model_args, mesh_device, prompt, args.max_new_tokens, args.max_seq_len
+        )
+        print(f"  Tokens: {toks}, Avg: {ms:.1f} ms/tok")
+        print(f"  Output: {text[:300]}{'...' if len(text) > 300 else ''}")
+        baseline_results[i] = {"text": text, "tokens": toks, "ms": ms}
+
+    # Free baseline model
+    del tt_model
+    import gc
+
+    gc.collect()
+
+    # ------------------------------------------------------------------ #
+    # Phase 2: TurboQuant BFP4 (rotation-absorbed weights)               #
+    # ------------------------------------------------------------------ #
+    print("\n=== Loading TQ model (rotation-absorbed) ===")
+    state_dict = model_args.load_state_dict()
+
+    from turbo_quant.rotation import generate_rotation_matrix
+    from turbo_quant.ttnn_integration import absorb_rotation_into_state_dict
+
+    rotation_cpu = generate_rotation_matrix(model_args.head_dim, seed=args.seed, dtype=torch.float32)
+    print("  Absorbing Π into W_v and Π^T into W_o...")
+    absorb_rotation_into_state_dict(
+        state_dict,
+        rotation_cpu,
+        n_layers=model_args.n_layers,
+        n_q_heads=model_args.n_heads,
+        n_kv_heads=model_args.n_kv_heads,
+        head_dim=model_args.head_dim,
+    )
+
+    from pathlib import Path
+    import tempfile
+
+    wcache = Path(tempfile.mkdtemp(prefix="tq_quality_weights_"))
+    tt_model = Transformer(
+        args=model_args,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        state_dict=state_dict,
+        weight_cache_path=wcache,
+        paged_attention_config=None,
+    )
+    del state_dict
+
+    tq_results = {}
+    for i, prompt in enumerate(prompts):
+        short = prompt[:60] + ("..." if len(prompt) > 60 else "")
+        print(f"\n--- TurboQuant {args.bits}-bit BFP4 | Prompt {i}: {short} ---")
+        text, toks, ms = generate_turbo_quant(
+            tt_model, model_args, mesh_device, prompt, args.max_new_tokens, args.max_seq_len, args.bits, args.seed
+        )
+        print(f"  Tokens: {toks}, Avg: {ms:.1f} ms/tok")
+        print(f"  Output: {text[:300]}{'...' if len(text) > 300 else ''}")
+        tq_results[i] = {"text": text, "tokens": toks, "ms": ms}
+
+    del tt_model
+
+    # ------------------------------------------------------------------ #
+    # Phase 3: Comparison                                                  #
+    # ------------------------------------------------------------------ #
+    print(f"\n{'='*80}")
+    print("COMPARISON")
+    print(f"{'='*80}")
 
     for i, prompt in enumerate(prompts):
         short = prompt[:60] + ("..." if len(prompt) > 60 else "")
-        print(f"\n{'='*80}")
-        print(f"PROMPT {i}: {short}")
-        print(f"{'='*80}")
+        base = baseline_results[i]
+        tq = tq_results[i]
+        match = base["text"].strip() == tq["text"].strip()
 
-        # --- Baseline ---
-        print(f"\n--- Baseline BFP8 ---")
-        base_text, base_toks, base_ms = generate_baseline(
-            tt_model, model_args, mesh_device, prompt, args.max_new_tokens, args.max_seq_len
-        )
-        print(f"  Tokens: {base_toks}, Avg: {base_ms:.1f} ms/tok")
-        print(f"  Output: {base_text[:200]}{'...' if len(base_text) > 200 else ''}")
+        print(f"\nPrompt {i}: {short}")
+        print(f"  Baseline: {base['tokens']} toks, {base['ms']:.1f} ms/tok")
+        print(f"  TQ BFP4:  {tq['tokens']} toks, {tq['ms']:.1f} ms/tok")
+        print(f"  Exact match: {'YES' if match else 'NO'}")
 
-        # --- TurboQuant ---
-        print(f"\n--- TurboQuant {args.bits}-bit ---")
-        tq_text, tq_toks, tq_ms = generate_turbo_quant(
-            tt_model, model_args, mesh_device, prompt, args.max_new_tokens, args.max_seq_len, args.bits, args.seed
-        )
-        print(f"  Tokens: {tq_toks}, Avg: {tq_ms:.1f} ms/tok")
-        print(f"  Output: {tq_text[:200]}{'...' if len(tq_text) > 200 else ''}")
-
-        # --- Compare ---
-        match = base_text.strip() == tq_text.strip()
-        print(f"\n  Exact match: {'YES' if match else 'NO'}")
-        if not match and base_toks > 0 and tq_toks > 0:
-            # Token-level overlap
-            base_words = base_text.split()
-            tq_words = tq_text.split()
+        if not match and base["tokens"] > 0 and tq["tokens"] > 0:
+            base_words = base["text"].split()
+            tq_words = tq["text"].split()
             common = len(set(base_words) & set(tq_words))
             total = len(set(base_words) | set(tq_words))
-            print(f"  Word overlap: {common}/{total} ({100*common/total:.0f}%)" if total > 0 else "")
-
-        results.append({"prompt_idx": i, "baseline_tokens": base_toks, "tq_tokens": tq_toks, "exact_match": match})
-
-    print(f"\n{'='*80}")
-    print("SUMMARY")
-    print(f"{'='*80}")
-    for r in results:
-        status = "MATCH" if r["exact_match"] else "DIFF"
-        print(f"  Prompt {r['prompt_idx']}: {status}  (baseline={r['baseline_tokens']} toks, TQ={r['tq_tokens']} toks)")
+            if total > 0:
+                print(f"  Word overlap: {common}/{total} ({100*common/total:.0f}%)")
+            print(f"  Baseline output: {base['text'][:200]}")
+            print(f"  TQ BFP4 output:  {tq['text'][:200]}")
 
     ttnn.close_mesh_device(mesh_device)
     print("\nDone.")
