@@ -200,9 +200,11 @@ void wait_for_go_message() {
 #endif
     uint32_t go_message_index = mailboxes->go_message_index;
 
+    DPRINT << "FW: waiting for go message" << ENDL();
     while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
+    DPRINT << "FW: got go message" << ENDL();
 }
 
 #if !defined(COMPILE_FOR_TRISC)
