@@ -624,13 +624,13 @@ static void run_quasar_pack_untilize_test(
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
 
-    // For Int16 (UInt16), pack incrementing 16-bit integers two-per-uint32. gold_standard_untilize
+    // For Int16, pack incrementing 16-bit integers two-per-uint32. gold_standard_untilize
     // operates on raw uint32_t (rearranges 16-bit slots), so golden comparison works for both.
     std::vector<uint32_t> src_vec;
-    if (data_format == tt::DataFormat::UInt16) {
+    if (data_format == tt::DataFormat::Int16) {
         src_vec.resize(src_dram_buffer_size / sizeof(uint32_t));
         for (uint32_t i = 0; i < src_vec.size(); i++) {
-            src_vec[i] = (static_cast<uint32_t>(2 * i + 1) << 16) | static_cast<uint32_t>(2 * i);
+            src_vec[i] = (static_cast<uint32_t>((2 * i) + 1) << 16) | static_cast<uint32_t>(2 * i);
         }
     } else {
         src_vec = create_arange_vector_of_bfloat16(src_dram_buffer_size, false);
@@ -692,8 +692,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
     vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
-        for (bool dst_full_sync_en : {true}) {
-            for (bool fp32_dest_acc_en : {true}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
                 for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
                     if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
                          data_format == tt::DataFormat::Float16_b)) {
