@@ -48,8 +48,7 @@ void kernel_main() {
     const uint32_t src_base_addr = get_arg_val<uint32_t>(rt++);
     const uint32_t logical_width = get_arg_val<uint32_t>(rt++);  // this core's logical width (in elements)
     const uint32_t padded_width = get_arg_val<uint32_t>(rt++);
-    const uint32_t logical_height_core = get_arg_val<uint32_t>(rt++);  // this core's real height (rows)
-    const uint32_t padded_height_core = get_arg_val<uint32_t>(rt++);    // this core's output height (rows)
+    const uint32_t logical_height_core = get_arg_val<uint32_t>(rt++);   // this core's real height (rows)
     const uint32_t global_logical_height = get_arg_val<uint32_t>(rt++); // full tensor logical height (rows) for batch stride
     const uint32_t shard_start_row = get_arg_val<uint32_t>(rt++);   // This core's start row (within a batch)
     const uint32_t start_col_bytes = get_arg_val<uint32_t>(rt++);   // for later block support.

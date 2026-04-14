@@ -77,9 +77,6 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         const bool input_is_nd_sharded = input_tensor.memory_config().created_with_nd_shard_spec();
         const bool output_is_nd_sharded = operation_attributes.output_mem_config.created_with_nd_shard_spec();
 
-        const bool input_is_legacy_sharded = input_tensor.shard_spec().has_value();
-        const bool output_is_legacy_sharded = operation_attributes.output_mem_config.shard_spec().has_value();
-
         if (input_is_nd_sharded || output_is_nd_sharded) {
             if (!operation_attributes.enough_space_height) {
                 return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -94,11 +91,8 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
 
-        if (input_is_legacy_sharded && output_is_legacy_sharded) {
-            auto memory_layout = input_tensor.memory_config().memory_layout();
-            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-                return TilizeWithValPaddingMultiCoreHeightShardedFactory{};
-            }
+        if (can_use_multicore_height_sharded_factory(operation_attributes, input_tensor)) {
+            return TilizeWithValPaddingMultiCoreHeightShardedFactory{};
         }
 
         return TilizeWithValPaddingMultiCoreDefaultFactory{};

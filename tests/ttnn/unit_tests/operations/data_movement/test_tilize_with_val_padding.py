@@ -444,7 +444,11 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
         memory_config=tilize_with_val_padding_args["input_mem_config"][0],
     )
     tt_output = ttnn.tilize_with_val_padding(
-        tt_input, output_tensor_shape, pad_value, memory_config=tilize_with_val_padding_args["output_mem_config"]
+        tt_input,
+        output_tensor_shape,
+        pad_value,
+        memory_config=tilize_with_val_padding_args["output_mem_config"],
+        use_multicore=tilize_with_val_padding_args.get("use_multicore", True),
     )
     torch_output = tt_output.cpu().to_torch_with_padded_shape()
 

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <map>
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
@@ -162,28 +161,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     const uint32_t tile_rows_per_core = output_shard_height / TILE_HEIGHT;
     const uint32_t total_tiles_per_core = tiles_per_row * tile_rows_per_core;
 
-    log_info(
-        tt::LogTest,
-        "height-sharded tilize factory:"
-        " input_logical={} input_padded={} output_logical={} output_padded={}"
-        " flattened_input_rows={} flattened_output_rows={}"
-        " input_shard=[{}, {}] output_shard=[{}, {}]"
-        " shard_count={} tiles_per_row={} tile_rows_per_core={} total_tiles_per_core={}",
-        input.logical_shape(),
-        input.padded_shape(),
-        output.logical_shape(),
-        output.padded_shape(),
-        flattened_input_logical_rows,
-        flattened_output_padded_rows,
-        input_shard_height,
-        input_shard_width,
-        output_shard_height,
-        output_shard_width,
-        output_shard_count,
-        tiles_per_row,
-        tile_rows_per_core,
-        total_tiles_per_core);
-
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
@@ -234,12 +211,19 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         num_tiles_per_block  // per_core_block_tile_cnt
     };
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     CreateKernel(
         program,
         "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         all_cores,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_args,
         });
 
@@ -286,8 +270,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
                        ? std::min(output_shard_height, flattened_input_logical_rows - shard_start_row)
                        : 0);
 
-        const uint32_t padded_height_core = output_shard_height;
-
         // Height-only factory: each shard spans full row width, so no column offset.
         const uint32_t start_col_bytes = 0;
 
@@ -299,7 +281,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             input_shard_width,             // logical_width
             output_shard_width,            // padded_width
             logical_height_core,           // logical_height_core
-            padded_height_core,            // padded_height_core
             flattened_input_logical_rows,  // global_logical_height
             shard_start_row,               // shard_start_row
             start_col_bytes,               // start_col_bytes
