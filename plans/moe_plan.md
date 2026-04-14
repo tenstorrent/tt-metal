@@ -73,6 +73,12 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links and verificat
 - `hf_model_cards/gpt-oss-20b/config.json`: num_local_experts=32 (L47), num_hidden_layers=24 (L45) — differences from 120B
 - `hf_model_cards/gpt-oss-120b/modeling_gpt_oss.py` (from `transformers/models/gpt_oss/`): GptOssExperts class (L69), gate_up_proj+bias (L75-76), down_proj+bias (L77-78), alpha=1.702 (L79), limit=7.0 (L80), custom activation `_apply_gate` (L82-86), expert forward (L90-110); GptOssTopKRouter class (L117), weight+bias (L123-124), softmax scoring (L129); GptOssMLP class (L134) combining router+experts (L137-138)
 
+
+#### Downloaded Files
+- `config.json` — `hf download openai/gpt-oss-120b config.json`
+- `README.md` — `hf download openai/gpt-oss-120b README.md`
+- `modeling_gpt_oss.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/gpt_oss/modeling_gpt_oss.py
+- (20B) `config.json` — `hf download openai/gpt-oss-20b config.json`
 #### Config Parameters (from config.json)
 
 | Parameter | 120B | 20B | Description |
@@ -188,6 +194,12 @@ input x: [batch, seq_len, 2880]
 - `hf_model_cards/deepseek-v3/config.json`: hidden_size (L17), moe_intermediate_size (L23), n_routed_experts (L26), n_shared_experts (L27), num_experts_per_tok (L30), hidden_act (L16), scoring_func (L58), topk_method (L61), n_group (L25), topk_group (L60), routed_scaling_factor (L57), first_k_dense_replace (L15), num_hidden_layers (L31), norm_topk_prob (L28), moe_layer_freq (L24)
 - `hf_model_cards/deepseek-v3/modeling_deepseek.py`: MoEGate class (L393), gate weight+bias_correction (L408-414), sigmoid scoring (L429), group-based top-k (L437-461), scaling factor applied (L471), DeepseekV3MoE class (L475), expert MLP gate/up/down (L383-385), SwiGLU activation (L389), shared_experts init (L518), shared expert addition (L531)
 
+
+#### Downloaded Files
+- `config.json` — `hf download deepseek-ai/DeepSeek-V3 config.json`
+- `README.md` — `hf download deepseek-ai/DeepSeek-V3 README.md`
+- `modeling_deepseek.py` — `hf download deepseek-ai/DeepSeek-V3 modeling_deepseek.py`
+- `configuration_deepseek.py` — `hf download deepseek-ai/DeepSeek-V3 configuration_deepseek.py`
 #### Config Parameters (from config.json)
 
 | Parameter | Value | Description |
@@ -288,6 +300,9 @@ output = routed_output + shared_output
 #### Source References
 - `hf_model_cards/glm-5/config.json`: hidden_size (L17), moe_intermediate_size (L26), n_routed_experts (L30), n_shared_experts (L31), num_experts_per_tok (L34), hidden_act (L15), scoring_func (L51), topk_method (L54), routed_scaling_factor (L50), n_group (L29), topk_group (L53), first_k_dense_replace (L14), num_hidden_layers (L35)
 
+
+#### Downloaded Files
+- `config.json` — `hf download zai-org/GLM-5 config.json`
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **6144** | ✓ |
@@ -317,6 +332,9 @@ output = routed_output + shared_output
 #### Source References
 - `hf_model_cards/kimi-k2.5/config.json` (all in `text_config`): hidden_size (L50), moe_intermediate_size (L69), n_routed_experts (L72), n_shared_experts (L73), num_experts_per_tok (L79), hidden_act (L49), scoring_func (L144), topk_method (L157), routed_scaling_factor (L143), n_group (L71), topk_group (L156), first_k_dense_replace (L46), num_hidden_layers (L80), architecture=DeepseekV3ForCausalLM (L21)
 
+
+#### Downloaded Files
+- `config.json` — `hf download moonshotai/Kimi-K2.5 config.json`
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **7168** | ✓ (same as DeepSeek V3) |
@@ -345,8 +363,13 @@ output = routed_output + shared_output
 
 #### Source References
 - `hf_model_cards/ling-1t/config.json`: hidden_size (L12), moe_intermediate_size (L20), num_experts (L25), num_shared_experts (L36), num_experts_per_tok (L22), hidden_act (L17), score_function (L51), moe_router_enable_expert_bias (L46), routed_scaling_factor (L47), n_group (L48), topk_group (L49), first_k_dense_replace (L16), num_hidden_layers (L11), norm_topk_prob (L21), use_bias (L32)
-- `hf_model_cards/ling-1t/modeling_bailing_moe_v2.py`: BailingMoeV2Gate class (L287), shared_experts init with `moe_intermediate_size * num_shared_experts` (L362-364), shared expert addition (L390-391)
+- `hf_model_cards/ling-1t/modeling_bailing_moe_v2.py`: BailingMoeV2Gate class (L287), expert_bias register_buffer (L302), sigmoid scoring (L338), expert_bias addition (L340), group_limited_topk method (L310-331), routed_scaling_factor applied (L346), shared_experts init with `moe_intermediate_size * num_shared_experts` (L362-364), shared expert addition (L390-391)
 
+
+#### Downloaded Files
+- `config.json` — `hf download inclusionAI/Ling-1T config.json`
+- `modeling_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T modeling_bailing_moe_v2.py`
+- `configuration_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T configuration_bailing_moe_v2.py`
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **8192** | ✓ |
@@ -356,7 +379,8 @@ output = routed_output + shared_output
 | `num_experts_per_tok` (K) | **8** | ✓ |
 | `hidden_act` | `silu` | |
 | `score_function` | **sigmoid** | Same as DeepSeek |
-| `moe_router_enable_expert_bias` | **true** | Has bias correction |
+| `topk_method` | group_limited_topk (from modeling code L310-331) | Same algorithm as DeepSeek noaux_tc |
+| `moe_router_enable_expert_bias` | **true** | Has bias correction (L302, L340) |
 | `routed_scaling_factor` | **2.5** | Same as DeepSeek |
 | `n_group` / `topk_group` | **8 / 4** | Same as DeepSeek V3! |
 | `norm_topk_prob` | true | |
@@ -365,7 +389,7 @@ output = routed_output + shared_output
 | `use_bias` | false | No bias on expert projections |
 | Shared expert intermediate | 2048 (= moe_intermediate × 1) | |
 
-**Notes:** Ling-1T is very similar to DeepSeek V3 in routing — same sigmoid scoring, same 8/4 group-based routing, same scaling factor, same expert bias correction. The unverified list had the wrong intermediate size (1536→2048) and wrong shared expert count (2→1). The unverified claim of "shared expert intermediate: 12288" is wrong — from code, shared expert uses `moe_intermediate_size * num_shared_experts = 2048`.
+**Notes:** Ling-1T is very similar to DeepSeek V3 in routing — same sigmoid scoring, same 8/4 group-based routing (`group_limited_topk` at L310-331), same scaling factor, same expert bias correction. Confirmed from `modeling_bailing_moe_v2.py`: sigmoid (L338), expert_bias (L302, L340), group_limited_topk (L310-331), routed_scaling_factor (L346). The unverified list had the wrong intermediate size (1536→2048) and wrong shared expert count (2→1). The unverified claim of "shared expert intermediate: 12288" is wrong — from code, shared expert uses `moe_intermediate_size * num_shared_experts = 2048`.
 
 ---
 
@@ -378,6 +402,10 @@ output = routed_output + shared_output
 - `hf_model_cards/glm-4.7/config.json`: hidden_size (L15), moe_intermediate_size (L21), n_routed_experts (L26), n_shared_experts (L27), num_experts_per_tok (L29), hidden_act (L14), routed_scaling_factor (L28), n_group (L24), topk_group (L25), first_k_dense_replace (L30), num_hidden_layers (L31), norm_topk_prob (L22)
 - `hf_model_cards/glm-4.7/modeling_glm4_moe.py`: sigmoid scoring (L390), e_score_correction_bias (L300, L391), group-based top-k (L392-406), routed_scaling_factor applied (L411), fused gate_up_proj (L338), chunk(2) split (L360), expert forward (L355-363)
 
+
+#### Downloaded Files
+- `config.json` — `hf download zai-org/GLM-4.7 config.json`
+- `modeling_glm4_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/glm4_moe/modeling_glm4_moe.py
 | Parameter | Value |
 |-----------|-------|
 | `hidden_size` | **5120** |
@@ -405,12 +433,17 @@ output = routed_output + shared_output
 
 ### 2.7 Qwen3 MoE — MoE Architecture (Verified)
 
-**Source:** `Qwen/Qwen3-235B-A22B` config.json
+**Source:** `Qwen/Qwen3-235B-A22B` config.json + transformers `modeling_qwen3_moe.py`
 **Downloaded to:** `plans/hf_model_cards/qwen3-moe/`
 
 #### Source References
 - `hf_model_cards/qwen3-moe/config.json`: hidden_size (L12), moe_intermediate_size (L19), num_experts (L22), num_experts_per_tok (L23), hidden_act (L11), num_hidden_layers (L24), norm_topk_prob (L20), intermediate_size (L14), router_aux_loss_coef (L30)
+- `hf_model_cards/qwen3-moe/modeling_qwen3_moe.py` (from `transformers/models/qwen3_moe/`): Qwen3MoeTopKRouter class (L254), softmax scoring (L266), top-k selection (L267), norm_topk_prob (L268-269)
 
+
+#### Downloaded Files
+- `config.json` — `hf download Qwen/Qwen3-235B-A22B config.json`
+- `modeling_qwen3_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **4096** | **No** (unverified said 2048) |
@@ -418,24 +451,30 @@ output = routed_output + shared_output
 | `num_experts` | **128** | ✓ |
 | `num_experts_per_tok` (K) | **8** | (not in unverified) |
 | `hidden_act` | `silu` | |
+| `scoring_func` | softmax (from modeling code L266) | |
 | `norm_topk_prob` | true | |
 | `router_aux_loss_coef` | 0.001 | |
 | `intermediate_size` | 12288 | Dense FFN dim |
 | `num_hidden_layers` | 94 | |
 | Shared experts | **None** | No shared expert fields in config |
 
-**Notes:** Qwen3 MoE is simpler than DeepSeek-family models — no `scoring_func`, `topk_method`, `n_group`, or `routed_scaling_factor` in config. Likely uses standard softmax routing. No shared experts. Unverified list was wrong on hidden_size and intermediate_size (both doubled).
+**Notes:** Qwen3 MoE uses **softmax routing** confirmed from modeling code (L266: `softmax(router_logits)` → top-k → optional normalization). No shared experts. Unverified list was wrong on hidden_size and intermediate_size (both doubled).
 
 ---
 
 ### 2.8 Qwen3.5 MoE — MoE Architecture (Verified)
 
-**Source:** `Qwen/Qwen3.5-397B-A17B` config.json (multimodal; MoE params in `text_config`)
+**Source:** `Qwen/Qwen3.5-397B-A17B` config.json (multimodal; MoE params in `text_config`) + transformers `modeling_qwen3_5_moe.py`
 **Downloaded to:** `plans/hf_model_cards/qwen3.5-moe/`
 
 #### Source References
 - `hf_model_cards/qwen3.5-moe/config.json` (all in `text_config`): hidden_size (L16), moe_intermediate_size (L88), num_experts (L92), num_experts_per_tok (L93), shared_expert_intermediate_size (L98), hidden_act (L15), num_hidden_layers (L94), router_aux_loss_coef (L97)
+- `hf_model_cards/qwen3.5-moe/modeling_qwen3_5_moe.py` (from `transformers/models/qwen3_5_moe/`): Qwen3_5MoeTopKRouter class (L754), softmax scoring (L765), top-k (L766), norm top-k (L767); Qwen3_5MoeSparseMoeBlock (L773), shared_expert init (L778), shared_expert_gate sigmoid gating (L788), output = expert + shared (L790)
 
+
+#### Downloaded Files
+- `config.json` — `hf download Qwen/Qwen3.5-397B-A17B config.json`
+- `modeling_qwen3_5_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **4096** | **No** (unverified said 2048) |
@@ -444,11 +483,13 @@ output = routed_output + shared_output
 | `num_experts_per_tok` (K) | **10** | (not in unverified) |
 | `shared_expert_intermediate_size` | **1024** | Explicit field, same as moe_intermediate |
 | `hidden_act` | `silu` | |
+| `scoring_func` | softmax (from modeling code L765) | |
 | `router_aux_loss_coef` | 0.001 | |
 | `num_hidden_layers` | 60 | |
 | `mtp_num_hidden_layers` | 1 | Multi-token prediction |
+| Shared expert gating | sigmoid gate on shared expert output (L788) | Unique to Qwen3.5 |
 
-**Notes:** Qwen3.5 has 512 experts (most of any model here), K=10 (highest), and an explicit `shared_expert_intermediate_size` field. The unverified list was significantly wrong on all dimension values. No `scoring_func`/`topk_method` in config — likely uses standard softmax routing.
+**Notes:** Qwen3.5 has 512 experts (most of any model here), K=10 (highest), and an explicit `shared_expert_intermediate_size` field. Uses **softmax routing** confirmed from modeling code (L765). Shared expert has a **sigmoid gate** (L788: `sigmoid(gate(x)) * shared_output`) before being added to routed output — this is different from DeepSeek-family models which add shared expert output directly. The unverified list was significantly wrong on all dimension values.
 
 ---
 
@@ -460,6 +501,9 @@ output = routed_output + shared_output
 #### Source References
 - `hf_model_cards/qwen3.5-35b/config.json` (all in `text_config`): hidden_size (L16), moe_intermediate_size (L68), num_experts (L72), num_experts_per_tok (L73), shared_expert_intermediate_size (L78), hidden_act (L15), num_hidden_layers (L74), router_aux_loss_coef (L77)
 
+
+#### Downloaded Files
+- `config.json` — `hf download Qwen/Qwen3.5-35B-A3B config.json`
 | Parameter | Value | vs Qwen3.5-397B |
 |-----------|-------|-----------------|
 | `hidden_size` | **2048** | 4096 (half) |
@@ -486,6 +530,9 @@ output = routed_output + shared_output
 - `hf_model_cards/qwen3-omni-30b/config.json` — Thinker MoE (in `thinker_config.text_config`): hidden_size (L315), moe_intermediate_size (L334), num_experts (L340), num_experts_per_tok (L341), shared_expert_intermediate_size=0 (L372), hidden_act (L314), num_hidden_layers (L342), norm_topk_prob (L336), router_aux_loss_coef (L370)
 - `hf_model_cards/qwen3-omni-30b/config.json` — Talker MoE (in `talker_config.text_config`): hidden_size (L52), moe_intermediate_size (L57), num_experts (L60), num_experts_per_tok (L61), shared_expert_intermediate_size=768 (L77), num_hidden_layers (L62)
 
+
+#### Downloaded Files
+- `config.json` — `hf download Qwen/Qwen3-Omni-30B-A3B-Instruct config.json`
 This is an omni-modal model (text+vision+audio) with **two separate MoE modules**: a "thinker" (main LLM) and a "talker" (audio generation).
 
 #### Thinker MoE (main LLM — `thinker_config.text_config`)
@@ -523,17 +570,29 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 
 ### 2.11 Mistral Large 3 (675B) — MoE Architecture (Verified)
 
-**Source:** `mistralai/Mistral-Large-3-675B-Instruct-2512` params.json + README.md
+**Source:** `mistralai/Mistral-Large-3-675B-Instruct-2512` params.json + README.md + mistral-inference code + vLLM implementation
 **Downloaded to:** `plans/hf_model_cards/mistral-large-3/`
 
 #### Source References
 - `hf_model_cards/mistral-large-3/params.json`: dim/hidden_size (L2), hidden_dim=16384 (L4), moe.expert_hidden_dim (L12), moe.num_experts (L17), moe.num_experts_per_tok (L18), moe.num_shared_experts (L19), moe.first_k_dense_replace (L15), moe.route_every_n (L20), moe.routed_scale (L21), moe.num_expert_groups (L14), moe.num_expert_groups_per_tok (L16), n_layers (L22)
 - `hf_model_cards/mistral-large-3/README.md`: "Granular Mixture-of-Experts" (L28), 675B total / 41B active (L28), 673B LM + 2.5B vision encoder (L43-44)
+- `hf_model_cards/mistral-large-3/transformer_layers.py` (from `mistralai/mistral-inference`): FeedForward w1/w2/w3 SiLU activation (L101-106), MoeLayer init (L150-153)
+- `hf_model_cards/mistral-large-3/moe.py` (from `mistralai/mistral-inference`): softmax routing (L27), simple top-k (L26)
+- `hf_model_cards/mistral-large-3/vllm_mistral_large_3.py` (from `vllm-project/vllm`): MistralLarge3ForCausalLM subclasses DeepseekV3ForCausalLM (L8, L11), shared_experts weight remapping confirming w1/w2/w3 (L27-29), expert w1/w2/w3 (L30-32)
 
+
+#### Downloaded Files
+- `params.json` — `hf download mistralai/Mistral-Large-3-675B-Instruct-2512 params.json`
+- `README.md` — `hf download mistralai/Mistral-Large-3-675B-Instruct-2512 README.md`
+- `moe.py` — https://raw.githubusercontent.com/mistralai/mistral-inference/main/src/mistral_inference/moe.py
+- `transformer_layers.py` — https://raw.githubusercontent.com/mistralai/mistral-inference/main/src/mistral_inference/transformer_layers.py
+- `args.py` — https://raw.githubusercontent.com/mistralai/mistral-inference/main/src/mistral_inference/args.py
+- `vllm_mistral_large_3.py` — https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/model_executor/models/mistral_large_3.py
 | Parameter | Value |
 |-----------|-------|
 | `dim` (hidden_size) | **7168** |
 | `expert_hidden_dim` (moe intermediate) | **4096** |
+| `shared_expert_intermediate` | **4096** (= expert_hidden_dim, confirmed from vLLM weight remapping) |
 | `hidden_dim` (dense FFN intermediate) | **16384** |
 | `num_experts` | **128** |
 | `num_shared_experts` | **1** |
@@ -543,9 +602,12 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 | `routed_scale` | 1.0 |
 | `num_expert_groups` | 1 |
 | `n_layers` | 61 |
+| `scoring_func` | softmax (from moe.py L27) |
+| `activation` | SiLU/SwiGLU (from transformer_layers.py L106: `silu(w1(x)) * w3(x)`) |
+| Expert layout | Separate w1/w2/w3 (gate/down/up), no bias |
 | Total / Active params | 675B / 41B |
 
-**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing). Has a vision encoder (2.5B). No custom modeling code downloadable — uses `mistral-common` / vLLM format. Config does not specify activation function or scoring method. The unverified list had incorrect hidden size (6144→7168), intermediate size (2048→4096), and K value (8→4).
+**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing), softmax routing. vLLM implements Mistral Large 3 as a **subclass of DeepseekV3ForCausalLM** with weight name remapping (vllm_mistral_large_3.py L11), confirming shared experts use the same w1/w2/w3 structure as routed experts. Shared expert intermediate size is 4096 (same as expert_hidden_dim) — inferred from vLLM remapping using the same gate_proj/up_proj/down_proj pattern with no separate size config. The unverified list had incorrect hidden size (6144→7168), intermediate size (2048→4096), and K value (8→4).
 
 ---
 
@@ -558,6 +620,10 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 - `hf_model_cards/gemma-4-26b/config.json` (all in `text_config`): hidden_size (L32), moe_intermediate_size (L70), intermediate_size (L35), num_experts (L72), top_k_experts (L92), hidden_activation (L31), enable_moe_block (L26), num_hidden_layers (L74), use_double_wide_mlp (L95)
 - `hf_model_cards/gemma-4-26b/modeling_gemma4.py` (from `transformers/models/gemma4/`): Gemma4TextMLP dense class (L1016), gate/up/down proj (L1025-1027), SwiGLU activation (L1031); Gemma4TextExperts class (L1250), gate_up_proj fused (L1258), down_proj (L1259), chunk(2) split (L1280); Gemma4TextRouter class (L1289), learned scale (L1299), per_expert_scale (L1300), softmax scoring (L1307), topk (L1310), per-expert scaling applied (L1320); decoder layer init: mlp+router+experts (L1332-1349), parallel dense+MoE forward (L1382-1396)
 
+
+#### Downloaded Files
+- `config.json` — `hf download google/gemma-4-26B-A4B-it config.json`
+- `modeling_gemma4.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/gemma4/modeling_gemma4.py
 | Parameter | Value |
 |-----------|-------|
 | `hidden_size` | **2816** |
@@ -626,7 +692,15 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 
 #### Source References
 - `hf_model_cards/deepseek-ocr/config.json` (in `language_config`): hidden_size (L29), moe_intermediate_size (L34), n_routed_experts (L36), n_shared_experts (L37), num_experts_per_tok (L39), topk_method (L47), n_group (L35), topk_group (L46), first_k_dense_replace (L28), num_hidden_layers (L40), architecture=DeepseekV2ForCausalLM (L19)
+- `hf_model_cards/deepseek-ocr/configuration_deepseek_v2.py`: scoring_func default = `'softmax'` (L142, L185)
+- `hf_model_cards/deepseek-ocr/modeling_deepseekv2.py`: MoEGate class (L400), scoring_func from config (L407), softmax scoring (L438-439), sigmoid scoring (L440-441), greedy topk_method (L448-451)
 
+
+#### Downloaded Files
+- `config.json` — `hf download deepseek-ai/DeepSeek-OCR config.json`
+- `modeling_deepseekv2.py` — `hf download deepseek-ai/DeepSeek-OCR --include '*.py'`
+- `configuration_deepseek_v2.py` — `hf download deepseek-ai/DeepSeek-OCR --include '*.py'`
+- `modeling_deepseekocr.py` — `hf download deepseek-ai/DeepSeek-OCR modeling_deepseekocr.py`
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **1280** | **No** (unverified said 4096) |
@@ -634,6 +708,7 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 | `n_routed_experts` | **64** | ✓ |
 | `n_shared_experts` | **2** | ✓ |
 | `num_experts_per_tok` (K) | **6** | ✓ |
+| `scoring_func` | softmax (default from configuration_deepseek_v2.py L142) | Not in config.json; V2 default is softmax |
 | `topk_method` | **greedy** | Different from DeepSeek V3 (noaux_tc) |
 | `n_group` / `topk_group` | 1 / 1 | No grouping |
 | Base architecture | **DeepseekV2ForCausalLM** | Based on V2, not V3 |
@@ -641,7 +716,7 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 | `first_k_dense_replace` | 1 | |
 | Shared expert intermediate | 1792 (= 896 × 2) | |
 
-**Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). The unverified list values (hidden=4096, intermediate=1407, shared_intermediate=5632) were likely for the larger DeepSeek-VL-v2 7B model, not the OCR model. Uses greedy routing instead of noaux_tc.
+**Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). Uses **softmax scoring** (V2 default from configuration_deepseek_v2.py L142 — config.json does not override) with **greedy top-k** selection. The unverified list values (hidden=4096, intermediate=1407, shared_intermediate=5632) were likely for the larger DeepSeek-VL-v2 7B model, not the OCR model.
 
 ---
 
@@ -717,14 +792,14 @@ Based on code exploration of:
 | **GLM-4.7** | 5120 | 1536 | 1536 | 160 | 1 | 8 | SiLU/SwiGLU | `sigmoid` (code) | noaux_tc-style (code) | 1/1 | 2.5 | No | correction (code) | 3 | 92 | No | GLM4-MoE (DS-style) |
 | **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
 | **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3 |
-| **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 (inferred) | 10 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
-| **Qwen3.5 35B** | 2048 | 512 | 512 | 256 | 1 (inferred) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 40 | No | Qwen3.5 |
-| **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 (no field) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
-| **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 (inferred, size=0) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
-| **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 (inferred, size=768) | 6 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
-| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | (unspec.) | `greedy` | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
-| **Mistral Large 3** | 7168 | 4096 | ? | 128 | 1 | 4 | SiLU? | (unspec.) | (unspec.) | 1/1 | 1.0 | No | No | 3 | 61 | No | Mistral |
-| **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | (unspec.) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
+| **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 (inferred) | 10 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
+| **Qwen3.5 35B** | 2048 | 512 | 512 | 256 | 1 (inferred) | 8 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 40 | No | Qwen3.5 |
+| **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 (no field) | 8 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
+| **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 (inferred, size=0) | 8 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
+| **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 (inferred, size=768) | 6 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
+| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | softmax (V2 default) | `greedy` | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
+| **Mistral Large 3** | 7168 | 4096 | 4096 (from vLLM) | 128 | 1 | 4 | SiLU/SwiGLU (code) | softmax (code) | simple top-k (code) | 1/1 | 1.0 | No | No | 3 | 61 | No | DS V3-like (vLLM subclass) |
+| **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | group_limited_topk (code) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
 | **Gemma 4 26B** | 2816 | 704 | — (parallel dense) | 128 | 0 (parallel dense) | 8 | **GELU/SwiGLU** | softmax | simple+per_expert_scale | —/— | per-expert learned | No | No (has learned scale) | all MoE | 30 | **Yes** | Gemma4 |
 
 ---
@@ -740,7 +815,7 @@ Based on the verified configs, the models cluster into clear families:
 - **Kimi K2.5**: Built on DS V3. 384 experts, scaling=2.827, no grouping.
 - **Ling-1T**: Very close to DS V3. Same group routing (8/4), same scaling=2.5.
 
-### Family 2: Standard softmax routing + SwiGLU (scoring_func unspecified in config — assumed softmax)
+### Family 2: Standard softmax routing + SwiGLU (confirmed from modeling code)
 - **Qwen3 (235B)**: Simple config, no grouping, no shared experts.
 - **Qwen3.5 (397B)**: 512 experts, K=10, softmax routing.
 - **Qwen3.5 (35B)**: Smaller Qwen3.5, 256 experts, K=8, same MoE arch.
@@ -748,7 +823,7 @@ Based on the verified configs, the models cluster into clear families:
 
 ### Family 3: Custom architectures
 - **GPT-OSS**: Unique activation (GELU-gated with clamping), has bias everywhere, fused interleaved gate_up, softmax routing.
-- **Mistral Large 3**: Custom format (params.json), K=4, large expert_hidden_dim=4096.
+- **Mistral Large 3**: SiLU/SwiGLU + softmax routing (confirmed from code), K=4, large expert_hidden_dim=4096. Implemented as DeepseekV3 subclass in vLLM. Separate w1/w2/w3 projections.
 - **Gemma 4 (optional)**: GELU activation (not SiLU), parallel dense+MoE (not replacement), per-expert learned scaling, fused chunked gate_up. Unique parallel dense MLP + MoE architecture.
 
 ### Family 4: Legacy/Small
@@ -770,18 +845,18 @@ Based on the verified configs, the models cluster into clear families:
 9. Router bias / bias correction (on/off)
 
 ### 7.2 Activation function strategy
-- **12/14 models use SiLU/SwiGLU** (including Mistral, unconfirmed): `down(silu(gate(x)) * up(x))`
+- **12/14 models use SiLU/SwiGLU** (all confirmed from config or modeling code): `down(silu(gate(x)) * up(x))`
 - **Gemma 4**: GELU/SwiGLU — same gate/up/down pattern but with `gelu_pytorch_tanh` instead of SiLU
 - **GPT-OSS**: custom GELU-gated with clamping and shift — unique pattern
 - Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant
 
 ### 7.3 Routing strategy
 - **DeepSeek family (5 rows: DS V3, GLM-5, GLM-4.7, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling (GLM-4.7 confirmed from modeling code)
-- **Standard family (5 rows: Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (likely, scoring_func unspecified in config)
+- **Standard softmax family (5 rows: Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (confirmed from modeling code)
 - **GPT-OSS**: softmax top-k with router bias
 - **Gemma 4**: softmax top-k with per-expert learned scaling
-- **DS-OCR**: greedy selection (scoring_func unspecified, topk_method=greedy)
-- **Mistral Large 3**: unspecified (no scoring_func or topk_method in params.json)
+- **Mistral Large 3**: softmax top-k (confirmed from mistral-inference moe.py)
+- **DS-OCR**: softmax scoring (V2 default) + greedy top-k selection
 - Recommendation: implement sigmoid+group and softmax as two routing modes
 
 ### 7.4 Expert projection layout
@@ -829,7 +904,11 @@ Using tile_size=32:
 
 ### Open design questions
 - For Qwen3.5 397B/35B, should `n_shared_experts` be a first-class config param only when present in JSON, or always derived from `shared_expert_intermediate_size` in HF modeling code?
-- For DeepSeek-OCR, is `greedy` routing a first-class mode for the generalized op, or out of scope for v1?
+- For DeepSeek-OCR, is `greedy` routing (softmax scoring + greedy top-k) a first-class mode for the generalized op, or out of scope for v1?
 - Should Qwen3-Omni Talker (different K, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile?
-- Confirm Qwen-family scoring/routing from modeling code (currently "(unspec.)" from config alone) before finalizing family classification
-- Confirm Mistral Large 3 activation and shared expert intermediate from weights or `mistral-common` docs
+- Qwen3.5 uses a **sigmoid gate on shared expert output** before adding to routed output (L788) — should the generalized module support this gated shared expert pattern?
+
+### Resolved from earlier revisions
+- ~~Confirm Qwen-family scoring/routing from modeling code~~ → **Resolved**: all use softmax (Qwen3 L266, Qwen3.5 L765)
+- ~~Confirm Mistral Large 3 activation and shared expert intermediate~~ → **Resolved**: SiLU/SwiGLU (transformer_layers.py L106), shared_expert_intermediate=4096 (vLLM weight remapping), softmax routing (moe.py L27)
+- ~~Confirm DS-OCR scoring_func~~ → **Resolved**: softmax (V2 default from configuration_deepseek_v2.py L142)
