@@ -32,3 +32,4 @@
 {"event":"analysis_written","operation":"sinh","output_file":".claude-analysis/softcap-1/sinh_analysis.md","sections":["dispatch_summary","approximation_mode","abstraction_layers","call_chain","params_dispatch","annotated_source","instruction_table","register_usage","address_mode","local_knowledge_sources"],"ts":"2026-04-14T23:25:13+00:00"}
 {"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/hardtanh_analysis.md","notes":"Dispatch chain incomplete but ckernel SFPU implementation fully documented","ts":"2026-04-14T23:25:22+00:00"}
 {"event":"complete","operation":"frac","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/frac_analysis.md","commit":"e34531ccb4","ts":"2026-04-14T23:26:11+00:00"}
+{"event":"complete","operation":"sinh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/sinh_analysis.md","commit":"c977068c44","ts":"2026-04-14T23:27:49+00:00"}
