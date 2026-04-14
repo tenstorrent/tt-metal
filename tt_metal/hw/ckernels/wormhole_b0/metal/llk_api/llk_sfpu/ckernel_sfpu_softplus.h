@@ -63,10 +63,12 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
 #ifdef INP_FLOAT32
-            // FP32: 4-term Taylor series for ln(1+e) to avoid boundary discontinuity
-            sfpi::vFloat e = _sfpu_exp_accurate_<false>(neg_a);
+            // FP32: 3-term Taylor series ln(1+e) = e - e²/2 + e³/3
+            // Fixes the 48K ULP discontinuity at the polynomial-to-exp boundary.
+            // 3 terms give ~1 ULP error at a=5 (the boundary).
+            sfpi::vFloat e = _sfpu_exp_accurate_<true>(neg_a);
             sfpi::vFloat e2 = e * e;
-            residual = e - e2 * 0.5f + e2 * e * 0.333333343f - e2 * e2 * 0.25f;
+            residual = e - e2 * 0.5f + e2 * e * 0.333333343f;
 #else
             // BF16: exp(-a) alone is sufficient (boundary rounds to same bf16)
             residual = _sfpu_exp_21f_bf16_<false>(neg_a);
@@ -98,8 +100,6 @@ inline void calculate_softplus(uint param0, uint param1, uint param2) {
 }
 
 template <bool APPROXIMATION_MODE>
-void softplus_init() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
-}
+void softplus_init() {}
 
 }  // namespace ckernel::sfpu
