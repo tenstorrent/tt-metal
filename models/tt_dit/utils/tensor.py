@@ -7,13 +7,13 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+import torch
+
 import ttnn
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import EllipsisType
-
-    import torch
 
 
 def typed_tensor(
@@ -360,10 +360,6 @@ def fast_device_to_host(
             transfer and returns the assembled tensor; all other ranks return
             ``None``.  If ``None`` (default), all ranks perform D2H.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
-    import torch
-
     mesh_shape = tuple(mesh_device.shape)
 
     if len(mesh_shape) != 2:
@@ -440,21 +436,26 @@ def fast_device_to_host(
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
-    # Get mesh coordinates before issuing DMA — topology is on the original
-    # device tensor and maps each shard index to its (row, col) mesh position.
+    # Save mesh coordinates from the *device* tensor before DMA — topology
+    # maps each shard index to its (row, col) mesh position.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
-    device_tensors = ttnn.get_device_tensors(tt_tensor)
 
-    # Async DMA: issue all transfers then sync once
-    host_tensors = [dt.cpu(blocking=False) for dt in device_tensors]
+    # Single .cpu() call on the full mesh tensor.  This batches all 32 DMA
+    # reads into one C++ dispatch so that:
+    #   - Host buffer allocation is parallelised across shards in C++.
+    #   - A single MeshBufferReadDescriptor is created, enabling the reader
+    #     thread pool to process all completion-queue reads in parallel.
+    host_tensor = tt_tensor.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
 
-    # Zero-copy to_torch when available, otherwise standard to_torch
-    with ThreadPoolExecutor(max_workers=len(host_tensors)) as pool:
-        shards = list(pool.map(_to_torch_zero_copy, host_tensors))
+    # Extract per-shard host tensors.  For single-host, get_device_tensors
+    # on a host tensor just validates presence and wraps each shard — no copy.
+    host_shard_tensors = ttnn.get_device_tensors(host_tensor)
 
+    # Zero-copy to_torch when available, otherwise standard to_torch
+    shards = [_to_torch_zero_copy(s) for s in host_shard_tensors]
     # Trim physical (tile-padded) shape to logical shape — view, no copy
-    logical_shape = list(host_tensors[0].shape)
+    logical_shape = list(host_shard_tensors[0].shape)
     shards = [s[tuple(slice(0, d) for d in logical_shape)] for s in shards]
 
     # Validate that topology coordinates and device tensors are consistent.
@@ -491,25 +492,48 @@ def fast_device_to_host(
                 )
                 raise ValueError(msg)
 
-    # Reassemble from 2D mesh using explicit coordinate lookup.
+    # Reassemble from 2D mesh by writing each shard directly into a
+    # pre-allocated output buffer.  This halves memory traffic compared to
+    # two-level torch.cat (one pass of 896 MB vs two passes of 1.8 GB) and
+    # avoids intermediate row-buffer allocations whose munmap costs ~42 ms.
     if concat_dims[0] is not None and concat_dims[1] is not None:
-        rows = []
-        for r in range(mesh_shape[0]):
-            row_shards = [shards_by_coord[(r, c)] for c in range(mesh_shape[1])]
-            rows.append(torch.cat(row_shards, dim=concat_dims[1]))
-        return torch.cat(rows, dim=concat_dims[0])
+        d0, d1 = concat_dims[0], concat_dims[1]
+        s0 = logical_shape[d0]
+        s1 = logical_shape[d1]
+        full_shape = list(logical_shape)
+        full_shape[d0] *= mesh_shape[0]
+        full_shape[d1] *= mesh_shape[1]
+        dtype = shards[0].dtype
+        ndim = len(full_shape)
+
+        buf_key = (tuple(full_shape), dtype)
+        prev = getattr(fast_device_to_host, "_cat_bufs", None)
+        if prev is None or prev[0] != buf_key:
+            out_buf = torch.empty(full_shape, dtype=dtype)
+            fast_device_to_host._cat_bufs = (buf_key, out_buf)
+        else:
+            _, out_buf = prev
+
+        for (r, c), shard in shards_by_coord.items():
+            slices = [slice(None)] * ndim
+            slices[d0] = slice(r * s0, (r + 1) * s0)
+            slices[d1] = slice(c * s1, (c + 1) * s1)
+            out_buf[tuple(slices)] = shard
+        result = out_buf
     elif concat_dims[0] is not None:
-        return torch.cat(
+        result = torch.cat(
             [shards_by_coord[(r, 0)] for r in range(mesh_shape[0])],
             dim=concat_dims[0],
         )
     elif concat_dims[1] is not None:
-        return torch.cat(
+        result = torch.cat(
             [shards_by_coord[(0, c)] for c in range(mesh_shape[1])],
             dim=concat_dims[1],
         )
     else:
-        return shards[0]
+        result = shards[0]
+
+    return result
 
 
 def upsample(
