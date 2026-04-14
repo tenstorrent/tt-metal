@@ -119,9 +119,22 @@ public:
             return {entry->hash, entry->valid};
         }
 
-        std::ifstream dep_file(path, std::ios::binary);
-        if (!dep_file.is_open()) {
+        std::ifstream dep_file;
+        std::error_code open_ec;
+        const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
+            [&](std::error_code& ec) {
+                dep_file.open(path, std::ios::binary);
+                if (!deph_file.is_open()) {
+                    ec.assign(errno, std::system_category());
+                    return false;
+                }
+                return true;
+            },
+            open_ec);
+
+        if (!dep_file_opened) {) {
             return {0, false};
+        }
         }
         uint64_t hash = hash_file_content(dep_file);
         if (dep_file.fail() && !dep_file.eof()) {
@@ -158,15 +171,15 @@ private:
 
     static std::optional<Metadata> get_metadata(const std::filesystem::path& path) {
         std::error_code ec;
-        auto size = std::filesystem::file_size(path, ec);
-        if (ec) {
+        auto size = tt::filesystem::safe_file_size(path);
+        if (!size.has_value()) {
             return std::nullopt;
         }
-        auto mtime = std::filesystem::last_write_time(path, ec);
-        if (ec) {
+        auto mtime = tt::filesystem::safe_last_write_time(path);
+        if (!mtime.has_value()) {
             return std::nullopt;
         }
-        return Metadata{mtime, size};
+        return Metadata{mtime.value(), size.value()};
     }
 
     std::mutex map_mutex_;

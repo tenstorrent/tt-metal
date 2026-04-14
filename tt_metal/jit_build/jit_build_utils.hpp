@@ -16,7 +16,10 @@ bool run_command(const std::string& cmd, const std::filesystem::path& log_file, 
 // Like run_command but bypasses the shell entirely by using posix_spawn with an explicit
 // argument vector.  Immune to shell metacharacter injection.
 // |working_dir| is passed as the cwd for the child process (empty = inherit parent cwd).
-bool exec_command(const std::vector<std::string>& args, const std::string& working_dir, const std::string& log_file);
+bool exec_command(
+    const std::vector<std::string>& args,
+    const std::filesystem::path& working_dir,
+    const std::filesystem::path& log_file);
 
 // Split a whitespace-delimited string into tokens (no shell quoting support).
 std::vector<std::string> tokenize_flags(const std::string& flags);

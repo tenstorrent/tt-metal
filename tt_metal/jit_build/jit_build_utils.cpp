@@ -29,6 +29,57 @@
 
 namespace tt::jit_build::utils {
 
+namespace {
+
+class SpawnFileActionsGuard {
+public:
+    SpawnFileActionsGuard() = default;
+    SpawnFileActionsGuard(const SpawnFileActionsGuard&) = delete;
+    SpawnFileActionsGuard& operator=(const SpawnFileActionsGuard&) = delete;
+
+    ~SpawnFileActionsGuard() {
+        close_log_fd();
+        destroy_file_actions();
+    }
+
+    int init() {
+        int ret = ::posix_spawn_file_actions_init(&file_actions_);
+        initialized_ = ret == 0;
+        return ret;
+    }
+
+    ::posix_spawn_file_actions_t* actions() { return &file_actions_; }
+
+    int log_fd() const { return log_fd_; }
+    int& mutable_log_fd() { return log_fd_; }
+
+    void cleanup_after_spawn() {
+        close_log_fd();
+        destroy_file_actions();
+    }
+
+private:
+    void close_log_fd() {
+        if (log_fd_ >= 0) {
+            ::close(log_fd_);
+            log_fd_ = -1;
+        }
+    }
+
+    void destroy_file_actions() {
+        if (initialized_) {
+            ::posix_spawn_file_actions_destroy(&file_actions_);
+            initialized_ = false;
+        }
+    }
+
+    ::posix_spawn_file_actions_t file_actions_{};
+    int log_fd_ = -1;
+    bool initialized_ = false;
+};
+
+}  // namespace
+
 bool run_command(const std::string& cmd, const std::filesystem::path& log_file, bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
@@ -41,10 +92,10 @@ bool run_command(const std::string& cmd, const std::filesystem::path& log_file, 
             std::cout << "===== RUNNING SYSTEM COMMAND:\n";
             std::cout << cmd << "\n" << std::endl;
         }
-        ret = system(cmd.c_str());
+        ret = ::system(cmd.c_str());
     } else {
         std::string redirected_cmd = cmd + " >> " + log_file.string() + " 2>&1";
-        ret = system(redirected_cmd.c_str());
+        ret = ::system(redirected_cmd.c_str());
     }
 
     return (ret == 0);
@@ -69,7 +120,10 @@ std::vector<std::string> tokenize_flags(const std::string& flags) {
     return tokens;
 }
 
-bool exec_command(const std::vector<std::string>& args, const std::string& working_dir, const std::string& log_file) {
+bool exec_command(
+    const std::vector<std::string>& args,
+    const std::filesystem::path& working_dir,
+    const std::filesystem::path& log_file) {
     if (args.empty()) {
         return false;
     }
@@ -82,32 +136,70 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     }
     argv.push_back(nullptr);
 
-    posix_spawn_file_actions_t file_actions;
-    posix_spawn_file_actions_init(&file_actions);
+    SpawnFileActionsGuard spawn_guard;
+    int file_actions_ret = spawn_guard.init();
+    if (file_actions_ret != 0) {
+        log_error(
+            tt::LogBuildKernels,
+            "posix_spawn_file_actions_init failed for '{}': {}",
+            argv[0],
+            std::strerror(file_actions_ret));
+        return false;
+    }
 
-    int log_fd = -1;
     if (!log_file.empty()) {
-        log_fd = open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
-        if (log_fd < 0) {
-            posix_spawn_file_actions_destroy(&file_actions);
+        const bool opened_log_file = tt::filesystem::retry_on_estale([&]() {
+            errno = 0;
+            spawn_guard.mutable_log_fd() = ::open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+            return spawn_guard.log_fd() >= 0;
+        });
+        if (!opened_log_file) {
+            const int open_errno = errno;
+            log_error(tt::LogBuildKernels, "open failed for log file '{}': {}", log_file, std::strerror(open_errno));
             return false;
         }
-        posix_spawn_file_actions_adddup2(&file_actions, log_fd, STDOUT_FILENO);
-        posix_spawn_file_actions_adddup2(&file_actions, log_fd, STDERR_FILENO);
+        int dup_stdout_ret =
+            ::posix_spawn_file_actions_adddup2(spawn_guard.actions(), spawn_guard.log_fd(), STDOUT_FILENO);
+        if (dup_stdout_ret != 0) {
+            log_error(
+                tt::LogBuildKernels,
+                "posix_spawn_file_actions_adddup2 failed for '{}' -> stdout (log file '{}'): {}",
+                argv[0],
+                log_file,
+                std::strerror(dup_stdout_ret));
+            return false;
+        }
+        int dup_stderr_ret =
+            ::posix_spawn_file_actions_adddup2(spawn_guard.actions(), spawn_guard.log_fd(), STDERR_FILENO);
+        if (dup_stderr_ret != 0) {
+            log_error(
+                tt::LogBuildKernels,
+                "posix_spawn_file_actions_adddup2 failed for '{}' -> stderr (log file '{}'): {}",
+                argv[0],
+                log_file,
+                std::strerror(dup_stderr_ret));
+            return false;
+        }
     }
 
     if (!working_dir.empty()) {
-        posix_spawn_file_actions_addchdir_np(&file_actions, working_dir.c_str());
+        int chdir_ret = ::posix_spawn_file_actions_addchdir_np(spawn_guard.actions(), working_dir.c_str());
+        if (chdir_ret != 0) {
+            log_error(
+                tt::LogBuildKernels,
+                "posix_spawn_file_actions_addchdir_np failed for '{}' (working dir '{}'): {}",
+                argv[0],
+                working_dir,
+                std::strerror(chdir_ret));
+            return false;
+        }
     }
 
     pid_t pid = 0;
     int spawn_ret =
-        posix_spawnp(&pid, argv[0], &file_actions, nullptr, const_cast<char* const*>(argv.data()), ::environ);
+        ::posix_spawnp(&pid, argv[0], spawn_guard.actions(), nullptr, const_cast<char* const*>(argv.data()), ::environ);
 
-    if (log_fd >= 0) {
-        close(log_fd);
-    }
-    posix_spawn_file_actions_destroy(&file_actions);
+    spawn_guard.cleanup_after_spawn();
 
     if (spawn_ret != 0) {
         log_error(tt::LogBuildKernels, "posix_spawnp failed for '{}': {}", argv[0], std::strerror(spawn_ret));
@@ -115,7 +207,7 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     }
 
     int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
+    while (::waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) {
             log_error(tt::LogBuildKernels, "waitpid failed for '{}': {}", argv[0], std::strerror(errno));
             return false;
