@@ -263,7 +263,7 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
 
     auto reduce_cfg = MatmulConfig::tile(cb_in_idx, cb_matmul_reduce, cb_identity_scaler);
     matmul_init<TILE>(reduce_cfg);
-    matmul_tile<TILE>(reduce_cfg, 0, 0, reduce_dst_idx);
+    matmul_single<TILE>(reduce_cfg, 0, 0, reduce_dst_idx);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);

@@ -1180,6 +1180,26 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
 /**
  * out_cb = in0_cb @ in1_cb
  */
+// PostComputeFn for SDPA: adds causal mask to tiles in DST after matmul accumulation.
+struct CausalMaskPostCompute {
+    uint32_t mask_cb;
+    uint32_t zero_cb;
+    ALWI void operator()(uint32_t out_subblock_num_tiles) const {
+        cb_wait_front(mask_cb, out_subblock_num_tiles);
+        cb_wait_front(zero_cb, 1);
+        add_tiles_init(zero_cb, mask_cb, true);
+        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+            add_tiles(zero_cb, mask_cb, 0, i, i);
+        }
+    }
+};
+
+/**
+ * Blocked matmul with absolute-offset packing, delegating to
+ * compute_kernel_lib::matmul_blocks_absolute for full DST+CB encapsulation.
+ *
+ * Preserves the original interface for backward compatibility with SDPA callers.
+ */
 ALWI void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -1203,57 +1223,21 @@ ALWI void matmul_blocks(
     // postcondition: out_cb has M*N produced
 
     auto cfg = MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, in0_block_w, transpose);
-    matmul_init_short<BLOCK>(cfg);
 
-    const uint32_t output_num_tiles = M * N;
-    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
-
-    uint32_t in0_index_offset = 0;
-
-    const uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
-    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
-
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-    cb_reserve_back(out_cb, output_num_tiles);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            matmul_accumulate<BLOCK>(cfg, in0_index_offset, in1_index_offset, 0, in0_block_w, 1, N, 0);
-
-            if (add_mask) {
-                cb_wait_front(mask_cb, out_subblock_num_tiles);
-                cb_wait_front(zero_cb, 1);
-                add_tiles_init(zero_cb, mask_cb, true);
-                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_cb, mask_cb, 0, i, i);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            uint32_t dst_idx = 0;
-            uint32_t out_col_offset = in1_subblock * subblock_w;
-            for (uint32_t r = 0; r < subblock_h; r++) {
-                uint32_t out_row_offset = r * N;
-                for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                    dst_idx++;
-                }
-            }
-            tile_regs_release();
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-        in0_wait_tiles += in0_subblock_num_tiles;
-        // Somewhat granularize the push of in0 subblocks
-        cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
+    if (add_mask) {
+        matmul_blocks_absolute<BLOCK>(
+            cfg,
+            M,
+            N,
+            K,
+            in0_num_subblocks,
+            in1_num_subblocks,
+            subblock_h,
+            subblock_w,
+            CausalMaskPostCompute{mask_cb, zero_cb});
+    } else {
+        matmul_blocks_absolute<BLOCK>(cfg, M, N, K, in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w);
     }
-    cb_pop_front(in1_cb, K * N);
 }
 
 template <uint32_t M>

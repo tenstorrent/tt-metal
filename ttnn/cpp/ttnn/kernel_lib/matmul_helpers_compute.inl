@@ -95,7 +95,7 @@ ALWI void matmul_init_short_with_both_dt(const MatmulConfig& cfg, uint32_t old_i
 // =============================================================================
 
 template <MatmulMode mode>
-ALWI void matmul_tile(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx) {
+ALWI void matmul_single(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx) {
     detail::matmul_single<mode>(cfg, in0_idx, in1_idx, dst_idx);
 }
 
@@ -300,18 +300,6 @@ ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uin
 }
 
 template <MatmulMode mode>
-ALWI void matmul_accumulate_attn(const MatmulConfig& cfg, uint32_t inner_dim, bool progressive_in0) {
-    for (uint32_t kt = 0; kt < inner_dim; ++kt) {
-        if (progressive_in0) {
-            cb_wait_front(cfg.in0_cb_id, kt + 1);
-        }
-        cb_wait_front(cfg.in1_cb_id, 1);
-        detail::matmul_single<mode>(cfg, kt, 0, 0);
-        cb_pop_front(cfg.in1_cb_id, 1);
-    }
-}
-
-template <MatmulMode mode>
 ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles) {
     for (uint32_t sub = 0; sub < num_subblocks; ++sub) {
         tile_regs_acquire();
@@ -324,112 +312,6 @@ ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_s
         }
         tile_regs_release();
         cb_push_back(cfg.out_cb_id, subblock_tiles);
-    }
-}
-
-template <MatmulMode mode>
-ALWI uint32_t matmul_moe_accumulate_with_bias(
-    const MatmulConfig& cfg,
-    const MatmulConfig& bias_cfg,
-    uint32_t in0_start,
-    uint32_t num_blocks,
-    uint32_t tiles_per_block,
-    uint32_t tile_stride,
-    uint32_t limit) {
-    uint32_t k_tracker = 0;
-    uint32_t in0_index = in0_start;
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        cb_wait_front(cfg.in1_cb_id, tiles_per_block);
-        uint32_t last_k_index = 0;
-        for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
-            if (k_tracker == limit) {
-                last_k_index = k;
-                break;
-            }
-            detail::matmul_single<mode>(cfg, in0_index, k, 0);
-            in0_index++;
-            k_tracker++;
-        }
-        if (k_tracker == limit) {
-            matmul_tile<mode>(bias_cfg, 0, last_k_index, 0);
-        }
-        cb_pop_front(cfg.in1_cb_id, tiles_per_block);
-    }
-    return in0_index;
-}
-
-template <MatmulMode mode>
-ALWI void matmul_moe_w2_accumulate_with_dm1_cycling(
-    const MatmulConfig& cfg,
-    const MatmulConfig& bias_cfg,
-    MoeDm1State& dm1,
-    uint32_t num_blocks,
-    uint32_t tiles_per_block,
-    uint32_t tile_stride,
-    uint32_t limit,
-    uint32_t dm1_rdy_cb,
-    uint32_t tiles_per_step,
-    uint32_t num_buffers,
-    const uint32_t* dm1_table) {
-    uint32_t k_tracker = 0;
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        cb_wait_front(cfg.in1_cb_id, tiles_per_block);
-        uint32_t last_k_index = 0;
-        for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
-            if (k_tracker == limit) {
-                last_k_index = k;
-                break;
-            }
-            if (dm1.tiles_remaining == 0) {
-                cb_pop_front(dm1_rdy_cb, 1);
-                cb_wait_front(dm1_rdy_cb, 1);
-                dm1.tiles_remaining = dm1_table[++dm1.step];
-                dm1.buf = (dm1.buf >= num_buffers - 1) ? 0 : dm1.buf + 1;
-                dm1.offset = dm1.buf * tiles_per_step;
-                dm1.index = dm1.offset;
-            }
-            dm1.tiles_remaining--;
-            detail::matmul_single<mode>(cfg, dm1.index, k, 0);
-            dm1.index++;
-            k_tracker++;
-        }
-        if (k_tracker == limit) {
-            matmul_tile<mode>(bias_cfg, 0, last_k_index, 0);
-        }
-        cb_pop_front(cfg.in1_cb_id, tiles_per_block);
-    }
-}
-
-template <MatmulMode mode>
-ALWI void matmul_moe_w2_accumulate_with_dm1_linear(
-    const MatmulConfig& cfg,
-    MoeDm1State& dm1,
-    uint32_t num_blocks,
-    uint32_t tiles_per_block,
-    uint32_t tile_stride,
-    uint32_t dm1_rdy_cb,
-    uint32_t tiles_per_step,
-    const uint32_t* dm1_table,
-    uint32_t last_block_early_exit_k) {
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        cb_wait_front(cfg.in1_cb_id, tiles_per_block);
-        for (uint32_t k = 0; k < tiles_per_block; k += tile_stride) {
-            if ((block == (num_blocks - 1)) && (k == last_block_early_exit_k)) {
-                cb_pop_front(dm1_rdy_cb, 1);
-                break;
-            }
-            if (dm1.tiles_remaining == 0) {
-                cb_pop_front(dm1_rdy_cb, 1);
-                cb_wait_front(dm1_rdy_cb, 1);
-                dm1.tiles_remaining = dm1_table[++dm1.step];
-                dm1.offset += tiles_per_step;
-                dm1.index = dm1.offset;
-            }
-            dm1.tiles_remaining--;
-            detail::matmul_single<mode>(cfg, dm1.index, k, 0);
-            dm1.index++;
-        }
-        cb_pop_front(cfg.in1_cb_id, tiles_per_block);
     }
 }
 
@@ -471,6 +353,139 @@ ALWI void matmul(const MatmulConfig& cfg, const MatmulBlockShape& shape) {
             }
         }
     }
+}
+
+// =============================================================================
+// Layer 7: Single-tile matmul with DST+CB encapsulation
+// =============================================================================
+
+template <MatmulMode mode, typename PostComputeFn>
+ALWI void matmul_single_and_pack(
+    const MatmulConfig& cfg,
+    uint32_t in0_idx,
+    uint32_t in1_idx,
+    uint32_t out_cb,
+    PostComputeFn post_compute) {
+
+    cb_reserve_back(out_cb, 1);
+    tile_regs_acquire();
+    detail::matmul_single<mode>(cfg, in0_idx, in1_idx, 0);
+    post_compute(1);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, out_cb);
+    tile_regs_release();
+    cb_push_back(out_cb, 1);
+}
+
+// =============================================================================
+// SDPA Helpers: Absolute-offset packing patterns
+// =============================================================================
+
+template <MatmulMode mode, bool blocked_pack, typename PostPackFn>
+ALWI void matmul_and_pack_absolute(
+    const MatmulConfig& cfg,
+    uint32_t in0_start,
+    uint32_t in1_start,
+    uint32_t inner_dim,
+    uint32_t in1_stride,
+    uint32_t out_cb,
+    uint32_t subblock_h,
+    uint32_t subblock_w,
+    uint32_t out_num_cols,
+    uint32_t row_offset,
+    uint32_t col_offset,
+    PostPackFn post_pack) {
+
+    tile_regs_acquire();
+#ifdef ARCH_BLACKHOLE
+    matmul_accumulate_no_mop<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
+#else
+    matmul_accumulate<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
+#endif
+    tile_regs_commit();
+
+    tile_regs_wait();
+    uint32_t dst_idx = 0;
+#ifdef ARCH_BLACKHOLE
+    if constexpr (blocked_pack) {
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + row_offset) * out_num_cols;
+            pack_tile<true>(dst_idx, out_cb, out_row_offset + col_offset);
+            dst_idx += subblock_w;
+        }
+    } else
+#endif
+    {
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + row_offset) * out_num_cols;
+            for (uint32_t c = 0; c < subblock_w; c++) {
+                pack_tile<true>(dst_idx, out_cb, out_row_offset + col_offset + c);
+                dst_idx++;
+            }
+        }
+    }
+    post_pack();
+    tile_regs_release();
+}
+
+template <MatmulMode mode, typename PostComputeFn>
+ALWI void matmul_blocks_absolute(
+    const MatmulConfig& cfg,
+    uint32_t M,
+    uint32_t N,
+    uint32_t K,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t subblock_h,
+    uint32_t subblock_w,
+    PostComputeFn post_compute) {
+
+    matmul_init_short<mode>(cfg);
+
+    const uint32_t output_num_tiles = M * N;
+    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
+    const uint32_t in0_subblock_num_tiles = subblock_h * cfg.kt_dim;
+
+    reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
+    cb_wait_front(cfg.in1_cb_id, K * N);
+    cb_reserve_back(cfg.out_cb_id, output_num_tiles);
+
+    uint32_t in0_index_offset = 0;
+    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        cb_wait_front(cfg.in0_cb_id, in0_wait_tiles);
+        uint32_t in1_index_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+            tile_regs_acquire();
+            matmul_accumulate<mode>(cfg, in0_index_offset, in1_index_offset, 0, cfg.kt_dim, 1, N, 0);
+
+            post_compute(out_subblock_num_tiles);
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            uint32_t dst_idx = 0;
+            uint32_t out_col_offset = in1_subblock * subblock_w;
+            for (uint32_t r = 0; r < subblock_h; r++) {
+                uint32_t out_row_offset = r * N;
+                for (uint32_t c = 0; c < subblock_w; c++) {
+                    pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + out_col_offset + c);
+                    dst_idx++;
+                }
+            }
+            tile_regs_release();
+
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += in0_subblock_num_tiles;
+        in0_wait_tiles += in0_subblock_num_tiles;
+        cb_push_back(cfg.out_cb_id, in0_subblock_all_cols_num_tiles);
+    }
+
+    cb_pop_front(cfg.in1_cb_id, K * N);
 }
 
 }  // namespace compute_kernel_lib

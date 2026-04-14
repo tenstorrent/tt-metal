@@ -170,7 +170,7 @@ void compute_u_scalar_row(
     auto u_reduce_cfg = MatmulConfig::tile(cb_u_scalar_row, cb_mat_mul_reduction, 0);
     tile_regs_acquire();
     matmul_init_short<TILE>(u_reduce_cfg);
-    matmul_tile<TILE>(u_reduce_cfg, 0, 0, accum_register);
+    matmul_single<TILE>(u_reduce_cfg, 0, 0, accum_register);
     tile_regs_commit();
 
     tile_regs_wait();

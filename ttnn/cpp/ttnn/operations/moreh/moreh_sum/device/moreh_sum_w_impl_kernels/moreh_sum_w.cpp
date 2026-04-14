@@ -98,7 +98,7 @@ void kernel_main() {
 #endif
             auto mm_cfg2 = MatmulConfig::tile(cb_input, cb_scaler, cb_out);
             matmul_init_short<TILE>(mm_cfg2);
-            matmul_tile<TILE>(mm_cfg2, 0, 0, reduce_dst_idx);
+            matmul_single<TILE>(mm_cfg2, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

@@ -77,9 +77,15 @@ struct RingAccumulatorState {
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
 
+// PostPackFn for SDPA: posts hardware semaphore to trigger early reduce.
+struct TriggerReducePostPack {
+    ALWI void operator()() const { PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU))); }
+};
+
 /**
  * Blocked subblock matmul with absolute offset packing.
- * Always uses pack_tile<true> at row-major positions in out_cb.
+ * Delegates to compute_kernel_lib::matmul_and_pack_absolute which manages
+ * the full DST lifecycle (acquire/commit/wait/release) and pack loop.
  */
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, bool blocked_pack = false>
 SDPA_NOINLINE void blocked_matmul_and_pack(
@@ -97,38 +103,34 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     bool trigger_reduce = false) {
     auto bm_cfg = MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, matmul_stride, transpose);
 
-    tile_regs_acquire();
-#ifdef ARCH_BLACKHOLE
-    matmul_accumulate_no_mop<BLOCK>(bm_cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
-#else
-    matmul_accumulate<BLOCK>(bm_cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
-#endif
-    tile_regs_commit();
-
-    tile_regs_wait();
-    uint32_t dst_idx = 0;
-#ifdef ARCH_BLACKHOLE
-    if constexpr (blocked_pack) {
-        for (uint32_t r = 0; r < subblock_h; r++) {
-            uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
-            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
-            dst_idx += subblock_w;
-        }
-    } else
-#endif
-    {
-        for (uint32_t r = 0; r < subblock_h; r++) {
-            uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
-            for (uint32_t c = 0; c < subblock_w; c++) {
-                pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                dst_idx++;
-            }
-        }
-    }
     if (trigger_reduce) {
-        PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        matmul_and_pack_absolute<BLOCK, blocked_pack, TriggerReducePostPack>(
+            bm_cfg,
+            in0_index_start,
+            in1_index_start,
+            inner_dim,
+            in1_stride,
+            out_cb,
+            subblock_h,
+            subblock_w,
+            out_num_cols,
+            row_subblock_idx * subblock_h,
+            out_col_offset,
+            TriggerReducePostPack{});
+    } else {
+        matmul_and_pack_absolute<BLOCK, blocked_pack>(
+            bm_cfg,
+            in0_index_start,
+            in1_index_start,
+            inner_dim,
+            in1_stride,
+            out_cb,
+            subblock_h,
+            subblock_w,
+            out_num_cols,
+            row_subblock_idx * subblock_h,
+            out_col_offset);
     }
-    tile_regs_release();
 }
 
 /**
@@ -497,22 +499,20 @@ void normalize_row_streaming(
             cb_wait_front(col_identity_cb, N);
             cb_wait_front(cur_sum_cb, 1);
 
-            cb_reserve_back(scratch_cb, 1);
-            tile_regs_acquire();
-            matmul_tile<BLOCK>(norm_cfg, 0, 0, 0);
+            // PostComputeFn: apply reciprocal to the sum tile in DST before packing
+            struct RecipPostCompute {
+                ALWI void operator()(uint32_t) const {
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0, (int)VectorMode::C)));
+                    recip_tile_init<false>();
+                    MATH((recip_tile<false>(0, (int)VectorMode::C)));
 #else
-            recip_tile_init();
-            MATH((recip_tile_first_column(0)));
+                    recip_tile_init();
+                    MATH((recip_tile_first_column(0)));
 #endif
-            tile_regs_commit();
+                }
+            };
 
-            tile_regs_wait();
-            pack_tile(0, scratch_cb);
-            tile_regs_release();
-            cb_push_back(scratch_cb, 1);
+            matmul_single_and_pack<BLOCK>(norm_cfg, 0, 0, scratch_cb, RecipPostCompute{});
 
             cb_pop_front(cur_sum_cb, 1);
         }
