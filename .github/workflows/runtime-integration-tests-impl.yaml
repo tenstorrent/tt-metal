@@ -9,6 +9,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      wheel-artifact-name:
+        required: false
+        type: string
+        default: ''
       enabled-skus:
         required: true
         type: string
@@ -83,6 +87,7 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_quietbox') || contains(matrix.test-group.sku, 'bh_loudbox') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
