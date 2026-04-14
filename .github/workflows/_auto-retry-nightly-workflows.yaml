@@ -58,7 +58,18 @@ jobs:
         run: |
           MAX_ATTEMPTS=2
           CURRENT_HOUR=$(date +"%H")
-          read original_trigger conclusion head_branch <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion + " " + .head_branch')
+
+          # Fetch workflow run details
+          run_details=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }} 2>&1)
+          if [ $? -ne 0 ]; then
+            echo "::error title=api-error::Failed to fetch workflow run details: $run_details"
+            echo "should-continue=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          read original_trigger conclusion head_branch <<< $(echo "$run_details" | jq -r '.event + " " + .conclusion + " " + .head_branch')
+
+          echo "Target workflow details: trigger=$original_trigger, conclusion=$conclusion, branch=$head_branch, attempt=${{ steps.get-run-id-and-attempt.outputs.attempt-number }}"
 
           # Check if head_branch is allowed (main, stable, or v* tag)
           is_allowed_ref=false
