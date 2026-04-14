@@ -4,10 +4,9 @@
 
 // Cross-layout typecast compute kernel.
 //
-// TILIZE_INPUT    (RM→TILE): two-phase with intermediate CB:
-//   Phase 1: tilize(input_cb → intermediate_cb)
-//   Phase 2: typecast(intermediate_cb → output_cb)
-//   tilize_uninit_with_dt reconfigures unpack for the new source CB between phases.
+// TILIZE_INPUT    (RM→TILE): tilize first, then typecast.
+//   Phase 1: tilize(input_cb → intermediate_cb) — clean hardware, no SFPU state
+//   Phase 2: typecast(intermediate_cb → output_cb) — after explicit reconfig
 //
 // UNTILIZE_OUTPUT (TILE→RM): fused typecast + pack_untilize_dest (single phase)
 
@@ -32,16 +31,16 @@ void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
 #ifdef TILIZE_INPUT
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t total_input_pages = get_compile_time_arg_val(5);
 #endif
 
 #if defined(TILIZE_INPUT)
-    // RM→TILE two-phase:
-    // Phase 1: tilize RM data from input_cb to intermediate_cb (tile format, input dtype)
-    // Phase 2: typecast from intermediate_cb to output_cb (tile format, output dtype)
+    // RM→TILE: tilize first (clean hardware), then typecast.
     //
-    // Between phases: tilize_uninit_with_dt reconfigures unpack for intermediate_cb,
-    // then init_sfpu sets up SFPU for typecast.
+    // Phase 1: tilize RM data from input_cb → intermediate_cb (tile format, input dtype).
+    // Tilize runs first on clean hardware — no SFPU state to interfere.
+    //
+    // Phase 2: typecast from intermediate_cb → output_cb (tile format, output dtype).
+    // Explicit reconfig between phases ensures hardware is properly configured.
 
     // Phase 1: tilize
     compute_kernel_hw_startup(input_cb, intermediate_cb);
@@ -57,9 +56,11 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-        fp32_mode>(per_core_block_cnt, total_input_pages);
+        fp32_mode>(per_core_block_cnt);
 
     // Phase 2: typecast from intermediate_cb → output_cb
+    // init_sfpu fully reinitializes unpack/math/pack for the SFPU typecast path.
+    // The tilize_uninit (called by tilize helper above) already cleaned up tilize state.
     init_sfpu(intermediate_cb, output_cb);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(output_cb, per_core_block_dim);
@@ -83,6 +84,14 @@ void kernel_main() {
     // Typecast tiles into DEST, then pack_untilize_dest writes DEST in RM format.
 
     init_sfpu(input_cb, output_cb);
+
+    // Disable fp32 dest accumulation before pack_untilize_dest_init —
+    // pack_untilize uses DST_ACCESS_STRIDED_MODE where strides are derived from
+    // pack_src_format. With fp32_dest on and non-fp32 output, strides are wrong.
+#if FP32_DEST_ACC_EN
+    disable_fp32_dest_acc();
+#endif
+
     pack_untilize_dest_init<per_core_block_dim>(output_cb);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {

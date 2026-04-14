@@ -198,7 +198,9 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
 }
 
 // ─── ROW_MAJOR → TILE ────────────────────────────────────────────────────────
-// Compute kernel: tilize(input_cb → intermediate_cb) + typecast(intermediate_cb → output_cb)
+// Compute kernel: typecast(input_cb → intermediate_cb) then tilize(intermediate_cb → output_cb)
+// Typecast runs first on clean SFPU hardware, then tilize runs after.
+// This avoids the tilize→SFPU state conflict that causes hangs.
 // Reader: reads RM sticks from interleaved input buffer
 // Writer: writes tiles to interleaved output buffer
 
@@ -282,10 +284,17 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
         WriterDataMovementConfig(writer_ct_args));
 
     // ── Compute kernel ───────────────────────────────────────────────────
-    const bool fp32_llk_acc = input_dtype == DataType::FLOAT32;
+    // For RM→TILE: Phase 1 tilize operates on input_cb (input dtype).
+    // Tilize with fp32_dest_acc + non-32-bit data hangs (hardware limitation).
+    // Enable fp32_dest only when input dtype is 32-bit (same logic as regular tilize).
+    const bool input_is_32bit =
+        (input_dtype == DataType::FLOAT32 || input_dtype == DataType::INT32 || input_dtype == DataType::UINT32);
+    const bool rm_to_tile_fp32_dest = args.fp32_dest_acc_en && input_is_32bit;
+
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc || args.preserve_fp32_precision) {
+    if (rm_to_tile_fp32_dest && args.preserve_fp32_precision) {
         unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     std::map<std::string, std::string> compute_defines;
@@ -302,9 +311,6 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
     const auto compute_kernel_path =
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
 
-    const uint32_t total_rm_rows_per_core = nblocks_per_core * TILE_HEIGHT;
-    const uint32_t total_rm_rows_per_cliff_core = nblocks_per_core_cliff * TILE_HEIGHT;
-
     if (!core_range.ranges().empty()) {
         std::vector<uint32_t> compute_args = {
             nblocks_per_core,  // per_core_block_cnt (tile-rows)
@@ -312,7 +318,6 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
             input_cb_index,
             output_cb_index,
             intermediate_cb_index,
-            total_rm_rows_per_core,  // total_input_pages for tilize
         };
         CreateKernel(
             program,
@@ -320,7 +325,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
             core_range,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .fp32_dest_acc_en = rm_to_tile_fp32_dest,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
                 .math_approx_mode = false,
@@ -335,7 +340,6 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
             input_cb_index,
             output_cb_index,
             intermediate_cb_index,
-            total_rm_rows_per_cliff_core,
         };
         CreateKernel(
             program,
@@ -343,7 +347,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
             core_range_cliff,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .fp32_dest_acc_en = rm_to_tile_fp32_dest,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
                 .math_approx_mode = false,
