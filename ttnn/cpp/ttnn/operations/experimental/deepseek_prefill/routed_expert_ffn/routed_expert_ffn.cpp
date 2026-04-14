@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "routed_expert_ffn.hpp"
-
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 
@@ -101,9 +99,6 @@ ttnn::Tensor routed_expert_ffn_optim(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& gate_program_config,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& up_program_config,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& down_program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     // Device compute grid
@@ -162,9 +157,6 @@ ttnn::Tensor routed_expert_ffn_optim(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
-    auto effective_gate_config = gate_program_config.value_or(gate_up_config);
-    auto effective_up_config = up_program_config.value_or(gate_up_config);
-
     // gate matmul:
     //   x_l1:      (M, K_gate)   [M_tiles x K_gate_tiles] bfloat8_b DRAM
     //   gate_proj:  (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] bfloat4_b DRAM
@@ -177,7 +169,7 @@ ttnn::Tensor routed_expert_ffn_optim(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/effective_gate_config,
+        /*program_config=*/gate_up_config,
         /*activation=*/std::string("silu"),
         /*compute_kernel_config=*/compute_kernel_config);
 
@@ -192,7 +184,7 @@ ttnn::Tensor routed_expert_ffn_optim(
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        /*program_config=*/effective_up_config,
+        /*program_config=*/gate_up_config,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
@@ -235,8 +227,6 @@ ttnn::Tensor routed_expert_ffn_optim(
         .fuse_batch = false,
     };
 
-    auto effective_down_config = down_program_config.value_or(down_config);
-
     // activated is already L1 interleaved from multiply — no reshard needed
     auto& activated_reshard = activated;
 
@@ -251,7 +241,7 @@ ttnn::Tensor routed_expert_ffn_optim(
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
-        /*program_config=*/effective_down_config,
+        /*program_config=*/down_config,
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config,
         /*core_grid=*/std::nullopt,
@@ -264,9 +254,6 @@ ttnn::Tensor routed_expert_ffn(
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& gate_program_config,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& up_program_config,
-    const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& down_program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
@@ -286,9 +273,6 @@ ttnn::Tensor routed_expert_ffn(
         /*gate_proj=*/gate_proj,
         /*up_proj=*/up_proj,
         /*down_proj=*/down_proj,
-        /*gate_program_config=*/gate_program_config,
-        /*up_program_config=*/up_program_config,
-        /*down_program_config=*/down_program_config,
         /*compute_kernel_config=*/compute_kernel_config,
         /*output=*/std::move(output));
 }
