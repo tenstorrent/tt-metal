@@ -55,7 +55,9 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links and verificat
 
 ### Notes
 - **GLM-4.7** uses the same `glm4_moe` architecture as GLM-4.5 but with extended context (202752 vs 131072). Also has a Flash variant: `zai-org/GLM-4.7-Flash` (`glm4_moe_lite`).
+- **GLM-4.5** config downloaded to `hf_model_cards/glm-4.5/` — MoE params match GLM-4.7 exactly (same `glm4_moe` arch, same hidden/expert/routing values). Not a separate plan entry.
 - **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096** (not 2048), 128 experts, 1 shared, K=**4** (not 8). The unverified list had incorrect intermediate size and K values. Mistral Small 3.2 is a 24B dense model (no MoE).
+- **Qwen n_shared_experts**: No Qwen config contains an explicit `n_shared_experts` or `num_shared_experts` field. Shared expert count is inferred: present if `shared_expert_intermediate_size > 0`, absent if field is 0 or missing. Marked "(inferred)" in the comparison table.
 
 ---
 
@@ -711,14 +713,14 @@ Based on code exploration of:
 | **GLM-4.7** | 5120 | 1536 | 1536 | 160 | 1 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | 1/1 | 2.5 | No | No | 3 | 92 | No | GLM4-MoE |
 | **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
 | **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3 |
-| **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 | 10 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
-| **Qwen3.5 35B** | 2048 | 512 | 512 | 256 | 1 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 40 | No | Qwen3.5 |
-| **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
-| **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
-| **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 | 6 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
-| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | (greedy) | greedy | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
+| **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 (inferred) | 10 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
+| **Qwen3.5 35B** | 2048 | 512 | 512 | 256 | 1 (inferred) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 40 | No | Qwen3.5 |
+| **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 (no field) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
+| **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 (inferred, size=0) | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
+| **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 (inferred, size=768) | 6 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
+| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | (unspec.) | `greedy` | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
 | **Mistral Large 3** | 7168 | 4096 | ? | 128 | 1 | 4 | SiLU? | (unspec.) | (unspec.) | 1/1 | 1.0 | No | No | 3 | 61 | No | Mistral |
-| **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | (bias-enabled) | 8/4 | 2.5 | No | correction | 4 | 80 | No | DS V3-like |
+| **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | (unspec.) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
 | **Gemma 4 26B** | 2816 | 704 | — (parallel dense) | 128 | 0 (parallel dense) | 8 | **GELU/SwiGLU** | softmax | simple+per_expert_scale | —/— | per-expert learned | No | No (has learned scale) | all MoE | 30 | **Yes** | Gemma4 |
 
 ---
@@ -764,26 +766,28 @@ Based on the verified configs, the models cluster into clear families:
 9. Router bias / bias correction (on/off)
 
 ### 7.2 Activation function strategy
-- **10/13 models use SiLU/SwiGLU**: `down(silu(gate(x)) * up(x))`
+- **12/14 models use SiLU/SwiGLU** (including Mistral, unconfirmed): `down(silu(gate(x)) * up(x))`
 - **Gemma 4**: GELU/SwiGLU — same gate/up/down pattern but with `gelu_pytorch_tanh` instead of SiLU
 - **GPT-OSS**: custom GELU-gated with clamping and shift — unique pattern
 - Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant
 
 ### 7.3 Routing strategy
-- **DeepSeek family (4 models)**: sigmoid scoring + group-based top-k + bias correction + scaling
-- **Standard family (5 models)**: softmax top-k (simple) — Qwen3, Qwen3.5 variants, Qwen3-Omni
+- **DeepSeek family (4 rows: DS V3, GLM-5, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling
+- **Standard family (6 rows: GLM-4.7, Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (likely, scoring_func unspecified in config)
 - **GPT-OSS**: softmax top-k with router bias
-- **DS-OCR**: greedy selection
+- **Gemma 4**: softmax top-k with per-expert learned scaling
+- **DS-OCR**: greedy selection (scoring_func unspecified, topk_method=greedy)
+- **Mistral Large 3**: unspecified (no scoring_func or topk_method in params.json)
 - Recommendation: implement sigmoid+group and softmax as two routing modes
 
 ### 7.4 Expert projection layout
-- **10/13 models**: separate gate_proj + up_proj + down_proj (no bias)
+- **12/14 rows**: separate gate_proj + up_proj + down_proj (no bias)
 - **GPT-OSS**: fused interleaved gate_up_proj + down_proj (with bias) — split via even/odd indices
 - **Gemma 4**: fused chunked gate_up_proj + down_proj (no bias) — split via `.chunk(2)` (first half/second half)
 - Recommendation: canonical internal layout is separate projections; fused layout handled at weight loading
 
 ### 7.5 Dense+MoE parallelism
-- **12/13 models**: MoE *replaces* the FFN (with optional shared expert added)
+- **13/14 rows**: MoE *replaces* the FFN (with optional shared expert added)
 - **Gemma 4**: MoE runs *in parallel* with a full dense MLP, outputs summed — unique architecture
 - Recommendation: support both modes (replacement vs parallel) as a config flag
 
@@ -817,3 +821,10 @@ Using tile_size=32:
 - [ ] Plan the kernel generalization (parameterize tile counts, activation, bias)
 - [ ] Prototype the generalized module
 - [ ] Test against existing DeepSeek and GPT-OSS implementations for regression
+
+### Open design questions
+- For Qwen3.5 397B/35B, should `n_shared_experts` be a first-class config param only when present in JSON, or always derived from `shared_expert_intermediate_size` in HF modeling code?
+- For DeepSeek-OCR, is `greedy` routing a first-class mode for the generalized op, or out of scope for v1?
+- Should Qwen3-Omni Talker (different K, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile?
+- Confirm GLM-4.7 and Qwen-family scoring/routing from modeling code (currently "(unspec.)" from config alone) before finalizing family classification
+- Confirm Mistral Large 3 activation and shared expert intermediate from weights or `mistral-common` docs
