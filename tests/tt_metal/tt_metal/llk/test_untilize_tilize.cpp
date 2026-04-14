@@ -565,8 +565,12 @@ static void run_quasar_pack_untilize_test(
 
     uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
 
-    tt::DataFormat output_data_fmt =
-        is_int8 ? tt::DataFormat::Int32 : (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b);
+    tt::DataFormat output_data_fmt = data_fmt;
+    if (is_int8) {
+        output_data_fmt = tt::DataFormat::Int32;
+    } else if (fp32_dest_acc_en) {
+        output_data_fmt = tt::DataFormat::Float32;
+    }
 
     tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
         .entry_size = input_single_tile_size,
@@ -693,7 +697,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en != true || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
+                if ((!fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
                     continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
                 }
                 run_quasar_pack_untilize_test(
