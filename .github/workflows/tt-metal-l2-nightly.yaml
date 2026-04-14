@@ -189,16 +189,9 @@ jobs:
             echo "$json" | jq -c --arg arch "$arch" --arg label "$label" '. += [{"arch": $arch, "runner-label": $label}]'
           }
 
-          # Matrix for tt-metal-l2-tests and didt-tests (N150, N300, P100, P150b)
+          # TEMPORARY: Only N150 for concat fix validation (#42105)
           matrix_l2='[]'
-          if [[ "$run_wormhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
-            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
-          fi
-          if [[ "$run_blackhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
-            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
-          fi
+          matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
           echo "matrix-l2-tests=$matrix_l2" >> $GITHUB_OUTPUT
 
           # Matrix for cpp-unit-tests (N150, N300, P150b, P100a)
@@ -278,30 +271,28 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      # Test group selection - default to all enabled for scheduled runs
-      run_conv_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',conv,') }}
-      run_matmul_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',matmul,') }}
-      run_docs_examples_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',docs_examples,') }}
-      run_experimental_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',experimental,') }}
-      run_pool_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',pool,') }}
-      run_sdxl_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdxl,') }}
-      run_train_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',train,') }}
-      run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdpa,') }}
-      run_sdpa_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdpa,') }}
-      run_eltwise_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',eltwise,') }}
-      run_transformers_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',transformers,') }}
-      run_moreh_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',moreh,') }}
-      run_data_movement_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',data_movement,') }}
-      run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
-      run_reduction_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',reduction,') }}
-      run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
-      run_compute_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,') }}
+      # TEMPORARY: Only run data_movement tests to validate concat fix (#42105)
+      run_conv_tests: false
+      run_matmul_tests: false
+      run_docs_examples_tests: false
+      run_experimental_tests: false
+      run_pool_tests: false
+      run_sdxl_tests: false
+      run_train_tests: false
+      run_sdpa_stress_tests: false
+      run_sdpa_tests: false
+      run_eltwise_tests: false
+      run_transformers_tests: false
+      run_moreh_tests: false
+      run_data_movement_tests: true
+      run_fused_tests: false
+      run_reduction_tests: false
+      run_misc_tests: false
+      run_compute_fused_tests: false
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     uses: ./.github/workflows/ttnn-ops-docs-check.yaml
     strategy:
@@ -317,9 +308,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   didt-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_didt_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     uses: ./.github/workflows/didt-tests.yaml
     strategy:
@@ -336,9 +325,7 @@ jobs:
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_cpp_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-cpp-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -356,9 +343,7 @@ jobs:
   # Metal IOMMU Unit Tests
   metal-iommu-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_metal_iommu_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-blackhole-only != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -374,9 +359,7 @@ jobs:
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -393,9 +376,7 @@ jobs:
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_fd_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -411,9 +392,7 @@ jobs:
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tutorials != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
     strategy:
@@ -429,9 +408,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   run-profiler-regression:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_profiler_regression) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -447,9 +424,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -466,9 +441,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-models:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -484,9 +457,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-python-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_python_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -504,9 +475,7 @@ jobs:
   # FD Model Tests
   models-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -522,7 +491,7 @@ jobs:
   # Triage tests (including hang report generation test)
   triage-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
@@ -539,9 +508,7 @@ jobs:
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+    if: false  # TEMPORARY: disabled for concat fix validation
     secrets: inherit
     strategy:
       fail-fast: false
