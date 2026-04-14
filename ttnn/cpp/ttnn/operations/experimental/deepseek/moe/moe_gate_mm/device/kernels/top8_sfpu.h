@@ -614,7 +614,7 @@ inline void _llk_math_top8_tile_init_() {
 }
 
 inline void _llk_math_top8_tile_(uint32_t tile_index, uint32_t dst_index) {
-    _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_calculate_top8_tile_, dst_index, VectorMode::RC_custom, tile_index);
 }
 

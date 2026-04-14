@@ -17,7 +17,7 @@ inline void llk_math_eltwise_unary_sfpu_signbit_init() {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_signbit(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_signbit<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
@@ -28,7 +28,7 @@ inline void llk_math_eltwise_unary_sfpu_signbit_int32_init() {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_signbit_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_signbit_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 

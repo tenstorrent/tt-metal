@@ -169,8 +169,7 @@ inline void _llk_math_top4_tile_init_() {
 }
 
 inline void _llk_math_top4_tile_(uint32_t dst_index) {
-    _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_calculate_top4_, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_top4_, dst_index, VectorMode::RC_custom);
 }
 
 #endif

@@ -17,8 +17,7 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_square(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_square<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_square<APPROXIMATE>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel
