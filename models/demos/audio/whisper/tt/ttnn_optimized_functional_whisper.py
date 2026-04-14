@@ -409,7 +409,6 @@ def whisper_attention(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
-    decoder_prefill: bool = True,
     *,
     parameters,
 ):
@@ -420,7 +419,7 @@ def whisper_attention(
     bsz, *_, tgt_len, _ = hidden_states.shape
 
     is_cross_attention = encoder_hidden_states is not None
-    self_kv_prefill = decoder_prefill and not is_cross_attention and is_decode and kv_cache is not None and tgt_len > 1
+    self_kv_prefill = not is_cross_attention and is_decode and kv_cache is not None and tgt_len > 1
     sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None and not self_kv_prefill
     # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
     encoder_sdpa_attention = not is_decode
@@ -667,7 +666,6 @@ def decoder_layer(
     current_decode_pos=None,
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
-    decoder_prefill: bool = True,
     *,
     parameters,
 ):
@@ -687,7 +685,6 @@ def decoder_layer(
         is_decode=True,
         kv_cache=kv_cache,
         current_decode_pos=current_decode_pos,
-        decoder_prefill=decoder_prefill,
         parameters=parameters.self_attn,
     )
     hidden_states = dropout(hidden_states, p=0, training=False)
@@ -765,7 +762,6 @@ def decoder(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
-    decoder_prefill: bool = True,
     *,
     parameters,
 ):
@@ -784,7 +780,6 @@ def decoder(
             cross_attn_cache=cross_attn_cache[i] if cross_attn_cache is not None else None,
             cross_attn_cache_valid=cross_attn_cache_valid,
             current_decode_pos=current_decode_pos,
-            decoder_prefill=decoder_prefill,
             parameters=decoder_layer_parameter,
         )
 
