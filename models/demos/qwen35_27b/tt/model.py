@@ -399,6 +399,119 @@ class Transformer(TTTransformer):
 
         return result
 
+    def prefill_layer_chunked(self, tokens_tensor, chunk_size=2048):
+        """Prefill long sequences using layer-at-a-time chunked processing.
+
+        Args:
+            tokens_tensor: [1, seq_len] torch tensor of token IDs
+            chunk_size: base chunk size (default 2048)
+
+        Returns:
+            x_normed: last-token output after final norm, ready for LM head
+        """
+        seq_len = tokens_tensor.shape[-1]
+
+        # ── Step 1: Embed tokens ──────────────────────────────────────
+        tokens_tt = tokens_tensor.reshape(1, 1, 1, seq_len)
+        tokens_tt = ttnn.from_torch(
+            tokens_tt,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        x = self.embd(tokens_tt)
+        x = ttnn.unsqueeze_to_4D(x)  # [1, 1, seq_len, dim]
+
+        # ── Step 2: Full RoPE tables ─────────────────────────────────
+        cos_full = self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :]
+        sin_full = self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :]
+
+        # ── Step 3: Init GDN prefill states ──────────────────────────
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "reset_state"):
+                attn.reset_state()
+            if hasattr(attn, "_init_prefill_states"):
+                attn._init_prefill_states()
+
+        # ── Step 4: Layer loop with chunking ─────────────────────────
+        n_layers = len(self.layers)
+        for layer_idx in range(n_layers):
+            layer = self.layers[layer_idx]
+            layer_type = self.args.layer_types[layer_idx]
+            is_last_layer = layer_idx == n_layers - 1
+            is_attention = layer_type == "full_attention"
+
+            # Attention layers use a larger minimum chunk size
+            layer_chunk_size = max(chunk_size, 4096) if is_attention else chunk_size
+
+            chunk_outputs = []
+            for chunk_start in range(0, seq_len, layer_chunk_size):
+                chunk_end = min(chunk_start + layer_chunk_size, seq_len)
+
+                # Slice input for this chunk
+                x_chunk = ttnn.slice(
+                    x,
+                    (0, 0, chunk_start, 0),
+                    (1, 1, chunk_end, x.shape[-1]),
+                )
+
+                # Prepare rot_mats for this chunk
+                if is_attention:
+                    cos_chunk = cos_full[:, :, chunk_start:chunk_end, :]
+                    sin_chunk = sin_full[:, :, chunk_start:chunk_end, :]
+                    rot_mats = [cos_chunk, sin_chunk]
+                else:
+                    rot_mats = None
+
+                # Run layer on chunk
+                out_chunk = layer(
+                    x_chunk,
+                    current_pos=None,
+                    rot_mats_global=rot_mats,
+                    mode=Mode.PREFILL,
+                )
+
+                # On last layer, extract last token from last chunk before concat
+                if is_last_layer and chunk_end == seq_len:
+                    last_tok_in_chunk = chunk_end - chunk_start - 1
+                    get_last = (last_tok_in_chunk // 32) * 32
+                    x_last = ttnn.slice(
+                        out_chunk,
+                        (0, 0, get_last, 0),
+                        (1, 1, get_last + 32, out_chunk.shape[-1]),
+                    )
+
+                chunk_outputs.append(out_chunk)
+
+            # Concatenate chunks back to full sequence
+            if len(chunk_outputs) == 1:
+                x_new = chunk_outputs[0]
+            else:
+                x_new = ttnn.concat(chunk_outputs, dim=2)
+                for c in chunk_outputs:
+                    ttnn.deallocate(c)
+
+            ttnn.deallocate(x)
+            x = x_new
+
+            logger.info(f"  Layer {layer_idx}/{n_layers} ({layer_type}) done")
+
+        # ── Step 5: Replicate prefill states to batch ────────────────
+        for layer in self.layers:
+            attn = layer.attention
+            if hasattr(attn, "replicate_kv_cache_to_batch"):
+                attn.replicate_kv_cache_to_batch()
+            if hasattr(attn, "replicate_prefill_state_to_batch"):
+                attn.replicate_prefill_state_to_batch()
+
+        # ── Step 6: Final norm on last token ─────────────────────────
+        ttnn.deallocate(x)
+        x_normed = self.norm(x_last, mode=Mode.PREFILL)
+
+        return x_normed
+
 
 def create_qwen35_model(
     mesh_device,
