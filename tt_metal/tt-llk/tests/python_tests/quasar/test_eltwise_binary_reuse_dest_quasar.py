@@ -21,6 +21,7 @@ from helpers.llk_params import (
     MathOperation,
     format_dict,
 )
+from helpers.pack import pack_mxfp4, pack_mxfp8p, pack_mxfp8r
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
     get_num_blocks_and_num_tiles_in_block,
@@ -46,7 +47,62 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, tolerances
+
+
+def print_all_differences(golden_tensor, res_tensor, output_format):
+    torch_format = format_dict[output_format]
+    golden_tensor = golden_tensor.to(torch_format)
+    res_tensor = res_tensor.to(torch_format)
+
+    tolerance = tolerances[output_format]
+    is_close = torch.isclose(
+        golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+    )
+    is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+    is_valid = is_close | is_nan
+
+    diff_indices = torch.where(~is_valid)[0]
+    if diff_indices.numel() == 0:
+        print(
+            f"No element-wise differences found within tolerance (rtol={tolerance.rtol}, atol={tolerance.atol})."
+        )
+        return
+
+    print(
+        f"Found {diff_indices.numel()} differing elements (rtol={tolerance.rtol}, atol={tolerance.atol})."
+    )
+    for idx in diff_indices.tolist():
+        g_val = golden_tensor[idx].item()
+        r_val = res_tensor[idx].item()
+        diff = g_val - r_val
+        abs_diff = abs(diff)
+        print(
+            f"idx {idx}: result={r_val} golden={g_val} diff={diff} abs_diff={abs_diff}"
+        )
+
+
+def dump_mx_block_scales(label, tensor, num_faces):
+    elements_per_tile = num_faces * 256
+    if tensor.numel() < elements_per_tile:
+        print(
+            f"{label}: skip scale dump (need {elements_per_tile} elements, got {tensor.numel()})"
+        )
+        return
+
+    num_blocks = num_faces * 8
+
+    def dump_packed(name, packed):
+        scales = packed[:num_blocks]
+        exps = [int(scale) - 127 for scale in scales]
+        print(f"{label} {name} scales_e8m0={scales}")
+        print(f"{label} {name} scale_exps={exps}")
+
+    tensor = tensor[:elements_per_tile]
+    dump_packed("MxFp4", pack_mxfp4(tensor, num_faces=num_faces))
+    dump_packed("MxFp8P", pack_mxfp8p(tensor, num_faces=num_faces))
+    dump_packed("MxFp8R", pack_mxfp8r(tensor, num_faces=num_faces))
+
 
 INPUT_DIMENSIONS = [
     [512, 32],
@@ -203,6 +259,8 @@ def test_eltwise_binary_reuse_dest_quasar(
         if eltwise_golden is not None
         else None
     )
+
+    debug_pre_quant_tile = None
 
     for out_t in range(tile_cnt_output):
         block_idx = out_t // output_tiles_in_block

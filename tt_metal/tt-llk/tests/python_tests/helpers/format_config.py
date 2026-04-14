@@ -275,6 +275,73 @@ MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l
 )  # 80
 
 # ============================================================================
+# MX (Microscaling) Format Value Maps
+# ============================================================================
+
+# Map of MX formats to their maximum normal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
+# - E4M3 (MxFp8P): Max normal = ± 2^8 × 1.75 = ± 448
+# - E2M1 (MxFp4):  Max normal = ± 2^2 × 1.5 = ± 6.0
+MX_FORMAT_MAX_NORMAL = {
+    DataFormat.MxFp8R: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
+    ),  # 57344.0 from dtype
+    DataFormat.MxFp8P: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
+    ),  # 448.0 from dtype,
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
+    ),  # 6.0 from dtype,
+}
+
+# Map of MX formats to their minimum normal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Min normal = ± 2^-14
+# - E4M3 (MxFp8P): Min normal = ± 2^-6
+# - E2M1 (MxFp4):  Min normal = ± 2^0 × 1.0 = ± 1.0
+MX_FORMAT_MIN_NORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
+    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
+    ),  # 1.0 from dtype
+}
+
+# Map of MX formats to their maximum subnormal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Max subnormal = ± 2^-14 × 0.75
+# - E4M3 (MxFp8P): Max subnormal = ± 2^-6 × 0.875
+# - E2M1 (MxFp4):  Max subnormal = ± 2^0 × 0.5 = ± 0.5
+MX_FORMAT_MAX_SUBNORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal)
+    * 0.75,
+    DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
+    * 0.875,
+    DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
+    * 0.5,
+}
+
+# Map of MX formats to their minimum subnormal values
+# Per OCP MX Specification:
+# - E5M2 (MxFp8R): Min subnormal = ± 2^-16
+# - E4M3 (MxFp8P): Min subnormal = ± 2^-9
+# - E2M1 (MxFp4):  Min subnormal = ± 2^0 × 0.5 = ± 0.5 (same as max)
+MX_FORMAT_MIN_SUBNORMAL = {
+    DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_subnormal),
+    DataFormat.MxFp8P: float(
+        ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
+    ),
+    DataFormat.MxFp4: float(
+        ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
+    ),
+}
+
+# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
+MX_FORMAT_BLOCK_SIZE = 32
+
+
+# ============================================================================
 # MX (Microscaling) Format Utilities
 # ============================================================================
 
