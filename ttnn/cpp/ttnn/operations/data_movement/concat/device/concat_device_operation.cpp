@@ -218,19 +218,14 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //
     // Theoretical limit: 5 + 6N <= 256  =>  N <= 41.8  =>  N_max = 41
     //
-    // However, empirical testing shows slightly higher limits work:
-    //   - ETH dispatch (N300/T3K): 47 works, 48 hangs
-    //   - WORKER dispatch: 49 works, 50 hangs
-    //
-    // The dispatch core type affects the limit because ETH cores have different
-    // buffer sizes than WORKER cores for storing kernel arguments.
+    // Empirical testing shows N=47 works across all dispatch core types.
+    // We use 47 as a universal safe limit for interleaved concat.
     //
     // IMPORTANT: This limit does NOT depend on:
     //   - Tensor shape/size (only number of tensors matters)
     //   - Tensor dtype (bfloat16 vs float32, etc.)
     //
     // It DOES depend on:
-    //   - Dispatch core type (ETH vs WORKER - different buffer sizes)
     //   - Memory layout (sharded vs interleaved - different kernels)
 
     const bool is_sharded = input_tensors[0].is_sharded();
