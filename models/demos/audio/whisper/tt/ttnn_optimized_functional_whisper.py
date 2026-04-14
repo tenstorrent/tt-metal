@@ -24,7 +24,9 @@ WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
 )
 
 WHISPER_BATCH_SIZE = 2
-WHISPER_L1_SMALL_SIZE = 1024
+# L1_SMALL pool for small per-core buffers (e.g. conv1d halo / sliding-window config). Encoder paths have seen
+# ~1.5 KiB allocations;
+WHISPER_L1_SMALL_SIZE = 1600
 WHISPER_TRACE_REGION_SIZE = 100000000
 
 
