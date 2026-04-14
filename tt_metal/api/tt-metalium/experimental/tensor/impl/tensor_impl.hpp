@@ -105,14 +105,4 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
     }
 }
 
-// ======================================================================================
-//                                 Utility functions
-// ======================================================================================
-
-// Returns true if the logical tensor data matches the physical tensor data:
-// 1. Row major layout is used.
-// 2. Logical 2D shape matches physical shape.
-// Used for optimizing conversion operations.
-bool logical_matches_physical(const TensorSpec& tensor_spec);
-
 }  // namespace tt::tt_metal::tensor_impl

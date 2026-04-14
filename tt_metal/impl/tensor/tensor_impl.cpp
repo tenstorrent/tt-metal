@@ -335,8 +335,4 @@ template std::vector<uint16_t> decode_tensor_data<uint16_t>(
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
 
-bool logical_matches_physical(const TensorSpec& tensor_spec) {
-    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
-}
-
 }  // namespace tt::tt_metal::tensor_impl

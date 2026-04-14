@@ -69,7 +69,7 @@ bool can_construct_on_single_device(
 
     // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
     // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
-    if (!tt::tt_metal::tensor_impl::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
+    if (!tt::tt_metal::logical_matches_physical(TensorSpec(tensor_shape, src_tensor_layout))) {
         return false;
     }
 

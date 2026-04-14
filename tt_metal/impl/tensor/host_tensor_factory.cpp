@@ -35,7 +35,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
     size_t volume = spec.logical_shape().volume();
 
     TT_FATAL(
-        !tensor_impl::logical_matches_physical(spec),
+        !logical_matches_physical(spec),
         "Logical matches physical, don't support that case, use Tensor::from_span instead!");
 
     TT_FATAL(
@@ -55,7 +55,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
 template <typename T>
 HostTensor HostTensor::from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
-    if (!tensor_impl::logical_matches_physical(spec)) {
+    if (!logical_matches_physical(spec)) {
         // If the logical shape doesn't match the physical shape, we need to encode the data
         // and write the result to a new buffer. This branch avoids the extra copy that
         // would otherwise occur in the from_vector function call.
@@ -96,7 +96,7 @@ HostTensor HostTensor::from_vector(std::vector<T>&& buffer, const TensorSpec& sp
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
 
     auto host_buffer =
-        tensor_impl::logical_matches_physical(buffer_spec)
+        logical_matches_physical(buffer_spec)
             ? HostBuffer(std::move(buffer))
             : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
@@ -116,7 +116,7 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
         convert_to_data_type<T>());
 
     auto data = host_buffer::get_as<const T>(tensor);
-    if (tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+    if (logical_matches_physical(tensor.tensor_spec())) {
         return std::vector<T>(data.begin(), data.end());
     }
     return tensor_impl::decode_tensor_data(data, tensor.tensor_spec());
@@ -131,7 +131,7 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
                 return static_cast<float>(val);
             });
-            if (tensor_impl::logical_matches_physical(tensor.tensor_spec())) {
+            if (logical_matches_physical(tensor.tensor_spec())) {
                 return physical_data;
             }
             return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), tensor.tensor_spec());
