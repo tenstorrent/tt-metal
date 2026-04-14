@@ -34,7 +34,7 @@ enum class DataFormat : uint8_t {
     Tf32 = 4,
     UInt8 = 30,
     UInt16 = 9,
-    Int16 = 9,
+    Int16 = 13,
     Int32 = 8,
     UInt32 = 24,
     RawUInt8 = 0xf0,
@@ -68,6 +68,7 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1;
         case DataFormat::UInt16:
+        case DataFormat::Int16:
         case DataFormat::RawUInt16: return 2;
         case DataFormat::UInt32:
         case DataFormat::Int32:
@@ -104,6 +105,7 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1024;
         case DataFormat::UInt16:
+        case DataFormat::Int16:
         case DataFormat::RawUInt16: return (1024 * 2);
         case DataFormat::UInt32:
         case DataFormat::Int32:

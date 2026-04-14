@@ -669,7 +669,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::UInt16}) {
+                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
                     if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
                          data_format == tt::DataFormat::Float16_b)) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
@@ -694,7 +694,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true}) {
             for (bool fp32_dest_acc_en : {true}) {
-                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::UInt16}) {
+                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
                     if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
                          data_format == tt::DataFormat::Float16_b)) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
