@@ -11,7 +11,7 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
@@ -56,12 +56,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
+            device = ttnn.open_device(device_id=0, l1_small_size=79104)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0)
+        device = ttnn.open_device(device_id=0, l1_small_size=79104)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -89,8 +89,9 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
+    pos_args = extract_positional_args(kwargs)
     if dim is None:
-        dim = kwargs.get("arg1", 0)
+        dim = pos_args.get(1, 0)
     if dim is None:
         dim = 0
 
