@@ -1974,7 +1974,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 num_layers=None,
                 max_batch_size=batch_per_dp,
                 max_seq_len=max_seq_len,
-                use_async_ccl=True,  # Use async CCL for better trace compatibility
+                use_async_ccl=False,  # Disabled: async CCL causes hangs/leaks after rebase
             )
             model_args_i = Molmo2ModelArgs(
                 mesh_device=submesh,
@@ -2406,6 +2406,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     attn_mask=user_attn_mask,
                 )
 
+                # Deallocate attention mask after prefill (large tensor: [1, 1, seq, seq])
+                if user_attn_mask is not None:
+                    ttnn.deallocate(user_attn_mask)
+
                 # Convert ttnn tensor to torch tensor (same as image/text path)
                 ttnn.synchronize_device(self.mesh_device)
                 mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
@@ -2619,6 +2623,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     user_id=user_id,
                     attn_mask=user_attn_mask,
                 )
+                if user_attn_mask is not None:
+                    ttnn.deallocate(user_attn_mask)
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
             else:
                 # Standalone mode: check for PIL images
@@ -2661,6 +2667,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         user_id=user_id,
                         attn_mask=user_attn_mask,
                     )
+                    if user_attn_mask is not None:
+                        ttnn.deallocate(user_attn_mask)
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
                 else:
                     # Run prefill without image (text-only)
@@ -2692,6 +2700,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         user_id=user_id,
                         attn_mask=user_attn_mask,
                     )
+                    if user_attn_mask is not None:
+                        ttnn.deallocate(user_attn_mask)
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
 
             # Synchronize device before reading - trace execution is async
