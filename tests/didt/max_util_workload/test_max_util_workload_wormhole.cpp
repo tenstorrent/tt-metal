@@ -94,7 +94,6 @@ struct MaxUtilConfig {
     uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
     uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing)
     // DRAM read transaction size.  Larger values saturate bandwidth better.
-    // TODO(WH): Recalibrate optimal page size for Wormhole B0; 1024 copied from BH.
     uint32_t eth_page_size = 1024;
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
     uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
@@ -1020,9 +1019,8 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
     // Each core reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
     uint64_t bytes_per_core = static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
 
-    // TODO(WH): Use Wormhole-appropriate core clock for GB/s display; 1.35 GHz copied from BH.
-    // 1.35 GHz assumed clock: bytes/cycle × 1.35e9 cycles/s ÷ 1e9 bytes/GB = bytes/cycle × 1.35
-    constexpr double kClockGHz = 1.35;
+    // 1.0 GHz assumed clock: bytes/cycle × 1.0e9 cycles/s ÷ 1e9 bytes/GB = bytes/cycle × 1.0
+    constexpr double kClockGHz = 1.0;
 
     double total_bw_bpc = 0.0;  // bytes/cycle
     uint32_t reported = 0;
