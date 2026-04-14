@@ -327,6 +327,7 @@ jobs:
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            -v ${{ steps.capture-home.outputs.home }}/Resources:${{ steps.capture-home.outputs.home }}/Resources:ro
             --device /dev/tenstorrent
             --pid=host
             --hostname=mpirun-host
