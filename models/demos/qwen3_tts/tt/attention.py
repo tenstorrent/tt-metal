@@ -41,8 +41,6 @@ TRACE-COMPATIBLE DECODE:
 
 from typing import Optional, Tuple
 
-import torch
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.rope import ttnn_rearrange_to_interleaved, ttnn_rearrange_to_noninterleaved
@@ -143,9 +141,10 @@ class Attention(LightweightModule):
         qkv_tx = ttnn.transpose(qkv_cat, -2, -1, memory_config=_dram)
         ttnn.deallocate(qkv_cat)
         qkv_4d = ttnn.reshape(qkv_tx, [1, 1, hidden_size, _fused_qkv], memory_config=_dram)
-        ttnn.deallocate(qkv_tx)
+        # to_torch before deallocate(qkv_tx): reshape may alias qkv_tx; freeing qkv_tx first leaves qkv_4d unallocated.
         _wqkv_host = ttnn.to_torch(qkv_4d).contiguous()
         ttnn.deallocate(qkv_4d)
+        ttnn.deallocate(qkv_tx)
         _wqkv_cache = get_cache_name("wqkv")
         if _wqkv_cache is not None:
             self.wqkv = ttnn.as_tensor(
@@ -192,9 +191,10 @@ class Attention(LightweightModule):
         o_tx = ttnn.transpose(o_tt, -2, -1, memory_config=_dram)
         ttnn.deallocate(o_tt)
         o_4d = ttnn.reshape(o_tx, [1, 1, _o_rows, hidden_size], memory_config=_dram)
-        ttnn.deallocate(o_tx)
+        # Same as wqkv: to_torch before deallocate(o_tx) if reshape aliases transpose buffer.
         _wo_host = ttnn.to_torch(o_4d).contiguous()
         ttnn.deallocate(o_4d)
+        ttnn.deallocate(o_tx)
         _wo_cache = get_cache_name("wo")
         if _wo_cache is not None:
             self.wo = ttnn.as_tensor(
@@ -286,7 +286,7 @@ class Attention(LightweightModule):
             )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -296,7 +296,7 @@ class Attention(LightweightModule):
         # known accuracy issue; see compute_kernel_config warning and tech_reports/
         # AdvancedPerformanceOptimizationsForModels — prefer HiFi3 for fp32 accumulation on WH.)
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -363,10 +363,12 @@ class Attention(LightweightModule):
         is_decode = mode == "decode"
 
         # Use DRAM for attention linear ops - L1 showed no benefit and adds overhead
-        linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        # linear_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
         # QKV projection
-        xqkv = ttnn.linear(x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=linear_mem_cfg)
+        xqkv = ttnn.linear(
+            x, self.wqkv, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         # Split: Q [b, num_heads, seq, head_dim], K/V [b, num_kv_heads, seq, head_dim]
         # Note: Unlike Qwen VL, we can't use nlp_create_qkv_heads_decode because Qwen3-TTS
@@ -377,7 +379,7 @@ class Attention(LightweightModule):
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv)
 
@@ -616,48 +618,74 @@ class Attention(LightweightModule):
 
         # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
         q_seq = q_f32.shape[2]
-        k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k_t = ttnn.transpose(k_exp, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         scores = ttnn.matmul(
-            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            q_f32, k_t, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
         )
         ttnn.deallocate(k_t)
         ttnn.deallocate(q_f32)
-        scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if decode_attn_mask is not None:
             # Trace-compatible decode mask: pre-allocated float32 [1,1,1,max_seq] device tensor.
             # Broadcast over num_heads dim: [1,1,1,max_seq] → [1,num_heads,1,max_seq].
-            scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
         elif cp_prefill_mask is not None:
             # Trace-compatible CP prefill mask: pre-allocated float32 [1,1,seq,max_seq].
             # Encodes causal masking over the full cache (positions beyond seq are -inf).
-            scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
         elif prefill_attn_mask is not None:
             # Trace-compatible Talker prefill mask: [1, num_heads, padded_seq, max_seq].
             # Encodes causal + padding masking: real positions attend only to prior real
             # positions; padding query rows and empty cache columns are -inf.
-            scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
         elif q_seq == k_seq and q_seq > 1:
             # Causal mask for standard prefill (full sequence self-attention)
-            causal_mask = torch.triu(torch.full((1, 1, q_seq, k_seq), float("-inf")), diagonal=1)
-            mask_tt = ttnn.from_torch(
-                causal_mask,
+            # Torch reference:
+            # causal_mask = torch.triu(torch.full((1, 1, q_seq, k_seq), float("-inf")), diagonal=1)
+            # mask_tt = ttnn.from_torch(causal_mask, dtype=ttnn.float32, device=self.device, ...)
+            # ttnn.triu is multiply(mask, x); triu(full(-inf)) gives 0*(-inf)->NaN. Use where(triu(ones), -inf, 0).
+
+            _cm_shape = [1, 1, q_seq, k_seq]
+            _cm_ones = ttnn.ones(
+                _cm_shape,
                 dtype=ttnn.float32,
-                device=self.device,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            _cm_upper = ttnn.triu(_cm_ones, diagonal=1)
+            ttnn.deallocate(_cm_ones)
+            _cm_zeros = ttnn.zeros(
+                _cm_shape,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            _cm_neg_inf = ttnn.full(
+                _cm_shape,
+                float("-inf"),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            mask_tt = ttnn.where(_cm_upper, _cm_neg_inf, _cm_zeros)
+            ttnn.deallocate(_cm_upper)
+            ttnn.deallocate(_cm_zeros)
+            ttnn.deallocate(_cm_neg_inf)
+            scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mask_tt)
 
-        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(scores)
 
         attn_output_f32 = ttnn.matmul(
             attn_weights,
             v_exp,
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_weights)
         ttnn.deallocate(v_exp)
@@ -667,13 +695,13 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_f32)
 
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
-        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=linear_mem_cfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output)
 

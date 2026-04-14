@@ -542,37 +542,35 @@ def sample_from_tt_vocab_logits(
 ) -> int:
     """Argmax or sample from on-device logits [..., seq, vocab].
 
-    **Greedy** with a single sequence position uses ``untilize`` + on-device ``argmax``
-    and only D2H's the token id (see ``generator.sample_tokens_on_device``).
+        **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
+        handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
+        could return invalid token IDs for some sliced / trace-backed logits tensors,
+        which then broke ``F.embedding`` in the CP decode loop.
 
-    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
-    :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
-    logits D2H for this demo's vocab width and trace count).
+    <<<<<<< Updated upstream
+        **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
+        :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
+        logits D2H for this demo's vocab width and trace count).
+    =======
+        **Sampling** (temperature / top_k / multinomial) uses ``to_torch`` +
+        :func:`sample_token` on the host.
+    >>>>>>> Stashed changes
 
-    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (untilize/argmax/D2H
-    id or full logits ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
+        If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
+        ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
     """
-    sh = tuple(logits_tt.shape)
-    seq_len = int(sh[-2]) if len(sh) >= 2 else 1
     _pc = time.perf_counter
-
-    if greedy and seq_len == 1:
-        t0 = _pc() if prof_acc is not None else 0.0
-        u = ttnn.untilize(logits_tt, use_multicore=True)
-        tid = ttnn.argmax(u, dim=-1, keepdim=False, use_multicore=True)
-        ttnn.deallocate(u)
-        out = int(ttnn.to_torch(tid).squeeze().item())
-        ttnn.deallocate(tid)
-        if prof_acc is not None:
-            prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (_pc() - t0)
-        return out
-
     t0 = _pc() if prof_acc is not None else 0.0
     th = ttnn.to_torch(logits_tt, dtype=torch.bfloat16)
     if th.ndim >= 3 and th.shape[-2] > 1:
         th = th[:, :, -1, :]
     th1d = th.reshape(-1)
     t1 = _pc() if prof_acc is not None else 0.0
+    if greedy:
+        out = int(th1d.float().argmax().item())
+        if prof_acc is not None:
+            prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
+        return out
     out = sample_token(
         th1d,
         temperature,

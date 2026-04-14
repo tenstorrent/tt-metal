@@ -97,7 +97,7 @@ class CodePredictor(LightweightModule):
                         bias,
                         device=device,
                         dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         cache_file_name=get_cache_name("input_proj_bias"),
                         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
