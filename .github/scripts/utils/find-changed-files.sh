@@ -23,7 +23,9 @@ DOCS_CHANGED=false
 MODEL_CHARTS_CHANGED=false
 MODELS_CHANGED=false
 BUILD_WORKFLOWS_CHANGED=false
-LLK_ENGINE_CHANGED=false
+LLK_WORMHOLE_CHANGED=false
+LLK_BLACKHOLE_CHANGED=false
+LLK_COMMON_CHANGED=false
 LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
@@ -55,10 +57,16 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/tt-llk/common/**)
-            LLK_ENGINE_CHANGED=true
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**)
+            LLK_WORMHOLE_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_quasar/**)
+        tt_metal/tt-llk/tt_llk_blackhole/**)
+            LLK_BLACKHOLE_CHANGED=true
+            ;;
+        tt_metal/tt-llk/common/**)
+            LLK_COMMON_CHANGED=true
+            ;;
+        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
@@ -145,7 +153,7 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
 fi
 
 # LLK engine changes imply Metalium may be affected (LLK is compiled into device kernels)
-if [[ "$LLK_ENGINE_CHANGED" = true ]]; then
+if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK_COMMON_CHANGED" = true ]]; then
     TTMETALIUM_CHANGED=true
     ANY_CODE_CHANGED=true
 fi
@@ -173,7 +181,9 @@ declare -A changes=(
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
     [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
-    [llk-engine-changed]=$LLK_ENGINE_CHANGED
+    [llk-wormhole-changed]=$LLK_WORMHOLE_CHANGED
+    [llk-blackhole-changed]=$LLK_BLACKHOLE_CHANGED
+    [llk-common-changed]=$LLK_COMMON_CHANGED
     [llk-quasar-changed]=$LLK_QUASAR_CHANGED
     [llk-tests-changed]=$LLK_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED

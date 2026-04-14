@@ -100,22 +100,6 @@ jobs:
           ./setup_testing_env.sh
           cd ..
 
-      # Step 2.5: Download test duration data for balanced splitting
-      # Downloads the latest available artifact from main branch only
-      - name: Download test duration data
-        if: ${{ inputs.use_durations }}
-        uses: dawidd6/action-download-artifact@v12
-        continue-on-error: true
-        with:
-          workflow: llk-collect-test-durations.yaml
-          workflow_conclusion: success
-          branch: main
-          name: test-durations-${{ contains(inputs.runs_on, 'n150') && 'wormhole' || 'blackhole' }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/
-          if_no_artifact_found: warn
-          search_artifacts: true
-          check_artifacts: true
-
       # Step 3: Run the tests
       - name: Run tests
         shell: bash
