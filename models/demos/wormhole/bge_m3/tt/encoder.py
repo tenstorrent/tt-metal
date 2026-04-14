@@ -46,6 +46,7 @@ class BgeM3TransformerBlock(LightweightModule):
             attention_weights.layer_norm,
             eps=args.norm_eps,
             mesh_device=mesh_device,
+            max_seq_len=max_seq_len,
         )
 
         self.feed_forward = BgeM3MLP.from_config(
@@ -67,21 +68,25 @@ class BgeM3TransformerBlock(LightweightModule):
             mlp_weights.layer_norm,
             eps=args.norm_eps,
             mesh_device=mesh_device,
+            max_seq_len=max_seq_len,
         )
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
         attention_output = self.attention(hidden_states, attention_mask=attention_mask)
 
-        hidden_states = ttnn.add(hidden_states, attention_output)
-
         if self.attention_norm is not None:
-            hidden_states = self.attention_norm(hidden_states)
+            hidden_states = self.attention_norm(attention_output, residual_input_tensor=hidden_states)
+        else:
+            hidden_states = ttnn.add(hidden_states, attention_output)
+        ttnn.deallocate(attention_output)
 
-        mlp_output = self.feed_forward(hidden_states)
-        hidden_states = ttnn.add(hidden_states, mlp_output)
-
+        mlp_in = hidden_states
+        mlp_output = self.feed_forward(mlp_in)
         if self.feed_forward_norm is not None:
-            hidden_states = self.feed_forward_norm(hidden_states)
+            hidden_states = self.feed_forward_norm(mlp_output, residual_input_tensor=mlp_in)
+        else:
+            hidden_states = ttnn.add(mlp_in, mlp_output)
+        ttnn.deallocate(mlp_output)
 
         return hidden_states
 
@@ -90,6 +95,7 @@ def _build_optional_layer_norm(
     layer_norm_weights: LayerNormWeights | None,
     eps: float,
     mesh_device,
+    max_seq_len: int | None = None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
@@ -100,5 +106,6 @@ def _build_optional_layer_norm(
             bias=layer_norm_weights.bias,
             eps=eps,
             mesh_device=mesh_device,
+            max_seq_len=max_seq_len,
         )
     )
