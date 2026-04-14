@@ -2,16 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-ND Gather Reproduction Test
+ND GatherReduce3 Reproduction Test
 
-Replicates the gather portion of GatherReduce after matmul5 in the attention block:
-  - 96 sender cores (12x8 grid) each write 64B (1x32 bf16 tile) to a single receiver core
-  - Half-based offset: cores 0-47 write to half0, cores 48-95 write to half1
-  - NOC API: noc_async_write_one_packet + noc_semaphore_inc + noc_async_posted_writes_flushed
-  - No TRISC reduction
+Replicates GatherReduce3 after matmul5 in the bliu/deepseek attention block:
+  - 112 sender cores (o_proj grid: 12x8 + 8x2) each write 64B (1x32 bf16 tile)
+  - UsePerCoreSenderIdx mode: per-core contiguous index 0..111
+  - Half-based offset: cores 0-55 write to half0, cores 56-111 write to half1
+  - NOC API: noc_async_write + noc_async_write_barrier + noc_semaphore_inc
+  - TRISC reduces using 32x32 tiles: out[i] = half0[i] + half1[i]
+  - Receiver core (11, 9) = CCL sender core
 
 Run multiple iterations to detect non-deterministic (ND) PCC corruption.
 """
+
+import sys
 
 import pytest
 import torch
@@ -21,30 +25,31 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 
 # =============================================================================
-# Constants matching GatherReduce3 in the attention block
+# Constants matching GatherReduce3 on bliu/deepseek
 # =============================================================================
 
-SENDER_GRID_START = (0, 0)
-SENDER_GRID_END = (11, 7)
-NUM_SENDER_COLS = SENDER_GRID_END[0] - SENDER_GRID_START[0] + 1  # 12
-NUM_SENDER_ROWS = SENDER_GRID_END[1] - SENDER_GRID_START[1] + 1  # 8
-NUM_SENDERS = NUM_SENDER_COLS * NUM_SENDER_ROWS  # 96
-HALF_NUM_CORES = NUM_SENDERS // 2  # 48
-WIDTH_PER_CORE = 32  # 1x32 tile
+# Non-rectangular sender grid: o_proj cores = 12x8 + 8x2 = 112 cores
+SENDER_RANGE1_START = (0, 0)
+SENDER_RANGE1_END = (11, 7)  # 12 cols x 8 rows = 96 cores
+SENDER_RANGE2_START = (0, 8)
+SENDER_RANGE2_END = (7, 9)  # 8 cols x 2 rows = 16 cores
+NUM_SENDERS = 112
+HALF_NUM_CORES = 56
+
+RECEIVER_CORE = ttnn.CoreCoord(11, 9)  # CCL sender core in bliu/deepseek
+
+WIDTH_PER_CORE = 32  # 1x32 tile per sender
 TILE_1X32 = ttnn.Tile([1, 32])
-DATA_SIZE_BYTES = 64  # 1x32 bf16 tile = 32 * 2 bytes
-HALF_SIZE_BYTES = HALF_NUM_CORES * DATA_SIZE_BYTES  # 48 * 64 = 3072
-TOTAL_WIDTH = NUM_SENDERS * WIDTH_PER_CORE  # 96 * 32 = 3072 elements
+DATA_SIZE_BYTES = 64  # 1x32 bf16 = 32 * 2
+TOTAL_WIDTH = NUM_SENDERS * WIDTH_PER_CORE  # 3584
 
-# Gather+Reduce constants (16x32 tiles for TRISC reduction)
-NUM_REDUCE_TILES = 3  # 3 tiles of 16x32 per half
-TILE_16X32 = ttnn.Tile([16, 32])
-TILE_16X32_SIZE = 1024  # 16 * 32 * 2 bytes (bf16)
-SCRATCH_SIZE_BYTES = 2 * NUM_REDUCE_TILES * TILE_16X32_SIZE  # 6144 bytes
+# Reduction uses 32x32 tiles: ceil(56 senders / 32 rows per tile) = 2 tiles per half
+TILE_32X32 = ttnn.Tile([32, 32])
+TILE_32X32_SIZE = 2048  # 32 * 32 * 2 bytes (bf16)
+NUM_REDUCE_TILES = 2  # 2 tiles of 32x32 per half
+HALF_SIZE_BYTES = NUM_REDUCE_TILES * TILE_32X32_SIZE  # 4096
+SCRATCH_SIZE_BYTES = 2 * HALF_SIZE_BYTES  # 8192
 
-RECEIVER_CORE = ttnn.CoreCoord(12, 9)  # rmsnorm core in attention block
-
-GATHER_KERNEL_PATH = "models/demos/deepseek_v3_b1/tests/unit_tests/kernels/test_nd_gather_kernel.cpp"
 GATHER_REDUCE_KERNEL_PATH = "models/demos/deepseek_v3_b1/tests/unit_tests/kernels/test_nd_gather_reduce_kernel.cpp"
 
 SEMAPHORE_ID = 0
@@ -55,13 +60,17 @@ SEMAPHORE_ID = 0
 # =============================================================================
 
 
-def create_sharded_input(device, torch_input, sender_grid, shard_shape):
-    """Create WIDTH_SHARDED input tensor on the sender grid."""
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({sender_grid}),
-        shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
+def get_sender_core_range_set():
+    """Build the non-rectangular sender CoreRangeSet matching o_proj grid."""
+    range1 = ttnn.CoreRange(ttnn.CoreCoord(*SENDER_RANGE1_START), ttnn.CoreCoord(*SENDER_RANGE1_END))
+    range2 = ttnn.CoreRange(ttnn.CoreCoord(*SENDER_RANGE2_START), ttnn.CoreCoord(*SENDER_RANGE2_END))
+    return ttnn.CoreRangeSet({range1, range2})
+
+
+def create_sharded_input(device, torch_input, sender_core_range_set):
+    """Create WIDTH_SHARDED input on the non-rectangular sender grid."""
+    shard_shape = (1, WIDTH_PER_CORE)
+    shard_spec = ttnn.ShardSpec(sender_core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     return ttnn.from_torch(
         torch_input,
@@ -73,196 +82,28 @@ def create_sharded_input(device, torch_input, sender_grid, shard_shape):
     )
 
 
-def create_output_tensor(device, output_shape, receiver_core):
-    """Create HEIGHT_SHARDED output tensor on the receiver core."""
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(receiver_core, receiver_core)}),
-        output_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
+def create_scratch_anchor(device, full_grid_set, num_grid_cores):
+    """Create HEIGHT_SHARDED anchor tensor on full grid for scratch CB address allocation.
+    Uses 32x32 tiles to match production GatherReduce3 scratch format."""
+    # 4 tiles of 32x32 per shard = (128, 32)
+    shard_h = 2 * NUM_REDUCE_TILES * 32  # 4 * 32 = 128
+    shard_w = 32
+    shard_spec = ttnn.ShardSpec(full_grid_set, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
     return ttnn.from_torch(
-        torch_output,
+        torch.zeros([num_grid_cores * shard_h, shard_w], dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=mem_config,
-        tile=TILE_1X32,
+        tile=TILE_32X32,
     )
 
 
-def build_program(device, input_tensor, output_tensor, sender_grid, receiver_core):
-    """Build the gather program descriptor (identical NOC pattern to GatherReduce)."""
-    receiver_noc_core = device.worker_core_from_logical_core(receiver_core)
-    receiver_data_addr = output_tensor.buffer_address()
-
-    sender_core_range = ttnn.CoreRangeSet({sender_grid})
+def create_output_tensor(device, receiver_core):
+    """Create HEIGHT_SHARDED output tensor on receiver core for reduce result (2 tiles of 32x32)."""
     receiver_core_range = ttnn.CoreRangeSet({ttnn.CoreRange(receiver_core, receiver_core)})
-    all_cores = sender_core_range.merge(receiver_core_range)
-
-    # --- Semaphore ---
-    semaphore = ttnn.SemaphoreDescriptor(
-        id=SEMAPHORE_ID,
-        core_ranges=all_cores,
-        initial_value=0,
-    )
-
-    # --- Sender kernel (NCRISC) on 12x8 grid ---
-    sender_named_args = [
-        ("is_sender_core", 1),
-        ("is_receiver_core", 0),
-        ("src_cb", 0),
-        ("src_num_pages", 1),
-        ("dest_noc_x", receiver_noc_core.x),
-        ("dest_noc_y", receiver_noc_core.y),
-        ("data_size_bytes", DATA_SIZE_BYTES),
-        ("receiver_semaphore_id", SEMAPHORE_ID),
-        ("grid_start_x", sender_grid.start.x),
-        ("grid_start_y", sender_grid.start.y),
-        ("grid_end_x", sender_grid.end.x),
-        ("grid_end_y", sender_grid.end.y),
-        ("half_num_cores", HALF_NUM_CORES),
-        ("half_size_bytes", HALF_SIZE_BYTES),
-    ]
-
-    sender_kernel = ttnn.KernelDescriptor(
-        kernel_source=GATHER_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=sender_core_range,
-        named_compile_time_args=sender_named_args,
-        common_runtime_args=[receiver_data_addr],
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_1,
-            noc=ttnn.NOC.NOC_0,
-        ),
-    )
-
-    # --- Receiver kernel (BRISC) on receiver core ---
-    receiver_named_args = [
-        ("is_sender_core", 0),
-        ("is_receiver_core", 1),
-        ("noc0_num_senders", NUM_SENDERS),
-        ("noc0_receiver_semaphore_id", SEMAPHORE_ID),
-    ]
-
-    receiver_kernel = ttnn.KernelDescriptor(
-        kernel_source=GATHER_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=receiver_core_range,
-        named_compile_time_args=receiver_named_args,
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_0,
-            noc=ttnn.NOC.NOC_1,
-        ),
-    )
-
-    # --- Compute kernels (no-op) ---
-    sender_compute = ttnn.KernelDescriptor(
-        kernel_source=GATHER_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=sender_core_range,
-        named_compile_time_args=[("is_sender_core", 1), ("is_receiver_core", 0)],
-        config=ttnn.ComputeConfigDescriptor(),
-    )
-
-    receiver_compute = ttnn.KernelDescriptor(
-        kernel_source=GATHER_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=receiver_core_range,
-        named_compile_time_args=[("is_sender_core", 0), ("is_receiver_core", 1)],
-        config=ttnn.ComputeConfigDescriptor(),
-    )
-
-    # --- CBs ---
-    src_cb = ttnn.cb_descriptor_from_sharded_tensor(0, input_tensor)
-
-    return ttnn.ProgramDescriptor(
-        kernels=[sender_kernel, receiver_kernel, sender_compute, receiver_compute],
-        cbs=[src_cb],
-        semaphores=[semaphore],
-    )
-
-
-# =============================================================================
-# Test
-# =============================================================================
-
-
-@pytest.mark.requires_grid_size((13, 10))
-@pytest.mark.parametrize("num_iterations", [20])
-def test_nd_gather(device, check_requires_grid_size, num_iterations):
-    """
-    Run the gather pattern from GatherReduce (96 senders -> 1 receiver, 64B each)
-    multiple times and check for ND PCC corruption.
-    """
-    sender_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(*SENDER_GRID_START),
-        ttnn.CoreCoord(*SENDER_GRID_END),
-    )
-
-    shard_shape = (1, WIDTH_PER_CORE)
-    output_shape = (1, TOTAL_WIDTH)
-
-    logger.info(f"Testing ND gather: {NUM_SENDERS} senders (12x8) -> receiver ({RECEIVER_CORE.x},{RECEIVER_CORE.y})")
-    logger.info(f"  data_size_bytes={DATA_SIZE_BYTES}, half_num_cores={HALF_NUM_CORES}, iterations={num_iterations}")
-
-    all_pass = True
-    pcc_values = []
-
-    for i in range(num_iterations):
-        torch.manual_seed(i)
-        torch_input = torch.randn(output_shape, dtype=torch.bfloat16)
-
-        ttnn_input = create_sharded_input(device, torch_input, sender_grid, shard_shape)
-        ttnn_output = create_output_tensor(device, output_shape, RECEIVER_CORE)
-
-        program = build_program(device, ttnn_input, ttnn_output, sender_grid, RECEIVER_CORE)
-        result = ttnn.generic_op([ttnn_input, ttnn_output], program)
-
-        result_torch = ttnn.to_torch(result)
-        passing, pcc_val = comp_pcc(torch_input, result_torch, 0.9999)
-        pcc_values.append(float(pcc_val))
-
-        status = "PASS" if passing else "FAIL"
-        logger.info(f"  [{i+1:>2}/{num_iterations}] {status} PCC={pcc_val:.6f}")
-
-        if not passing:
-            all_pass = False
-
-        ttnn_input.deallocate()
-        ttnn_output.deallocate()
-
-    # Summary
-    logger.info(f"Results: {sum(1 for p in pcc_values if p >= 0.9999)}/{num_iterations} passed (PCC >= 0.9999)")
-    logger.info(f"  min PCC = {min(pcc_values):.6f}, max PCC = {max(pcc_values):.6f}")
-
-    assert all_pass, f"ND gather failed on {sum(1 for p in pcc_values if p < 0.9999)}/{num_iterations} iterations"
-
-
-# =============================================================================
-# Gather + Reduce Test
-# =============================================================================
-
-
-def create_scratch_anchor(device, full_grid_set, num_grid_cores):
-    """Create HEIGHT_SHARDED anchor tensor on full grid for scratch CB address allocation."""
-    scratch_shard_u32 = SCRATCH_SIZE_BYTES // 4  # 6144 / 4 = 1536 uint32 elements
-    shard_spec = ttnn.ShardSpec(full_grid_set, (1, scratch_shard_u32), ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    return ttnn.from_torch(
-        torch.zeros([num_grid_cores, scratch_shard_u32], dtype=torch.uint32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-    )
-
-
-def create_reduce_output_tensor(device, receiver_core):
-    """Create HEIGHT_SHARDED output tensor on receiver core for reduce result (3 tiles of 16x32)."""
-    receiver_core_range = ttnn.CoreRangeSet({ttnn.CoreRange(receiver_core, receiver_core)})
-    output_shape = (NUM_REDUCE_TILES * 16, 32)  # (48, 32) = 3 tiles of 16x32
+    output_shape = (NUM_REDUCE_TILES * 32, 32)  # (64, 32) = 2 tiles of 32x32
     shard_spec = ttnn.ShardSpec(receiver_core_range, output_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     return ttnn.from_torch(
@@ -271,120 +112,96 @@ def create_reduce_output_tensor(device, receiver_core):
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=mem_config,
-        tile=TILE_16X32,
+        tile=TILE_32X32,
     )
 
 
-def build_gather_reduce_program(device, input_tensor, anchor_tensor, output_tensor, sender_grid, receiver_core):
-    """Build the gather+reduce program (identical NOC pattern + TRISC reduction as GatherReduce)."""
-    receiver_noc_core = device.worker_core_from_logical_core(receiver_core)
+def build_program(device, input_tensor, anchor_tensor, output_tensor, sender_core_range_set, receiver_core):
+    """Build the GatherReduce3 program using UnifiedKernelDescriptor (matches bliu/deepseek production)."""
+    from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+        PerCoreCompileTimeDescriptor,
+        UnifiedCompileTimeCoreDescriptor,
+        UnifiedKernelDescriptor,
+    )
 
-    sender_core_range = ttnn.CoreRangeSet({sender_grid})
+    receiver_noc_core = device.worker_core_from_logical_core(receiver_core)
     receiver_core_range = ttnn.CoreRangeSet({ttnn.CoreRange(receiver_core, receiver_core)})
-    all_cores = sender_core_range.merge(receiver_core_range)
+    all_cores = sender_core_range_set.merge(receiver_core_range)
 
     # Bounding box grid for scratch CB (must cover all sender + receiver cores)
     full_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 9))
     full_grid_set = ttnn.CoreRangeSet({full_grid})
 
-    # CB indices
     src_cb_id = 0
     scratch_cb_id = 1
     out_cb_id = 2
 
     # --- Semaphore ---
-    semaphore = ttnn.SemaphoreDescriptor(
-        id=SEMAPHORE_ID,
+    semaphore = ttnn.SemaphoreDescriptor(id=SEMAPHORE_ID, core_ranges=all_cores, initial_value=0)
+
+    # --- Per-core sender_idx (UsePerCoreSenderIdx mode) ---
+    sender_cores = ttnn.corerange_to_cores(sender_core_range_set, row_wise=True)
+    sender_idx_core_values = [(core, idx) for idx, core in enumerate(sender_cores)]
+
+    # --- Unified kernel ---
+    unified_kernel = UnifiedKernelDescriptor(
+        kernel_source=GATHER_REDUCE_KERNEL_PATH,
         core_ranges=all_cores,
-        initial_value=0,
-    )
-
-    # --- Sender kernel (NCRISC) on 12x8 grid ---
-    sender_named_args = [
-        ("is_sender_core", 1),
-        ("is_receiver_core", 0),
-        ("src_cb", src_cb_id),
-        ("src_num_pages", 1),
-        ("dest_noc_x", receiver_noc_core.x),
-        ("dest_noc_y", receiver_noc_core.y),
-        ("data_size_bytes", DATA_SIZE_BYTES),
-        ("receiver_semaphore_id", SEMAPHORE_ID),
-        ("grid_start_x", sender_grid.start.x),
-        ("grid_start_y", sender_grid.start.y),
-        ("grid_end_x", sender_grid.end.x),
-        ("grid_end_y", sender_grid.end.y),
-        ("half_num_cores", HALF_NUM_CORES),
-        ("half_size_bytes", HALF_SIZE_BYTES),
-        ("scratch_cb", scratch_cb_id),
-    ]
-
-    sender_kernel = ttnn.KernelDescriptor(
-        kernel_source=GATHER_REDUCE_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=sender_core_range,
-        named_compile_time_args=sender_named_args,
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_1,
-            noc=ttnn.NOC.NOC_0,
-        ),
-    )
-
-    # --- Receiver kernel (BRISC) on receiver core ---
-    receiver_named_args = [
-        ("is_sender_core", 0),
-        ("is_receiver_core", 1),
-        ("noc0_num_senders", NUM_SENDERS),
-        ("noc0_receiver_semaphore_id", SEMAPHORE_ID),
-        ("scratch_cb", scratch_cb_id),
-        ("num_tiles", NUM_REDUCE_TILES),
-    ]
-
-    receiver_kernel = ttnn.KernelDescriptor(
-        kernel_source=GATHER_REDUCE_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=receiver_core_range,
-        named_compile_time_args=receiver_named_args,
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_0,
-            noc=ttnn.NOC.NOC_1,
-        ),
-    )
-
-    # --- Compute kernels ---
-    # Sender compute (no-op, but must pass TRISC args for constexpr resolution)
-    sender_compute = ttnn.KernelDescriptor(
-        kernel_source=GATHER_REDUCE_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=sender_core_range,
-        named_compile_time_args=[
-            ("is_sender_core", 1),
-            ("is_receiver_core", 0),
+        ncrisc_named_compile_time_args=[
+            ("src_cb", src_cb_id),
+            ("src_num_pages", 1),
+            ("dest_noc_x", receiver_noc_core.x),
+            ("dest_noc_y", receiver_noc_core.y),
+            ("data_size_bytes", DATA_SIZE_BYTES),
+            ("receiver_semaphore_id", SEMAPHORE_ID),
+            ("half_num_cores", HALF_NUM_CORES),
+            ("half_size_bytes", HALF_SIZE_BYTES),
+            ("scratch_cb", scratch_cb_id),
+        ],
+        brisc_named_compile_time_args=[
+            ("noc0_num_senders", NUM_SENDERS),
+            ("noc0_receiver_semaphore_id", SEMAPHORE_ID),
+            ("scratch_cb", scratch_cb_id),
+            ("num_tiles", NUM_REDUCE_TILES),
+        ],
+        trisc_named_compile_time_args=[
             ("scratch_cb", scratch_cb_id),
             ("out_cb", out_cb_id),
             ("num_tiles", NUM_REDUCE_TILES),
         ],
-        config=ttnn.ComputeConfigDescriptor(),
+        trisc_compute_config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            dst_full_sync_en=False,
+        ),
+        unified_compile_time_core_descriptors=[
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_sender_core",
+                core_range=sender_core_range_set,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_receiver_core",
+                core_range=receiver_core_range,
+                value=1,
+                other_value=0,
+            ),
+        ],
+        per_core_compile_time_descriptors=[
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sender_idx",
+                core_values=sender_idx_core_values,
+                other_value=0,
+            ),
+        ],
     )
 
-    # Receiver compute (TRISC add_half_tiles)
-    receiver_compute_args = [
-        ("is_sender_core", 0),
-        ("is_receiver_core", 1),
-        ("scratch_cb", scratch_cb_id),
-        ("out_cb", out_cb_id),
-        ("num_tiles", NUM_REDUCE_TILES),
-    ]
-
-    receiver_compute = ttnn.KernelDescriptor(
-        kernel_source=GATHER_REDUCE_KERNEL_PATH,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=receiver_core_range,
-        named_compile_time_args=receiver_compute_args,
-        config=ttnn.ComputeConfigDescriptor(),
-    )
+    kernel_result = unified_kernel.get_kernel_descriptors()
 
     # --- CBs ---
-    # CB0: src input (from sharded input tensor, on sender cores only)
+    # CB0: src input (from sharded input tensor, on sender cores)
     src_cb = ttnn.cb_descriptor_from_sharded_tensor(src_cb_id, input_tensor)
 
     # CB1: scratch (from anchor tensor, on ALL cores so get_write_ptr returns same addr)
@@ -398,8 +215,8 @@ def build_gather_reduce_program(device, input_tensor, anchor_tensor, output_tens
         ttnn.CBFormatDescriptor(
             buffer_index=scratch_cb_id,
             data_format=ttnn.bfloat16,
-            page_size=TILE_16X32_SIZE,
-            tile=ttnn.TileDescriptor(TILE_16X32),
+            page_size=TILE_32X32_SIZE,
+            tile=ttnn.TileDescriptor(TILE_32X32),
         )
     ]
 
@@ -409,44 +226,48 @@ def build_gather_reduce_program(device, input_tensor, anchor_tensor, output_tens
         ttnn.CBFormatDescriptor(
             buffer_index=out_cb_id,
             data_format=ttnn.bfloat16,
-            page_size=TILE_16X32_SIZE,
-            tile=ttnn.TileDescriptor(TILE_16X32),
+            page_size=TILE_32X32_SIZE,
+            tile=ttnn.TileDescriptor(TILE_32X32),
         )
     ]
 
     return ttnn.ProgramDescriptor(
-        kernels=[sender_kernel, receiver_kernel, sender_compute, receiver_compute],
+        kernels=kernel_result.kernels,
         cbs=[src_cb, scratch_cb, out_cb],
         semaphores=[semaphore],
     )
 
 
+# =============================================================================
+# Test
+# =============================================================================
+
+
 @pytest.mark.requires_grid_size((13, 10))
-@pytest.mark.parametrize("num_iterations", [5])
+@pytest.mark.parametrize("num_iterations", [50])
 def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
     """
-    Run the gather+reduce pattern from GatherReduce (96 senders -> 1 receiver, 64B each,
-    then TRISC add_half_tiles reduction) multiple times and check for ND PCC corruption.
+    Run the GatherReduce3 pattern (112 senders -> receiver (11,9), 64B each,
+    then TRISC add_half_tiles reduction with 32x32 tiles) multiple times
+    and check for ND PCC corruption.
+
+    Matches bliu/deepseek production: non-rectangular o_proj grid,
+    UsePerCoreSenderIdx, noc_async_write + barrier.
 
     Uses same input every iteration. If output varies across iterations, that's ND.
     """
-    sender_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(*SENDER_GRID_START),
-        ttnn.CoreCoord(*SENDER_GRID_END),
-    )
+    sender_core_range_set = get_sender_core_range_set()
 
     # Bounding box grid for anchor tensor
     full_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 9))
     full_grid_set = ttnn.CoreRangeSet({full_grid})
     num_grid_cores = 13 * 10  # 130
 
-    shard_shape = (1, WIDTH_PER_CORE)
-
     logger.info(
-        f"Testing ND gather+reduce: {NUM_SENDERS} senders (12x8) -> receiver ({RECEIVER_CORE.x},{RECEIVER_CORE.y})"
+        f"Testing GatherReduce3: {NUM_SENDERS} senders (12x8+8x2) -> receiver ({RECEIVER_CORE.x},{RECEIVER_CORE.y})"
     )
     logger.info(f"  data_size_bytes={DATA_SIZE_BYTES}, half_num_cores={HALF_NUM_CORES}")
-    logger.info(f"  reduce: {NUM_REDUCE_TILES} tiles of 16x32, scratch={SCRATCH_SIZE_BYTES}B")
+    logger.info(f"  reduce: {NUM_REDUCE_TILES} tiles of 32x32, scratch={SCRATCH_SIZE_BYTES}B")
     logger.info(f"  iterations={num_iterations} (same input each time, checking output consistency)")
 
     # Fixed input for all iterations
@@ -455,8 +276,8 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
 
     # Allocate tensors ONCE — reuse across all iterations to keep L1 addresses stable
     anchor = create_scratch_anchor(device, full_grid_set, num_grid_cores)
-    ttnn_input = create_sharded_input(device, torch_input, sender_grid, shard_shape)
-    ttnn_output = create_reduce_output_tensor(device, RECEIVER_CORE)
+    ttnn_input = create_sharded_input(device, torch_input, sender_core_range_set)
+    ttnn_output = create_output_tensor(device, RECEIVER_CORE)
     logger.info(
         f"  L1 addrs: anchor=0x{anchor.buffer_address():x}, "
         f"input=0x{ttnn_input.buffer_address():x}, output=0x{ttnn_output.buffer_address():x}"
@@ -467,26 +288,25 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
     pcc_values = []
 
     for i in range(num_iterations):
-        program = build_gather_reduce_program(device, ttnn_input, anchor, ttnn_output, sender_grid, RECEIVER_CORE)
+        logger.info(f"  [{i+1:>2}] Building program...")
+        program = build_program(device, ttnn_input, anchor, ttnn_output, sender_core_range_set, RECEIVER_CORE)
+        logger.info(f"  [{i+1:>2}] Program built. Launching generic_op...")
+        sys.stdout.flush()
+        sys.stderr.flush()
         result = ttnn.generic_op([ttnn_input, anchor, ttnn_output], program)
+        logger.info(f"  [{i+1:>2}] generic_op completed. Reading output...")
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         result_torch = ttnn.to_torch(ttnn_output)
+        logger.info(f"  [{i+1:>2}] output read OK, shape={result_torch.shape}")
 
-        # Diagnostic: check if scratch CB (anchor) has data on receiver core
-        # Receiver core (12,9) is shard index 129 (last) in the full grid
-        anchor_torch = ttnn.to_torch(anchor)
-        receiver_scratch = anchor_torch[129]  # uint32 data
-
-        # Debug: print shape and first values on first 5 iterations
-        if i < 5:
+        if i < 3:
             logger.info(f"  [{i+1:>2}] output[:5]={result_torch.flatten()[:5].tolist()}")
             logger.info(f"  [{i+1:>2}] output nonzero={result_torch.count_nonzero().item()}/{result_torch.numel()}")
-            scratch_nonzero = (receiver_scratch != 0).sum().item()
-            logger.info(f"  [{i+1:>2}] scratch(receiver) nonzero={scratch_nonzero}/{receiver_scratch.numel()}")
 
         if reference_output is None:
             reference_output = result_torch.clone()
-            # Sanity: output should not be all zeros
             is_nonzero = result_torch.abs().sum().item() > 0
             logger.info(f"  [{i+1:>2}/{num_iterations}] Reference run (non-zero={is_nonzero})")
             if not is_nonzero:
@@ -513,4 +333,4 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
 
     assert (
         all_pass
-    ), f"ND gather+reduce failed: {sum(1 for p in pcc_values if p < 0.9999)}/{len(pcc_values)} iterations differ from reference"
+    ), f"ND GatherReduce3 failed: {sum(1 for p in pcc_values if p < 0.9999)}/{len(pcc_values)} iterations differ from reference"
