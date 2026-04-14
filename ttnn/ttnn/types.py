@@ -16,7 +16,16 @@ float32 = DataType.FLOAT32
 bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
-DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
+try:
+    DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
+except AttributeError:
+    # Binary predates DumpTensorMode; provide a stub so existing models can load
+    from enum import IntEnum
+
+    class DumpTensorMode(IntEnum):  # type: ignore[no-redef]
+        LOCAL = 0
+        DISTRIBUTED_GATHER = 1
+
 
 BufferType = ttnn._ttnn.tensor.BufferType
 TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
@@ -41,7 +50,13 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 TILE_SIZE = 32
 
 Tile = ttnn._ttnn.tensor.Tile
-OverlappedTensor = ttnn._ttnn.tensor.OverlappedTensor
+try:
+    OverlappedTensor = ttnn._ttnn.tensor.OverlappedTensor
+except AttributeError:
+    # Binary predates OverlappedTensor; provide a stub
+    class OverlappedTensor:  # type: ignore[no-redef]
+        """Stub: not supported by this binary."""
+
 
 Shape = ttnn._ttnn.types.Shape
 TensorSpec = ttnn._ttnn.tensor.TensorSpec
@@ -82,7 +97,13 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
-get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
+try:
+    get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
+except AttributeError:
+    # Binary predates this function; provide a stub
+    def get_optimal_worker_cores_for_sharded_tensor(*args, **kwargs):  # type: ignore[misc]
+        raise NotImplementedError("get_optimal_worker_cores_for_sharded_tensor not supported by this binary")
+
 
 QueueId = ttnn._ttnn.types.QueueId
 

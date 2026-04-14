@@ -12,10 +12,20 @@ import math
 from ttnn._ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
-    determine_expected_group_norm_sharded_config_and_grid_size,
     _compute_num_virtual_cols,
     _find_expected_dram_grid,
 )
+
+try:
+    from ttnn._ttnn.operations.normalization import (
+        determine_expected_group_norm_sharded_config_and_grid_size,
+    )
+except ImportError:
+    # Binary predates determine_expected_group_norm_sharded_config_and_grid_size
+    def determine_expected_group_norm_sharded_config_and_grid_size(*args, **kwargs):  # type: ignore[misc]
+        raise NotImplementedError(
+            "determine_expected_group_norm_sharded_config_and_grid_size not supported by this binary"
+        )
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
