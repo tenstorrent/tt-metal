@@ -60,12 +60,12 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
             .grad_output = grad_output,
-            .attn_output = attn_output,
             .query = query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,  // No explicit mask - using mask_type
             .intermediates = intermediates,
+            .attn_output = attn_output,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};
 
@@ -132,12 +132,12 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
             .grad_output = grad_output,
-            .attn_output = attn_output,
             .query = query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
             .intermediates = intermediates,
+            .attn_output = attn_output,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};
 

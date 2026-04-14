@@ -69,7 +69,9 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
             .intermediates = intermediates,
             .preallocated_grad_query = grad_query};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query};
+        // Ring attention doesn't use u_scaler across devices — let the factory allocate a throwaway tensor.
+        auto sdpa_return_value =
+            sdpa_bw::device::SDPABackwardQDeviceOperation::create_output_tensors(sdpa_attrs, sdpa_tensor_args);
 
         auto cached_program =
             sdpa_bw::device::SDPABackwardQProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
@@ -140,7 +142,8 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
             .intermediates = intermediates,
             .preallocated_grad_query = grad_query};
 
-        sdpa_q::tensor_return_value_t sdpa_return_value{grad_query};
+        auto sdpa_return_value =
+            sdpa_bw::device::SDPABackwardQDeviceOperation::create_output_tensors(sdpa_attrs, sdpa_tensor_args);
 
         // Convert our shared_variables to SDPA's shared_variables type
         sdpa_bw::device::SDPABackwardQProgramFactory::shared_variables_t sdpa_shared_vars{
