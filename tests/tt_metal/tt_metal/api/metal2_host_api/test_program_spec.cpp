@@ -745,9 +745,15 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
-// These verify that valid configurations succeed.
-// NOTE: Program creation needs full HAL support.
-// TODO: Enable these tests with a Quasar mock device.
+// These verify that valid ProgramSpec configurations produce a Program without throwing.
+// They exercise the full MakeProgramFromSpec pipeline: spec validation, DFB ID assignment,
+// DFBAccessor handle map construction, and kernel object creation.
+//
+// Coverage gap: JIT compilation and device-side execution are not tested here.
+// Mock device isn't really enough to test anything on device side adequately.
+// Execution-level coverage for DFB local accessor bindings will come from:
+//   - DFB integration tests: tests/tt_metal/tt_metal/api/dataflow_buffer/. (TODO)
+//   - Real-hardware tests via the WH/BH Metal 2.0 host API path (when that lands)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
