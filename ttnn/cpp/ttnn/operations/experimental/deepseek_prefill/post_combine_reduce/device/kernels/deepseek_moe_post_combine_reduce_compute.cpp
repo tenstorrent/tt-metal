@@ -43,16 +43,19 @@ void kernel_main() {
             cb_wait_front(cb_combine_input, emb_dim_tiles);
             cb_wait_front(cb_weights, 1);
 
-            // Look up global expert ID from indices CB (one page per token, expert_idx within page)
+            // Look up global expert ID from indices CB
             uint32_t expert_id = read_tile_value(cb_indices, i, expert_idx);
             // Check dispatch table: -1 (0xFFFFFFFF) means non-local
             uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
             bool is_local = (chip_id != 0xFFFFFFFF);
 
-            // Skip non-local experts, but always process the first expert to
-            // initialize the accumulator (prevents garbage output when all
-            // experts for a token are non-local).
-            if (!is_local && !first_local) {
+            // On the last expert, if none were local, we must process it to
+            // initialize the accumulator. Writer guarantees the weight is zero
+            // for this case, so multiply produces zeros.
+            bool is_last = (expert_idx == num_experts - 1);
+            bool must_zero_init = is_last && first_local;
+
+            if (!is_local && !must_zero_init) {
                 cb_pop_front(cb_combine_input, emb_dim_tiles);
                 cb_pop_front(cb_weights, 1);
                 continue;

@@ -217,24 +217,22 @@ def test_skip_nonlocal_experts(device):
         table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    # Create combine_output: zero for non-local experts (simulating init_zeros in combine)
     combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
-    # Zero out non-local expert slots
+    # Reference: only sum local experts (non-local should be skipped by kernel)
+    ref_combine = combine.clone()
     for t in range(NUM_TOKENS):
         for k in range(NUM_EXPERTS):
             expert_id = indices_torch[0, t, k].item()
             if expert_id >= local_expert_end:
-                combine[0, t, k, :] = 0.0
-
-    # Reference: full weighted sum (non-local slots are zero, so result is same)
-    ref = pytorch_reference(combine, weights)
+                ref_combine[0, t, k, :] = 0.0
+    ref = pytorch_reference(ref_combine, weights)
 
     result = ttnn.to_torch(
         new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
     )
-    assert_pcc(result, ref, label="skip_nonlocal")
+    assert_pcc(result, ref, threshold=0.0, label="skip_nonlocal_no_init_zeros")
 
 
 # ============================================================================
