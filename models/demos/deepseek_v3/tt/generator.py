@@ -284,6 +284,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._mtp_predict_trace_rot_idxs: ttnn.Tensor | None = None
         self._mtp_predict_trace_output: ttnn.Tensor | None = None
         self._mtp_predict_trace_page_table: ttnn.Tensor | None = None
+        self._sampling_trace_logits_device: ttnn.Tensor | None = None
+        self._sampling_trace_logits_host: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
@@ -672,6 +674,12 @@ class DeepseekGenerator(WarmupForwardMixin):
             ):
                 ttnn.deallocate(self._mtp_predict_trace_page_table)
                 del self._mtp_predict_trace_page_table
+            if self._sampling_trace_logits_device is not None:
+                ttnn.deallocate(self._sampling_trace_logits_device)
+                del self._sampling_trace_logits_device
+            if self._sampling_trace_logits_host is not None:
+                ttnn.deallocate(self._sampling_trace_logits_host)
+                del self._sampling_trace_logits_host
         except Exception as e:
             logger.warning(f"Failed to cleanup trace state: {e}")
 
@@ -779,10 +787,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:
-            if enable_trace:
-                raise ValueError(
-                    f"Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}"
-                )
             if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
                 raise ValueError(
                     f"Device sampling expects logits batch in [1, {sampling_batch_size}], got {logits.shape[2]}"
@@ -796,8 +800,30 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             filler = ttnn.repeat(filler_row, (1, 1, sampling_batch_size - logits.shape[2], 1))
             ttnn.deallocate(filler_row)
-            sampling_logits = ttnn.concat([logits, filler], dim=2)
+            padded_logits = ttnn.concat([logits, filler], dim=2)
             ttnn.deallocate(filler)
+            if enable_trace:
+                if (
+                    self._sampling_trace_logits_device is None
+                    or self._sampling_trace_logits_host is None
+                    or self._sampling_trace_logits_device.shape != padded_logits.shape
+                ):
+                    if self._sampling_trace_logits_device is not None:
+                        ttnn.deallocate(self._sampling_trace_logits_device)
+                    if self._sampling_trace_logits_host is not None:
+                        ttnn.deallocate(self._sampling_trace_logits_host)
+                    self._sampling_trace_logits_device = ttnn.allocate_tensor_on_device(
+                        padded_logits.spec, self.mesh_device
+                    )
+                    self._sampling_trace_logits_host = ttnn.allocate_tensor_on_host(
+                        padded_logits.spec, self.mesh_device
+                    )
+                ttnn.copy_device_to_host_tensor(padded_logits, self._sampling_trace_logits_host)
+                ttnn.copy_host_to_device_tensor(self._sampling_trace_logits_host, self._sampling_trace_logits_device)
+                ttnn.deallocate(padded_logits)
+                sampling_logits = self._sampling_trace_logits_device
+            else:
+                sampling_logits = padded_logits
 
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
@@ -805,7 +831,8 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
         finally:
             if sampling_logits is not logits:
-                ttnn.deallocate(sampling_logits)
+                if sampling_logits is not self._sampling_trace_logits_device:
+                    ttnn.deallocate(sampling_logits)
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
@@ -821,18 +848,26 @@ class DeepseekGenerator(WarmupForwardMixin):
             tt_out_tok,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=tuple(mesh_device.shape)),
         )
-        if composed.ndim == 4:
-            if tt_out_tok.shape[-2] == batch_size_per_row:
-                tokens = composed[:, :, :, 0]
-            elif tt_out_tok.shape[-1] == batch_size_per_row:
-                tokens = composed[:, :, 0, :batch_size_per_row]
-            else:
-                tokens = composed
-            tokens = tokens.reshape(-1)
-        else:
-            tokens = composed.reshape(-1)
-        batch_size = batch_size_per_row * int(mesh_device.shape[0])
-        return tokens[:batch_size].to(torch.int64)
+        tokens = composed.reshape(-1)
+        rows = int(mesh_device.shape[0])
+        if rows <= 0:
+            raise RuntimeError(f"Invalid mesh row count: {rows}")
+        if tokens.numel() % rows != 0:
+            raise RuntimeError(
+                f"Unexpected sampled token shape {tuple(composed.shape)} for mesh rows={rows}; "
+                f"cannot derive per-row token layout."
+            )
+
+        # Sampling can run with padded per-row batches (e.g. 32) even when active users per row are smaller
+        # (e.g. 8). Select only the first `batch_size_per_row` users from each row to avoid returning filler rows.
+        per_row_tokens = tokens.view(rows, tokens.numel() // rows)
+        if batch_size_per_row > per_row_tokens.shape[1]:
+            raise RuntimeError(
+                f"Requested {batch_size_per_row} tokens/row, but sampled output has only {per_row_tokens.shape[1]} "
+                f"tokens/row (composed shape={tuple(composed.shape)})."
+            )
+        active_tokens = per_row_tokens[:, :batch_size_per_row]
+        return active_tokens.reshape(-1).to(torch.int64)
 
     def _tt_from_hidden_states_step(
         self,
