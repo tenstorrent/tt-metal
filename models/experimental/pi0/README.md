@@ -310,6 +310,140 @@ python models/experimental/pi0/tests/demo/run_libero_demo.py
 python models/experimental/pi0/tests/demo/visualize_demo.py
 ```
 
+## Closed-Loop LIBERO Evaluation
+
+Pi-0.5 can be evaluated closed-loop inside the LIBERO simulator via
+`tests/pcc/test_rollout_libero.py`. The rollout harness resets the env to
+a canonical LIBERO initial state, runs the policy in the loop (replanning
+every `--chunk` steps), and reports per-task success rates. Both the
+PyTorch reference (`--backend torch`) and the TTNN implementation
+(`--backend ttnn`) are supported with identical preprocessing, so their
+success rates can be compared directly.
+
+### One-time setup
+
+Pi-0.5 closed-loop evaluation requires the LIBERO simulator repo. Install
+it once in the same Python environment you use for tt-metal:
+
+```bash
+# Clone upstream LIBERO (tested against commit 8f1084e3)
+cd <your workspace root>
+git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git
+cd LIBERO
+
+# Install as editable (brings in robosuite, bddl, mujoco, gym, etc.)
+pip install --no-deps -e .
+pip install robosuite==1.4.0 bddl==1.0.1 mujoco==3.6.0 easydict pyserial gym==0.25.2
+
+# Pre-create the LIBERO config file to skip its interactive setup prompt.
+# Point the paths at LIBERO's own `libero/libero/` subdirectory:
+mkdir -p ~/.libero
+cat > ~/.libero/config.yaml <<'YAML'
+benchmark_root: <workspace>/LIBERO/libero/libero
+bddl_files: <workspace>/LIBERO/libero/libero/bddl_files
+init_states: <workspace>/LIBERO/libero/libero/init_files
+datasets: <workspace>/LIBERO/libero/libero/datasets
+assets: <workspace>/LIBERO/libero/libero/assets
+YAML
+```
+
+The rollout harness pulls per-task LIBERO init states from LIBERO's
+`init_files/` directory via the upstream `libero.libero.benchmark` API.
+It does NOT need the raw training demo `.hdf5` files.
+
+Additional Python deps used by the harness (install in the tt-metal venv
+if not already present):
+
+```bash
+pip install 'lerobot[all]==0.4.4' --no-deps
+pip install datasets 'huggingface_hub[hf_transfer]' deepdiff orderly-set
+```
+
+### Pi-0.5 LIBERO weights
+
+The harness loads the LeRobot `lerobot/pi05_libero` checkpoint (a ~14.5 GB
+pi-0.5 fine-tune for LIBERO). Download it via Hugging Face and symlink
+into the expected location:
+
+```bash
+export HF_TOKEN=<your huggingface token>
+huggingface-cli download lerobot/pi05_libero
+
+# Point the pi0 weights dir at your local HF cache
+ln -s ~/.cache/huggingface/hub/models--lerobot--pi05_libero/snapshots/<snapshot-hash> \
+      models/experimental/pi0/weights/pi05_libero
+```
+
+(The `pi05_base` checkpoint used by the numerical-fidelity tests can be
+fetched the same way from `lerobot/pi05_base`.)
+
+### Environment variables
+
+```bash
+source <tt-metal venv>/bin/activate
+export TT_METAL_HOME=<tt-metal root>
+export PYTHONPATH=$TT_METAL_HOME/ttnn:$TT_METAL_HOME
+export HF_TOKEN=<your huggingface token>
+
+# Rendering backend:
+# - headless (for CI / scripts): MUJOCO_GL=egl
+# - on-screen viewer (requires an X display): MUJOCO_GL=glfw + DISPLAY=:0
+export MUJOCO_GL=egl
+```
+
+### Running the rollout
+
+The harness takes `--suite`, `--tasks` (task IDs), `--n-inits`, and
+`--max-steps`. The `lerobot/pi05_libero` fine-tune targets the
+`libero_10`, `libero_spatial`, and `libero_goal` suites (matching the
+suites used in the openpi eval):
+
+```bash
+# TTNN backend, libero_spatial task 0, 1 init, headless
+python models/experimental/pi0/tests/pcc/test_rollout_libero.py \
+    --backend ttnn --suite libero_spatial --tasks 0 \
+    --n-inits 1 --max-steps 220 --chunk 10
+
+# PyTorch reference on the same input (much slower on CPU)
+python models/experimental/pi0/tests/pcc/test_rollout_libero.py \
+    --backend torch --suite libero_spatial --tasks 0 \
+    --n-inits 1 --max-steps 220 --chunk 10
+
+# With on-screen MuJoCo viewer (requires DISPLAY set)
+export MUJOCO_GL=glfw
+export DISPLAY=:0
+python models/experimental/pi0/tests/pcc/test_rollout_libero.py \
+    --backend ttnn --suite libero_spatial --tasks 0 \
+    --n-inits 1 --max-steps 220 --chunk 10 --render
+```
+
+Recommended `--max-steps` per suite (matching openpi's LIBERO eval):
+`libero_spatial` 220, `libero_object` 280, `libero_goal` 300,
+`libero_10` 520, `libero_90` 400.
+
+### Numerical-fidelity tests (no simulator needed)
+
+Three additional tests live under `tests/pcc/` and validate the TTNN
+implementation against the PyTorch reference WITHOUT launching LIBERO.
+Run them after any change to `tt/ttnn_gemma.py`, `tt/ttnn_paligemma.py`,
+`tt/ttnn_pi0_model.py`, `tt/ttnn_suffix.py`, or
+`reference/torch_pi0_model.py`:
+
+```bash
+# Per-denoise-step velocity PCC (threshold: per-step ≥ 0.99, aggregate ≥ 0.93)
+python models/experimental/pi0/tests/pcc/test_pcc_pi05_per_step.py
+
+# N-run determinism check (max|Δ| must be 0 across repeated inferences)
+python models/experimental/pi0/tests/pcc/test_determinism_pi05.py --runs 5
+
+# Action-space divergence on held-out LeRobot samples (real LIBERO / ALOHA inputs)
+python models/experimental/pi0/tests/pcc/test_action_divergence_lerobot.py --n 4
+```
+
+All three tests load the `pi05_base` checkpoint from
+`models/experimental/pi0/weights/pi05_base`; override with
+`PI0_CHECKPOINT=/path/to/checkpoint` if you keep weights elsewhere.
+
 ## Troubleshooting
 
 ### `Checkpoint not found`
