@@ -305,8 +305,9 @@ set(GPP_FLAGS_wormhole -mcpu=tt-wh)
 set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
 # Define common flags for all architectures
+# Define common flags for all architectures
 set(GPP_FLAGS_common
-    -std=c++17
+    -std=c++20
     -flto=auto
     -ffast-math
     -fno-use-cxa-atexit
@@ -320,6 +321,8 @@ set(GPP_FLAGS_common
     -Wno-error=unused-but-set-variable
     -Wno-unused-variable
     -Wno-unused-function
+    -Wno-volatile
+    -Wno-template-body
     -Os
     -fno-tree-loop-distribute-patterns
 )

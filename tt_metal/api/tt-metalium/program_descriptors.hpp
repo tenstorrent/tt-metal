@@ -104,6 +104,19 @@ struct KernelDescriptor {
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
+    // Named runtime args use "ns.field" convention (e.g. "demo.num_tiles").
+    // The name is split on '.' to produce namespace hierarchy in the generated header.
+    // Common: same value on all cores. Per-core: different value per core.
+    struct NamedCommonRuntimeArg {
+        std::string name;
+        uint32_t value;
+    };
+    using NamedCommonRuntimeArgs = std::vector<NamedCommonRuntimeArg>;
+    struct NamedPerCoreRuntimeArg {
+        std::string name;
+        std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+    };
+    using NamedPerCoreRuntimeArgs = std::vector<NamedPerCoreRuntimeArg>;
     using ConfigDescriptor = std::
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
@@ -120,6 +133,13 @@ struct KernelDescriptor {
     // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
+    // Named common runtime args: ordered (name, value) pairs.
+    // Names define the index mapping compiled into the kernel for compile-time resolution.
+    // Values are set as common runtime args (appended after any positional common_runtime_args).
+    NamedCommonRuntimeArgs named_common_runtime_args;
+    // Per-core named runtime args: each entry has a name and per-core values.
+    // Values are merged into runtime_args by program.cpp; indices auto-assigned by position.
+    NamedPerCoreRuntimeArgs named_per_core_runtime_args;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
