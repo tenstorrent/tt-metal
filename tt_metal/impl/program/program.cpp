@@ -1588,7 +1588,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
         auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
             program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
 
@@ -1630,7 +1630,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
         auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
             program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;

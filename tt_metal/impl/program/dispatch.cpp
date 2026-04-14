@@ -37,6 +37,7 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "impl/device/device_impl.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -429,8 +430,7 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(write_offsets);
 }
 
-void insert_stall_cmds(
-    ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id) {
     // Initialize stall command sequences for this program.
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
@@ -2744,10 +2744,11 @@ void write_program_command_sequence(
     LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers, bool use_prefetcher_cache) {
-    std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
-    program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+TraceNode create_trace_node(
+    ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
+    std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};
+    program.generate_trace_dispatch_commands(mesh_device, use_prefetcher_cache);
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
     // regular cached program command sequence), so rta_updates includes all the RTAs.
@@ -2852,13 +2853,13 @@ void reset_config_buf_mgrs_and_expected_workers(
 }
 
 void reset_worker_dispatch_state_on_device(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
-    auto num_sub_devices = device->num_sub_devices();
+    auto num_sub_devices = mesh_device->num_sub_devices();
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
@@ -2901,9 +2902,9 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                device->num_noc_unicast_txns(sub_device_id),
-                device->noc_data_start_index(sub_device_id),
+                mesh_device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                mesh_device->num_noc_unicast_txns(sub_device_id),
+                mesh_device->noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }
@@ -2914,8 +2915,8 @@ void reset_worker_dispatch_state_on_device(
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i];
         if (reset_launch_msg_state) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                    device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
+                                    mesh_device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
@@ -2936,8 +2937,7 @@ void reset_worker_dispatch_state_on_device(
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-void set_num_worker_sems_on_dispatch(
-    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
+void set_num_worker_sems_on_dispatch(SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
     if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
@@ -2954,10 +2954,7 @@ void set_num_worker_sems_on_dispatch(
 }
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* /*device*/,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id) {
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
@@ -2975,10 +2972,7 @@ void set_go_signal_noc_data_on_dispatch(
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
-    tt::tt_metal::IDevice* device,
-    tt::tt_metal::SubDeviceId sub_device_id,
-    uint32_t num_expected_workers,
-    uint8_t cq_id) {
+    Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
     tt::tt_metal::DeviceCommandCalculator calculator;
     bool distributed_dispatcher =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
@@ -3034,7 +3028,7 @@ static_assert(
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
 void set_core_go_message_mapping_on_device(
-    IDevice* device,
+    Device* device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
