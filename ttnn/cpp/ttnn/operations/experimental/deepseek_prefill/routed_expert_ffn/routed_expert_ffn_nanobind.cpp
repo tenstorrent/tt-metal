@@ -4,14 +4,11 @@
 
 #include "routed_expert_ffn_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "routed_expert_ffn.hpp"
-#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -34,9 +31,6 @@ void bind_routed_expert_ffn(nb::module_& mod) {
             down_proj (ttnn.Tensor): Down projection weight (hidden_dim, emb_dim).
 
         Keyword Args:
-            gate_program_config (ttnn.MatmulProgramConfig, optional): Program config for the gate matmul. Defaults to None.
-            up_program_config (ttnn.MatmulProgramConfig, optional): Program config for the up matmul. Defaults to None.
-            down_program_config (ttnn.MatmulProgramConfig, optional): Program config for the down matmul. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to None.
             output (ttnn.Tensor, optional): Pre-allocated output tensor for in-place write of the final matmul result. Defaults to None.
 
@@ -54,9 +48,6 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         nb::arg("up_proj").noconvert(),
         nb::arg("down_proj").noconvert(),
         nb::kw_only(),
-        nb::arg("gate_program_config") = nb::none(),
-        nb::arg("up_program_config") = nb::none(),
-        nb::arg("down_program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none());
 }

@@ -93,14 +93,6 @@ class TtRoutedExpert(LightweightModule):
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
 
-        # Build program configs for matmuls using optimal parameters from sweeps
-        logger.warning(
-            f"RoutedExpert: No optimal program config for given dimensions {max_tokens=}{emb_dim=}{hidden_dim=}, using defaults."
-        )
-        self.gate_program_config = None
-        self.up_program_config = None
-        self.down_program_config = None
-
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
         logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -273,9 +265,6 @@ class TtRoutedExpert(LightweightModule):
             gate_proj,
             up_proj,
             down_proj,
-            gate_program_config=self.gate_program_config,
-            up_program_config=self.up_program_config,
-            down_program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
             output=out,
         )
