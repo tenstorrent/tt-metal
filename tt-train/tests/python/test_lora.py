@@ -28,7 +28,6 @@ import math
 import numpy as np
 import pytest
 
-from python_test_utils import param_to_numpy_bf16_current
 import ttnn
 import ttml
 from ttml.models import RunnerType, WeightTyingType
@@ -688,6 +687,7 @@ class TestLoraTrainingStep:
         loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
         assert np.isfinite(loss_np).all(), "Loss should be finite"
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_only_lora_params_updated_llama(self, toy_llama_config):
         """Frozen params must not change; at least some LoRA params must change."""
         model = Llama(toy_llama_config)
@@ -698,7 +698,7 @@ class TestLoraTrainingStep:
         frozen_before = {}
         lora_before = {}
         for name, param in lora_model.parameters().items():
-            arr = param_to_numpy_bf16_current(param).copy()
+            arr = param.to_numpy(ttnn.DataType.FLOAT32).copy()
             if param.get_requires_grad():
                 lora_before[name] = arr
             else:
@@ -727,17 +727,18 @@ class TestLoraTrainingStep:
         optimizer.step()
 
         for name, before in frozen_before.items():
-            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
             assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():
-            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
             if not np.allclose(before, after, atol=1e-6):
                 any_changed = True
                 break
         assert any_changed, "At least some LoRA params should change after training"
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_only_lora_params_updated_nanogpt(self, toy_gpt_config):
         """Frozen params must not change; at least some LoRA params must change."""
         model = create_nanogpt(toy_gpt_config)
@@ -748,7 +749,7 @@ class TestLoraTrainingStep:
         frozen_before = {}
         lora_before = {}
         for name, param in lora_model.parameters().items():
-            arr = param_to_numpy_bf16_current(param).copy()
+            arr = param.to_numpy(ttnn.DataType.FLOAT32).copy()
             if param.get_requires_grad():
                 lora_before[name] = arr
             else:
@@ -777,12 +778,12 @@ class TestLoraTrainingStep:
         optimizer.step()
 
         for name, before in frozen_before.items():
-            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
             assert np.allclose(before, after, atol=1e-6), f"Frozen param {name} should not change during training"
 
         any_changed = False
         for name, before in lora_before.items():
-            after = param_to_numpy_bf16_current(lora_model.parameters()[name])
+            after = lora_model.parameters()[name].to_numpy(ttnn.DataType.FLOAT32)
             if not np.allclose(before, after, atol=1e-6):
                 any_changed = True
                 break

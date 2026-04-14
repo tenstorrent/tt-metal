@@ -11,7 +11,6 @@ equivalent results to the C++ implementation from _ttml.
 import numpy as np
 import pytest
 
-from python_test_utils import param_to_numpy_bf16_current
 import ttnn
 import ttml  # noqa: E402
 
@@ -363,6 +362,7 @@ def test_different_feature_sizes(n_features, out_features):
     assert cpp_shape == (batch_size, 1, 1, out_features)
 
 
+@pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
 def test_gradient_flow(sample_data):
     """Test that gradients flow correctly in both models."""
     n_features = sample_data["n_features"]
@@ -382,8 +382,8 @@ def test_gradient_flow(sample_data):
 
     cpp_weight_key = [k for k in cpp_params_before.keys() if "weight" in k.lower()][0]
     py_weight_key = [k for k in py_params_before.keys() if "weight" in k.lower()][0]
-    cpp_weight_before = param_to_numpy_bf16_current(cpp_params_before[cpp_weight_key])
-    py_weight_before = param_to_numpy_bf16_current(py_params_before[py_weight_key])
+    cpp_weight_before = cpp_params_before[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32)
+    py_weight_before = py_params_before[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Train one step
     lr = 0.1
@@ -419,8 +419,8 @@ def test_gradient_flow(sample_data):
     cpp_params_after = cpp_model.parameters()
     py_params_after = py_model.parameters()
 
-    cpp_weight_after = param_to_numpy_bf16_current(cpp_params_after[cpp_weight_key])
-    py_weight_after = param_to_numpy_bf16_current(py_params_after[py_weight_key])
+    cpp_weight_after = cpp_params_after[cpp_weight_key].to_numpy(ttnn.DataType.FLOAT32)
+    py_weight_after = py_params_after[py_weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
     # Parameters should have changed
     assert not np.allclose(

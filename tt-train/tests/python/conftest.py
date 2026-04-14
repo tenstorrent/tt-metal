@@ -4,15 +4,7 @@
 
 """Pytest configuration for TTML Python tests."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-# Ensure local test helper modules (e.g., python_test_utils.py) are importable in CI.
-TESTS_PYTHON_DIR = Path(__file__).resolve().parent
-if str(TESTS_PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(TESTS_PYTHON_DIR))
 
 
 def pytest_configure(config):

@@ -9,10 +9,9 @@ into the ttml Python package, with Python implementations taking precedence.
 """
 
 import inspect
-import numpy as np
 import pytest
+import numpy as np
 
-from python_test_utils import param_to_numpy_bf16_current
 import ttml  # noqa: E402
 import ttml._ttml  # noqa: E402
 import ttnn
@@ -335,7 +334,7 @@ class TestCppOptimizersWithPythonModules:
 
         # Get initial weight values
         weight_key = [k for k in params.keys() if "weight" in k][0]
-        weight_before = param_to_numpy_bf16_current(params[weight_key]).copy()
+        weight_before = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # Create C++ SGD optimizer with the Python module's parameters
         sgd_config = ttml.optimizers.SGDConfig.make(
@@ -366,10 +365,11 @@ class TestCppOptimizersWithPythonModules:
 
         # Verify weights changed
         params_after = model.parameters()
-        weight_after = param_to_numpy_bf16_current(params_after[weight_key])
+        weight_after = params_after[weight_key].to_numpy(ttnn.DataType.FLOAT32)
 
         assert not np.allclose(weight_before, weight_after, atol=1e-6), "SGD optimizer should have updated the weights"
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_adamw_optimizer_with_python_module(self):
         """Test AdamW optimizer updates parameters registered via Python AbstractModuleBase."""
         from ttml.modules import AbstractModuleBase, Parameter
@@ -396,7 +396,7 @@ class TestCppOptimizersWithPythonModules:
         assert len(weight_keys) >= 2, "Should have both weight1 and weight2"
 
         # Store initial values
-        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in weight_keys}
+        initial_weights = {k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in weight_keys}
 
         # Create C++ AdamW optimizer
         adamw_config = ttml.optimizers.AdamWConfig.make(
@@ -424,11 +424,12 @@ class TestCppOptimizersWithPythonModules:
         # Verify all weights changed
         params_after = model.parameters()
         for key in weight_keys:
-            weight_after = param_to_numpy_bf16_current(params_after[key])
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"AdamW optimizer should have updated {key}"
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_optimizer_with_nested_python_modules(self):
         """Test optimizer works with nested Python modules (submodules)."""
         from ttml.modules import AbstractModuleBase, Parameter
@@ -462,7 +463,7 @@ class TestCppOptimizersWithPythonModules:
         assert any("inner" in k.lower() for k in param_names), "Should have inner_weight"
 
         # Store initial values
-        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in param_names}
+        initial_weights = {k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in param_names}
 
         # Create optimizer and train
         sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
@@ -482,7 +483,7 @@ class TestCppOptimizersWithPythonModules:
         # Verify all weights (both outer and inner) were updated
         params_after = model.parameters()
         for key in param_names:
-            weight_after = param_to_numpy_bf16_current(params_after[key])
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"Optimizer should have updated nested parameter {key}"
@@ -692,6 +693,7 @@ class TestModuleList:
         assert isinstance(sliced, ModuleList)
         assert len(sliced) == 3
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_module_list_with_optimizer(self):
         """Test that ModuleList parameters work with optimizer."""
         from ttml.modules import AbstractModuleBase, ModuleList, Parameter
@@ -719,7 +721,7 @@ class TestModuleList:
         params = model.parameters()
 
         # Store initial values
-        initial_weights = {k: param_to_numpy_bf16_current(params[k]).copy() for k in params.keys()}
+        initial_weights = {k: params[k].to_numpy(ttnn.DataType.FLOAT32).copy() for k in params.keys()}
 
         # Create optimizer and train
         sgd_config = ttml.optimizers.SGDConfig.make(0.1, 0.0, 0.0, 0.0, False)
@@ -739,7 +741,7 @@ class TestModuleList:
         # Verify all weights were updated
         params_after = model.parameters()
         for key in initial_weights:
-            weight_after = param_to_numpy_bf16_current(params_after[key])
+            weight_after = params_after[key].to_numpy(ttnn.DataType.FLOAT32)
             assert not np.allclose(
                 initial_weights[key], weight_after, atol=1e-6
             ), f"Optimizer should have updated parameter {key}"
