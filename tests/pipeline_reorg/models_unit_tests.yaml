@@ -256,7 +256,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
   model: llama3.3-70b-galaxy
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 30
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
@@ -273,7 +273,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 30
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
@@ -299,7 +299,7 @@
     pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
   model: gpt-oss-120b-high-batch-galaxy
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 25
       tier: 1
   owner_id: U08TJ70UFRT # Stuti Raizada
