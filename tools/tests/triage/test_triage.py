@@ -80,6 +80,8 @@ def cause_hang_with_app(request):
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
     os.environ.pop("TT_METAL_LOGS_PATH", None)
+    # Prevent triage subprocesses from resetting the device mid-test, we do a single reset in teardown.
+    reset_after_hang = os.environ.pop("TT_METAL_RESET_DEVICE_AFTER_HANG", None)
     request.cls.exalens_context = init_ttexalens()
     proc = subprocess.Popen(
         [app_path_str] + args,
@@ -122,8 +124,9 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
 
-        # Reset the device state after the hang if set in environment
-        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        if reset_after_hang is not None:
+            os.environ["TT_METAL_RESET_DEVICE_AFTER_HANG"] = reset_after_hang
+        if reset_after_hang == "1":
             subprocess.run(["tt-smi", "-r"], check=True)
 
 
