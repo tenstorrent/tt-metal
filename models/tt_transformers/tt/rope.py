@@ -864,17 +864,13 @@ class HfRotarySetupNew(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
 
-        # Generate the cos/sin matrices in HF format (no Meta permutation)
-        # Generate for max_seq_len to allow slicing in prepare_inputs_prefill
-        self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
-            head_dim=head_dim,
-            device=device,
-            seq_len=max_seq_len,
-            theta=rope_theta,
-            rope_scaling=rope_scaling,
-            datatype=datatype,
+        # Decode cos/sin: stored in ROW_MAJOR_LAYOUT for precise embedding lookup
+        # (matches RotarySetup which also uses ROW_MAJOR for decode cos/sin).
+        self.cos_matrix, self.sin_matrix = self._build_hf_cos_sin(
+            head_dim, device, max_seq_len, rope_theta, rope_scaling, datatype, layout=ttnn.ROW_MAJOR_LAYOUT
         )
 
+        # Prefill cos/sin: stored in TILE_LAYOUT (consumed directly by the prefill kernel).
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats_hf(
             head_dim=head_dim,
             device=device,
@@ -887,6 +883,50 @@ class HfRotarySetupNew(LightweightModule):
         self.transformation_mat = None
         self.transformation_mat_prefill = None
 
+        self.core_grid = device.compute_with_storage_grid_size()
+
+    @staticmethod
+    def _build_hf_cos_sin(
+        head_dim: int,
+        device: Any,
+        seq_len: int,
+        theta: float,
+        rope_scaling: Optional[RopeScaling],
+        datatype: Any,
+        layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
+    ) -> List[ttnn.Tensor]:
+        """Build HF-format cos/sin cache tensors on device."""
+        from models.tt_transformers.tt.common import precompute_freqs
+
+        cos_freqs, sin_freqs = precompute_freqs(
+            head_dim,
+            seq_len * 2,
+            theta,
+            rope_scaling.factor if rope_scaling else None,
+            rope_scaling.original_max_position_embeddings if rope_scaling else None,
+            rope_scaling.rope_type.value if rope_scaling else "llama3",
+        )
+        cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1)
+        sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1)
+        cos_hf = cos_hf.unsqueeze(0).unsqueeze(0)
+        sin_hf = sin_hf.unsqueeze(0).unsqueeze(0)
+
+        cos_matrix = ttnn.from_torch(
+            cos_hf,
+            device=device,
+            layout=layout,
+            dtype=datatype,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+        )
+        sin_matrix = ttnn.from_torch(
+            sin_hf,
+            device=device,
+            layout=layout,
+            dtype=datatype,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
+        )
+        return [cos_matrix, sin_matrix]
+
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
@@ -896,18 +936,14 @@ class HfRotarySetupNew(LightweightModule):
         assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
         assert torch.min(position_idxs) >= 0, "Position idxs must be non-negative"
 
-        # # Add padding if needed
-        # pad_size = nearest_32(batch) - batch
-        # position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
-
-        if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
+        if on_host:
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
             )
-        else:  # On device
+        else:
             rot_idxs = ttnn.as_tensor(
                 position_idxs,
                 dtype=ttnn.uint32,
@@ -929,6 +965,10 @@ class HfRotarySetupNew(LightweightModule):
         This method extracts cos/sin values from the cache for each batch element's position.
         Returns tensors shaped [1, batch, 1, head_dim] for use with rotary_embedding_hf.
 
+        The cos/sin tensors are placed in HEIGHT_SHARDED memory with the same core grid
+        layout that nlp_create_qkv_heads_decode uses for Q/K, ensuring the sharded
+        rotary_embedding_hf kernel reads matching data on each core.
+
         Args:
             position_idxs: [batch] tensor of positions, one per batch element
             return_rot_idxs: If True, also return the processed rotation indices.
@@ -939,25 +979,17 @@ class HfRotarySetupNew(LightweightModule):
         """
         device = self.device
 
-        # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
 
-        # Send the idxs to device
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Use embedding to gather cos/sin values at specified positions
-        # cos_matrix and sin_matrix are [1, 1, max_seq_len, head_dim]
-        # After embedding: [1, batch, head_dim]
         embedding_layout = ttnn.TILE_LAYOUT
 
-        # Extract cos/sin values at the specified positions first
-        # cos_matrix is [1, 1, max_seq_len, head_dim]
-        # After embedding: [1, batch, head_dim]
         cos = ttnn.embedding(
             rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, batch, head_dim]
@@ -965,33 +997,30 @@ class HfRotarySetupNew(LightweightModule):
             rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, batch, head_dim]
 
-        # Reshape to [1, batch, 1, head_dim] for rotary_embedding_hf decode mode
-        # cos = ttnn.unsqueeze_to_4D(cos)  # [1, batch, 1, head_dim]
-        # sin = ttnn.unsqueeze_to_4D(sin)  # [1, batch, 1, head_dim]
-        cos = ttnn.unsqueeze(cos, 2)  # [1, batch, 1, head_dim]
-        sin = ttnn.unsqueeze(sin, 2)  # [1, batch, 1, head_dim]
-        # For decode mode, we need HEIGHT_SHARDED memory config
-        # Each core handles one batch element
-        # Note: batch here is the padded batch size (nearest_32)
-        padded_batch = rot_idxs.shape[1]
-        core_grid = device.compute_with_storage_grid_size()
-        max_cores = core_grid.x * core_grid.y
-        num_cores = min(padded_batch, max_cores)
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        # Use ttnn.num_cores_to_corerangeset to get a proper 2D grid
-        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, core_grid, row_wise=True)
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
 
-        # Calculate shard dimensions for cos/sin tensors [1, batch, 1, head_dim]
-        # Each shard handles one batch element's cos/sin values
-        shard_height = 32  # TILE_HEIGHT (for the single head dimension)
-        shard_width = self.head_dim
+        batch = self.batch_size
+        num_cores = min(batch, self.core_grid.x * self.core_grid.y)
+        batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
 
-        shard_spec = ttnn.ShardSpec(shard_grid, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
-        # Convert to HEIGHT_SHARDED memory config for decode mode
-        cos = ttnn.to_memory_config(cos, sharded_mem_config)
-        sin = ttnn.to_memory_config(sin, sharded_mem_config)
+        if batch % ttnn.TILE_SIZE != 0:
+            cos = cos[:, :batch, :, :]
+            sin = sin[:, :batch, :, :]
+
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs
