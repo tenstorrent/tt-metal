@@ -120,6 +120,10 @@ class MoeContext:
     bcast_sender_coord: Any = None
     socket: Any = None
 
+    # Expert frequency tracking
+    expert_freq_tensor: Any = None
+    freq_window_size: int = 0  # 0 = full uint32 range
+
     # CB reconfig
     reconfig_moe_cbs: bool = False
 
@@ -4453,6 +4457,8 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        expert_freq_tensor=None,
+        freq_window_size=0,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -4594,6 +4600,9 @@ class MoeOp:
             bcast_semaphores=bcast_semaphores,
             bcast_sender_coord=bcast_sender_coord,
             socket=socket,
+            # Expert frequency tracking
+            expert_freq_tensor=expert_freq_tensor,
+            freq_window_size=freq_window_size,
         )
 
         # Shared descriptors (populated by _build_descriptors)
@@ -4686,6 +4695,9 @@ class MoeOp:
         ncrisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         brisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
         trisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
+        # Expert frequency tracking
+        freq_addr = self.ctx.expert_freq_tensor.buffer_address() if self.ctx.expert_freq_tensor is not None else 0
+        brisc_args += [("expert_freq_l1_addr", freq_addr), ("freq_window_size", self.ctx.freq_window_size)]
 
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
@@ -4865,6 +4877,9 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # Expert frequency tracking
+        expert_freq_tensor=None,
+        freq_window_size=0,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4939,6 +4954,8 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            expert_freq_tensor=expert_freq_tensor,
+            freq_window_size=freq_window_size,
         )
 
         # ==================================================================

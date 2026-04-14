@@ -200,6 +200,8 @@ class DecoderBlock:
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
         is_torus=True,
+        expert_freq_tensor=None,
+        freq_window_size=0,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -291,6 +293,8 @@ class DecoderBlock:
             persistent_mode=persistent_mode,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
+            expert_freq_tensor=expert_freq_tensor,
+            freq_window_size=freq_window_size,
         )
 
         moe._build_descriptors()

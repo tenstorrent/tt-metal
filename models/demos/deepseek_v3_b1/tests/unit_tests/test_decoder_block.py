@@ -684,6 +684,21 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
+    # Expert frequency tracking tensor on the sender core
+    expert_freq_tensor = None
+    if is_moe:
+        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core_from_residual, sender_core_from_residual)])
+        freq_shard_spec = ttnn.ShardSpec(sender_core_grid, (1, 257), ttnn.ShardOrientation.ROW_MAJOR)
+        freq_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, freq_shard_spec)
+        expert_freq_tensor = ttnn.from_torch(
+            torch.zeros((1, 257), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=submesh,
+            memory_config=freq_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
     # ══════════════════════════════════════════════════════════════════════════
     # Golden model PyTorch tensors (only when state_dict is available)
     # ══════════════════════════════════════════════════════════════════════════
@@ -863,6 +878,8 @@ def create_decoder_block_tensors(
                 "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
                 "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
                 "moe_ref_reduce_output": moe_ref_reduce_output,
+                "expert_freq_tensor": expert_freq_tensor,
+                "rigged_expert_ids": rigged_expert_ids,
             }
         )
     return result
@@ -1159,10 +1176,56 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        expert_freq_tensor=d.get("expert_freq_tensor"),
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
+
+    # Validate expert frequency counters
+    if d.get("expert_freq_tensor") is not None and enable_routing:
+        freq_torch = ttnn.to_torch(d["expert_freq_tensor"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        total_iters = num_iters * num_internal_iterations
+        rigged_expert_ids = d.get("rigged_expert_ids")
+
+        for dev_idx in range(freq_torch.shape[0]):
+            counters = freq_torch[dev_idx, :256].to(torch.int64)
+            iter_count = freq_torch[dev_idx, 256].item()
+            nonzero_mask = counters != 0
+            nonzero_indices = torch.where(nonzero_mask)[0]
+            nonzero_counts = counters[nonzero_mask]
+            logger.info(
+                f"Device {dev_idx}: expert freq iteration_count={iter_count}, "
+                f"nonzero experts ({len(nonzero_indices)}): "
+                f"{dict(zip(nonzero_indices.tolist(), nonzero_counts.tolist()))}"
+            )
+
+            # Iteration counter must match
+            assert (
+                iter_count == total_iters
+            ), f"Device {dev_idx}: iteration counter {iter_count} != expected {total_iters}"
+
+            # Structural: exactly 8 experts selected per iteration, so sum == 8 * total_iters
+            assert (
+                counters.sum().item() == 8 * total_iters
+            ), f"Device {dev_idx}: counter sum {counters.sum().item()} != expected {8 * total_iters}"
+
+            if rigged_expert_ids is not None:
+                # Rigged: we know exactly which 8 global expert IDs were forced
+                expected_global_ids = set()
+                for grp, local_ids in rigged_expert_ids.items():
+                    for local_id in local_ids:
+                        expected_global_ids.add(grp * 32 + local_id)
+                actual_ids = set(nonzero_indices.tolist())
+                assert actual_ids == expected_global_ids, (
+                    f"Device {dev_idx}: frequency nonzero experts {sorted(actual_ids)} "
+                    f"!= expected rigged experts {sorted(expected_global_ids)}"
+                )
+                # Each rigged expert should have count == total_iters
+                for eid in expected_global_ids:
+                    assert (
+                        counters[eid].item() == total_iters
+                    ), f"Device {dev_idx}: expert {eid} count {counters[eid].item()} != {total_iters}"
 
     kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 

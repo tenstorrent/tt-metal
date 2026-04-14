@@ -2493,6 +2493,36 @@ void kernel_main() {
             gate();
         }
 
+        // 4a. Update expert frequency counters (sender core BRISC only)
+        {
+            DeviceZoneScopedN("FREQ_UPDATE");
+#if defined(COMPILE_FOR_BRISC)
+            constexpr uint32_t expert_freq_l1_addr = get_named_compile_time_arg_val("expert_freq_l1_addr");
+            constexpr uint32_t freq_window_size = get_named_compile_time_arg_val("freq_window_size");
+            if constexpr (Core::is_sender_core && expert_freq_l1_addr != 0) {
+                volatile tt_l1_ptr uint32_t* freq_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_freq_l1_addr);
+
+                // Tumbling window reset
+                uint32_t iter = freq_ptr[256] + 1;
+                constexpr bool use_full_range = (freq_window_size == 0);
+                bool reset = use_full_range ? (iter == 0) : (iter >= freq_window_size);
+                if (reset) {
+                    for (uint32_t j = 0; j < 257; j++) freq_ptr[j] = 0;
+                    iter = 0;
+                }
+                freq_ptr[256] = iter;
+
+                // Increment the 8 selected experts — read from gate output indices CB
+                volatile tt_l1_ptr uint16_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    get_read_ptr(get_named_compile_time_arg_val("gate_output_indices_cb")));
+                for (uint32_t i = 0; i < 8; i++) {
+                    freq_ptr[static_cast<uint32_t>(index_ptr[i])]++;
+                }
+            }
+#endif
+        }
+
         // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
         // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj
         // cores push to CB 10. Other grid cores just drain the semaphore (no CB ops).
