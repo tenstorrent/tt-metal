@@ -35,7 +35,7 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-void run_kernel(RUNTIME_PARAMETERS params)
+PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -184,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;

@@ -1127,33 +1127,6 @@ constexpr std::uint32_t AVAILABLE_MATH                = 272;
 
 namespace llk_perf
 {
-// RAII wrapper for automatic per-zone counter start/stop.
-// May already be defined by perf.h (forward-declaration version).
-#ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
-#define _LLK_PERF_COUNTER_SCOPED_DEFINED_
-
-class perf_counter_scoped
-{
-    std::uint32_t m_zone;
-
-public:
-    perf_counter_scoped(const perf_counter_scoped&)            = delete;
-    perf_counter_scoped(perf_counter_scoped&&)                 = delete;
-    perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
-    perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
-
-    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zone) : m_zone(zone)
-    {
-        start_perf_counters(m_zone);
-    }
-
-    __attribute__((always_inline)) ~perf_counter_scoped()
-    {
-        stop_perf_counters(m_zone);
-    }
-};
-#endif // _LLK_PERF_COUNTER_SCOPED_DEFINED_
-
 // ── Runtime zone allocator ──────────────────────────────────────────
 // Maps compile-time zone name hashes to sequential zone IDs (0, 1, 2).
 // zone_name_hash may already be defined by perf.h (constexpr, can't duplicate).
@@ -1198,16 +1171,42 @@ __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t h
     return (hash_val < detail::ZONE_LOOKUP_SIZE) ? detail::zone_lookup[hash_val] : 0;
 }
 
+// RAII wrapper for automatic per-zone counter start/stop.
+// May already be defined by perf.h (forward-declaration version).
+#ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
+#define _LLK_PERF_COUNTER_SCOPED_DEFINED_
+
+class perf_counter_scoped
+{
+    std::uint32_t m_zone;
+
+public:
+    perf_counter_scoped(const perf_counter_scoped&)            = delete;
+    perf_counter_scoped(perf_counter_scoped&&)                 = delete;
+    perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
+    perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
+
+    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
+    {
+        start_perf_counters(m_zone);
+    }
+
+    __attribute__((always_inline)) ~perf_counter_scoped()
+    {
+        stop_perf_counters(m_zone);
+    }
+};
+#endif // _LLK_PERF_COUNTER_SCOPED_DEFINED_
+
 } // namespace llk_perf
 
 // MEASURE_PERF_COUNTERS may already be defined by perf.h.
 // Only redefine here if perf.h was not included first.
 #ifndef PERF_COUNTER_VAR_CONCAT_
 #undef MEASURE_PERF_COUNTERS
-#define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
-#define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
-#define MEASURE_PERF_COUNTERS(zone_name) \
-    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+#define PERF_COUNTER_VAR_CONCAT_(a, b)   a##b
+#define PERF_COUNTER_VAR_(line)          PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(llk_perf::detail::zone_name_hash(zone_name));
 #endif
 
 #endif // PERF_COUNTERS_COMPILED
