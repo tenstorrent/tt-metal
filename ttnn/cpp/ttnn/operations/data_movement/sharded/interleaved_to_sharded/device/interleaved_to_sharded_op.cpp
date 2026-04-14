@@ -22,12 +22,25 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.buffer() == nullptr) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
+    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
+    // Use the normalized memory config for validation so that convertible ND specs are accepted.
+    auto resolved_output_mem_config = output_mem_config;
+    if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+            return {
+                false,
+                "interleaved_to_sharded does not support ND sharding. Please use ttnn.to_memory_config or "
+                "ttnn.copy instead."};
+        }
+        resolved_output_mem_config = output_spec.memory_config();
+    }
     if (tensor_args.output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.output_tensor.value();
         if (output_tensor.logical_shape() != input_tensor.logical_shape()) {
             return {false, "Mismatched output shape"};
         }
-        if (output_tensor.memory_config() != output_mem_config) {
+        if (output_tensor.memory_config() != resolved_output_mem_config) {
             return {false, "Mismatched output memory config"};
         }
         if (output_tensor.dtype() != output_dtype) {
@@ -61,19 +74,6 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
         return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
-    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
-    // Use the normalized memory config for validation so that convertible ND specs are accepted.
-    auto resolved_output_mem_config = output_mem_config;
-    if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-        if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-            return {
-                false,
-                "interleaved_to_sharded does not support ND sharding. Please use ttnn.to_memory_config or "
-                "ttnn.copy instead."};
-        }
-        resolved_output_mem_config = output_spec.memory_config();
-    }
     if (resolved_output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
         if (resolved_output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
             return {false, "We don't support DRAM block sharding"};
