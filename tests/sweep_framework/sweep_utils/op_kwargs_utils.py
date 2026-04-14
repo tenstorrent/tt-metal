@@ -183,6 +183,40 @@ def parse_dict_value(key: str, value: Any) -> Any:
     return value
 
 
+def extract_positional_args(kwargs: Dict[str, Any]) -> Dict[int, Any]:
+    """Extract non-tensor positional args (arg0, arg1, …) from the run() kwargs.
+
+    The V2 config loader stores non-tensor positional arguments under the keys
+    ``arg0``, ``arg1``, ``arg2``, etc.  ``build_op_kwargs`` intentionally filters
+    these out (they are positional, not keyword arguments to the ttnn op).
+
+    Sweep tests should call this helper **before** the op invocation to retrieve
+    positional args such as ``scale``, ``cache_idx``, ``output_dtype``, etc.
+
+    Example::
+
+        pos_args = extract_positional_args(kwargs)
+        scale = float(pos_args.get(1, 1.0))        # arg1 = scale
+        output_dtype = pos_args.get(2, ttnn.float32)  # arg2 = dtype
+
+    Args:
+        kwargs: The ``**kwargs`` dict from the ``run()`` function.
+
+    Returns:
+        Dict mapping integer index → parsed value.  Only indices whose
+        ``argN`` key is present and not ``__ABSENT__`` are included.
+        Dict values (enums, memory configs, etc.) are auto-parsed into ttnn objects.
+    """
+    positional = {}
+    for key, value in kwargs.items():
+        if key.startswith("arg") and key[3:].isdigit():
+            if value is None or value == "__ABSENT__":
+                continue
+            parsed = parse_dict_value(key, value)
+            positional[int(key[3:])] = parsed
+    return positional
+
+
 def build_op_kwargs(
     kwargs: Dict[str, Any],
     *,
@@ -200,6 +234,10 @@ def build_op_kwargs(
     don't accept it or handle it via separate positional parameters.  Sweep
     modules that need ``memory_config`` in op kwargs should add it explicitly
     after calling this function.
+
+    Note: Positional args (``arg0``, ``arg1``, …) are filtered out because they
+    are positional parameters, not keyword arguments.  Use
+    :func:`extract_positional_args` to retrieve them.
 
     Args:
         kwargs: The **kwargs from the run() function (everything not in named params)

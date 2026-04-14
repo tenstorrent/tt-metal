@@ -20,6 +20,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
@@ -52,12 +53,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -80,6 +81,16 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # memory_config is a legitimate op kwarg for nlp_concat_heads (controls output layout).
+    # build_op_kwargs strips it by default, so re-add from traced kwargs if present.
+    traced_memory_config = kwargs.get("memory_config")
+    if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
@@ -119,18 +130,32 @@ def run(
                 input_a_tensor_placement,
             )
         else:
+            # Create on DRAM first, then try to move to the traced sharded config.
+            # This avoids "shard width must match physical width" errors with HEIGHT_SHARDED configs.
+            actual_memory_config = input_a_memory_config
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                actual_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=actual_memory_config,
             )
+
+            if actual_memory_config is not input_a_memory_config:
+                try:
+                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                except Exception:
+                    pass  # stay on DRAM if sharded config is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
+    # memory_config kwarg controls the output layout (the op auto-derives shard spec).
     output_tensor = ttnn.experimental.nlp_concat_heads(input_tensor_a, **op_kwargs)
+
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

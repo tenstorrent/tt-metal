@@ -161,6 +161,14 @@ LEAD_MODELS_BATCH_POLICY = {
 }
 
 
+# ── Model-traced sweep: per-group batching policy ─────────────────────────────
+# Controls how many parallel CI jobs each test group gets for model-traced runs.
+# Absent entries use the caller-provided fixed ``batch_size``.
+MODEL_TRACED_BATCH_POLICY = {
+    "wormhole-t3k-sweeps": {"parallel_jobs": 5},
+}
+
+
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
 # These maps answer the CI ownership question:
 # "Which logical lane owns a mesh-grouped vector file?"
