@@ -158,27 +158,50 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
-    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
-    std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
-    TT_FATAL(sender_cores.size() == num_cores, "Expected {} sender cores, got {}", num_cores, sender_cores.size());
-
-    // Step 2: Collect idle cores in the SAME physical row as sender_cores[0]
-    uint32_t sender_row_y_phys =
-        (uint32_t)mesh_device->virtual_core_from_logical_core(sender_cores[0], tt::CoreType::WORKER).y;
-    std::set<CoreCoord> sender_core_set(sender_cores.begin(), sender_cores.end());
-    std::vector<CoreCoord> same_row_idle;
+    // Interleaved layout: [sender0, idle0_0..idle0_{k0-1}, sender1, idle1_0..idle1_{k1-1}, ...]
+    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
+    uint32_t sender_row_y = subdevice_cores.at(0).y;
+    std::vector<CoreCoord> all_row_cores;
     for (const auto& core : subdevice_cores) {
-        if (sender_core_set.count(core)) {
-            continue;
+        if (core.y == sender_row_y) {
+            all_row_cores.push_back(core);
         }
-        auto noc = mesh_device->virtual_core_from_logical_core(core, tt::CoreType::WORKER);
-        if ((uint32_t)noc.y == sender_row_y_phys) {
-            same_row_idle.push_back(core);
+    }
+    std::sort(
+        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+
+    uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
+    TT_FATAL(
+        total_row_cores > num_cores,
+        "Same-row has only {} cores for {} senders — need at least one idle core per sender",
+        total_row_cores,
+        num_cores);
+
+    // Divide total_row_cores into num_cores groups: last (total_row_cores % num_cores) groups get +1.
+    // Within each group: first core = sender, remaining = that sender's idle cores.
+    uint32_t base_group_size = total_row_cores / num_cores;
+    uint32_t extra_groups = total_row_cores % num_cores;
+
+    std::vector<CoreCoord> sender_cores;
+    sender_cores.reserve(num_cores);
+    std::vector<std::vector<CoreCoord>> sender_idle_groups(num_cores);
+    std::vector<CoreCoord> all_idle_cores;
+    std::vector<uint32_t> idle_sender_map;
+
+    {
+        uint32_t pos = 0;
+        for (uint32_t s = 0; s < num_cores; s++) {
+            uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
+            sender_cores.push_back(all_row_cores[pos++]);
+            for (uint32_t j = 1; j < group_size; j++, pos++) {
+                sender_idle_groups[s].push_back(all_row_cores[pos]);
+                all_idle_cores.push_back(all_row_cores[pos]);
+                idle_sender_map.push_back(s);
+            }
         }
     }
 
-    uint32_t num_idle_cores = static_cast<uint32_t>(same_row_idle.size());
+    uint32_t num_idle_cores = static_cast<uint32_t>(all_idle_cores.size());
     TT_FATAL(
         num_idle_cores >= num_cores,
         "Same-row has only {} idle cores for {} senders — need at least one idle core per sender",
@@ -187,24 +210,13 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t K_base = num_idle_cores / num_cores;
     uint32_t K_extra = num_idle_cores % num_cores;
 
-    // sender_idle_groups[s] = dedicated idle cores for sender s (all in same physical row)
-    std::vector<std::vector<CoreCoord>> sender_idle_groups(num_cores);
-    std::vector<CoreCoord> all_idle_cores;
-    all_idle_cores.reserve(num_idle_cores);
-    // idle_sender_map[j] = which sender owns flat idle-core index j
-    std::vector<uint32_t> idle_sender_map;
-    idle_sender_map.reserve(num_idle_cores);
-    {
-        uint32_t pos = 0;
-        for (uint32_t s = 0; s < num_cores; s++) {
-            uint32_t k_s = K_base + (s < K_extra ? 1 : 0);
-            for (uint32_t j = 0; j < k_s; j++, pos++) {
-                sender_idle_groups[s].push_back(same_row_idle[pos]);
-                all_idle_cores.push_back(same_row_idle[pos]);
-                idle_sender_map.push_back(s);
-            }
-        }
+    // Build sender_core_grid from selected sender cores
+    std::set<CoreRange> sender_ranges_set;
+    for (const auto& sc : sender_cores) {
+        sender_ranges_set.insert(CoreRange(sc));
     }
+    auto sender_core_grid = CoreRangeSet(sender_ranges_set);
+    TT_FATAL(sender_cores.size() == num_cores, "Expected {} sender cores, got {}", num_cores, sender_cores.size());
 
     log_debug(
         tt::LogOp,
@@ -535,7 +547,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     {
         uint32_t global_idle_idx = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
-            uint32_t k_s = K_base + (s < K_extra ? 1 : 0);
+            uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_idle_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
                 per_core_args.push_back(j);    // 11: core_id (local to sender s's group)
@@ -623,7 +635,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     reader_kernel_ids.reserve(num_cores);
     for (uint32_t s = 0; s < num_cores; s++) {
-        uint32_t k_s = K_base + (s < K_extra ? 1 : 0);
+        uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
         auto per_sender_compile_args = reader_compile_time_args_base;
         per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender k_s)
         per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
