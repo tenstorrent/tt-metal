@@ -52,16 +52,26 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (!output_mem_config.is_sharded()) {
         return {false, "Output memory config must be sharded"};
     }
+    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
+    // Use the normalized memory config for validation so that convertible ND specs are accepted.
+    auto resolved_output_mem_config = output_mem_config;
     if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
-        return {false, "interleaved_to_sharded does not support ND sharding. Please use ttnn.to_memory_config or ttnn.copy instead."};
+        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+            return {
+                false,
+                "interleaved_to_sharded does not support ND sharding. Please use ttnn.to_memory_config or "
+                "ttnn.copy instead."};
+        }
+        resolved_output_mem_config = output_spec.memory_config();
     }
-    if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-        if (output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
+    if (resolved_output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        if (resolved_output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
             return {false, "We don't support DRAM block sharding"};
         }
     }
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        if ((*output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
+        if ((*resolved_output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
                 tt::tt_metal::hal::get_l1_alignment() != 0) {
             return {false, "Shard page size must currently have L1 aligned page size"};
         }
