@@ -138,8 +138,10 @@ extern "C" uint32_t _start1() {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
+            // DPRINT << "TRISC-FW: waiting for go message " << *trisc_run << ENDL();
             invalidate_l1_cache();
         }
+        DPRINT << "TRISC-FW: got go message" << ENDL();
         DeviceZoneScopedMainN("TRISC-FW");
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
