@@ -15,6 +15,7 @@ struct FastReduceNCProgramFactory {
         tt::tt_metal::KernelHandle writer_kernel_id;
         uint32_t num_cores_to_be_used;
         uint32_t num_cores_x;
+        std::vector<tt::tt_metal::CoreCoord> ordered_cores;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

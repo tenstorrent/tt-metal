@@ -30,7 +30,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 #ifdef LLK_TRISC_PACK
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(const volatile struct RuntimeParams /*params*/)
 {
     TIMESTAMP_DATA("TEST_TIMESTAMP_DATA", 0xBADC0FFE0DDF00D);
 }

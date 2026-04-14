@@ -28,7 +28,7 @@ const std::uint32_t tile_size = 16 * 16 * 4; // bytes per face
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t face_r_dim = DEFAULT_TENSOR_SHAPE.face_r_dim;
     const std::uint32_t num_faces  = DEFAULT_TENSOR_SHAPE.total_num_faces();
@@ -54,7 +54,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "params.h"
 #include "sfpu_operations.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -84,7 +84,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);

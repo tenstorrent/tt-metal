@@ -193,30 +193,26 @@ def fuse_gate_up(
 
     gate_up_dict = overlap_tensors(
         [
-            [
-                OverlapEntry(
-                    "gate_proj",
-                    gate_preprocessed,
-                    replace(
-                        cfg.gate_shard_spec,
-                        raw_tensor_shape=tuple(gate_preprocessed.shape),
-                        dtype=dtype,
-                        logical_tensor_shape=cfg.gate_proj_shape,
-                    ),
+            OverlapEntry(
+                "gate_proj",
+                gate_preprocessed,
+                replace(
+                    cfg.gate_shard_spec,
+                    raw_tensor_shape=tuple(gate_preprocessed.shape),
+                    dtype=dtype,
+                    logical_tensor_shape=cfg.gate_proj_shape,
                 ),
-            ],
-            [
-                OverlapEntry(
-                    "up_proj",
-                    up_preprocessed,
-                    replace(
-                        cfg.up_shard_spec,
-                        raw_tensor_shape=tuple(up_preprocessed.shape),
-                        dtype=dtype,
-                        logical_tensor_shape=cfg.up_proj_shape,
-                    ),
+            ),
+            OverlapEntry(
+                "up_proj",
+                up_preprocessed,
+                replace(
+                    cfg.up_shard_spec,
+                    raw_tensor_shape=tuple(up_preprocessed.shape),
+                    dtype=dtype,
+                    logical_tensor_shape=cfg.up_proj_shape,
                 ),
-            ],
+            ),
         ],
         device=device,
         move_to_device=move_to_device,
