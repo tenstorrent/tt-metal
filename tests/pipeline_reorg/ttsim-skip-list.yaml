@@ -5,9 +5,6 @@
 # Tests that apply to all architectures are duplicated in each section.
 
 wormhole_b0:
-  # Multi-device tests
-  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py # ttnn.from_torch uses to_layout for distributed tensors which is not supported by TTSim
-
   # Base functionality - simulator limitations (tilize/untilize, layout conversion)
   - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
   - tests/ttnn/unit_tests/base_functionality/test_expand.py
