@@ -254,6 +254,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         }
 
         distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::Finish(cq);
 
         uint32_t expected_value_to_read = 0x1234;
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {
@@ -362,6 +363,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
             {virtual_receiver_core.x, virtual_receiver_core.y, receiver_addr, value_to_write, 1, 0});
 
         distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::Finish(cq);
 
         tt_metal::detail::ReadFromDeviceL1(device, receiver_core, receiver_addr, sizeof(uint32_t), readback);
         EXPECT_EQ(readback[0], value_to_write);
@@ -419,6 +421,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
             {virtual_receiver_core.x, virtual_receiver_core.y, second_receiver_addr, value_to_write + 1, 1, 0});
 
         distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::Finish(cq);
 
         tt_metal::detail::ReadFromDeviceL1(device, receiver_core, first_receiver_addr, 32, readback);
         EXPECT_EQ(readback[0], value_to_write);
@@ -467,6 +470,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
              sizeof(uint32_t)});
 
         distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::Finish(cq);
 
         tt_metal::detail::ReadFromDeviceL1(
             device, receiver_core, base_receiver_addr, num_writes * sizeof(uint32_t), readback);
@@ -545,6 +549,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
              l1_alignment});
 
         distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::Finish(cq);
 
         tt_metal::detail::ReadFromDeviceL1(
             device, receiver_core, receiver_addr0, readback.size() * sizeof(uint32_t), readback);
@@ -614,6 +619,7 @@ void run_local_noc_stream_reg_inc(
     tt_metal::detail::WriteToDeviceL1(device, core, unreserved_base_addr, l1_buffer_data, core_type);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
+    distributed::Finish(cq);
 
     tt_metal::detail::ReadFromDeviceL1(device, core, unreserved_base_addr, sizeof(uint32_t), l1_buffer_data, core_type);
     switch (l1_buffer_data[0]) {
