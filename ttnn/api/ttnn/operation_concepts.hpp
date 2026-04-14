@@ -52,6 +52,15 @@ concept HasCreateAt = requires {
 template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
+template <typename T>
+concept ProgramDescriptorFactoryConcept =
+    requires { &T::create_descriptor; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
+
+// Detect operations that put create_descriptor directly on the operation struct
+// (no program_factory_t wrapper needed for single-descriptor operations).
+template <typename T>
+concept HasDirectDescriptor = requires { &T::create_descriptor; } && !requires { typename T::program_factory_t; };
+
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
@@ -83,13 +92,14 @@ concept HasSelectProgramFactory = requires(
 };
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
-// ProgramFactoryConcept or MeshWorkloadFactoryConcept.
+// ProgramFactoryConcept, MeshWorkloadFactoryConcept, or ProgramDescriptorFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
     return (
-        (ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> !=
-         MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>>) &&
+        ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail
@@ -99,19 +109,23 @@ concept AllFactoriesValid =
     detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
 
 template <typename device_operation_t>
-concept DeviceOperationConcept = requires {
-    typename device_operation_t::program_factory_t;
+concept HasProgramFactoryType = requires { typename device_operation_t::program_factory_t; };
 
-    [](const typename device_operation_t::operation_attributes_t& operation_attributes,
-       const typename device_operation_t::tensor_args_t& tensor_args) {
-        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+template <typename device_operation_t>
+concept DeviceOperationConcept =
+    requires {
+        [](const typename device_operation_t::operation_attributes_t& operation_attributes,
+           const typename device_operation_t::tensor_args_t& tensor_args) {
+            device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
-        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
-    };
-} && HasComputeOutputSpecs<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>;
+            using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
+            static_assert(std::same_as<
+                          decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
+                          tensor_return_value_t>);
+        };
+    } && HasComputeOutputSpecs<device_operation_t> &&
+    (HasDirectDescriptor<device_operation_t> ||
+     (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
