@@ -98,10 +98,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     if (entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
-        content << "#include \"experimental/dataflow_buffer.h\"\n\n";
+        content << "#include \"experimental/dataflow_buffer.h\"\n\n"
+                   "namespace dfb {\n";
         for (const auto& [name, id] : entries) {
             content << "constexpr experimental::DFBAccessor " << name << "{" << id << "};\n";
         }
+        content << "}  // namespace dfb\n";
     }
     write_file(path, content.str());
 }
