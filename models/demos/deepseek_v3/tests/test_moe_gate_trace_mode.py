@@ -127,6 +127,16 @@ def run_moe_gate_with_trace(mesh_device, mode, tt_input, run_config):
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 5502496,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
         ("decode", USERS_PER_ROW, 1),
