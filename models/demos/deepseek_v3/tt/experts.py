@@ -68,7 +68,7 @@ class Experts(AbstractModule):
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2),
+                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2).contiguous(),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
