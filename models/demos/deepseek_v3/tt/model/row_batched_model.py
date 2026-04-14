@@ -100,6 +100,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 (sub_state_dict(state_dict, mtp_layer_prefix),),
                 output_path / "mtp",
                 mesh_device,
+                reuse_embedding_weight_cfg=weight_cfg["embedding"],
+                reuse_head_weight_cfg=weight_cfg["lm_head"],
             )
         return weight_cfg
 
@@ -174,7 +176,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
-            "lm_head": LMHead1D.decode_model_config(mesh_device),
+            "lm_head": LMHead1D.decode_model_config(hf_config, mesh_device),
         }
         if cls._has_mtp_layer(hf_config):
             model_cfg["mtp"] = MTP2D.decode_model_config(

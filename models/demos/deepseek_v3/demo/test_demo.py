@@ -15,6 +15,8 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+PERF_MARGIN = 0.08
+FINAL_DECODE_TPS_PER_USER = "decode_t/s/u"
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +48,23 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
+    statistics = results.get("statistics", {})
+    assert statistics, "Expected demo statistics for performance assertion"
+
+    for metric_name, expected in perf_targets.items():
+        measured = statistics.get(metric_name)
+        assert measured is not None, f"Expected demo statistic {metric_name!r} for performance assertion"
+
+        measured = float(measured)
+        lower = expected * (1 - PERF_MARGIN)
+        upper = expected * (1 + PERF_MARGIN)
+        assert lower <= measured <= upper, (
+            f"{metric_name}={measured:.6f} is outside expected range "
+            f"[{lower:.6f}, {upper:.6f}] (expected {expected:.6f} +/- {PERF_MARGIN*100:.1f}%)"
+        )
+
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -59,6 +78,7 @@ def _demo_case(
     profile_decode: bool,
     stop_at_eos: bool | None,
     expect_full_length: bool,
+    perf_targets: dict[str, float] | None = None,
     case_id: str,
     marks=None,
 ):
@@ -75,6 +95,7 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "perf_targets": perf_targets,
         },
         id=case_id,
         marks=marks,
@@ -137,11 +158,27 @@ def _demo_case(
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="dual_demo_full_results",
+            artifact_name="dual_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            case_id="dual_full_demo",
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 0.986038678353197},
+            case_id="dual_full_demo_32upr",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
+        ),
+        _demo_case(
+            max_prompts=24,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="dual_demo_full_results_8upr",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="dual_full_demo_8upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
@@ -152,11 +189,26 @@ def _demo_case(
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="dual_demo_stress_results",
+            artifact_name="dual_demo_stress_results_32upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="dual_stress_demo",
+            case_id="dual_stress_demo_32upr",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
+        ),
+        _demo_case(
+            max_prompts=56,
+            max_users_per_row=8,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="dual_demo_stress_results_8upr",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="dual_stress_demo_8upr",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
@@ -167,11 +219,27 @@ def _demo_case(
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="quad_demo_full_results",
+            artifact_name="quad_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
             expect_full_length=False,
-            case_id="quad_full_demo",
+            perf_targets={FINAL_DECODE_TPS_PER_USER: 1.0168109351915215},
+            case_id="quad_full_demo_32upr",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
+        ),
+        _demo_case(
+            max_prompts=512,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_demo_full_results_8upr",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="quad_full_demo_8upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         _demo_case(
@@ -182,11 +250,26 @@ def _demo_case(
             override_num_layers=None,
             enable_trace=True,
             sample_on_device=True,
-            artifact_name="quad_demo_stress_results",
+            artifact_name="quad_demo_stress_results_32upr",
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="quad_stress_demo",
+            case_id="quad_stress_demo_32upr",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+        ),
+        _demo_case(
+            max_prompts=56,
+            max_users_per_row=8,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=False,
+            artifact_name="quad_demo_stress_results_8upr",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_stress_demo_8upr",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
@@ -250,7 +333,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload (QUAD tests only)
+    # Save results to JSON for artifact upload when requested by the case.
     if case["artifact_name"] is not None:
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -278,3 +361,5 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         print(f"\nDemo results saved to: {output_file}")
 
     _assert_no_garbage_tokens(results)
+    if case["perf_targets"] is not None:
+        _assert_perf_targets(results, case["perf_targets"])

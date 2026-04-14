@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -34,5 +35,8 @@ bool dependencies_up_to_date(std::istream& hash_file);
 
 // Returns true if all dependencies' hashes match those stored in the .hash file.
 bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj);
+
+// Clears process-local cache of dependency file hashes.
+void clear_file_hash_cache();
 
 }  // namespace tt::jit_build

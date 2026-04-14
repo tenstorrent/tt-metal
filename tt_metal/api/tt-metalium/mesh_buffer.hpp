@@ -72,6 +72,21 @@ struct ShardedBufferConfig {
 enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
 using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
 
+class MeshBuffer;
+
+}  // namespace tt::tt_metal::distributed
+
+// Forward declaration for experimental per-core allocation friend
+namespace tt::tt_metal::experimental::per_core_allocation {
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
+    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
+}  // namespace tt::tt_metal::experimental::per_core_allocation
+
+namespace tt::tt_metal::distributed {
+
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
 class MeshBuffer {
@@ -180,6 +195,12 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
+        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+        tt::tt_metal::distributed::MeshDevice*,
+        const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
 class AnyBuffer {

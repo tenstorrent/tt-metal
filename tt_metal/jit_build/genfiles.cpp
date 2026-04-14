@@ -38,7 +38,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
+namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace fs = std::filesystem;
 

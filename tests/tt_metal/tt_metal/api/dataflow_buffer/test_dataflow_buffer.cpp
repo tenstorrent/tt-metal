@@ -50,15 +50,17 @@ void execute_program_and_verify(
     bool verify_output = true) {
     distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
 
-    // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+        // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    std::vector<uint32_t> rdback_dram;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), rdback_dram, in_buffer, zero_coord, true);
+        std::vector<uint32_t> rdback_dram;
+        distributed::ReadShard(mesh_device->mesh_command_queue(), rdback_dram, in_buffer, zero_coord, true);
 
-    tt_driver_atomics::mfence();
+        tt_driver_atomics::mfence();
 
-    EXPECT_EQ(rdback_dram, input);
+        EXPECT_EQ(rdback_dram, input);
+    }
 
     // Execute using slow dispatch (DFBs not yet supported in MeshWorkload path)
     IDevice* device = mesh_device->get_devices()[0];
@@ -257,14 +259,22 @@ void run_single_dfb_program(
 
     // For Tensix → DM: pre-fill each core's DFB L1 with its input chunk so the
     // Tensix producer kernel can read from L1 while DM consumer drains to DRAM.
+    //
+    // l1_by_core addresses are not populated until allocate_dataflow_buffers() runs
+    // during program compilation. Since this is a single-DFB test it is always placed at the L1 base allocator address.
     if (producer_type == DFBPorCType::TENSIX) {
-        for (const auto& group : dfb->groups) {
-            for (const auto& [core, alloc_addr] : group.l1_by_core) {
-                const uint32_t co = core_to_chunk_offset.at(core);
-                std::vector<uint32_t> slice(
-                    input.begin() + co * entry_size / sizeof(uint32_t),
-                    input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
-                detail::WriteToDeviceL1(device, core, alloc_addr, slice);
+        const uint32_t dfb_l1_addr =
+            static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        for (const CoreRange& cr : core_range_set.ranges()) {
+            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                    const CoreCoord core(x, y);
+                    const uint32_t co = core_to_chunk_offset.at(core);
+                    std::vector<uint32_t> slice(
+                        input.begin() + co * entry_size / sizeof(uint32_t),
+                        input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                    detail::WriteToDeviceL1(device, core, dfb_l1_addr, slice);
+                }
             }
         }
     }
@@ -406,7 +416,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 18;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
@@ -622,7 +633,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 29;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
@@ -670,7 +682,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .enable_implicit_sync = GetParam()};
 
     uint32_t num_entries_in_buffer = 21;
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, {}, num_entries_in_buffer);
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4S) {

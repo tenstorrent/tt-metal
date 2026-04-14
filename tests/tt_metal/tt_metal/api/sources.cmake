@@ -6,7 +6,6 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
     allocator/test_per_core_bank_manager.cpp
-    allocator/test_per_core_allocation.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
@@ -35,6 +34,7 @@ set(UNIT_TESTS_API_SOURCES
     test_compile_time_args.cpp
     test_compile_defines.cpp
     test_direct.cpp
+    test_dram_kernels.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
