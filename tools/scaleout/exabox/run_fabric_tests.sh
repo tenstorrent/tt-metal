@@ -186,46 +186,11 @@ if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
 fi
 
-if [[ "$CONFIG" == "4x8" ]]; then
-    SINGLE_HOST="${HOSTS%%,*}"
-    echo "Running single-host 4x8 on: $SINGLE_HOST"
-    echo ""
-
-    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-        --empty-entrypoint \
-        --bind-to none \
-        --host "$SINGLE_HOST" \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
-else
-    ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-        --empty-entrypoint \
-        --bind-to none \
-        --host "$HOSTS" \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
-fi
+tt-run --mesh-graph-descriptor "$MESH_GRAPH_DESC_PATH" \
+    --hosts "$HOSTS" \
+    --docker-image "$DOCKER_IMAGE" \
+    --docker-empty-entrypoint \
+    "$TEST_BINARY" --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 
 echo ""
 echo "=========================================="
