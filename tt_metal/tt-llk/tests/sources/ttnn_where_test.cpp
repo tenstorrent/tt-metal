@@ -45,10 +45,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_C[0]), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(L1_ADDRESS(params.buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(L1_ADDRESS(params.buffer_C[0]), UNPACK_FMT, UNPACK_FMT);
 }
 
 #endif
@@ -99,12 +99,10 @@ void run_kernel(RUNTIME_PARAMETERS)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
         0, MATH_FMT, MATH_FMT); // buffer condition
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        1, MATH_FMT, MATH_FMT); // buffer true
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        2, MATH_FMT, MATH_FMT); // buffer false
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(1, MATH_FMT, MATH_FMT); // buffer true
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(2, MATH_FMT, MATH_FMT); // buffer false
 
     // calculation of sfpu operation on dest
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();

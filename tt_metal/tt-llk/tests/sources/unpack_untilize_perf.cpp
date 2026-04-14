@@ -123,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                         block_tile, formats.math, formats.math);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

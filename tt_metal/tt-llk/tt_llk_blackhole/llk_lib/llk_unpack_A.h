@@ -18,17 +18,15 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <
-    BroadcastType BType                          = BroadcastType::NONE,
-    bool acc_to_dest                             = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_A_mop_config_(
     const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
 {
+    const bool unpack_to_dest = requires_unpack_to_dest(unpack_dst_format);
+
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
-    static_assert(
+    LLK_ASSERT(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -187,11 +185,7 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
-template <
-    BroadcastType BType                          = BroadcastType::NONE,
-    bool acc_to_dest                             = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -200,6 +194,8 @@ inline void _llk_unpack_A_init_(
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
+    const bool unpack_to_dest = requires_unpack_to_dest(unpack_dst_format);
+
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
@@ -215,22 +211,32 @@ inline void _llk_unpack_A_init_(
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only unpack a single row
+    if constexpr (BType == BroadcastType::NONE)
     {
-        config_unpacker_x_end<UNP_SEL>(1);
+        config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
     }
-    else // base case is to upk the entire face
+    else if (unpack_to_dest)
     {
-        config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        if constexpr (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
+        {
+            config_unpacker_x_end<p_setadc::UNP_A>(1);
+        }
+        else
+        {
+            config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
+        }
+    }
+    else
+    {
+        config_unpacker_x_end<p_setadc::UNP_B>(face_r_dim);
     }
 
     // TODO NC: Move to TRISC1 tt-metal#36411
-    if constexpr (BType != BroadcastType::NONE && unpack_to_dest)
+    if (BType != BroadcastType::NONE && unpack_to_dest)
     {
         _llk_unpack_dbg_feature_disable_();
     }
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
@@ -242,13 +248,11 @@ inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
     TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
-template <
-    BroadcastType BType                          = BroadcastType::NONE,
-    bool acc_to_dest                             = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
+    const bool unpack_to_dest = requires_unpack_to_dest(unpack_dst_format);
+
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
 
     // Clear z/w start counters
@@ -261,7 +265,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
-    if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+    if (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
     {
         const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
         cfg[upk0_reg]                = address;
@@ -275,7 +279,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
-    if constexpr (unpack_to_dest)
+    if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {

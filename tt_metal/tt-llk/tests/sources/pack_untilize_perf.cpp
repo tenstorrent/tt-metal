@@ -47,8 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -72,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t i = 0; i < TILE_CNT; ++i)
             {
-                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                     PERF_ADDRESS(PERF_INPUT_A, i), formats.unpack_A_src, formats.unpack_A_dst);
             }
         }
@@ -145,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // "consumed" and can be overwritten with new data.
                         // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
                         // this method will perform synchronization only and no actual data copy.
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math);
                     }
                 }
@@ -163,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                         block_tile, formats.math, formats.math);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

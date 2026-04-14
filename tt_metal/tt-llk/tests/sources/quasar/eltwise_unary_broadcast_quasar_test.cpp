@@ -86,18 +86,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (unpack_to_dest)
     {
-        _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id_a, 1);
+        _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_A, BROADCAST_TYPE, is_fp32_dest_acc_en>(buf_desc_id_a, 1, unpack_to_dest);
         for (std::uint32_t i = 0; i < num_tiles_per_unpack; ++i)
         {
-            _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A, unpack_to_dest>(i);
+            _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_A>(i, unpack_to_dest);
         }
     }
     else
     {
-        _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id_b, 1);
+        _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BROADCAST_TYPE, is_fp32_dest_acc_en>(buf_desc_id_b, 1, unpack_to_dest);
         for (std::uint32_t i = 0; i < num_tiles_per_unpack; ++i)
         {
-            _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, unpack_to_dest>(i);
+            _llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>(i, unpack_to_dest);
         }
     }
 }
@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TileShape tile_shape = {
             .num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
 
-        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(tile_shape);
+        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en>(tile_shape, unpack_to_dest);
 
         const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
         const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
@@ -139,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
             {
-                _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(tile, tile_shape);
+                _llk_math_eltwise_unary_broadcast_<BROADCAST_TYPE, is_fp32_dest_acc_en>(tile, tile_shape, unpack_to_dest);
             }
             _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }

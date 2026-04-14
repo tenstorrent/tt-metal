@@ -107,11 +107,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
 #ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
             i, formats.math, formats.math, params.num_faces);
 #else
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(i, formats.math, formats.math);
 #endif
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

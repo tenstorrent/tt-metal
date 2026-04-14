@@ -26,12 +26,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         params.UNPACK_TRANSPOSE_FACES, 0, FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
@@ -72,11 +72,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
 #ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(i, formats.math, formats.math);
 #else
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(i, formats.math, formats.math);
 #endif
     }
 

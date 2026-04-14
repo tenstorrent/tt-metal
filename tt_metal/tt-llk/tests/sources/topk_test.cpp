@@ -178,7 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
 
                     // only do face level transpose in the first iteration to turn in into column-wise format.
-                    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                         /* transpose_of_faces */ (current_iteration == 0) ? 1 : 0,
                         /* within_face_16x16_transpose */ (current_iteration == 0) ? 1 : 0,
                         /* face_r_dim     */ FACE_R_DIM,
@@ -196,7 +196,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Unpack first tile in pair.
                     const int first_tile_index = tile_row_offset + stage_offset + tile_pair_offset;
 
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                         L1_ADDRESS(params.buffer_A[first_tile_index]), unpack_src_format, unpack_dst_format);
 
                     // Unpack second tile in pair.
@@ -204,7 +204,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         first_tile_index +
                         distance_between_corresponding_tiles; // since we are processing pairs of tiles that are distance_between_corresponding_tiles apart.
 
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                         L1_ADDRESS(params.buffer_A[second_tile_index]), unpack_src_format, unpack_dst_format);
 
                 } // Stage loop.
@@ -323,12 +323,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int first_tile_in_pair_idx = stage_index * NUM_TILES_PER_STAGE;
 
                     // Datacopy first tile in pair:
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                         /*dst_tile_index=*/first_tile_in_pair_idx, math_format, math_format);
 
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
                     // Datacopy second tile in pair:
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                         /*dst_tile_index=*/second_tile_in_pair_idx, math_format, math_format);
 
                 } // Stage loop.

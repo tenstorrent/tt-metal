@@ -17,11 +17,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <
-    BroadcastType BType                          = BroadcastType::NONE,
-    bool acc_to_dest                             = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_A_custom_(
     const std::uint32_t address, [[maybe_unused]] const std::uint32_t unpack_src_format = 0, [[maybe_unused]] const std::uint32_t unpack_dst_format = 0)
 {

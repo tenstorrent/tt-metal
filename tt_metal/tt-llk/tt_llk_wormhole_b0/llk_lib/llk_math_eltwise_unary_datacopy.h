@@ -19,9 +19,11 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
-template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
+    const bool unpack_to_dest = requires_unpack_to_dest(dst_format);
+
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -389,11 +391,10 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_datacopy_uninit_()
+template <BroadcastType src_b_bcast_type = BroadcastType::NONE>
+inline void _llk_math_eltwise_unary_datacopy_uninit_(const bool unpack_to_dest = false)
 {
-    // clear debug feature disable
-    if constexpr (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
+    if (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest)
     {
         _llk_math_dbg_feature_enable_();
     }

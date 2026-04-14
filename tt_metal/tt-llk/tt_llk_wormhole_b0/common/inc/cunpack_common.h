@@ -222,6 +222,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
 }
 
 /**
+ * \brief Determines if the given unpack destination format requires the Dst register path.
+ *
+ * SrcA/SrcB registers support Tf32, BF16, FP16, and integer 8/16-bit formats.
+ * Float32, Int32, and UInt32 can only be represented in the Dst register.
+ *
+ * \param unpack_dst_format Desired register output format (maps to OutDataFormat config field).
+ * \return true if the format requires unpack-to-dest (Dst register path); false for SrcA/SrcB path.
+ */
+inline bool requires_unpack_to_dest(const std::uint32_t unpack_dst_format)
+{
+    const DataFormat df = static_cast<DataFormat>(masked_data_format(unpack_dst_format));
+    return df == DataFormat::Float32 || df == DataFormat::Int32 || df == DataFormat::UInt32;
+}
+
+/**
  * \brief Checks if the unpacker conversion is supported w.r.t. the FP32 dest accumulation mode.
  *
  * The unpacker writes to one of two register destinations (ref: Unpackers/FormatConversion.md):

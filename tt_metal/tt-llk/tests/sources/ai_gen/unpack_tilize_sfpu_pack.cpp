@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // Step 1: Copy tilized input from src A to dest
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(0, formats.math, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE>(0, formats.math, formats.math);
 
     // Step 2: Initialize and perform SFPU unary operation on the copied data
     _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();

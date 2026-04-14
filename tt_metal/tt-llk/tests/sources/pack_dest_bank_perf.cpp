@@ -46,13 +46,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
-            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                 PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
         }
     }
@@ -72,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                         PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -119,10 +118,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
         {
 #ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                 block_tile, formats.math, formats.math, 4);
 #else
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                 block_tile, formats.math, formats.math);
 #endif
         }
@@ -151,10 +150,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
 #ifdef ARCH_BLACKHOLE
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math, 4);
 #else
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math);
 #endif
                     }
@@ -173,10 +172,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
 #ifdef ARCH_BLACKHOLE
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math, 4);
 #else
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math);
 #endif
                     }

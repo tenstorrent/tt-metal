@@ -19,11 +19,11 @@ using namespace ckernel::math;
 /**
  * @brief Programs address modifiers for eltwise unary broadcast (MOVB2D / MOVD2B paths).
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast; must not be NONE.
- * @tparam unpack_to_dest When true, UNP_A wrote to dest; ADDR_MOD_3 used for dest<->srcB moves.
  * @param tile_shape Face geometry (face_r_dim, num_faces) for row-broadcast addrmods.
+ * @param unpack_to_dest When true, UNP_A wrote to dest; ADDR_MOD_3 used for dest<->srcB moves.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TileShape& tile_shape)
+template <BroadcastType BROADCAST_TYPE>
+inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TileShape& tile_shape, const bool unpack_to_dest = false)
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
 
@@ -42,7 +42,7 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TileShape& tile_sha
             .set(ADDR_MOD_2);
     }
 
-    if constexpr (unpack_to_dest)
+    if (unpack_to_dest)
     {
         if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
         {
@@ -66,17 +66,17 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TileShape& tile_sha
 /**
  * @brief MOP / replay configuration for MOVB2D unary-broadcast (srcB -> dest).
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast.
- * @tparam unpack_to_dest When true, unpack filled dest; MOVB2D reads srcB only, so `_llk_math_eltwise_unary_broadcast_`
+ * @param tile_shape Tile shape for loop counts and row dimensions.
+ * @param unpack_to_dest When true, unpack filled dest; MOVB2D reads srcB only, so `_llk_math_eltwise_unary_broadcast_`
  *         runs MOVD2B (dest->srcB) first, then programs this MOVB2D MOP. ROW uses the fixed replay below; COL/SCALAR use
  *         the same outer/inner template as the non-unpack_to_dest path with ADDR_MOD_3 from addrmod.
- * @param tile_shape Tile shape for loop counts and row dimensions.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TileShape& tile_shape)
+template <BroadcastType BROADCAST_TYPE>
+inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TileShape& tile_shape, const bool unpack_to_dest = false)
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
 
-    if constexpr (BROADCAST_TYPE == BroadcastType::ROW && unpack_to_dest)
+    if (BROADCAST_TYPE == BroadcastType::ROW && unpack_to_dest)
     {
         constexpr std::uint32_t replay_buf_start          = 1;
         constexpr std::uint32_t replay_movb2d_instr_count = ELTWISE_MATH_ROWS;
@@ -169,19 +169,19 @@ inline void _llk_math_eltwise_unary_broadcast_d2b_mop_config_(const TileShape& t
 /**
  * @brief Init unary-broadcast math: addrmods, MOP when not unpack_to_dest, reset counters.
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast.
- * @tparam unpack_to_dest UNP path wrote to dest; MOVB2D MOP deferred to per-tile call.
  * @tparam is_fp32_dest_acc_en Same name/position as unpack init for uniform call sites. Must be false when
- *         unpack_to_dest is true (static_assert below).
+ *         unpack_to_dest is true.
  * @param tile_shape Passed to addrmod / MOP setup.
+ * @param unpack_to_dest UNP path wrote to dest; MOVB2D MOP deferred to per-tile call.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
+template <BroadcastType BROADCAST_TYPE, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape, const bool unpack_to_dest = false)
 {
-    static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
-    _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tile_shape);
-    if constexpr (!unpack_to_dest)
+    LLK_ASSERT(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
+    _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE>(tile_shape, unpack_to_dest);
+    if (!unpack_to_dest)
     {
-        _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, false>(tile_shape);
+        _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE>(tile_shape, false);
     }
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -189,22 +189,22 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
 /**
  * @brief Run one tile of unary broadcast math: set dest write addr, optional D2B then MOVB2D when unpack_to_dest.
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast.
- * @tparam unpack_to_dest When true, runs D2B then MOVB2D replay for unpack-to-dest workaround.
  * @tparam is_fp32_dest_acc_en Same template args as init; combination unpack_to_dest + true is rejected in init.
  * @param tile_idx Destination tile index within current dest bank (SyncHalf).
  * @param tile_shape Used when unpack_to_dest (D2B / MOVB2D MOP); otherwise ignored.
+ * @param unpack_to_dest When true, runs D2B then MOVB2D replay for unpack-to-dest workaround.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TileShape& tile_shape)
+template <BroadcastType BROADCAST_TYPE, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TileShape& tile_shape, const bool unpack_to_dest = false)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
-    if constexpr (unpack_to_dest)
+    if (unpack_to_dest)
     {
         _llk_math_eltwise_unary_broadcast_d2b_mop_config_<BROADCAST_TYPE>(tile_shape);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         _reset_counters_<p_setrwc::SET_ABD_F>();
-        _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, true>(tile_shape);
+        _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE>(tile_shape, true);
     }
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

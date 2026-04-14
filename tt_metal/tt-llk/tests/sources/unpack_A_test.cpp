@@ -41,7 +41,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces,
         params.num_faces);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-    _llk_unpack_A_init_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
+    _llk_unpack_A_init_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE>(
         params.UNPACK_TRANSPOSE_FACES,
         params.UNPACK_TRANSPOSE_WITHIN_FACE,
         params.TEST_FACE_R_DIM,
@@ -51,8 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < num_tiles_in_block * num_blocks; ++i)
     {
-        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE>(L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
     _llk_unpack_A_uninit_<BROADCAST_TYPE>(params.TEST_FACE_R_DIM);
 }
@@ -102,12 +101,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                tile_in_block, formats.math, formats.math);
+            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BROADCAST_TYPE>(tile_in_block, formats.math, formats.math);
         }
         _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
     }
-    _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
+    _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE>(unpack_to_dest);
 }
 
 #endif

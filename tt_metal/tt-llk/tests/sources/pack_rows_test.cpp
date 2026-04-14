@@ -25,14 +25,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces*/, 4 /*num_faces*/);
-    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE>(
         0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, FACE_R_DIM, 4 /*num_faces*/, formats.unpack_A_src, formats.unpack_A_dst);
 
     const int num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
 
     for (int tile = 0; tile < num_total_tiles; ++tile)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
             L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 }
@@ -73,8 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math);
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(tile, formats.math, formats.math);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

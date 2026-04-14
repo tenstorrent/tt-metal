@@ -52,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
-        _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
+        _llk_unpack_A_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type>(
             UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_A_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type, unpack_to_dest>(
+                    _llk_unpack_A_<BROADCAST_TYPE, is_fp32_dest_acc_en, reuse_dest_type>(
                         PERF_ADDRESS(PERF_INPUT_A, /* tile_idx */ i), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -140,7 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // "consumed" and can be overwritten with new data.
                         // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
                         // this method will perform synchronization only and no actual data copy.
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE>(
                             i % MAX_TILES_DEST, formats.math, formats.math);
                     }
                     else
@@ -172,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             // "consumed" and can be overwritten with new data.
                             // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
                             // this method will perform synchronization only and no actual data copy.
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE>(
                                 block_tile, formats.math, formats.math);
                         }
                         else
@@ -206,7 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             LLK_ASSERT(
                                 (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                 "block_tile exceeds max dest tiles");
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE>(
                                 block_tile, formats.math, formats.math);
                         }
 
@@ -233,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE>(
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU binary operation

@@ -48,8 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
@@ -70,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
                         PERF_ADDRESS(PERF_INPUT_A, i), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
@@ -174,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE>(
                             block_tile, formats.math, formats.math);
                     }
 
