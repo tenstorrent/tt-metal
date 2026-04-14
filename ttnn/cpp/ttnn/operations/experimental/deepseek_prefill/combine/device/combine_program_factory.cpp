@@ -158,19 +158,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
-    // Step 1: Select sender cores using num_cores_to_corerangeset_in_subcoregrids.
-    // This picks the first num_cores from the subdevice in row-major order, keeping
-    // senders physically adjacent and (typically) in the same physical row.
-    CoreRangeSet sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
     TT_FATAL(sender_cores.size() == num_cores, "Expected {} sender cores, got {}", num_cores, sender_cores.size());
 
-    // Step 2: Collect idle cores in the SAME physical row as sender_cores[0].
-    // NOC multicast requires a single-row bounding box: if idle cores span multiple
-    // physical rows the box widens to a rectangle that includes non-subdevice cores
-    // (Ethernet tiles, other workers), causing noc_async_write_barrier() to hang
-    // because the hardware waits for ACKs from cores that can't respond properly.
+    // Step 2: Collect idle cores in the SAME physical row as sender_cores[0]
     uint32_t sender_row_y_phys =
         (uint32_t)mesh_device->virtual_core_from_logical_core(sender_cores[0], tt::CoreType::WORKER).y;
     std::set<CoreCoord> sender_core_set(sender_cores.begin(), sender_cores.end());
@@ -230,14 +223,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     constexpr uint32_t read_batch_size = 32;
 
-    // // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
-    // detail::create_tensor_cb(
-    //     program,
-    //     sender_core_grid,
-    //     dispatched_buffer,
-    //     /*buffering_factor=*/hidden_size / 32,
-    //     /*cb_id=*/tt::CBIndex::c_0,
-    //     "dispatched_buffer_scratch");
     // c_1: dispatched_metadata scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
         program,
@@ -476,9 +461,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     // c_1 on idle cores: receives the expert_token_counts multicast from the owning sender.
     // MUST be allocated BEFORE c_0 so its L1 address matches the sender's c_1 address.
-    // The sender uses get_write_ptr(c_1_sender) as the multicast destination; if c_0 were
-    // allocated first here it would consume ~3 MB causing c_1 to wrap and corrupt the mailbox.
-    // One extra page holds the single receive_buf_addr that each sender appends before multicasting.
     {
         uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
         uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
@@ -490,12 +472,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 .set_page_size(tt::CBIndex::c_1, counter_page_size);
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, c1_idle_config);
     }
-    // c_0 on idle cores: dispatched_buffer tiles, one token's worth (hidden_size/32 tiles)
-    // MUST be at index 0: pack_untilize_block calls llk_math_eltwise_unary_datacopy with
-    // operand=0 (Blackhole UnpackToDestEn=true path), so MATH reads unpack_src_format[0].
-    // Placing dispatched_buffer (bfloat16) here ensures the correct format is used.
-    // NOTE: c_0 is allocated after c_1 (see above) so that the multicast destination address
-    // matches the sender; the CB index (0) is independent of allocation order.
+    // c_0 on idle cores: dispatched_buffer tiles
     detail::create_tensor_cb(
         program,
         idle_core_grid,
@@ -672,17 +649,18 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             .compile_args = compile_time_args,
             .defines = writer_defines});
 
-    // Compute kernel on idle cores (c_3 signal, c_2 untilize out, c_0 tile in)
-    [[maybe_unused]] tt::tt_metal::KernelHandle compute_idle_kernel_id = tt::tt_metal::CreateKernel(
+    // Compute kernel on idle cores that untilizes dispatched_buffer data
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
         "untilize_combine.cpp",
         idle_core_grid,
         tt::tt_metal::ComputeConfig{
             .compile_args = {
-                static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_signal_id
-                static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_untilize_id
-                static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_in_id (must be 0: MATH reads unpack_src_format[0])
+                static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_signal_id (CB used for signaling on the same core that
+                                                          // data is loaded and ready to be untilized)
+                static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_untilize_id (untilized dispatched_buffer data)
+                static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_in_id (dispatched_buffer data)
                 static_cast<uint32_t>(hidden_size),       // hidden_size
                 static_cast<uint32_t>(read_batch_size),   // read_batch_size
             }});
