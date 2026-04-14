@@ -266,6 +266,30 @@ def get_matrix_output_key_for_test_group(test_group_name):
     return profile["matrix_output_key"]
 
 
+def get_mesh_device_shape_for_hardware_group(hardware_group) -> str:
+    """Return the primary mesh device shape string for a hardware group.
+
+    This is the "natural" mesh shape that the hardware physically provides,
+    used to set ``MESH_DEVICE_SHAPE`` so that the sweep framework filters
+    vectors to those matching the actual device topology.
+    """
+    if hardware_group is None:
+        return "1x1"
+
+    _board_type, device_series, card_count = hardware_group
+
+    if device_series == "tt_galaxy_wh":
+        return "4x8"
+    if device_series == "n300" and card_count == 4:
+        return "2x4"
+    if device_series == "n300" and card_count == 1:
+        return "1x2"
+    if device_series == "p150b":
+        return "1x1"
+    # n150 or unknown single-chip
+    return "1x1"
+
+
 def get_test_group_name_for_hardware_group(hardware_group):
     """Map a parsed hardware tuple to the logical test group used in CI."""
     if hardware_group is None:

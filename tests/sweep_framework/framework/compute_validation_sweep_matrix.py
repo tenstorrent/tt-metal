@@ -25,6 +25,7 @@ from constants import format_hardware_suffix, parse_hardware_suffix, strip_group
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     get_lead_models_test_group_name_for_hardware_group,
+    get_mesh_device_shape_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
 )
@@ -164,6 +165,8 @@ def compute_validation_matrix(
         total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
+        mesh_device_shape = get_mesh_device_shape_for_hardware_group(hardware_group)
+
         for index, batch in enumerate(runner_batches, start=1):
             include.append(
                 {
@@ -177,6 +180,7 @@ def compute_validation_matrix(
                     "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                     "trace_ids": trace_id_list,
                     "hardware_group": hardware_label,
+                    "mesh_device_shape": mesh_device_shape,
                 }
             )
 
