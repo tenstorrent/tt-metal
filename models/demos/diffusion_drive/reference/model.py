@@ -696,7 +696,7 @@ class AgentHead(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ffn, BoundingBox2DIndex.size()),
         )
-        self._mlp_label = nn.Linear(d_model, 1)
+        self._mlp_label = nn.Sequential(nn.Linear(d_model, 1))
 
     def forward(self, agent_queries: torch.Tensor) -> Dict[str, torch.Tensor]:
         states = self._mlp_states(agent_queries)
