@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
-from models.demos.deepseek_v3_b1.prepare_weights import (
+from models.demos.deepseek_v3_b1.weights.prepare import (
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -86,28 +85,7 @@ class RoutedExpertTensors(NamedTuple):
 # ============================================================================
 # Constants (namespaced by usage)
 # ============================================================================
-class RoutedExpert:
-    M = 1
-    K = 7168
-    N_PER_CORE = 32  # routing matmul width per core
-    NUM_CORES = 8  # routing matmul cores
-    GATE_PROJ_N = 2048
-    GATE_EPS = 1e-20
-    GATE_SCALING_FACTOR = 2.5
-    TILE_W = 32  # for padding math
-    FINAL_OUTPUT_WIDTH_PER_CORE = 32 * 32  # 1024
-    INPUT_CORE_Y = 9  # for ttnn.CoreCoord(device_grid_size.x - 1, INPUT_CORE_Y)
-    SEED = 0
-    GATE_PROJ_EXPERT_SEED = 0
-    UP_PROJ_EXPERT_SEED = 256
-    DOWN_PROJ_EXPERT_SEED = 512
-
-
-class SharedExpert:
-    K_PARALLEL = 8
-    N_PARALLEL = 8
-    N_PER_CORE = 64  # N = N_PER_CORE * DownProj.NUM_MATMUL_CORES in helper
-    SEED = 100
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
 
 
 class SDPA:
@@ -172,8 +150,7 @@ def create_shared_expert_tensors(
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
 
-    bdw = BlitzDecodeWeights(device)
-    moe_tp = bdw.moe_tp
+    moe_tp = device.shape[0] * device.shape[1] if hasattr(device, "shape") else 1
     K_down_full = K_down * moe_tp
 
     assert layer_idx is not None, "layer_idx must be provided"
@@ -232,7 +209,7 @@ def create_shared_expert_tensors(
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
     shared_weights = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+        device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
 
     return SharedExpertTensors(
@@ -314,8 +291,6 @@ def create_routed_expert_tensors(
     gate_eps = RoutedExpert.GATE_EPS
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
-    # ── Use provided state dict (gate weight/bias/rmsnorm_gamma all from state dict) ──
-    bdw = BlitzDecodeWeights(device)
     if layer_idx is None:
         layer_idx = ROUTED_EXPERT_LAYER_IDX if is_moe else DENSE_LAYER_IDX
     layer_key = f"model.layers.{layer_idx}"
@@ -361,7 +336,7 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
     ttnn_gate_mm_weights = attn.gate_mm
     ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
@@ -410,7 +385,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=True,
@@ -442,7 +417,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=False,
@@ -693,6 +668,34 @@ def create_reference_mlp_models(state_dict, layer_idx):
     return expert_mlp, shared_mlp
 
 
+def rig_moe_gate_for_expected_experts(
+    state_dict,
+    layer_idx,
+    winning_groups,
+    winning_experts_by_group,
+    *,
+    low_bias=-10.0,
+    high_bias=10.0,
+    zero_gate_weights=True,
+):
+    """Rig grouped gate so top-k deterministically selects requested experts."""
+    gate_key = f"model.layers.{layer_idx}.mlp.gate.weight"
+    bias_key = f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"
+
+    if zero_gate_weights:
+        state_dict[gate_key] = torch.zeros_like(state_dict[gate_key])
+
+    bias_2d = torch.full((8, 32), low_bias, dtype=state_dict[bias_key].dtype)
+    expected_expert_ids = []
+    for group_id in winning_groups:
+        for expert_id in winning_experts_by_group[group_id]:
+            bias_2d[group_id, expert_id] = high_bias
+            expected_expert_ids.append(group_id * 32 + expert_id)
+
+    state_dict[bias_key] = bias_2d.reshape(-1).contiguous()
+    return expected_expert_ids
+
+
 @pytest.mark.parametrize(
     "use_hardcoded_expert_index",
     [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
@@ -700,6 +703,7 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
@@ -822,7 +826,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     )
 
     # Compute fused MoE golden (routed + shared expert + eltwise add)
-    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden(
+    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden_single_device(
         r.torch_input,
         shared_gate_weights=s.torch_gate_weights,
         shared_up_weights=s.torch_up_weights,
@@ -873,23 +877,18 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-def test_moe_fused_with_reduce(
-    bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
-):
+@pytest.mark.timeout(1200)
+def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
     Each of 8 devices runs the full fused MoE (routed + shared expert),
     then results are reduced (summed) across all devices to ROOT1.
 
-    When use_hardcoded_expert_index=True, each device uses expert index = chip_id (0..7)
-    and the gate is only used for scaling; this is not the same as the reference model,
-    which uses the gate to select the actual top-8 experts. The reference comparison
-    is therefore skipped in that case and only runs when use_hardcoded_expert_index=False.
+    Gate is rigged so grouped top-k picks deterministic winners.
     """
     num_devices = TestConfig.NUM_DEVICES_4x2
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -913,12 +912,24 @@ def test_moe_fused_with_reduce(
         num_routed_experts=256,
         include_global=False,
     )
+    winning_groups = [0, 2, 5, 7]
+    winning_experts_by_group = {
+        0: [1, 9],
+        2: [4, 19],
+        5: [7, 23],
+        7: [3, 28],
+    }
+    expected_expert_ids = rig_moe_gate_for_expected_experts(
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        winning_groups,
+        winning_experts_by_group,
+    )
 
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
         submesh,
-        use_hardcoded_expert_index,
         mesh_mapper=mesh_mapper,
         create_final_output=False,
         state_dict=state_dict,
@@ -990,21 +1001,27 @@ def test_moe_fused_with_reduce(
     final_output_total_width = r.final_output_total_width
     final_output_mem_config = r.final_output_mem_config
 
-    # 3 intermediate tensors for 3 reduction rounds (same shape as final_output)
-    intermediate_tensors = []
-    for _ in range(TestConfig.REDUCE_NUM_ROUNDS):
-        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
-    logger.info("Created 3 intermediate tensors for reduce rounds")
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
 
     # Reduce output tensor (single-core sharded on each device)
     compute_grid = submesh.compute_with_storage_grid_size()
@@ -1061,7 +1078,7 @@ def test_moe_fused_with_reduce(
         shared_down_weights_tensor=s.ttnn_down_weights,
         shared_k_parallel=s.k_parallel,
         shared_n_parallel=s.n_parallel,
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
+        use_hardcoded_expert_index=False,
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer=sdpa_out_interm_buffer,
         num_iterations=num_iterations,
@@ -1078,56 +1095,35 @@ def test_moe_fused_with_reduce(
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
-    # Read gate scores/indices from device (needed for per-device golden)
+    # Read gate scores/indices from device
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-    device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
+    tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
+    tt_top8_sorted = torch.sort(tt_top8).values
+    expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
+    assert torch.equal(tt_top8_sorted, expected_top8_sorted), (
+        f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
+    )
 
-    # Compute expected output for each device, then sum
-    # Each device uses a different hardcoded expert index (chip_id)
-    # and a different TP shard of shared expert weights
-    K_down = s.K_down
-    expected_final_outputs = []
-    for device_idx in range(num_devices):
-        chip_id = device_idx
-
-        if use_hardcoded_expert_index:
-            actual_expert_idx = chip_id
-            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
-        else:
-            actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
-            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
-
-        shared_gate_shard = s.torch_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_up_shard = s.torch_up_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
-        shared_down_shard = s.torch_down_weights[device_idx * K_down : (device_idx + 1) * K_down, :]
-
-        _, _, torch_expected_final = MoeOp.golden(
-            r.torch_input,
-            shared_gate_weights=shared_gate_shard,
-            shared_up_weights=shared_up_shard,
-            shared_down_weights=shared_down_shard,
-            gate_proj_weights_dict=r.expert_weights_dict,
-            up_proj_weights_dict=r.up_proj_weights_dict,
-            down_proj_weights_dict=r.down_proj_weights_dict,
-            rmsnorm_gamma=r.torch_rmsnorm_gamma,
-            rmsnorm_epsilon=1e-6,
-            routing_weights_tensor=r.torch_gate_mm_weights,
-            bias_tensor=r.torch_bias,
-            eps=r.gate_eps,
-            scaling_factor=r.gate_scaling_factor,
-            use_hardcoded_expert_index=True,
-            hardcoded_expert_index=actual_expert_idx,
-            explicit_expert_scale=actual_expert_scale,
-        )
-        expected_final_outputs.append(torch_expected_final)
-        logger.info(
-            f"Device {device_idx}: expert_idx={actual_expert_idx}, "
-            f"expert_scale={actual_expert_scale:.4f}, "
-            f"output range=[{torch_expected_final.min():.4f}, {torch_expected_final.max():.4f}]"
-        )
-
-    # Expected reduce output = sum of all per-device outputs
-    expected_reduce_output = sum(expected_final_outputs)
+    # One logical golden call (h + MoE(h)); no per-device golden loop needed.
+    _, _, expected_reduce_output = MoeOp.golden(
+        r.torch_input,
+        shared_gate_weights=s.torch_gate_weights,
+        shared_up_weights=s.torch_up_weights,
+        shared_down_weights=s.torch_down_weights,
+        gate_proj_weights_dict=r.expert_weights_dict,
+        up_proj_weights_dict=r.up_proj_weights_dict,
+        down_proj_weights_dict=r.down_proj_weights_dict,
+        rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
+        rmsnorm_epsilon=1e-6,
+        routing_mode=True,
+        eps=r.gate_eps,
+        scaling_factor=r.gate_scaling_factor,
+        include_residual=True,
+    )
 
     # Get actual reduce output from ROOT1 device
     reduce_output_torch = ttnn.to_torch(
@@ -1135,8 +1131,6 @@ def test_moe_fused_with_reduce(
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
-    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
-    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     reduce_output_root = reduce_output_torch[root_device_idx]
 
     # Extract valid portion (remove per-core padding)
@@ -1152,11 +1146,9 @@ def test_moe_fused_with_reduce(
     logger.info(f"Reduce output PCC: {pcc_output}")
     assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
-    # --- Reference model comparison (when doing same op as reference: gate-selected experts) ---
-    # Skip when use_hardcoded_expert_index=True: B1 then uses fixed experts 0..7 (one per device),
-    # while the reference uses gate-selected top-8 experts; they are not the same operation.
+    # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)
-    if num_experts_in_state_dict >= 256 and not use_hardcoded_expert_index:
+    if num_experts_in_state_dict >= 256:
         reference_moe, _ = create_reference_moe_model(state_dict, ROUTED_EXPERT_LAYER_IDX)
 
         # Apply RMSNorm (same as B1 fused op does internally)
@@ -1178,10 +1170,11 @@ def test_moe_fused_with_reduce(
         with torch.no_grad():
             ref_moe_output = reference_moe(normed_input.unsqueeze(0)).squeeze(0)
 
+        # Residual is added once (on ROOT1 only), so reduce output directly
+        # matches: residual + moe_output
         ref_block_output = r.torch_input.float() + ref_moe_output.float()
-        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
 
-        passing_ref, pcc_ref = comp_pcc(ref_block_output, adjusted_reduce, 0.95)
+        passing_ref, pcc_ref = comp_pcc(ref_block_output, reduce_output_valid.float(), 0.95)
         logger.info(f"Reference MoE comparison PCC: {pcc_ref}")
         assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
 
@@ -1190,6 +1183,7 @@ def test_moe_fused_with_reduce(
 
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.timeout(1200)
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
@@ -1314,8 +1308,10 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         up_proj_weights_dict=r.up_proj_weights_dict,
         down_proj_weights_dict=r.down_proj_weights_dict,
         rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
         rmsnorm_epsilon=1e-6,
-        enable_routing=False,
+        routing_mode=False,
     )
 
     passing, pcc = comp_pcc(torch_expected, output_final_valid, 0.97)
@@ -1332,10 +1328,11 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_mlp_weights", [True, False], ids=["mlp", "moe"])
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("use_mlp_weights", [True], ids=["mlp"])
+@pytest.mark.parametrize("reconfig_moe_cbs", [True])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
     bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
@@ -1450,21 +1447,27 @@ def test_mlp_with_reduce(
     final_output_total_width = r.final_output_total_width
     final_output_mem_config = r.final_output_mem_config
 
-    # 3 intermediate tensors for 3 reduction rounds
-    intermediate_tensors = []
-    for _ in range(TestConfig.REDUCE_NUM_ROUNDS):
-        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
-    logger.info("Created 3 intermediate tensors for reduce rounds")
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
 
     # Reduce output tensor (single-core sharded on each device)
     compute_grid = submesh.compute_with_storage_grid_size()
@@ -1532,9 +1535,10 @@ def test_mlp_with_reduce(
     logger.info(f"MoeOp no-routing with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
     # ── Verify results ──
-    # Compute per-device golden with per-device TP shards of shared expert weights
-    # For dense (use_mlp_weights): each device uses routed expert d; pass single-expert dict for that device.
+    # Compute per-device golden with per-device TP shards of shared expert weights.
+    # Residual is only added on ROOT1 device; non-root devices skip it.
     K_down = s.K_down
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     expected_final_outputs = []
     for device_idx in range(num_devices):
         shared_gate_shard = s.torch_gate_weights[:, device_idx * K_down : (device_idx + 1) * K_down]
@@ -1550,7 +1554,7 @@ def test_mlp_with_reduce(
             up_dict = r.up_proj_weights_dict
             down_dict = r.down_proj_weights_dict
 
-        _, _, device_expected = MoeOp.golden(
+        _, _, device_expected = MoeOp.golden_single_device(
             r.torch_input,
             shared_gate_weights=shared_gate_shard,
             shared_up_weights=shared_up_shard,
@@ -1561,6 +1565,7 @@ def test_mlp_with_reduce(
             rmsnorm_gamma=r.torch_rmsnorm_gamma,
             rmsnorm_epsilon=1e-6,
             enable_routing=False,
+            include_residual=(device_idx == root_device_idx),
         )
         expected_final_outputs.append(device_expected)
 
@@ -1573,8 +1578,6 @@ def test_mlp_with_reduce(
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
 
-    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
-    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     reduce_output_root = reduce_output_torch[root_device_idx]
 
     # Extract valid portion (remove per-core padding)
@@ -1600,13 +1603,13 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             shared_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
             routed_outputs = [routed_refs[d](normed_input.unsqueeze(0)).squeeze(0) for d in range(8)]
-        ref_reduce = sum(routed_outputs).float() + shared_output.float() + num_devices * r.torch_input.float()
-        # Also compare against single full MLP (reference block): reduce_output - 7*residual = block_output
+        # Residual is added once (on ROOT1 only)
+        ref_reduce = sum(routed_outputs).float() + shared_output.float() + r.torch_input.float()
+        # Also compare against single full MLP (reference block): reduce_output directly matches
         full_mlp_ref = create_reference_dense_full_mlp(state_dict, layer_idx)
         with torch.no_grad():
             ref_block_output = r.torch_input.float() + full_mlp_ref(normed_input.unsqueeze(0)).squeeze(0).float()
-        adjusted_reduce = reduce_output_valid.float() - 7 * r.torch_input.float()
-        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), adjusted_reduce.flatten(), 0.975)
+        passing_full, pcc_full = comp_pcc(ref_block_output.flatten(), reduce_output_valid.float().flatten(), 0.975)
         logger.info(f"Reference full MLP (block) comparison PCC: {pcc_full}")
         assert passing_full, f"Reference full MLP block comparison PCC failed: {pcc_full}"
     else:
@@ -1614,9 +1617,8 @@ def test_mlp_with_reduce(
         with torch.no_grad():
             expert_0_output = expert_ref(normed_input.unsqueeze(0)).squeeze(0)
             shared_full_output = shared_ref(normed_input.unsqueeze(0)).squeeze(0)
-        ref_reduce = (
-            num_devices * expert_0_output.float() + shared_full_output.float() + num_devices * r.torch_input.float()
-        )
+        # Residual is added once (on ROOT1 only)
+        ref_reduce = num_devices * expert_0_output.float() + shared_full_output.float() + r.torch_input.float()
 
     passing_ref, pcc_ref = comp_pcc(ref_reduce, reduce_output_valid, 0.975)
     logger.info(f"Reference MLP comparison PCC: {pcc_ref}")

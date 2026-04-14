@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,9 @@
 
 #include "device/dit_layernorm_pre_all_gather_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
+ttnn::Tensor dit_layernorm_pre_allgather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& recip_tensor,
     const DataType dtype,
@@ -16,10 +16,10 @@ ttnn::Tensor ExecuteDitLayerNormPreAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     return ttnn::prim::dit_layernorm_pre_all_gather(
         input_tensor, recip_tensor, dtype, kernel_config_val, memory_config.value_or(input_tensor.memory_config()));
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

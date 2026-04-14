@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -88,16 +88,25 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
                             (dst_cb_data_format == tt::DataFormat::Int32) ||
                             (dst_cb_data_format == tt::DataFormat::UInt32);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+
+    // Select compute kernel based on approximation mode
+    std::string compute_kernel_path;
+    if (args.approximate == "tanh") {
+        compute_kernel_path =
+            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+            "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
+    } else {
+        compute_kernel_path =
+            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+            "kernels/compute/eltwise_bw_gelu_poly.cpp";
+    }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-                                     "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"
-                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-                                     "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
+        compute_kernel_path,
         all_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode});
 

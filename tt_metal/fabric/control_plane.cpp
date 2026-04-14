@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -78,12 +79,11 @@ namespace {
 // o o o o
 // o o o o
 // * o o * < Corners pinned with *
-// Generate fixed ASIC position pinnings for UBB galaxy systems during auto-discovery.
-// This function is only called during auto-discovery (when no manual mapping is provided).
+// Generate fixed ASIC position pinnings for a single mesh in UBB galaxy systems.
 // For UBB galaxy runs with 32 chips, it can optionally hard pin fabric node id 0 to asic 1 tray 1.
 // If MGD pinnings are provided for fabric node id 0, MGD pinnings take precedence and hard pinning is skipped.
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
-    const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id, const MeshShape& mesh_shape, bool hard_pin_node_0 = false) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
     // Get all 4 possible corners ASIC positions
@@ -93,14 +93,12 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
     corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
 
+    // Generate corner fabric node IDs for this mesh
     std::vector<FabricNodeId> corner_fabric_node_ids;
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
-    }
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
 
     fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
@@ -488,21 +486,31 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
-        const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
-                           this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-        const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-        if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
-            fixed_asic_position_pinnings.insert(
-                fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+        // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
+        if (cluster.is_ubb_galaxy()) {
+            for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+                const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+                const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+                const size_t mesh_chip_count = mesh_shape.mesh_size();
+
+                // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
+                if (!is_1d && mesh_chip_count % 32 == 0) {
+                    auto mesh_pinnings =
+                        get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                    fixed_asic_position_pinnings.insert(
+                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                }
+            }
         }
 
-        // Add MGD pinnings to the topology mapper
-        const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-        for (const auto& [pos, fabric_node] : pinnings) {
-            fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
+        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available)
+        if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
+            const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            for (const auto& [pos, fabric_node] : pinnings) {
+                fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
+            }
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -588,17 +596,23 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
     // bisect a device.
-    const bool is_1d =
-        this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-    const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-    // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
-    if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
-        // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
-        fixed_asic_position_pinnings.insert(
-            fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+    // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
+    if (cluster.is_ubb_galaxy()) {
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            const size_t mesh_chip_count = mesh_shape.mesh_size();
+
+            // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
+            if (!is_1d && mesh_chip_count % 32 == 0) {
+                auto mesh_pinnings =
+                    get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                fixed_asic_position_pinnings.insert(
+                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+            }
+        }
     }
 
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -2258,6 +2272,56 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
 
 const MeshGraph& ControlPlane::get_mesh_graph() const { return *mesh_graph_; }
 
+const tt::tt_metal::PhysicalSystemDescriptor& ControlPlane::get_physical_system_descriptor() const {
+    return *physical_system_descriptor_;
+}
+
+const TopologyMapper& ControlPlane::get_topology_mapper() const {
+    TT_FATAL(this->topology_mapper_ != nullptr, "ControlPlane: topology mapper not initialized");
+    return *this->topology_mapper_;
+}
+
+std::vector<FabricNodeId> ControlPlane::get_exit_fabric_node_ids_between_meshes(
+    MeshId src_mesh_id, MeshId dst_mesh_id) const {
+    auto mesh_it = intermesh_exit_fabric_node_ids_.find(src_mesh_id);
+    if (mesh_it == intermesh_exit_fabric_node_ids_.end()) {
+        return {};
+    }
+    auto dst_it = mesh_it->second.find(dst_mesh_id);
+    if (dst_it == mesh_it->second.end()) {
+        return {};
+    }
+    std::vector<FabricNodeId> result(dst_it->second.begin(), dst_it->second.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+std::vector<std::pair<FabricNodeId, FabricNodeId>>
+ControlPlane::get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+    MeshId src_mesh_id, MeshId dst_mesh_id) const {
+    auto mesh_it = intermesh_exit_peer_fabric_node_id_pairs_.find(src_mesh_id);
+    if (mesh_it == intermesh_exit_peer_fabric_node_id_pairs_.end()) {
+        return {};
+    }
+    auto dst_it = mesh_it->second.find(dst_mesh_id);
+    if (dst_it == mesh_it->second.end()) {
+        return {};
+    }
+    return dst_it->second;
+}
+
+namespace {
+void sort_intermesh_exit_peer_fabric_node_id_pairs(
+    std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>& m) {
+    for (auto& src_entry : m) {
+        for (auto& dst_entry : src_entry.second) {
+            auto& pairs = dst_entry.second;
+            std::sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        }
+    }
+}
+}  // namespace
+
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
@@ -2565,6 +2629,8 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 // Intermesh Connectivity Generation Functions
 
 void ControlPlane::generate_intermesh_connectivity() {
+    intermesh_exit_fabric_node_ids_.clear();
+    intermesh_exit_peer_fabric_node_id_pairs_.clear();
     AnnotatedIntermeshConnections intermesh_connections;
 
     auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
@@ -2584,7 +2650,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     if (!generate_mapping_locally_ && *(this->distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
-        intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
+        intermesh_connections = this->convert_port_descriptors_to_intermesh_connections(exit_node_port_descriptors);
     } else {
         // Intermesh Connectivity generation for the single-host case
         intermesh_connections = this->generate_intermesh_connections_on_local_host();
@@ -2601,6 +2667,227 @@ void ControlPlane::generate_intermesh_connectivity() {
         get_num_requested_intermesh_connections());
 
     this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+    this->collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
+    this->collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
+    sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
+}
+
+void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
+    const auto& distributed_context = this->distributed_context_.get();
+    if (*distributed_context.size() == 1) {
+        return;
+    }
+
+    auto serialize_local_map =
+        [](const std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& m) {
+            std::vector<uint8_t> buf;
+            auto append_u32 = [&buf](uint32_t v) {
+                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
+            };
+            append_u32(static_cast<uint32_t>(m.size()));
+            for (const auto& [src_mesh, inner] : m) {
+                append_u32(*src_mesh);
+                append_u32(static_cast<uint32_t>(inner.size()));
+                for (const auto& [dst_mesh, fn_set] : inner) {
+                    append_u32(*dst_mesh);
+                    append_u32(static_cast<uint32_t>(fn_set.size()));
+                    for (const auto& fn : fn_set) {
+                        append_u32(*fn.mesh_id);
+                        append_u32(fn.chip_id);
+                    }
+                }
+            }
+            return buf;
+        };
+
+    auto merge_from_serialized =
+        [](std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>& into,
+           const std::vector<uint8_t>& data) {
+            std::size_t off = 0;
+            auto read_u32 = [&data, &off](uint32_t& out) {
+                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_fab: truncated");
+                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
+                off += sizeof(uint32_t);
+            };
+            uint32_t n_src = 0;
+            read_u32(n_src);
+            for (uint32_t si = 0; si < n_src; si++) {
+                uint32_t src_raw = 0;
+                uint32_t n_dst = 0;
+                read_u32(src_raw);
+                read_u32(n_dst);
+                MeshId src_mesh{src_raw};
+                for (uint32_t di = 0; di < n_dst; di++) {
+                    uint32_t dst_raw = 0;
+                    uint32_t n_fn = 0;
+                    read_u32(dst_raw);
+                    read_u32(n_fn);
+                    MeshId dst_mesh{dst_raw};
+                    auto& into_set = into[src_mesh][dst_mesh];
+                    for (uint32_t fi = 0; fi < n_fn; fi++) {
+                        uint32_t mesh_raw = 0;
+                        uint32_t chip_id = 0;
+                        read_u32(mesh_raw);
+                        read_u32(chip_id);
+                        into_set.insert(FabricNodeId(MeshId{mesh_raw}, chip_id));
+                    }
+                }
+            }
+            TT_FATAL(off == data.size(), "collect_intermesh_exit_fab: size mismatch");
+        };
+
+    std::vector<uint8_t> serialized_local = serialize_local_map(intermesh_exit_fabric_node_ids_);
+    std::vector<uint8_t> serialized_remote;
+    auto my_rank = *(distributed_context.rank());
+
+    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+        if (my_rank == static_cast<int>(bcast_root)) {
+            int local_data_size_bytes = static_cast<int>(serialized_local.size());
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
+                distributed_context.rank());
+
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                distributed_context.rank());
+        } else {
+            int remote_data_size_bytes = 0;
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+            serialized_remote.clear();
+            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+
+            merge_from_serialized(intermesh_exit_fabric_node_ids_, serialized_remote);
+        }
+        distributed_context.barrier();
+    }
+}
+
+void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts() {
+    const auto& distributed_context = this->distributed_context_.get();
+    if (*distributed_context.size() == 1) {
+        return;
+    }
+
+    auto serialize_local_pair_map =
+        [](const std::unordered_map<
+            MeshId,
+            std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>& m) {
+            std::vector<uint8_t> buf;
+            auto append_u32 = [&buf](uint32_t v) {
+                buf.insert(buf.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
+            };
+            append_u32(static_cast<uint32_t>(m.size()));
+            for (const auto& [src_mesh, inner] : m) {
+                append_u32(*src_mesh);
+                append_u32(static_cast<uint32_t>(inner.size()));
+                for (const auto& [dst_mesh, pairs] : inner) {
+                    append_u32(*dst_mesh);
+                    append_u32(static_cast<uint32_t>(pairs.size()));
+                    for (const auto& pr : pairs) {
+                        append_u32(*pr.first.mesh_id);
+                        append_u32(pr.first.chip_id);
+                        append_u32(*pr.second.mesh_id);
+                        append_u32(pr.second.chip_id);
+                    }
+                }
+            }
+            return buf;
+        };
+
+    auto merge_pair_vectors = [](std::vector<std::pair<FabricNodeId, FabricNodeId>>& into,
+                                 const std::vector<std::pair<FabricNodeId, FabricNodeId>>& from) {
+        into.reserve(into.size() + from.size());
+        for (const auto& p : from) {
+            if (std::find(into.begin(), into.end(), p) == into.end()) {
+                into.push_back(p);
+            }
+        }
+    };
+
+    auto merge_from_serialized =
+        [&merge_pair_vectors](
+            std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>&
+                into,
+            const std::vector<uint8_t>& data) {
+            std::size_t off = 0;
+            auto read_u32 = [&data, &off](uint32_t& out) {
+                TT_FATAL(off + 4 <= data.size(), "collect_intermesh_exit_peer_pairs: truncated");
+                std::memcpy(&out, data.data() + off, sizeof(uint32_t));
+                off += sizeof(uint32_t);
+            };
+            uint32_t n_src = 0;
+            read_u32(n_src);
+            for (uint32_t si = 0; si < n_src; si++) {
+                uint32_t src_raw = 0;
+                uint32_t n_dst = 0;
+                read_u32(src_raw);
+                read_u32(n_dst);
+                MeshId src_mesh{src_raw};
+                for (uint32_t di = 0; di < n_dst; di++) {
+                    uint32_t dst_raw = 0;
+                    uint32_t n_pr = 0;
+                    read_u32(dst_raw);
+                    read_u32(n_pr);
+                    MeshId dst_mesh{dst_raw};
+                    std::vector<std::pair<FabricNodeId, FabricNodeId>> remote_pairs;
+                    remote_pairs.reserve(n_pr);
+                    for (uint32_t pi = 0; pi < n_pr; pi++) {
+                        uint32_t a_m = 0, a_c = 0, b_m = 0, b_c = 0;
+                        read_u32(a_m);
+                        read_u32(a_c);
+                        read_u32(b_m);
+                        read_u32(b_c);
+                        remote_pairs.emplace_back(FabricNodeId(MeshId{a_m}, a_c), FabricNodeId(MeshId{b_m}, b_c));
+                    }
+                    auto& into_vec = into[src_mesh][dst_mesh];
+                    if (into_vec.empty()) {
+                        into_vec = std::move(remote_pairs);
+                    } else {
+                        merge_pair_vectors(into_vec, remote_pairs);
+                    }
+                }
+            }
+            TT_FATAL(off == data.size(), "collect_intermesh_exit_peer_pairs: size mismatch");
+        };
+
+    std::vector<uint8_t> serialized_local = serialize_local_pair_map(intermesh_exit_peer_fabric_node_id_pairs_);
+    std::vector<uint8_t> serialized_remote;
+    auto my_rank = *(distributed_context.rank());
+
+    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+        if (my_rank == static_cast<int>(bcast_root)) {
+            int local_data_size_bytes = static_cast<int>(serialized_local.size());
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
+                distributed_context.rank());
+
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local.data(), serialized_local.size())),
+                distributed_context.rank());
+        } else {
+            int remote_data_size_bytes = 0;
+            distributed_context.broadcast(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+            serialized_remote.clear();
+            serialized_remote.resize(static_cast<std::size_t>(remote_data_size_bytes));
+            distributed_context.broadcast(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_remote.data(), serialized_remote.size())),
+                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+
+            merge_from_serialized(intermesh_exit_peer_fabric_node_id_pairs_, serialized_remote);
+        }
+        distributed_context.barrier();
+    }
 }
 
 std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
@@ -2618,9 +2905,12 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
+    bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
+
     std::vector<PortDescriptor> ports_to_neighbor;
 
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
+    int z_fallback_count = 0;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2635,37 +2925,55 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
-        bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
-
-        for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
-            if (exit_node_chip == chip_id) {
-                auto port_direction = port_id.first;
-                auto logical_chan_id = port_id.second;
+        auto try_assign_port = [&](bool use_z_direction) -> bool {
+            for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
+                if (exit_node_chip != port_chip_id) {
+                    continue;
+                }
+                auto port_direction = port_id_pair.first;
+                auto logical_chan_id = port_id_pair.second;
 
                 // Blackhole Z-channels must be assigned the Z Routing Direction.
                 // All other channels must avoid using the Z-direction (they are used for routing along the X/Y
                 // directions). This is to ensure that logical and physical channel assignments are consistent.
                 bool is_z_direction = (port_direction == RoutingDirection::Z);
-                if (should_assign_z != is_z_direction) {
+                if (use_z_direction != is_z_direction) {
                     continue;
                 }
 
-                // Override direction to Z BEFORE creating port_id if needed
-                RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
+                RoutingDirection final_direction = use_z_direction ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
-                // Assign this port id to the exit node if it is not already assigned
-                bool valid_direction =
-                    !curr_exit_node_direction.contains(exit_node_hash) ||
-                    curr_exit_node_direction.at(exit_node_hash) == final_direction;
+                bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
+                                       curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
                     exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
+                    intermesh_exit_fabric_node_ids_[my_mesh_id][neighbor_mesh_id].insert(exit_node_fabric_node_id);
+                    const FabricNodeId peer_fabric_node_id =
+                        this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
+                    intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id][neighbor_mesh_id].emplace_back(
+                        exit_node_fabric_node_id, peer_fabric_node_id);
+                    intermesh_exit_peer_fabric_node_id_pairs_[neighbor_mesh_id][my_mesh_id].emplace_back(
+                        peer_fabric_node_id, exit_node_fabric_node_id);
                     curr_exit_node_direction[exit_node_hash] = final_direction;
-                    break;
+                    return true;
                 }
             }
+            return false;
+        };
+
+        bool assigned = try_assign_port(should_assign_z);
+        if (!assigned && !should_assign_z) {
+            if (z_fallback_count++ == 0) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ran out of NESW ports for mesh {} -> {}, falling back to Z direction for remaining connections",
+                    *my_mesh_id,
+                    *neighbor_mesh_id);
+            }
+            try_assign_port(true);
         }
     }
     return ports_to_neighbor;
@@ -2727,17 +3035,39 @@ void ControlPlane::validate_requested_intermesh_connections(
     if (strict_binding) {
         return;
     }
+    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
     for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
         auto src_mesh_id = MeshId(src_mesh);
         for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
             auto dst_mesh_id = MeshId(dst_mesh);
-            TT_FATAL(
-                num_channels <= port_descriptors.at(src_mesh_id).at(dst_mesh_id).size(),
-                "Requested {} channels between {} and {}, but only have {} physical links",
-                num_channels,
-                src_mesh,
-                dst_mesh,
-                port_descriptors.at(src_mesh_id).at(dst_mesh_id).size());
+            const auto& ports = port_descriptors.at(src_mesh_id).at(dst_mesh_id);
+            if (num_channels > ports.size()) {
+                std::string port_directions_str;
+                for (size_t i = 0; i < ports.size(); ++i) {
+                    if (i > 0) {
+                        port_directions_str += ", ";
+                    }
+                    port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
+                                           std::to_string(ports[i].port_id.second);
+                }
+                const std::string msg = fmt::format(
+                    "Requested {} channels between {} and {}, but only have {} physical links. "
+                    "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
+                    "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
+                    "generate_rank_bindings does not yet validate Z vs non-Z port capacity. "
+                    "Available port directions: {}.",
+                    num_channels,
+                    src_mesh,
+                    dst_mesh,
+                    ports.size(),
+                    port_directions_str);
+                if (inter_mesh_relaxed) {
+                    log_warning(
+                        tt::LogFabric, "Inter-mesh channel request exceeds physical links (policy relaxed): {}", msg);
+                } else {
+                    TT_THROW("{}", msg);
+                }
+            }
         }
     }
 }
@@ -2764,6 +3094,30 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
                     num_physical_channels_found++;
                 }
             }
+            std::string phys_loc_str;
+            if (topology_mapper_ != nullptr) {
+                try {
+                    FabricNodeId fn_id(my_mesh_id, src_device);
+                    auto hostname = topology_mapper_->get_hostname_for_fabric_node_id(fn_id);
+                    auto tray_id = topology_mapper_->get_tray_id_for_fabric_node_id(fn_id);
+                    auto asic_location = topology_mapper_->get_asic_location_for_fabric_node_id(fn_id);
+                    phys_loc_str = fmt::format(" (host={}, tray={}, loc={})", hostname, *tray_id, *asic_location);
+                } catch (const std::exception&) {
+                    phys_loc_str = " (physical_location_unavailable)";
+                }
+            }
+            log_info(
+                tt::LogFabric,
+                "get_requested_exit_nodes: mesh {} -> {}, FabricNodeId M{}D{}{}: num_channels_requested={}, "
+                "num_physical_channels_found={}, total_src_exit_node_chips={}",
+                *my_mesh_id,
+                *neighbor_mesh_id,
+                *my_mesh_id,
+                src_device,
+                phys_loc_str,
+                num_channels_requested,
+                num_physical_channels_found,
+                src_exit_node_chips.size());
             TT_FATAL(
                 num_physical_channels_found >= num_channels_requested,
                 "Requested {} channels between {} and {} on src FabricNodeId {}, but only have {} physical channels",
@@ -2964,7 +3318,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     return intermesh_connections;
 }
 
-AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh_connections(
+AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
@@ -2991,6 +3345,22 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh
             if (!active_logical_ports.contains(port_id)) {
                 exit_node_directions_.at(exit_node).erase(physical_chan);
             }
+        }
+    }
+    // Keep only exit nodes that appear in paired intermesh connections (drops unpaired port assignments)
+    {
+        auto& my_row = intermesh_exit_fabric_node_ids_[my_mesh_id];
+        my_row.clear();
+        const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
+        for (const auto& connection : intermesh_connections) {
+            const auto& src_side = std::get<0>(connection);
+            if (src_side.first != *my_mesh_id) {
+                continue;
+            }
+            MeshId dst_mesh_id{std::get<1>(connection).first};
+            const auto& src_port_id = src_side.second;
+            ChipId src_chip = mesh_edge_ports_to_chip_id.at(*my_mesh_id).at(src_port_id);
+            my_row[dst_mesh_id].insert(FabricNodeId(my_mesh_id, src_chip));
         }
     }
     return intermesh_connections;
@@ -3131,6 +3501,15 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
                         auto& current_eth_conn = connected_eth_chans[num_connections_assigned];
                         exit_node_directions_[node][current_eth_conn.src_chan] = local_port_id.first;
                         exit_node_directions_[neighbor_node][current_eth_conn.dst_chan] = neighbor_port_id.first;
+                        intermesh_exit_fabric_node_ids_[local_mesh_id][neighbor_node.mesh_id].insert(node);
+                        const FabricNodeId peer_fabric_node_id =
+                            this->topology_mapper_->get_fabric_node_id_from_asic_id(
+                                this->topology_mapper_->get_asic_id_from_fabric_node_id(
+                                    FabricNodeId(neighbor_node.mesh_id, static_cast<std::uint32_t>(neighbor_chip_id))));
+                        intermesh_exit_peer_fabric_node_id_pairs_[local_mesh_id][neighbor_node.mesh_id].emplace_back(
+                            node, peer_fabric_node_id);
+                        intermesh_exit_peer_fabric_node_id_pairs_[neighbor_node.mesh_id][local_mesh_id].emplace_back(
+                            peer_fabric_node_id, node);
 
                         // Update counters
                         num_connections[compute_mesh_connectivity_hash(local_mesh_id, neighbor_node.mesh_id)]++;

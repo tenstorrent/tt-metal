@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,7 +101,7 @@ moreh_group_norm_backward_input_grad(
     OperationType::operation_attributes_t operation_attributes{
         num_groups,
         input_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

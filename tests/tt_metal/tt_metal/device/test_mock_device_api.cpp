@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,6 +70,11 @@ TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
 
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 2);
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P300_both_mmio.yaml");
+}
+
+TEST_F(MockDeviceAPIFixture, QuasarConfigurationsAreValid) {
+    experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
+    EXPECT_EQ(*experimental::get_mock_cluster_desc(), "quasar_Q1.yaml");
 }
 
 TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {

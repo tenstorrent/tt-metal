@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,13 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, is_llk_assert_enabled, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from models.common.utility_functions import (
+    is_blackhole,
+    is_llk_assert_enabled,
+    skip_for_blackhole,
+    skip_for_slow_dispatch,
+)
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -92,11 +97,24 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    if dtype == ttnn.bfloat16 or dtype == ttnn.bfloat8_b:
-        expected_pcc = 0.9999
-    elif dtype == ttnn.bfloat4_b:
-        expected_pcc = 0.989
-    assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+    if dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            torch_input_tensor,
+            output_tensor,
+            pcc_threshold=0.989,
+            check_allclose=False,
+            check_frobenius=False,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_input_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            check_allclose=False,
+            check_frobenius=False,
+            check_ulp=False,
+        )
 
 
 @pytest.mark.parametrize("n", [1])
@@ -162,7 +180,7 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_input_tensor, output_tensor, 1)
+    assert_numeric_metrics(torch_input_tensor, output_tensor, pcc_threshold=1, check_ulp=False)
 
 
 @pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
@@ -174,7 +192,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     z_tt = ttnn.matmul(x_tt, y_tt)
     z = ttnn.to_torch(z_tt)
     z_t = torch.matmul(x, y)
-    assert_with_pcc(z_t, z)
+    assert_numeric_metrics(z_t, z)
 
 
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
@@ -268,14 +286,16 @@ def test_matmul_reuse_config_sharded_fd_column(
     )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
-    if in1_dtype == ttnn.bfloat8_b:
-        expected_pcc = 0.999
-    elif in1_dtype == ttnn.bfloat4_b:
-        expected_pcc = 0.993
 
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.008 * k,
+        rtol=11 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("b", [2])
@@ -369,14 +389,29 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
-    if in1_dtype == ttnn.bfloat8_b:
-        expected_pcc = 0.999
-    elif in1_dtype == ttnn.bfloat4_b:
-        expected_pcc = 0.993
 
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(pcc_message)
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+    if in1_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.04 * k,
+            rtol=68.5 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.993,
+            check_ulp=False,
+        )
+    elif in1_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor,
+            atol=0.007 * k,
+            rtol=8.688 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=0.999)
 
 
 def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
@@ -524,7 +559,28 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     # required for multi-device stress tests
     for o in ttnn.get_device_tensors(output_t):
         output_tensor = ttnn.to_torch(o)
-        assert_with_pcc(pt_out, output_tensor, expected_pcc)
+        if in1_dtype == ttnn.bfloat8_b:
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor,
+                atol=0.004 * k,
+                rtol=0.624 * k,
+                frobenius_threshold=0.001 * k,
+                pcc_threshold=expected_pcc,
+                check_ulp=False,
+            )
+        elif in1_dtype == ttnn.bfloat16:
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor,
+                atol=0.004 * k,
+                rtol=0.227 * k,
+                frobenius_threshold=0.001 * k,
+                pcc_threshold=expected_pcc,
+                check_ulp=False,
+            )
+        else:
+            assert_numeric_metrics(pt_out, output_tensor, pcc_threshold=expected_pcc, check_ulp=False)
 
 
 def run_matmul_2d_multiple_output_blocks_per_core(
@@ -564,15 +620,16 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     in0 = torch.randn(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
 
-    if in0_sharded:
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            (b, 1, m, k),
-            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_mcast else ttnn.ShardOrientation.COL_MAJOR,
-        )
-    else:
-        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    with device.cache_entries_counter.measure():
+        if in0_sharded:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (b, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_mcast else ttnn.ShardOrientation.COL_MAJOR,
+            )
+        else:
+            in0_memory_config = ttnn.L1_MEMORY_CONFIG
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -600,61 +657,70 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        out_block_h=out_block_h,
-        out_block_w=out_block_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=transpose_mcast,
-        fused_activation=None,
-        fuse_batch=fuse_batch,
-    )
+    with device.cache_entries_counter.measure():
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=out_block_h,
+            out_block_w=out_block_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=transpose_mcast,
+            fused_activation=None,
+            fuse_batch=fuse_batch,
+        )
 
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    if out_sharded:
-        out_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
-    else:
-        out_mem_config = ttnn.L1_MEMORY_CONFIG
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    pt_out = in0 @ in1
-    if has_bias:
-        pt_out += bias
+        if out_sharded:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
+        else:
+            out_mem_config = ttnn.L1_MEMORY_CONFIG
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        pt_out = in0 @ in1
+        if has_bias:
+            pt_out += bias
 
-    # required for multi-device stress tests
-    for o in ttnn.get_device_tensors(output_t):
-        output_tensor = ttnn.to_torch(o)
-        assert_with_pcc(pt_out, output_tensor, 0.999)
+        # required for multi-device stress tests
+        for o in ttnn.get_device_tensors(output_t):
+            output_tensor = ttnn.to_torch(o)
+            assert_numeric_metrics(
+                pt_out,
+                output_tensor,
+                atol=0.006 * k,
+                rtol=6.782 * k,
+                frobenius_threshold=0.001 * k,
+                pcc_threshold=0.999,
+                check_ulp=False,
+            )
 
 
 @pytest.mark.parametrize("b", [1, 2])
@@ -714,7 +780,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert mesh_device.num_program_cache_entries() == 1
+    assert mesh_device.cache_entries_counter.total == 1
 
 
 def run_matmul_2d_tiny_tile(
@@ -800,33 +866,43 @@ def run_matmul_2d_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
+
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.005 * k,
+        rtol=1.716 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("m", [512])
@@ -871,7 +947,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 def run_matmul_1d_tiny_tile(
@@ -960,33 +1036,42 @@ def run_matmul_1d_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.005 * k,
+        rtol=1.786 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("m", [128])
@@ -1031,7 +1116,7 @@ def test_matmul_1d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 def run_matmul_1d_multiple_output_blocks_per_core(
@@ -1173,31 +1258,40 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     else:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.004 * k,
+        rtol=8.603 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("m", [256])
@@ -1250,7 +1344,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("side", ["height", "width"])
@@ -1305,11 +1399,23 @@ def test_padded_2d_matmul(device, side, tile_count):
     dummy_out = torch.zeros([1, 1, M, N])
     dummy_upper = torch.full([1, 1, X, X], 4)
 
-    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # This test measures matmul performance by collecting hardware counter statistics
+    # (see: test_perf_op_report.py::TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]).
+    # To ensure accurate results, we must avoid executing additional operations on the device.
+    # If a device is not passed to ttnn.from_torch(), any layout or typecast transformations
+    # will be performed on the host, as before.
+    act = ttnn.to_device(act, device)
+    weight = ttnn.to_device(weight, device)
+    lower_tt = ttnn.to_device(lower_tt, device)
+    out_tt = ttnn.to_device(out_tt, device)
+    upper_tt = ttnn.to_device(upper_tt, device)
+
     # Free up dummy output tensor so matmul will allocate output there
     ttnn.deallocate(out_tt)
     output_tensor = ttnn.matmul(
@@ -1329,8 +1435,15 @@ def test_padded_2d_matmul(device, side, tile_count):
     # Check that the tensors above and below the output are unchanged
     torch_output_tensor = torch.matmul(torch_act, torch_weight)
     output_tensor = ttnn.to_torch(output_tensor)
-    pcc = 0.999
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.003 * K,
+        rtol=3.641 * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
     assert torch.all(lower == 2)
     assert torch.all(upper == 4)
 
@@ -1421,7 +1534,15 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         upper = ttnn.to_torch(u).float()
         # Check that the tensors above and below the output are unchanged
         output_tensor_i = ttnn.to_torch(o)
-        assert_with_pcc(torch_output_tensor, output_tensor_i, pcc)
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor_i,
+            atol=0.004 * K,
+            rtol=0.001 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
         assert torch.all(lower == 2)
         assert torch.all(upper == 4)
 
@@ -1452,7 +1573,15 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99981)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.004 * k_size,
+        rtol=0.004 * k_size,
+        frobenius_threshold=0.003 * k_size,
+        pcc_threshold=0.99981,
+        check_ulp=True,
+    )
 
 
 # fmt: off
@@ -1480,7 +1609,15 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.002 * k_size,
+        rtol=0.003 * k_size,
+        frobenius_threshold=0.002 * k_size,
+        pcc_threshold=0.9999,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize("w", [(4), (2)])
@@ -1500,6 +1637,15 @@ def test_matmul_does_dot_product(device, w):
 
     assert len(torch_output_tensor.shape) == 0
     assert len(output.shape) == 0
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.004 * w,
+        rtol=0.007 * w,
+        frobenius_threshold=0.004 * w,
+        pcc_threshold=0.99,
+        check_ulp=True,
+    )
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
 
 
@@ -1525,7 +1671,15 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999599)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.007 * w,
+        rtol=0.004 * w,
+        frobenius_threshold=0.004 * w,
+        pcc_threshold=0.999599,
+        check_ulp=True,
+    )
 
 
 # fmt: off
@@ -1538,6 +1692,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
     ])
 # fmt: on
 def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
+    torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -1549,7 +1704,15 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.9997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.004 * w,
+        rtol=0.003 * w,
+        frobenius_threshold=0.001 * w,
+        pcc_threshold=0.9997,
+        check_ulp=True,
+    )
 
 
 # fmt: off
@@ -1596,7 +1759,14 @@ def test_tutorial_matmul(device):
     output = input_tensor_a @ input_tensor_b
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.002 * k_size,
+        rtol=0.915 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
@@ -1620,7 +1790,14 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.002 * k_size,
+        rtol=0.915 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
@@ -1647,7 +1824,14 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
 
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.002 * k_size,
+        rtol=0.915 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1781,7 +1965,14 @@ def test_sharded_matmul(
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, pcc=0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.008 * k_size,
+        rtol=9.579 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 7])
@@ -1806,7 +1997,14 @@ def test_matmul_with_core_grid(device, batch_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=6.157 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1830,7 +2028,14 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=5.256 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1854,7 +2059,14 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=6.788 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -1878,7 +2090,14 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=6.157 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1911,9 +2130,16 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
-    assert_allclose(torch_output_tensor, output, 0.32, 0.016)
-    assert_with_ulp(torch_output_tensor, output, 3)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.005 * k,
+        rtol=0.003 * k,
+        frobenius_threshold=0.002 * k,
+        ulp_threshold=3,
+        pcc_threshold=0.99,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1958,7 +2184,15 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.012 * k,
+        rtol=0.001 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.99,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize("transpose_a", [True, False])
@@ -2093,7 +2327,15 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output,
+        atol=0.012 * k,
+        rtol=0.002 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=True,
+    )
 
 
 ##########################
@@ -2121,7 +2363,14 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.003 * k_size,
+        rtol=0.705 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.996,
+    )
 
 
 @pytest.mark.parametrize(
@@ -2293,7 +2542,9 @@ def test_matmul_in0_in1_bias_sharded(
     if has_bias:
         matmul_output = matmul_output + bias_tensor
 
-    assert_with_pcc(matmul_output, tt_mm_out, pcc=0.993)
+    assert_numeric_metrics(
+        matmul_output, tt_mm_out, atol=0.018 * K, rtol=2.57 * K, frobenius_threshold=0.001 * K, pcc_threshold=0.993
+    )
 
 
 @pytest.mark.parametrize("M", [32, 128])
@@ -2314,13 +2565,33 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
     # Half sync mode
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b, core_grid=ttnn.CoreGrid(y=4, x=4))
 
-    pcc = 0.99
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.024 * K,
+        rtol=20.5 * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=0.99,
+    )
     output_tensor = ttnn.to_torch(output2)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.024 * K,
+        rtol=20.5 * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=0.99,
+    )
     output_tensor = ttnn.to_torch(output3)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.024 * K,
+        rtol=20.5 * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=0.99,
+    )
 
 
 def test_interleaved_input_sharded_output_matmul(device):
@@ -2343,7 +2614,14 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output1 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.004 * 32,
+        rtol=0.247 * 32,
+        frobenius_threshold=0.001 * 32,
+        pcc_threshold=0.99,
+    )
 
     # Block sharded
     out_mem_config = ttnn.create_sharded_memory_config(
@@ -2355,7 +2633,14 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output2 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output2)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.004 * 32,
+        rtol=0.247 * 32,
+        frobenius_threshold=0.001 * 32,
+        pcc_threshold=0.99,
+    )
 
     # Height sharded
     torch_input_tensor_a = torch.randn([1, 1, 256, 32], dtype=torch.bfloat16)
@@ -2374,7 +2659,14 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output3)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.004 * 32,
+        rtol=0.54 * 32,
+        frobenius_threshold=0.001 * 32,
+        pcc_threshold=0.99,
+    )
 
 
 @pytest.mark.parametrize(
@@ -2419,7 +2711,14 @@ def test_small_matmul_pcc(device):
     output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output1)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.002 * 2048,
+        rtol=0.001 * 2048,
+        frobenius_threshold=0.001 * 2048,
+        pcc_threshold=0.99,
+    )
 
 
 @pytest.mark.parametrize("shape", [(32, 32)])
@@ -2512,7 +2811,14 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         program_config=program_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.5 * 64,
+        rtol=0.031 * 64,
+        frobenius_threshold=0.02 * 16,
+        pcc_threshold=pcc,
+    )
 
     # L1 Sharded output
     output_tensor = ttnn.matmul(
@@ -2523,14 +2829,28 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         program_config=program_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.5 * 64,
+        rtol=0.031 * 64,
+        frobenius_threshold=0.02 * 16,
+        pcc_threshold=pcc,
+    )
 
     # L1 Sharded inferred output
     output_tensor = ttnn.matmul(
         input_tensor0, input_tensor1, compute_kernel_config=compute_kernel_config, program_config=program_config
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.5 * 64,
+        rtol=0.031 * 64,
+        frobenius_threshold=0.02 * 16,
+        pcc_threshold=pcc,
+    )
 
 
 @pytest.mark.parametrize("input_b_value", [2.0])
@@ -2777,8 +3097,83 @@ def test_matmul_block_sharded_input_with_padding(device):
         ),
     )
     ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
 
     ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_numeric_metrics(
+        torch_output, output, atol=0.008 * 16, rtol=12.313 * 16, frobenius_threshold=0.001 * 16, pcc_threshold=0.99
+    )
+
+
+def test_matmul_height_sharded_input_with_padding(device):
+    """
+    Test matmul with height-sharded input where K dimension has tile padding.
+
+    Exercises reader_bmm_tile_layout_in0_sender_padding.cpp with IN0_SHARDED
+    via the 1D mcast (in1 direction) program. Uses per_core_M=2 so that each
+    core's block has multiple tile rows, which is necessary to trigger the bug
+    where only the last tile row's K-padding was zeroed.
+
+    - Input 0: (256, 16) height_sharded on 4 cores, shard [64, 32]
+    - Input 1: (16, 128) interleaved, DRAM
+    """
+    torch.manual_seed(0)
+
+    input_a_shape = (256, 16)
+    input_b_shape = (16, 128)
+
+    torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_input_a, torch_input_b)
+
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(256, 32))
+
+    ttnn_input_b = ttnn.from_torch(
+        torch_input_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_a_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+            [64, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(4, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=2,
+        per_core_N=4,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, output, pcc=0.99)
@@ -2852,7 +3247,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
     worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid
+    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -2862,6 +3257,7 @@ def _teardown_subdevice(device, sub_device_manager):
     device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "m_size, k_size, n_size",
     [
@@ -2880,15 +3276,17 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
         torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
         torch_output = torch_input_a @ torch_input_b
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
 
         output = ttnn.matmul(
             input_a,
@@ -2897,7 +3295,14 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.004 * k_size,
+            rtol=0.79 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -2936,11 +3341,49 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
     result_col = ttnn.to_torch(ttnn.matmul(tt_A_col, tt_W_col, transpose_b=True))
 
     # Both paths should match golden
-    assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
-    assert_with_pcc(golden, result_col, pcc=pcc_threshold)
+    if weight_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            golden, result_conv, atol=0.065 * K, rtol=15.22 * K, frobenius_threshold=0.002 * K, pcc_threshold=0.99
+        )
+    elif weight_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            golden, result_conv, atol=0.004 * K, rtol=2.301 * K, frobenius_threshold=0.001 * K, pcc_threshold=0.99
+        )
+    else:
+        assert_numeric_metrics(golden, result_conv, pcc_threshold=0.99)
+
+    if weight_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            golden, result_col, atol=0.065 * K, rtol=15.22 * K, frobenius_threshold=0.002 * K, pcc_threshold=0.99
+        )
+    elif weight_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            golden, result_col, atol=0.004 * K, rtol=2.301 * K, frobenius_threshold=0.001 * K, pcc_threshold=0.99
+        )
+    else:
+        assert_numeric_metrics(golden, result_col, pcc_threshold=0.99)
 
     # The two paths should match each other
-    assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+    if weight_dtype == ttnn.bfloat4_b:
+        assert_numeric_metrics(
+            result_conv,
+            result_col,
+            atol=0.065 * K,
+            rtol=15.22 * K,
+            frobenius_threshold=0.002 * K,
+            pcc_threshold=0.99,
+        )
+    elif weight_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            result_conv,
+            result_col,
+            atol=0.004 * K,
+            rtol=2.301 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=0.99,
+        )
+    else:
+        assert_numeric_metrics(result_conv, result_col, pcc_threshold=0.99)
 
 
 def test_from_torch_col_tilize_validation():
@@ -2998,7 +3441,7 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
     assert (
         result_col.shape == result_manual.shape
     ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
-    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+    assert_numeric_metrics(result_manual, result_col, pcc_threshold=0.99)
 
 
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])

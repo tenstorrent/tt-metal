@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,6 +51,7 @@ struct ASICDescriptor {
     ASICLocation asic_location;
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
+    ChipId umd_unique_id;
     std::string host_name;
 };
 
@@ -178,6 +179,7 @@ public:
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
     ASICLocation get_asic_location(AsicID asic_id) const;
+    ChipId get_umd_unique_id(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
@@ -216,6 +218,8 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
     bool get_all_hostnames_unique() const { return all_hostnames_unique_; }
+    void set_is_bh_galaxy_rev_c(bool is_bh_galaxy_rev_c) { is_bh_galaxy_rev_c_ = is_bh_galaxy_rev_c; }
+    bool is_bh_galaxy_rev_c() const { return is_bh_galaxy_rev_c_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
@@ -247,6 +251,8 @@ private:
     tt::umd::semver_t ethernet_firmware_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, ASICLocation>> pcie_id_to_asic_location_;
+
+    bool is_bh_galaxy_rev_c_ = false;
 
     // Local hostname and rank set by discovery (for my_host_name())
     std::string local_hostname_;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -371,7 +371,7 @@ SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
+ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
     bool is_chunked_prefill = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
     bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
 
@@ -460,7 +460,7 @@ SDPAOperation::create_op_performance_model(
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size
                                       : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         batch_size,

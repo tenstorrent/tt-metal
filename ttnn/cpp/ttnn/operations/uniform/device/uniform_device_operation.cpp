@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,10 +34,10 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
     return tensor_args.input;
 }
 
-tt::stl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+ttsl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
     cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::operations::uniform
@@ -58,7 +58,7 @@ ttnn::Tensor uniform(
             to,
             seed,
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)},
         OperationType::tensor_args_t{input});
 }
 }  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,9 @@
 #include "api/compute/eltwise_unary/rounding.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
 #include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -23,14 +25,17 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
+    experimental::CircularBuffer cb_in(cb_input);
+    experimental::CircularBuffer cb_out(cb_output);
+
     constexpr float M_PI = 3.14159265358979323846f;
 
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(cb_output, per_core_block_dim);
+        cb_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            cb_wait_front(cb_input, 1);
+            cb_in.wait_front(1);
             tile_regs_acquire();
 
             // copy input to dst 0 and 1
@@ -38,13 +43,42 @@ void kernel_main() {
             copy_tile(cb_input, 0, 0);  // x
             copy_tile(cb_input, 0, 1);  // x
 
+            fill_tile_init();
+            fill_tile(2, 0.5f);
+
+            // x - 0.5
+            sub_binary_tile_init();
+            sub_binary_tile(1, 2, 1);
+
+            // (x - 0.5) < 0
+            ltz_tile_init();
+            ltz_tile(1);
+
+            fill_tile_init();
+            fill_tile(2, 1.0f);
+
+            // 1 - x
+            sub_binary_tile_init();
+            sub_binary_tile(2, 0, 2);
+
+            // tile 1 = z = (x < 0.5) ? 1-x : x
+            where_tile_init();
+            where_tile<DataFormat::Float32>(1, 2, 0, 1);
+
+            // log z
+            log_tile_init<false>();
+            log_tile<false>(1);
+
             // tile 0 = res_stirling
-            lgamma_stirling_tile_init();
-            lgamma_stirling_tile(0);
+            lgamma_stirling_float_tile_init();
+            lgamma_stirling_float_tile(0, 1, 0);  // x, log_z
 
             // fill tile 2 with M_PI
             fill_tile_init();
             fill_tile(2, M_PI);
+
+            copy_tile_to_dst_init_short(cb_input);
+            copy_tile(cb_input, 0, 1);  // x
 
             // tile 1 = frac (x)
             rounding_op_tile_init();
@@ -76,7 +110,7 @@ void kernel_main() {
 
             // tile 1 = 0 if x == floor(x), otherwise sin(frac (x) * M_PI)
             where_tile_init();
-            where_tile<DataFormat::Float16_b>(2, 3, 1, 1);
+            where_tile<DataFormat::Float32>(2, 3, 1, 1);
 
             // abs(integer adjusted sin(frac (x) * M_PI))
             abs_tile_init();
@@ -100,8 +134,8 @@ void kernel_main() {
 
             tile_regs_release();
 
-            cb_pop_front(cb_input, 1);
+            cb_in.pop_front(1);
         }
-        cb_push_back(cb_output, per_core_block_dim);
+        cb_out.push_back(per_core_block_dim);
     }
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -111,6 +111,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):

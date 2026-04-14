@@ -18,7 +18,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(precompile_fw REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(precompile_fw TT::CommonPCH)
 
 add_custom_command(
     OUTPUT
@@ -34,3 +34,12 @@ add_custom_command(
 )
 
 add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
+
+if(TT_INSTALL)
+    install(
+        DIRECTORY
+            ${PROJECT_SOURCE_DIR}/tt_metal/pre-compiled/
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/pre-compiled
+        COMPONENT metalium-runtime
+    )
+endif()

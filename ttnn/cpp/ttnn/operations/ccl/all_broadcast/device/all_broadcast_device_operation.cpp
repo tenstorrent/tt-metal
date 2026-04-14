@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ std::vector<Tensor> AllBroadcastDeviceOperation::create_output_tensors(
     return outputs;
 }
 
-tt::stl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
 

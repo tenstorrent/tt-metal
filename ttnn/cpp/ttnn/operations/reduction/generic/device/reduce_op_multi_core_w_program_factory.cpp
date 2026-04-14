@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,8 +64,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
@@ -155,6 +154,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .defines = reduce_defines});
     }
 
+    TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
     uint32_t out_dim_divider = Wt;
     std::vector<CoreCoord> cores;
     if (operation_attributes.sub_core_grids.has_value()) {

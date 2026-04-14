@@ -9,7 +9,7 @@ target_link_libraries(
 )
 
 if(TARGET TT::CommonPCH)
-    target_precompile_headers(distributed_buffer_rw REUSE_FROM TT::CommonPCH)
+    tt_reuse_precompile_headers(distributed_buffer_rw TT::CommonPCH)
 endif()
 
 target_include_directories(distributed_buffer_rw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

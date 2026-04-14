@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ Tensor HCSumReduceDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
@@ -77,13 +77,13 @@ Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
-    std::optional<MathFidelity> math_fidelity) {
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     using OperationType = ttnn::experimental::prim::HCSumReduceDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(input.memory_config()),
         .dtype = dtype.value_or(input.dtype()),
-        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+        .math_fidelity = math_fidelity.value_or(tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input};
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,9 @@ enum class KernelName {
     ReaderRowBcastTTT,
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
+    ReaderRowColBcastTTT,
+    ReaderRowColBcastTTS,
+    ReaderRowColBcastTST,
     WriterNoBcastTernary,
     WriterColBcastTTT,
     ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases

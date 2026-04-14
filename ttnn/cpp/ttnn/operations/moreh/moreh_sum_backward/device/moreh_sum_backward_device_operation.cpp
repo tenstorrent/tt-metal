@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -126,7 +126,7 @@ namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
-    tt::stl::Span<const int64_t> dims,
+    ttsl::Span<const int64_t> dims,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
@@ -136,7 +136,7 @@ ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_r
         ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
         keepdim,
         memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

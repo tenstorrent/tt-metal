@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor InterleavedToShardedOperation::invoke(
+ttnn::Tensor interleaved_to_sharded(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
@@ -25,7 +25,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
         preallocated_output);
 }
 
-ttnn::Tensor InterleavedToShardedOperation::invoke(
+ttnn::Tensor interleaved_to_sharded(
     const ttnn::Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2> shard_shape,
@@ -52,7 +52,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
                     case TensorMemoryLayout::BLOCK_SHARDED:
                         num_cores = tt::div_up(total_height, shard_shape[0]) * tt::div_up(total_width, shard_shape[1]);
                         break;
-                    default: TT_ASSERT(false, "Unsupported sharding scheme");
+                    default: TT_FATAL(false, "Unsupported sharding scheme");
                 }
                 grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
@@ -72,4 +72,4 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
         keep_l1_aligned.value_or(false));
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

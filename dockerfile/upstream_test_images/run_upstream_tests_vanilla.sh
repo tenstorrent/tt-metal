@@ -179,7 +179,7 @@ test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py
-    pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
+    pytest tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
 }
 
 test_suite_wh_6u_llama_demo_tests() {
@@ -292,6 +292,7 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_p300"]="
@@ -303,6 +304,7 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_qb_ge"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="

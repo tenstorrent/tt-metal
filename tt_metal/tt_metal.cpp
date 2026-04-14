@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,14 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include "context/context_types.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <experimental/host_api.hpp>
+#include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -402,6 +405,105 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+}  // namespace detail
+
+namespace experimental {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+
+    const auto devices = ctx.device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+    ZoneScoped;
+
+    auto device_id = device->id();
+
+    // Verify program was prepared by prior LaunchProgram call
+    TT_FATAL(
+        program.impl().is_finalized(),
+        "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+    TT_FATAL(
+        program.impl().is_compiled(),
+        "Program must be compiled on at least one device before calling DispatchCompiledProgramToDevice (target device "
+        "{}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    TT_FATAL(
+        !logical_cores_used_in_program.empty(),
+        "Program has no logical cores to dispatch to device {}. Ensure the program has kernels.",
+        device_id);
+
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+
+    MetalContext::instance().get_cluster().dram_barrier(device_id);
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            auto runtime_id = program.get_runtime_id();
+
+            // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() =
+                runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device_id);
+
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                device_id,
+                physical_core,
+                local_launch_msg.view(),
+                kg->go_msg.view(),
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+        }
+    }
+}
+
+}  // namespace experimental
+
+namespace detail {
+
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
@@ -411,7 +513,10 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
-void ReleaseOwnership() { MetalContext::destroy_instance(); }
+void ReleaseOwnership() {
+    experimental::DispatchContext::get().reset();
+    MetalContext::destroy_all_instances();
+}
 
 void print_page(
     uint32_t dev_page_id,
@@ -767,6 +872,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                 auto runtime_id = program.get_runtime_id();
@@ -784,7 +892,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    hal.get_dev_addr(
+                        programmable_core_type, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -885,7 +994,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
                     uint32_t offset = 0;
                     for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize();
+                        auto serialized = dfb->serialize_for_core(logical_core);
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
                         offset += serialized.size();
                     }
@@ -923,9 +1032,12 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
-            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -1046,10 +1158,13 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 
@@ -1318,6 +1433,39 @@ KernelHandle CreateKernelFromString(
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
+static KernelHandle CreateDramKernel(
+    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
+    TT_FATAL(
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
+    TT_FATAL(
+        MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        "DRAM programmable cores are not enabled. Set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 to enable.");
+    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
 CBHandle CreateCircularBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
@@ -1575,6 +1723,11 @@ uint8_t PopCurrentCommandQueueIdForThread() {
 }
 
 uint8_t GetCurrentCommandQueueIdForThread() {
+    // TODO: Make GetCurrentCommandQueueIdForThread work for non-default contexts
+    // https://github.com/tenstorrent/tt-metal/issues/39819
+    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return 0;
+    }
     const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     if (cq_stack.empty()) {
         return 0;

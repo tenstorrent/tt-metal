@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@ import torch
 import numpy as np
 import pytest
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     num_to_corerange,
@@ -30,7 +29,6 @@ def reset_seeds():
     yield
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -62,7 +60,34 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
         )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
+    ([2, 20, 20, 512, 64, (8, 8), True],),  # Whisper-large (nh not multiple of 32; grid must give num_cores/b <= nkv)
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_non_tile_aligned_heads(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
+    """Regression test for models with num_heads not a multiple of 32 (e.g. Whisper-large with 20 heads).
+
+    The output logical shape must preserve the unpadded head count so that downstream
+    ops like nlp_concat_heads produce the correct hidden dimension.
+    """
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
+
+    run_test_sdpa_decode_single_iter(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor, sharded_in=False, sharded_out=False
+    )
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -85,10 +110,9 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False, causal=False
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -123,7 +147,6 @@ def test_sdpa_decode_ignore_users(device, b, nh, nkv, s, d, dtype, grid_size, q_
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
     [
@@ -165,7 +188,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -191,7 +213,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
@@ -201,13 +222,13 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     "b, nh, nkv, s, d",
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
-def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
+def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, reset_seeds):
     dummy_tensors = []
+    # One cur_pos vector for both outer passes: compute_program_hash includes cur_pos, so resampling
+    # per iteration would compile extra programs for cur_pos_tensor=False paths (expected cache size 4).
+    start_indices = np.random.randint(0, s - 1, b).tolist()
+    start_indices[0] = s - 1
     for i in range(2):
-        # generate random start indices from 0 to s-1
-        start_indices = np.random.randint(0, s - 1, b).tolist()
-        start_indices[0] = s - 1
-
         dummy_tensors.append(
             ttnn.as_tensor(
                 torch.zeros(32, 32),
@@ -298,7 +319,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
     assert device.num_program_cache_entries() == 4
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [

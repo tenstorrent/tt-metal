@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,10 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+
 namespace ttnn::test_utils {
 
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,9 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
@@ -114,7 +114,24 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997 if use_welford else 0.9998)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.015
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -203,7 +220,24 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.015
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -226,7 +260,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     ],
 )
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -293,7 +328,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         use_welford=use_welford,
     )
 
@@ -302,7 +337,25 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.02
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -392,7 +445,24 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.015
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 def generate_sdxl_test_inputs():
@@ -437,8 +507,7 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 640, 16, 16))
     inputs.append((1, 1280, 16, 16))
     inputs.append((1, 2560, 16, 16))
-    # This test is removed to test_group_norm_DRAM because of the Issue #36408. To be added back after the issue is resolved.
-    # inputs.append((1, 1920, 16, 16))
+    inputs.append((1, 1920, 16, 16))
     inputs.append((1, 1920, 32, 32))
     inputs.append((1, 1280, 32, 32))
     inputs.append((1, 960, 32, 32))
@@ -449,21 +518,135 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base
-    N, C, H, W = input_shape
+    if layout == ttnn.TILE_LAYOUT and inplace:
+        pytest.skip("Tile layout requires non-inplace tensors.")
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
 
-    # Use 5x5 grid for shape (1, 640, 16, 16) (temporary workaround for issue #36408)
-    if (C, H, W) == (640, 16, 16):
-        grid_size = ttnn.CoreGrid(y=4, x=4)
-    else:
-        grid_size = ttnn.CoreGrid(y=8, x=8)
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    # Generate torch tensor
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+
+    if not perf_test_mode:
+        # Execute torch group_norm
+        torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    # Generate ttnn tensor
+    dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        dummy_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=layout,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=dummy_tensor.shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        device=device,
+    )
+
+    # Generate input mask
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    # Execute ttnn group_norm
+    tt_output_tensor = ttnn.group_norm(
+        tt_input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        memory_config=tt_input_tensor.memory_config(),
+        core_grid=core_grid,
+        inplace=inplace,
+        use_welford=use_welford,
+    )
+    ttnn.synchronize_device(device)
+
+    if not perf_test_mode:
+        tt_output_tensor = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+        if use_welford:
+            pcc_threshold = 0.9995
+            rtol = 0.14
+            atol = 0.085
+            frobenius_threshold = 0.04
+        else:
+            pcc_threshold = 0.9999
+            rtol = 0.065
+            atol = 0.065
+            frobenius_threshold = 0.04
+        assert_numeric_metrics(
+            torch_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=pcc_threshold,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
+        )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Paramemeters need to stay consistent with usage in
+# models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
+def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = layout != ttnn.TILE_LAYOUT
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Oppositive of previous test in terms of inplace, for full coverage purposes.
+def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace True
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = layout != ttnn.TILE_LAYOUT
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        # UNet
+        (1, 1280, 64, 64),
+        (1, 1280, 32, 32),
+        (1, 1920, 64, 64),
+        (1, 1920, 32, 32),
+        (1, 2560, 32, 32),
+        (1, 320, 128, 128),
+        (1, 320, 64, 64),
+        (1, 640, 64, 64),
+        (1, 640, 32, 32),
+        (1, 960, 64, 64),
+        # VAE
+        (1, 512, 128, 128),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@run_for_blackhole("blackhole specific tests")
+def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
+    torch.manual_seed(0)
+
+    num_groups = 32  #  always 32 for SDXL Base
+    N, C, H, W = input_shape
+
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = layout != ttnn.TILE_LAYOUT
 
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -474,38 +657,33 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Generate ttnn tensor
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
     tt_input_tensor = ttnn.from_torch(
-        tt_input_tensor,
+        dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=layout,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=dummy_tensor.shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
         device=device,
     )
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
-
-    # Generate shard config
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_shape = N * H * W // grid_size.x, C // grid_size.y
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=sharded_mem_config)
 
     # Execute ttnn group_norm
     tt_output_tensor = ttnn.group_norm(
         tt_input_tensor,
         num_groups=num_groups,
         input_mask=input_mask_tensor,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
-        inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
-        use_welford=use_welford,
+        memory_config=tt_input_tensor.memory_config(),
+        core_grid=core_grid,
+        inplace=inplace,
+        use_welford=False,
     )
     ttnn.synchronize_device(device)
 
@@ -513,7 +691,18 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9996)
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.036
+        assert_numeric_metrics(
+            torch_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=pcc_threshold,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
+        )
 
 
 def generate_sdxl_test_inputs_neg_mask():
@@ -611,7 +800,18 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.016
+        assert_numeric_metrics(
+            torch_output_tensor,
+            tt_output_tensor,
+            pcc_threshold=pcc_threshold,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -687,7 +887,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         packer_l1_acc=False,
     )
     tt_output_low = do_group_norm_for_config(config_low)
-    _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
+    ref_f = torch_output_tensor.float()
+    frobenius_low = (ref_f - tt_output_low.float()).norm() / (ref_f.norm() + 1e-8)
 
     # Execute high-accuracy groupnorm
     config_high = ttnn.init_device_compute_kernel_config(
@@ -698,10 +899,12 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         packer_l1_acc=False,
     )
     tt_output_high = do_group_norm_for_config(config_high)
-    _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
+    frobenius_high = (ref_f - tt_output_high.float()).norm() / (ref_f.norm() + 1e-8)
 
     # Verify that the higher-accuracy config is closer to torch
-    assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
+    assert (
+        frobenius_high <= frobenius_low
+    ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
 @pytest.mark.parametrize(
@@ -803,7 +1006,18 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
         epsilon=eps,
     )
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc_threshold = 0.9999
+    rtol = 0.065
+    atol = 0.065
+    frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -869,7 +1083,8 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
         packer_l1_acc=False,
     )
     tt_output_low = do_group_norm_for_config(config_low)
-    _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
+    ref_f2 = torch_output_tensor.float()
+    frobenius_low2 = (ref_f2 - tt_output_low.float()).norm() / (ref_f2.norm() + 1e-8)
 
     # Execute high-accuracy groupnorm
     config_high = ttnn.init_device_compute_kernel_config(
@@ -880,10 +1095,12 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
         packer_l1_acc=False,
     )
     tt_output_high = do_group_norm_for_config(config_high)
-    _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
+    frobenius_high2 = (ref_f2 - tt_output_high.float()).norm() / (ref_f2.norm() + 1e-8)
 
     # Verify that the higher-accuracy config is closer to torch
-    assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
+    assert (
+        frobenius_high2 <= frobenius_low2
+    ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
 @pytest.mark.parametrize(
@@ -916,7 +1133,8 @@ def test_group_norm_negative_tests(
         (1, 1280, 16, 16, 32),
     ],
 )
-def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):
     """Use determine_expected_group_norm_dram_grid_size to pick a grid, then
     run DRAM-interleaved group norm and compare against torch."""
     torch.manual_seed(0)
@@ -960,7 +1178,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
         weight=gamma_t,
         bias=beta_t,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        core_grid=grid_size,
+        core_grid=grid_size if specify_grid else None,
         inplace=False,
         num_out_blocks=1,
         use_welford=True,
@@ -969,7 +1187,18 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups):
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.999)
+    pcc_threshold = 0.99975
+    rtol = 0.14
+    atol = 0.085
+    frobenius_threshold = 0.02
+    assert_numeric_metrics(
+        torch_output,
+        tt_output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1066,4 +1295,21 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.998 if use_welford else 0.999)
+    if use_welford:
+        pcc_threshold = 0.99
+        rtol = 0.14
+        atol = 0.3
+        frobenius_threshold = 0.06
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.016
+    assert_numeric_metrics(
+        torch_output,
+        tt_output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

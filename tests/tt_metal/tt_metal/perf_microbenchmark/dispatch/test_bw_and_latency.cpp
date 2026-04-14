@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,8 +106,10 @@ void init(int argc, char** argv) {
             0);
         log_info(LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
         log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
+        log_info(LogTest, "  -drx: when reading/writing dram, X of end core for worker range (default same as -rx)");
+        log_info(LogTest, "  -dry: when reading/writing dram, Y of end core for worker range (default same as -ry)");
         log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
-        log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
+        log_info(LogTest, "  -c: when reading/writing dram, DRAM channel (default 0)");
         log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
         log_info(LogTest, "-link: link mcast transactions");
@@ -122,6 +124,8 @@ void init(int argc, char** argv) {
 
     uint32_t core_x = test_args::get_command_option_uint32(input_args, "-rx", 1);
     uint32_t core_y = test_args::get_command_option_uint32(input_args, "-ry", 0);
+    uint32_t end_core_x = test_args::get_command_option_uint32(input_args, "-drx", core_x);
+    uint32_t end_core_y = test_args::get_command_option_uint32(input_args, "-dry", core_y);
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
     hammer_write_reg_g = test_args::has_command_option(input_args, "-hr");
@@ -148,8 +152,8 @@ void init(int argc, char** argv) {
     page_count_g = size_bytes / page_size_g;
 
     test_write = test_args::has_command_option(input_args, "-wr");
-    if (test_write && (source_mem_g != 2 && source_mem_g != 6)) {
-        log_info(LogTest, "Writing only tested w/ L1 destination\n");
+    if (test_write && (source_mem_g != 1 && source_mem_g != 2 && source_mem_g != 6)) {
+        log_info(LogTest, "Writing only tested w/ DRAM or L1 destination\n");
         exit(-1);
     }
 
@@ -157,7 +161,15 @@ void init(int argc, char** argv) {
 
     read_profiler_results = test_args::has_command_option(input_args, "-profread");
 
-    worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
+    if (end_core_x < core_x || end_core_y < core_y) {
+        log_info(LogTest, "-drx must be >= -rx and -dry must be >= -ry");
+        exit(-1);
+    }
+    worker_g = CoreRange({core_x, core_y}, {end_core_x, end_core_y});
+    if (worker_g.size() > 1 && source_mem_g != 1) {
+        log_info(LogTest, "Multi-core worker range only supported with DRAM");
+        exit(-1);
+    }
     src_worker_g = {src_core_x, src_core_y};
 
     if (source_mem_g == 6) {
@@ -218,6 +230,7 @@ int main(int argc, char** argv) {
         uint32_t noc_addr_x, noc_addr_y;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
+        uint32_t write_dram = 0;
         uint32_t issue_mcast = 0;
         uint32_t num_mcast_dests = mcast_src_workers_g.size();
         uint32_t mcast_noc_addr_end_x = 0;
@@ -245,7 +258,7 @@ int main(int argc, char** argv) {
                 noc_mem_addr = dev_pcie_base + pcie_offset;
             } break;
             case 1: {
-                src_mem = "FROM_DRAM";
+                src_mem = test_write ? "TO_DRAM" : "FROM_DRAM";
                 vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
                 TT_FATAL(
                     dram_cores.size() > dram_channel_g,
@@ -254,6 +267,7 @@ int main(int argc, char** argv) {
                     dram_cores.size());
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
+                write_dram = test_write;
             } break;
             case 2: {
                 src_mem = test_write ? "TO_L1" : "FROM_L1";
@@ -313,6 +327,7 @@ int main(int argc, char** argv) {
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
             {"NOP_COUNT", std::to_string(nop_count_g)},
+            {"WRITE_DRAM", std::to_string(write_dram)},
         };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
@@ -332,7 +347,7 @@ int main(int argc, char** argv) {
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
         if (page_size_as_runtime_arg_g) {
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g, {page_size_g});
         }
         mesh_workload.add_program(
             tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
@@ -481,7 +496,7 @@ int main(int argc, char** argv) {
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() /
                     (page_count_g * iterations_g));
         } else {
-            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g /
+            float bw = (float)page_count_g * (float)page_size_g * (float)iterations_g * (float)worker_g.size() /
                        (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;

@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_format.hpp"
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
-#include <base_types.hpp>     // for UnpackToDestMode
+#include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
 #include <iostream>       // for basic_ostream
@@ -58,6 +58,11 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
         if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
             (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
             (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+            continue;
+        }
+
+        // Special case where Fp8_e4m3 can be used with any format
+        if (format == DataFormat::Fp8_e4m3) {
             continue;
         }
 
@@ -140,7 +145,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
@@ -168,7 +173,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
             unpack_dst_format.push_back(src_format);
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
-                unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
+                unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
                 unpack_dst_format.push_back(
                     get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {
@@ -213,9 +218,11 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Invalid) {
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
-        pack_src_format = DataFormat::Float16;
+        pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        if (is_bfp_format(data_format)) {
+        if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
+            pack_src_format = DataFormat::Float32;
+        } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
             } else {

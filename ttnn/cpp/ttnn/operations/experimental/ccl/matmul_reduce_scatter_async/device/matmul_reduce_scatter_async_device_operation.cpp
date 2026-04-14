@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,7 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
-tt::stl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "MatmulReduceScatterAsyncDeviceOperation::compute_program_hash is called");
 
