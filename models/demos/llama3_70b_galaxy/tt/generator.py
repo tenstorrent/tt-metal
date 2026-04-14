@@ -1036,6 +1036,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
@@ -1069,6 +1070,11 @@ class Generator(WarmupForwardMixin):
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
+        # Apply slot remap from condense before advancing seeds.
+        if slot_remap is not None:
+            sm_bs = self.model.sampling.seed_manager.max_batch_size
+            rank_remap = slot_remap[0:sm_bs]
+            self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
         self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
