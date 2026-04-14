@@ -78,7 +78,7 @@ Tensor create_device_tensor(
         return TensorTopology{mesh_shape, placements, std::move(coordinates)};
     });
 
-    output = Tensor(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, std::move(topology)));
+    output = Tensor(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, topology));
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
