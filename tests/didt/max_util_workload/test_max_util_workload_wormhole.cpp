@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Max-utilization workload test.
+// Max-utilization workload test (Wormhole B0 variant).
+// Host-side calibration tables are seeded from Blackhole; see TODO(WH) comments.
 // Architecture:
 //   1. Pre-fill phase: BRISC runs on each core to read 2 DRAM buffers into L1
 //      - Buffer 0: 8 tiles of bfloat16 from DRAM
@@ -43,7 +44,7 @@ namespace tt::tt_metal {
 using namespace std;
 using namespace tt;
 
-namespace unit_tests::didt::max_util_workload {
+namespace unit_tests::didt::max_util_workload_wormhole {
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -93,7 +94,8 @@ struct MaxUtilConfig {
     uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
     uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing)
     // DRAM read transaction size.  Larger values saturate bandwidth better.
-    uint32_t eth_page_size = 1024;  // 1KB found to be optimal for BH
+    // TODO(WH): Recalibrate optimal page size for Wormhole B0; 1024 copied from BH.
+    uint32_t eth_page_size = 1024;
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
     uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
 
@@ -213,6 +215,8 @@ static MaxUtilConfig full_grid_config(
 //
 // Values are placeholder estimates; calibrate on target hardware by measuring
 // achieved DRAM bandwidth at each setting and adjusting the cycle counts.
+//
+// TODO(WH): Recalibrate for Wormhole B0; map entries below are copied from BH as a starting point.
 // ---------------------------------------------------------------------------
 
 // clang-format off
@@ -276,6 +280,7 @@ static CoreCoord dram_noc0_coord(IDevice* device, uint32_t bank_id) {
 // Layout rule (matches physical DRAM placement on current chips):
 //   NOC0 x < 8  → left-side cores  → DRAM banks 0-3
 //   NOC0 x >= 8 → right-side cores → DRAM banks 4-7
+// TODO(WH): Verify ETH/DRAM geometry and threshold for Wormhole B0; logic below matches BH.
 //
 // At most 4 cores are taken from each side (capped to 1 core per bank).
 // Returns a vector of (logical_eth_core, bank_id) pairs, sorted for
@@ -570,6 +575,8 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
 // The kernel uses cycles_to_wait to insert idle cycles and throttle the FPU.
 // Fill in the values for your target architecture; keys cover the valid [1, 92]
 // range at representative intervals.
+//
+// TODO(WH): Recalibrate for Wormhole B0; map entries below are copied from BH as a starting point.
 // ---------------------------------------------------------------------------
 
 // clang-format off
@@ -622,12 +629,14 @@ static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCycle
 //   duty_cycle ≈ T_hot / (T_hot + T_slow × num_slow_wl_loops)
 //
 // Tune the values below on hardware by timing both workloads at 1000 loops.
+//
+// TODO(WH): Recalibrate for Wormhole B0; map entries below are copied from BH as a starting point.
 // ---------------------------------------------------------------------------
 
 static constexpr uint32_t kDutyCycleCalibrationLoops = 1000;
 
 // clang-format off
-// Derived experimentally at 1000 loops.
+// Derived experimentally at 1000 loops (BH); WH values TBD.
 static const std::map<uint32_t, uint32_t> kDutyCycleToSlowLoopsMap = {
     {10,  1260},  // 90/10
     {20,   560},  // 80/20
@@ -709,7 +718,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
     // Top-left core multicasts to entire grid; all other cores are no-ops.
     auto reader_kernel = CreateKernel(
         program,
-        "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
+        "tests/didt/max_util_workload/kernels/wormhole_b0/max_util_reader.cpp",
         core_range_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -767,7 +776,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
     CreateKernel(
         program,
-        "tests/didt/max_util_workload/kernels/max_util_compute.cpp",
+        "tests/didt/max_util_workload/kernels/wormhole_b0/max_util_compute.cpp",
         core_range_set,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -905,7 +914,7 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
     // -- Reader kernel (BRISC / NOC0): reuse the same noop reader --
     auto reader_kernel = CreateKernel(
         program,
-        "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
+        "tests/didt/max_util_workload/kernels/wormhole_b0/max_util_reader.cpp",
         core_range_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -1011,6 +1020,7 @@ static void log_eth_bw(IDevice* device, const MaxUtilConfig& cfg) {
     // Each core reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
     uint64_t bytes_per_core = static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
 
+    // TODO(WH): Use Wormhole-appropriate core clock for GB/s display; 1.35 GHz copied from BH.
     // 1.35 GHz assumed clock: bytes/cycle × 1.35e9 cycles/s ÷ 1e9 bytes/GB = bytes/cycle × 1.35
     constexpr double kClockGHz = 1.35;
 
@@ -1339,28 +1349,28 @@ void max_util_all_devices(const shared_ptr<distributed::MeshDevice>& mesh_device
         /*super_sync=*/super_sync));
 }
 
-}  // namespace unit_tests::didt::max_util_workload
+}  // namespace unit_tests::didt::max_util_workload_wormhole
 
 // ---------------------------------------------------------------------------
 // GTest fixtures
 // ---------------------------------------------------------------------------
 
-class MaxUtilWorkloadBlackholeMeshDeviceFixture : public MeshDeviceFixtureBase {
+class MaxUtilWorkloadWormholeMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
-    MaxUtilWorkloadBlackholeMeshDeviceFixture() :
-        MeshDeviceFixtureBase(Config{.arch = tt::ARCH::BLACKHOLE, .num_cqs = 1}) {}
+    MaxUtilWorkloadWormholeMeshDeviceFixture() :
+        MeshDeviceFixtureBase(Config{.arch = tt::ARCH::WORMHOLE_B0, .num_cqs = 1}) {}
 };
 
-TEST_F(MaxUtilWorkloadBlackholeMeshDeviceFixture, MaxUtilWorkload_Smoke) {
-    unit_tests::didt::max_util_workload::max_util_smoke(get_mesh_device());
+TEST_F(MaxUtilWorkloadWormholeMeshDeviceFixture, MaxUtilWorkloadWH_Smoke) {
+    unit_tests::didt::max_util_workload_wormhole::max_util_smoke(get_mesh_device());
 }
 
-TEST_F(MaxUtilWorkloadBlackholeMeshDeviceFixture, MaxUtilWorkload_Stress) {
-    unit_tests::didt::max_util_workload::max_util_stress(get_mesh_device());
+TEST_F(MaxUtilWorkloadWormholeMeshDeviceFixture, MaxUtilWorkloadWH_Stress) {
+    unit_tests::didt::max_util_workload_wormhole::max_util_stress(get_mesh_device());
 }
 
-TEST_F(MaxUtilWorkloadBlackholeMeshDeviceFixture, MaxUtilWorkload_AllDevices) {
-    unit_tests::didt::max_util_workload::max_util_all_devices(get_mesh_device());
+TEST_F(MaxUtilWorkloadWormholeMeshDeviceFixture, MaxUtilWorkloadWH_AllDevices) {
+    unit_tests::didt::max_util_workload_wormhole::max_util_all_devices(get_mesh_device());
 }
 
 }  // namespace tt::tt_metal

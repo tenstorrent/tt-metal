@@ -22,3 +22,28 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/didt
 )
+
+add_executable(unit_tests_didt_max_util_wormhole test_max_util_workload_wormhole.cpp)
+
+target_link_libraries(
+    unit_tests_didt_max_util_wormhole
+    PUBLIC
+        Metalium::Metal
+        test_common_libs
+)
+
+target_include_directories(
+    unit_tests_didt_max_util_wormhole
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_target_properties(
+    unit_tests_didt_max_util_wormhole
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/didt
+)
