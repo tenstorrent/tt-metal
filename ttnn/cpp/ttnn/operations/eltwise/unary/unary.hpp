@@ -223,6 +223,13 @@ inline Tensor logical_not(
     return logical_not_unary(input_tensor, memory_config, optional_output_tensor, sub_core_grids);
 }
 
+// Softcap: cap * tanh(x / cap)
+Tensor softcap(
+    const Tensor& input_tensor,
+    float cap = 50.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 // Softplus with beta and threshold parameters
 Tensor softplus(
     const Tensor& input_tensor,
