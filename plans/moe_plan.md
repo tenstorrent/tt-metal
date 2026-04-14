@@ -10,7 +10,7 @@
   - [2.3 GLM-5](#23-glm-5--moe-architecture-verified) — DeepSeek family
   - [2.4 Kimi K2.5](#24-kimi-k25--moe-architecture-verified) — DeepSeek family
   - [2.5 Ling-1T](#25-ling-1t--moe-architecture-verified) — DeepSeek family
-  - [2.6 GLM-4.7](#26-glm-47--moe-architecture-verified) — Standard softmax
+  - [2.6 GLM-4.7](#26-glm-47--moe-architecture-verified) — DeepSeek family (confirmed from modeling code)
   - [2.7 Qwen3 MoE](#27-qwen3-moe--moe-architecture-verified) — Standard softmax
   - [2.8 Qwen3.5 MoE (397B)](#28-qwen35-moe--moe-architecture-verified) — Standard softmax
   - [2.9 Qwen3.5 35B](#29-qwen35-35b-a3b--moe-architecture-verified) — Standard softmax
@@ -371,11 +371,12 @@ output = routed_output + shared_output
 
 ### 2.6 GLM-4.7 — MoE Architecture (Verified)
 
-**Source:** `zai-org/GLM-4.7` config.json
+**Source:** `zai-org/GLM-4.7` config.json + modeling_glm4_moe.py
 **Downloaded to:** `plans/hf_model_cards/glm-4.7/`
 
 #### Source References
 - `hf_model_cards/glm-4.7/config.json`: hidden_size (L15), moe_intermediate_size (L21), n_routed_experts (L26), n_shared_experts (L27), num_experts_per_tok (L29), hidden_act (L14), routed_scaling_factor (L28), n_group (L24), topk_group (L25), first_k_dense_replace (L30), num_hidden_layers (L31), norm_topk_prob (L22)
+- `hf_model_cards/glm-4.7/modeling_glm4_moe.py`: sigmoid scoring (L390), e_score_correction_bias (L300, L391), group-based top-k (L392-406), routed_scaling_factor applied (L411), fused gate_up_proj (L338), chunk(2) split (L360), expert forward (L355-363)
 
 | Parameter | Value |
 |-----------|-------|
@@ -385,17 +386,20 @@ output = routed_output + shared_output
 | `n_shared_experts` | **1** |
 | `num_experts_per_tok` (K) | **8** |
 | `hidden_act` | `silu` |
+| `scoring_func` | sigmoid (from modeling code L390) |
+| `topk_method` | noaux_tc-style (from modeling code L389-412) |
 | `routed_scaling_factor` | 2.5 |
 | `norm_topk_prob` | true |
-| `n_group` / `topk_group` | 1 / 1 | No grouping (simpler than DeepSeek) |
+| `n_group` / `topk_group` | 1 / 1 | Same algorithm as DeepSeek, collapses to single group |
 | `first_k_dense_replace` | 3 |
 | `num_hidden_layers` | 92 |
 | `num_nextn_predict_layers` | 1 | Multi-token prediction like DeepSeek |
 | `max_position_embeddings` | 202752 |
+| Expert layout | Fused gate_up_proj + chunk(2) (L338, L360) — same as Gemma 4 |
 | Shared expert intermediate | 1536 (= moe_intermediate × 1) |
 | Architecture | `Glm4MoeForCausalLM` (`glm4_moe`) |
 
-**Notes:** GLM-4.7 uses the same `glm4_moe` architecture as GLM-4.5 (identical MoE parameters) with extended context length. Follows the DeepSeek MoE pattern (SwiGLU) but with no expert grouping and smaller dimensions. Config does not specify `scoring_func` or `topk_method` — likely defaults differ from DeepSeek. A lighter Flash variant exists (`GLM-4.7-Flash`, arch `glm4_moe_lite`).
+**Notes:** GLM-4.7 uses the same `glm4_moe` architecture as GLM-4.5 (identical MoE parameters) with extended context length. Config does not expose `scoring_func` or `topk_method`, but `modeling_glm4_moe.py` confirms **DeepSeek-style routing**: sigmoid scoring (L390), e_score_correction_bias (L391), group-based top-k with masking (L392-406), routed_scaling_factor (L411). With n_group=1/topk_group=1, the group logic collapses to a single group but the algorithm is the same. Expert projections use **fused gate_up_proj + chunk(2)** (L338, L360), not separate gate/up projections. A lighter Flash variant exists (`GLM-4.7-Flash`, arch `glm4_moe_lite`).
 
 ---
 
@@ -662,7 +666,7 @@ Based on code exploration of:
 | **Combine module** | Delegates to `SelectiveReduceCombineDeviceOperation` | Fused combine in MoEGPTMeshWorkloadFactory |
 | **Core placement** | Hardcoded cores | Dynamic rectangle search avoiding matmul cores |
 | **Ring tile counts** | W0/W1=224, W2=64 | W0/W1=90, W2=90 (symmetric) |
-| **Activation** | Standard | SwiGLU (custom SFPU: `swiglu_sfpu.h`) |
+| **Activation** | Standard | Custom gated activation (see §2.1 for details; `swiglu_sfpu.h`) |
 | **Cross-device** | Full fabric support (topology, num_links, semaphores) | Simpler, cluster_axis only |
 | **Semaphores** | Init + final barrier, explicit | Optional (fused mode only) |
 | **Namespace** | `ttnn::experimental::prim` | `ttnn::operations::experimental::moe_gpt::program` |
@@ -710,7 +714,7 @@ Based on code exploration of:
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **DeepSeek V3** | 7168 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 8/4 | 2.5 | No | correction | 3 | 61 | No | DS V3 |
 | **GPT-OSS 120B** | 2880 | 2880 | — | 128 | 0 | 4 | custom GELU-gated | softmax | simple | —/— | 1.0 | Yes | Yes | all MoE | 36 | No | GPT-OSS |
-| **GLM-4.7** | 5120 | 1536 | 1536 | 160 | 1 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | 1/1 | 2.5 | No | No | 3 | 92 | No | GLM4-MoE |
+| **GLM-4.7** | 5120 | 1536 | 1536 | 160 | 1 | 8 | SiLU/SwiGLU | `sigmoid` (code) | noaux_tc-style (code) | 1/1 | 2.5 | No | correction (code) | 3 | 92 | No | GLM4-MoE (DS-style) |
 | **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
 | **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3 |
 | **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 (inferred) | 10 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
@@ -732,11 +736,11 @@ Based on the verified configs, the models cluster into clear families:
 ### Family 1: DeepSeek V3-style (sigmoid + noaux_tc + SwiGLU)
 - **DeepSeek V3**: The original. Group routing (8/4), scaling=2.5.
 - **GLM-5**: Nearly identical MoE. No grouping (1/1), but same sigmoid+noaux_tc routing.
+- **GLM-4.7**: Same sigmoid + grouped-top-k + bias-correction routing confirmed from modeling code (matches the noaux_tc algorithm, though the config has no `topk_method` field). n_group=1/topk_group=1 (single group). Uses fused gate_up_proj+chunk(2) layout.
 - **Kimi K2.5**: Built on DS V3. 384 experts, scaling=2.827, no grouping.
 - **Ling-1T**: Very close to DS V3. Same group routing (8/4), same scaling=2.5.
 
-### Family 2: Standard softmax routing + SwiGLU
-- **GLM-4.7**: Scaling=2.5 but no explicit scoring_func — simpler routing.
+### Family 2: Standard softmax routing + SwiGLU (scoring_func unspecified in config — assumed softmax)
 - **Qwen3 (235B)**: Simple config, no grouping, no shared experts.
 - **Qwen3.5 (397B)**: 512 experts, K=10, softmax routing.
 - **Qwen3.5 (35B)**: Smaller Qwen3.5, 256 experts, K=8, same MoE arch.
@@ -755,7 +759,7 @@ Based on the verified configs, the models cluster into clear families:
 ## 7. Generalization Implications
 
 ### 7.1 Parameters that MUST be configurable
-1. `hidden_size` — ranges from 1280 to 8192 (adding Qwen3-Omni/35B: also 2048)
+1. `hidden_size` — ranges from 1024 (Qwen3-Omni Talker) to 8192 (Ling-1T)
 2. `moe_intermediate_size` — ranges from 384 to 4096 (Qwen3-Omni talker: 384, Mistral: 4096)
 3. `n_routed_experts` — ranges from 64 to 512
 4. `n_shared_experts` — 0, 1, or 2
@@ -772,8 +776,8 @@ Based on the verified configs, the models cluster into clear families:
 - Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant
 
 ### 7.3 Routing strategy
-- **DeepSeek family (4 rows: DS V3, GLM-5, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling
-- **Standard family (6 rows: GLM-4.7, Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (likely, scoring_func unspecified in config)
+- **DeepSeek family (5 rows: DS V3, GLM-5, GLM-4.7, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling (GLM-4.7 confirmed from modeling code)
+- **Standard family (5 rows: Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (likely, scoring_func unspecified in config)
 - **GPT-OSS**: softmax top-k with router bias
 - **Gemma 4**: softmax top-k with per-expert learned scaling
 - **DS-OCR**: greedy selection (scoring_func unspecified, topk_method=greedy)
@@ -781,8 +785,9 @@ Based on the verified configs, the models cluster into clear families:
 - Recommendation: implement sigmoid+group and softmax as two routing modes
 
 ### 7.4 Expert projection layout
-- **12/14 rows**: separate gate_proj + up_proj + down_proj (no bias)
+- **11/14 rows**: separate gate_proj + up_proj + down_proj (no bias)
 - **GPT-OSS**: fused interleaved gate_up_proj + down_proj (with bias) — split via even/odd indices
+- **GLM-4.7**: fused chunked gate_up_proj + down_proj (no bias) — split via `.chunk(2)` (same as Gemma 4)
 - **Gemma 4**: fused chunked gate_up_proj + down_proj (no bias) — split via `.chunk(2)` (first half/second half)
 - Recommendation: canonical internal layout is separate projections; fused layout handled at weight loading
 
@@ -826,5 +831,5 @@ Using tile_size=32:
 - For Qwen3.5 397B/35B, should `n_shared_experts` be a first-class config param only when present in JSON, or always derived from `shared_expert_intermediate_size` in HF modeling code?
 - For DeepSeek-OCR, is `greedy` routing a first-class mode for the generalized op, or out of scope for v1?
 - Should Qwen3-Omni Talker (different K, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile?
-- Confirm GLM-4.7 and Qwen-family scoring/routing from modeling code (currently "(unspec.)" from config alone) before finalizing family classification
+- Confirm Qwen-family scoring/routing from modeling code (currently "(unspec.)" from config alone) before finalizing family classification
 - Confirm Mistral Large 3 activation and shared expert intermediate from weights or `mistral-common` docs
