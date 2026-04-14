@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
-    TOPK_MIN_WIDTH,
     even_int_div,
     get_dequantized_tensor,
     shard_and_save,
@@ -296,117 +295,148 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert x.memory_config() == cfg["input_memory_config"]
+        SEND_CORES = (0, 3, 6, 9)
+        RECV_CORES = (1, 2, 4, 5, 7, 8, 10, 11)
+        L = 1
+        C = 1
+        M = x.shape[2]
+        K = x.shape[3]
+        N = cfg["gate_proj"]["input_tensor_b"].shape[3]
 
-        # Gate projections
-        if cfg["linear_fallback"]:
-            logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
-        else:
-            logits = ttnn.linear(x, **cfg["gate_proj"])
-        # Sigmoid activation
-        scores = ttnn.sigmoid(logits)
-        ttnn.deallocate(logits)
-        token_count = scores.shape[1] * scores.shape[2]
-        scores_flat = scores if scores.shape[1] == 1 else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
-        # Add score correction bias
-        # Expand bias to match scores shape(dynamic shape)
-        scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
-        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        scores_with_bias = ttnn.add(
-            scores,
-            scores_correction_bias,
-            memory_config=cfg["add_score_correction_bias"]["memory_config"],
-            dtype=cfg["add_score_correction_bias"]["dtype"],
+        in0_core_coords = cfg["mesh_device"].get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        core2dram = {}
+        for dram_bank_id, core_coords in enumerate(in0_core_coords):
+            core2dram[core_coords] = dram_bank_id
+
+        in0_num_cores = len(in0_core_coords)
+
+        # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+        ring2cores = {}
+        for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+            # key: ring_pos, value: (core_coord, dram_bank_id, send_flag)
+            ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in SEND_CORES else 0)
+
+        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
+        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+
+        # --------------------------------------------------------------------------
+        # Constants
+        # --------------------------------------------------------------------------
+        in0_dtype = ttnn.bfloat16
+        w_dtype = ttnn.bfloat16
+        num_dram_banks = len(in0_core_coords)
+
+        dram_core_coords = [ttnn.CoreCoord(core2dram[in0_core_coord], 0) for in0_core_coord in in0_core_coords_sorted]
+        dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+        dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+        # --------------------------------------------------------------------------
+        # Tensor shapes and memory configurations
+        # --------------------------------------------------------------------------
+        # Define tensor shapes - same for both accuracy and performance testing
+        input_shape = (in0_num_cores, M, K)
+
+        in0_shard_spec = ttnn.ShardSpec(
+            grid=in0_core_range_set,
+            shard_shape=(M, K),
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
-        scores_with_bias_flat = (
-            scores_with_bias
-            if scores_with_bias.shape[1] == 1
-            else ttnn.reshape(scores_with_bias, (1, 1, token_count, scores_with_bias.shape[3]))
+
+        # Each core gets a copy of the original (M, K) input
+        input_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
         )
-        # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias_flat, **cfg["reshape_scores"])
-        num_experts_per_group = expert_scores_grouped.shape[3]
 
-        # calculate top-2 scores with expert groups
-        if cfg["topk_fallback"]:
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
-                expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
-            )
-        else:
-            if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
-                # Pad to 64 for topk op
-                expert_scores_grouped = ttnn.pad(
-                    expert_scores_grouped,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_scores_grouped.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
-                expert_scores_grouped, **cfg["topk_within_expert_groups"]
-            )
-        ttnn.deallocate(expert_scores_grouped)
-        ttnn.deallocate(topk_indices_within_expert_groups)
-        # sum top-2 scores within expert groups
-        expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
-        ttnn.deallocate(topk_scores_within_expert_groups)
-        # reshape to 4D tensor
-        expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
+        # ------------------------------------------------------------------------
+        # Create DRAM shard spec for w
+        # Tensor shape: (L, K, N) -> Sharded across N cores
+        # ------------------------------------------------------------------------
+        w_shard_height = L * (76 + 1) * ttnn.TILE_SIZE
+        w_shard_width = 2 * ttnn.TILE_SIZE
 
-        # calculate top-k expert groups
-        if cfg["topk_fallback"]:
-            topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
-                expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
-            )
-        else:
-            if expert_group_scores.shape[3] < TOPK_MIN_WIDTH:
-                expert_group_scores = ttnn.pad(
-                    expert_group_scores,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_group_scores.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
-                expert_group_scores, **cfg["topk_expert_groups"]
-            )
-        ttnn.deallocate(expert_group_scores)
-        ttnn.deallocate(topk_expert_groups_scores)
-
-        # create full expert_groups_mask(dynamic shape)
-        input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
-
-        # create full src tensor of ones
-        src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
-
-        # scatter top-k expert groups indices to full expert_groups_mask
-        active_groups_mask = ttnn.scatter(
-            input=input_mask,
-            index=topk_expert_groups_indices,
-            src=src_tensor,
-            dim=cfg["scatter_top_expert_groups"]["dim"],
+        w_shard_spec = ttnn.ShardSpec(
+            dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR
         )
-        ttnn.deallocate(topk_expert_groups_indices)
-        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
-        active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
 
-        # expand active_groups_mask to all the experts
-        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
-        ttnn.deallocate(active_groups_mask)
-        active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
-        ttnn.deallocate(scores_with_bias)
-        ttnn.deallocate(active_experts_mask)
+        w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
 
-        # calculate top-k experts
-        if cfg["topk_fallback"]:
-            topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
-                active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
+        # ------------------------------------------------------------------------
+        # Create DRAM shard spec for output
+        # Tensor shape: (M, N) -> Sharded across 8 cores
+        # ------------------------------------------------------------------------
+        output_shard_height = M
+        output_shard_width = ttnn.TILE_SIZE
+        output_shard_spec = ttnn.ShardSpec(
+            in0_core_range_set, (output_shard_height, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+        tt_output = ttnn.empty(
+            (M, in0_num_cores * ttnn.TILE_SIZE),
+            dtype=in0_dtype,
+            device=cfg["mesh_device"],
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=output_mem_config,
+        )
+
+        # ------------------------------------------------------------------------
+        # Prepare the tensors
+        # --------------------------------------------------------------------------
+        torch_w = ttnn.to_torch(
+            cfg["gate_proj"]["input_tensor_b"],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                cfg["mesh_device"], dims=(0, 1), mesh_shape=tuple(cfg["mesh_device"].shape)
+            ),
+        )[0, 0]
+        torch_bias = ttnn.to_torch(
+            cfg["add_score_correction_bias"]["input_tensor_b"],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                cfg["mesh_device"], dims=(0, 1), mesh_shape=tuple(cfg["mesh_device"].shape)
+            ),
+        )[0, 0].to(torch.bfloat16)
+
+        # ------------------------------------------------------------------------
+        # Prepare w tensor (padded, and reordered)
+        from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_mm import prepare_w_tensor
+
+        torch_w_reordered = prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores)
+        # Create tt_w tensor with DRAM sharding
+        tt_w = ttnn.from_torch(
+            torch_w_reordered,
+            dtype=w_dtype,
+            device=cfg["mesh_device"],
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=w_mem_config,
+        )
+
+        # --------------------------------------------------------------------------
+        # Run the operation
+        # --------------------------------------------------------------------------
+        # Collect accuracy metrics for all layers and experts
+        all_outputs = []
+        all_accuracy_metrics = {}
+
+        import itertools
+
+        breakpoint()
+        for layer_id, column_id in itertools.product(range(L), range(C)):
+            ttnn.experimental.deepseek.moe.moe_gate_mm(
+                x,
+                w_tensor=tt_w,
+                output_tensor=tt_output,
+                layer_id=layer_id,
+                column_id=column_id,
             )
-        else:
-            topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
-                active_experts_scores, **cfg["topk_experts"]
-            )
-        ttnn.deallocate(active_experts_scores)
-        ttnn.deallocate(topk_experts_scores_with_bias)
+
+            tt_to_torch_output = ttnn.to_torch(tt_output)
+            all_outputs.append(tt_to_torch_output)
+
+        tt_to_torch_outputs = torch.stack(all_outputs)
+
+        # prepare the output tensor
 
         # gather original scores without bias
         topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)

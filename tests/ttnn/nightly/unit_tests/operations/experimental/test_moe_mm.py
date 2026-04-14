@@ -186,14 +186,16 @@ def prepare_output_tensor(tt_output, ring2cores):
     # output, without the final selection of top 8 experts.
     # So we retain it for reference, but not used in the test.
     # --------------------------------------------------------------------------
-    # output = torch.cat(each_shard, dim=1)
+    output = torch.cat(each_shard, dim=1)
 
     # # Get the 32 scores values from each tile.
-    # f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
-    # f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
+    f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
+    f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
 
-    # group_scores = torch.cat([f1_scores, f2_scores], dim=-1)
-    # return group_scores.transpose(0, 1)
+    group_scores = torch.cat([f1_scores, f2_scores], dim=-1)
+    group_scores = group_scores.transpose(0, 1)
+    group_scores = 2.5 * (group_scores / group_scores.sum(dim=-1, keepdim=True))
+    breakpoint()
     # --------------------------------------------------------------------------
 
     # Only the last core has the values in the first 8 rows of the first 2 faces of the tile
@@ -358,7 +360,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=input_sharded_mem_config,
             )
-
+        breakpoint()
         ttnn.experimental.deepseek.moe.moe_gate_mm(
             tt_input,
             w_tensor=tt_w,
@@ -462,7 +464,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 256, 1, 1): 27,
+    (128, 7168, 256, 1, 1): 27,
 }
 
 
