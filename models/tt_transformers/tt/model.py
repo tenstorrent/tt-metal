@@ -138,10 +138,14 @@ class Transformer(LightweightModule):
             prefetcher=prefetcher,
         )
 
-        # Initialize on-device sampling if supported
-        # Sampling on device is supported only if each device has maximum logits size of 64*1024
+        # Initialize on-device sampling if supported. Limit is on the **padded** logits width per
+        # device (matches LM-head column shard). Default 64*1024; models with larger shards (e.g.
+        # Gemma 3 on N150/N300) set args.device_sampling_max_per_device_vocab.
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        total_vocab = getattr(self.args, "padded_vocab_size", None) or self.args.vocab_size
+        per_device_vocab = total_vocab // sampling_splits
+        max_per_device = getattr(self.args, "device_sampling_max_per_device_vocab", 64 * 1024)
+        self._supports_on_device_sampling = prefetcher is None and per_device_vocab <= max_per_device
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,

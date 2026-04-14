@@ -10,12 +10,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.model_config import OpGroup
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -96,6 +97,22 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
+        self.device_sampling_max_per_device_vocab = 192 * 1024
+
+        # Prefill QKV uses minimal_matmul for seq_len > 128. On Wormhole B0, HiFi4 + 8×8×8 blocks exceed L1 once
+        # multimodal prefill length and device-side sampling buffers are resident (program.cpp CB vs L1 clash).
+        if is_wormhole_b0():
+            logger.info(
+                "Gemma3 on Wormhole B0: HiFi2_FP16 for LI_QKV_PREFILL/LI_O_PREFILL to shrink prefill matmul CBs."
+            )
+            for layer_id in range(self.n_layers):
+                opts = self.optimizations.decoder_optimizations[layer_id]
+                opts._opt_settings["OpFidelity"].update(
+                    {
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                    }
+                )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
@@ -153,6 +170,11 @@ class ModelArgs(TTModelArgs):
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
         return to_warmup_seq_lens
+
+    def supports_decode_trace(self) -> bool:
+        # Decode trace capture stalls after the compile (no-trace) run on Blackhole (e.g. P150)
+        # inside _capture_decode_trace_text (between "Done Compiling Model" and "Done Capturing Decode Trace").
+        return not is_blackhole()
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {

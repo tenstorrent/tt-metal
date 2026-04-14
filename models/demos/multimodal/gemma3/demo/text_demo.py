@@ -919,9 +919,26 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
-    # Warmup prefill and decode
-    # Note: Gemma3 on-device sampling disabled because vocab_size/num_devices > 64k
-    # https://github.com/tenstorrent/tt-metal/issues/32249
+    # On-device sampling when Transformer built SamplingGenerator (Gemma3 ModelArgs sets
+    # device_sampling_max_per_device_vocab; see models/demos/multimodal/gemma3/tt/model_config.py).
+    # Token-accuracy mode needs full host logits for top-k checks / teacher forcing — keep sampling on host.
+    model_supports_device_sampling = (
+        getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    )
+    can_sample_on_device = model_supports_device_sampling and not token_accuracy
+    if model_supports_device_sampling and token_accuracy:
+        logger.info("token_accuracy=True: using host logits / host sampling (device sampling disabled)")
+    non_greedy_decoding_on_device = can_sample_on_device and sampling_params.get("temperature", 0) > 0
+    logger.info(
+        f"Gemma3 decode sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
+    )
+    logger.info(
+        f"[VERIFY_SAMPLING] tt_sampling/SamplingGenerator present={model[0].sampling is not None}, "
+        f"_supports_on_device_sampling={getattr(model[0], '_supports_on_device_sampling', False)}, "
+        f"token_accuracy={token_accuracy} → can_sample_on_device={can_sample_on_device} "
+        f"(True means prefill+decode use device TTSampling; False means host argmax/sample_host)"
+    )
+
     logger.info("Warming up model...")
     # Must match paged_attention: non-paged KV uses a single logical block; decode warmup cannot use a 1024-wide page table.
     num_blocks = (
@@ -932,16 +949,16 @@ def test_demo_text(
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     logger.info("Warmup complete")
 
@@ -997,26 +1014,56 @@ def test_demo_text(
             f"page_table_shape={tuple(page_table.shape) if page_table is not None else None}"
         )
 
+        if can_sample_on_device:
+            # Greedy (temperature==0): top_k=1 and top_p=1 match host argmax; avoid host logits + sample_host.
+            # Non-greedy: device top-k/top-p with demo temperature/top_p.
+            t = sampling_params.get("temperature", 0) or 0
+            if t <= 0:
+                device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+            else:
+                device_sampling_params = SamplingParams(temperature=t, top_k=32, top_p=sampling_params["top_p"])
+        else:
+            device_sampling_params = None
+
+        if device_sampling_params is not None:
+            logger.info(
+                f"[VERIFY_SAMPLING] batch={batch_idx} using DEVICE sampling for prefill+decode: {device_sampling_params!r} "
+                f"(next-token from tt_sampling; host only sees token ids after D2H, not full-vocab logits)"
+            )
+        else:
+            logger.info(
+                f"[VERIFY_SAMPLING] batch={batch_idx} using HOST sampling: prefill torch.argmax(logits), "
+                f"decode sample_host(temp={sampling_params.get('temperature')}, top_p={sampling_params.get('top_p')})"
+            )
+
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
+        prefill_out = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
             warmup_prefill=False,
+            sampling_params=device_sampling_params,
         )
-        prefilled_token = torch.argmax(logits, dim=-1)
-        logger.info(
-            f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
-        )
+        if device_sampling_params is not None:
+            prefill_tokens, _prefill_lp = prefill_out
+            prefilled_token = prefill_tokens.long()
+            logger.info(f"[VERIFY PREFILL] device_sampling first_token_ids={prefilled_token.flatten()[:4].tolist()}")
+        else:
+            logits = prefill_out
+            prefilled_token = torch.argmax(logits, dim=-1)
+            logger.info(
+                f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
+            )
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         # Keep track of generated outputs to print out every iteration
+        prefilled_flat = prefilled_token.view(global_batch_size, -1).squeeze(-1)
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
+            user_tok = int(prefilled_flat[user].item())
             all_outputs[user].append(user_tok)
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
@@ -1024,14 +1071,14 @@ def test_demo_text(
         # Gemma3 vocab size is 262144, sampling is supported only where vocab_size/num_devices<=64k
         # https://github.com/tenstorrent/tt-metal/issues/32249
         # => Hardcode sampling to host for now
-        sampling_on_device = False
+        # sampling_on_device = False
 
-        if sampling_on_device:
-            device_sampling_params = SamplingParams(
-                temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-            )
-        else:
-            device_sampling_params = None
+        # if sampling_on_device:
+        #    device_sampling_params = SamplingParams(
+        #        temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+        #    )
+        # else:
+        #    device_sampling_params = None
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
@@ -1040,7 +1087,8 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        out_tok = prefilled_token
+        # decode_forward expects batch-major token ids shaped [B, 1] (see Transformer.prepare_decode_inputs_host).
+        out_tok = prefilled_flat.reshape(global_batch_size, 1)
 
         logger.info(f"Starting decode loop...")
 
@@ -1049,13 +1097,13 @@ def test_demo_text(
             profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
             # below the collect method also applies teacher forcing which is necessary for exact token matching
             if token_accuracy:
-                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+                out_tok[0, 0] = token_acc.collect_predicted_tokens(out_tok[0, 0].item()).squeeze()
 
             _verify_demo = iteration < 12 or (44 <= iteration <= 58)
             if _verify_demo:
                 logger.info(
                     f"[VERIFY DEMO] iter={iteration} expect_decode_step={iteration + 1} "
-                    f"token_in={out_tok[0].item()} current_pos_before_forward={current_pos[0].item()}"
+                    f"token_in={out_tok[0, 0].item()} current_pos_before_forward={current_pos[0].item()}"
                 )
 
             # Run decode forward
@@ -1069,14 +1117,24 @@ def test_demo_text(
             )
 
             if _verify_demo:
-                top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
-                logger.info(
-                    f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
-                )
+                if device_sampling_params is not None:
+                    # decode_forward returns per-user sampled token ids, not full vocab logits
+                    logger.info(
+                        f"[VERIFY DEMO] iter={iteration} device_sampling=True (no host top-5 logits); "
+                        f"decode_out_shape={tuple(logits.shape)}"
+                    )
+                else:
+                    top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
+                    logger.info(
+                        f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
+                    )
 
             # Get the next token
             if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
+                # process_output_decode may return [B] or [B, 1] token ids
+                out_tok = logits.reshape(global_batch_size, 1) if logits.dim() == 1 else logits
+                if out_tok.shape != (global_batch_size, 1):
+                    out_tok = out_tok.reshape(global_batch_size, -1)[:, -1:]
 
             else:
                 # TODO Fix use case with temperature > 0
@@ -1086,11 +1144,15 @@ def test_demo_text(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                if out_tok.dim() == 1:
+                    out_tok = out_tok.unsqueeze(-1)
+                elif out_tok.dim() == 2 and out_tok.shape[-1] != 1:
+                    out_tok = out_tok[:, :1]
 
             if _verify_demo:
                 logger.info(
-                    f"[VERIFY DEMO] iter={iteration} sampled_token={out_tok[0].item()} "
-                    f"decoded={tokenizer.decode([out_tok[0].item()])!r}"
+                    f"[VERIFY DEMO] iter={iteration} sampled_token={out_tok[0, 0].item()} "
+                    f"decoded={tokenizer.decode([out_tok[0, 0].item()])!r}"
                 )
 
             profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
@@ -1109,7 +1171,7 @@ def test_demo_text(
                 logger.info(f"[VERIFY DEMO] iter={iteration} current_pos_after_increment={current_pos.tolist()}")
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = int(out_tok[user, 0].item())
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
