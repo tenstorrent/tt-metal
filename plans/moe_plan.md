@@ -812,7 +812,9 @@ Based on code exploration of:
 | **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | group_limited_topk (code) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
 | **Gemma 4 26B** | 2816 | 704 | — (parallel dense) | 128 | 0 (parallel dense) | 8 | **GELU/SwiGLU** | softmax | simple+per_expert_scale | —/— | per-expert learned | No | No (has learned scale) | all MoE | 30 | **Yes** | Gemma4 |
 
-**Note:** Qwen3.5 models (397B, 35B) use a **sigmoid gate on shared expert output** before adding to routed output (see §2.8). This is not captured in the table above but is a unique architectural detail for generalization.
+**Notes on the table above:**
+- Qwen3.5 models (397B, 35B) use a **sigmoid gate on shared expert output** before adding to routed output (see §2.8). This is a unique architectural detail for generalization.
+- Qwen-family models (Qwen3, Qwen3.5, Qwen3-Omni) show "—" for scaling_factor because their configs have no `routed_scaling_factor` field. Their routing uses `norm_topk_prob` normalization instead, effectively equivalent to scaling=1.0 after normalization.
 
 ---
 
