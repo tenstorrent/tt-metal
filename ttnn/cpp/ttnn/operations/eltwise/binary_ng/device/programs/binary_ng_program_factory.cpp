@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_program_factory_utils.hpp"
 
 #include <algorithm>
 using namespace tt::tt_metal;
@@ -487,9 +488,6 @@ BinaryNgProgramFactory::cached_program_t BinaryNgProgramFactory::create(
     // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
     // used.
     const auto input_dtype = operation_attributes.input_dtype;
-    if (is_quant_op) {
-        TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
-    }
 
     auto program = CreateProgram();
 
@@ -678,11 +676,7 @@ BinaryNgProgramFactory::cached_program_t BinaryNgProgramFactory::create(
     tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     // COMPUTE KERNEL
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Float32 && b_data_format == tt::DataFormat::Float32) ||
-                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
-                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
+    bool fp32_dest_acc_en = is_fp32_dest_acc_en(a_data_format, b_data_format, c_data_format);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;

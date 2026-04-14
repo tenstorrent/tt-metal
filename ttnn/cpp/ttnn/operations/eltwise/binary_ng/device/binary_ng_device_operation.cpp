@@ -245,12 +245,26 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    (void)args;
+    (void)tensor_args;
+    if (!program::BinaryNgDramOptimizedProgram::validate_program(args, tensor_args).has_value()) {
+        return program::BinaryNgDramOptimizedProgram{};
+    }
+    return program::BinaryNgProgramFactory{};
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
+
+    if (attributes.is_quant_op) {
+        TT_FATAL(attributes.is_sfpu, "Quantization op is SFPU-only");
+    }
 
     // Validate storage type for input tensors
     TT_FATAL(
@@ -530,6 +544,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
+
+    log_info(tt::LogOp, "fast_and_approximate_mode: {}", fast_and_approximate_mode);
+    log_info(tt::LogOp, "\n[binary_ng] is_sfpu_op: {}", is_sfpu_op);
 
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {

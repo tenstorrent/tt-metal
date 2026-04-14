@@ -1,0 +1,393 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_dram_optimized_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/programs/binary_ng_program_factory_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/cb_utils.hpp"
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <tt-metalium/work_split.hpp>
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+template <bool initialize_args>
+inline void set_eltwise_binary_runtime_args_for_dram_cores(
+    tt::tt_metal::Program& program,
+    const ttnn::Tensor& a_tensor,
+    const ttnn::Tensor& b_tensor,
+    const ttnn::Tensor& output,
+    const tt::tt_metal::KernelHandle reader_kernel_id,
+    const tt::tt_metal::KernelHandle writer_kernel_id,
+    const tt::tt_metal::KernelHandle compute_kernel_id,
+    const CoreRangeSet& all_device_cores) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::constants;
+
+    uint32_t num_tiles = static_cast<uint32_t>(a_tensor.physical_volume() / TILE_HW);
+
+    bool row_major = true;  // TODO: make this configurable
+    uint32_t num_cores_total = all_device_cores.num_cores();
+
+    // TODO: Move FATAL to validate function?
+    TT_FATAL(
+        a_tensor.logical_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
+        "num_tiles mismatch, {} % {} != 0",
+        a_tensor.logical_shape()[-1],
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        a_tensor.logical_shape()[-2] % tt::constants::TILE_WIDTH == 0,
+        "num_tiles mismatch, {} % {} != 0",
+        a_tensor.logical_shape()[-2],
+        tt::constants::TILE_WIDTH);
+
+    // vector of cores
+    auto cores = corerange_to_cores(all_device_cores, std::nullopt, row_major);
+
+    std::vector<std::vector<uint32_t>> reader_args_array{cores.size()};
+    std::vector<std::vector<uint32_t>> compute_args_array{cores.size()};
+    std::vector<std::vector<uint32_t>> writer_args_array{cores.size()};
+
+    auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
+    auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
+
+    std::vector<uint32_t> core_ids;
+    for (uint32_t core_id = 0; core_id < num_cores_total; ++core_id) {
+        const CoreCoord& core = cores.at(core_id);
+
+        uint32_t num_tiles_per_core = num_tiles / num_cores_total + (core_id < num_tiles % num_cores_total ? 1 : 0);
+
+        if constexpr (!initialize_args) {
+            // RuntimeArgsData
+            auto& reader_args = cached_reader_args.at(core.x).at(core.y);
+            reader_args[2] = 0;
+            auto& eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
+            eltwise_args[0] = 0;
+            auto& writer_args = cached_writer_args.at(core.x).at(core.y);
+            writer_args[1] = 0;
+        }
+
+        uint32_t vc = core_id & 0x3;
+        core_ids.push_back(core_id);
+        for (uint32_t j = 0; j < core_id; ++j) {
+            auto core_ = cores[j];
+
+            if (core_.y == core.y and ((core_id & 0x3) == (core_ids[j] & 0x3))) {  // same vc and same row
+                vc = (vc + 1) & 0x3;
+                break;
+            }
+        }
+
+        std::vector<uint32_t> reader_args_vec = {
+            a_tensor.buffer()->address(), b_tensor.buffer()->address(), core_id, num_tiles_per_core, vc};
+
+        std::vector<uint32_t> compute_args_vec = {num_tiles_per_core, vc};
+        std::vector<uint32_t> writer_args_vec = {output.buffer()->address(), core_id, num_tiles_per_core, vc};
+
+        reader_args_array[core_id] = std::move(reader_args_vec);
+        compute_args_array[core_id] = std::move(compute_args_vec);
+        writer_args_array[core_id] = std::move(writer_args_vec);
+        if constexpr (!initialize_args) {
+            auto& core_reader_args = cached_reader_args.at(core.x).at(core.y);
+            std::ranges::copy(reader_args_array[core_id], core_reader_args.data());
+
+            auto& core_eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
+            std::ranges::copy(compute_args_array[core_id], core_eltwise_args.data());
+
+            auto& core_writer_args = cached_writer_args.at(core.x).at(core.y);
+            std::ranges::copy(writer_args_array[core_id], core_writer_args.data());
+        }
+    }
+
+    if constexpr (initialize_args) {
+        SetRuntimeArgs(program, reader_kernel_id, cores, reader_args_array);
+        SetRuntimeArgs(program, compute_kernel_id, cores, compute_args_array);
+        SetRuntimeArgs(program, writer_kernel_id, cores, writer_args_array);
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+namespace ttnn::operations::binary_ng::program {
+
+const std::string kernel_prefix = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/";
+
+std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
+    const BinaryNgParams& operation_attributes, const BinaryNgInputs& tensor_args) {
+    if (!operation_attributes.memory_config.is_dram()) {
+        return "Memory config must be DRAM";
+    }
+    if (!tensor_args.input_tensor_a.memory_config().is_dram()) {
+        return "Input tensor A must be on DRAM";
+    }
+    if (!tensor_args.input_tensor_b.has_value()) {
+        return "Input tensor B must be set";
+    }
+    if (!tensor_args.input_tensor_b->memory_config().is_dram()) {
+        return "Input tensor B must be on DRAM";
+    }
+    if (!operation_attributes.rhs_activations.empty()) {
+        return "Right hand side activations are not supported";
+    }
+    if (!operation_attributes.lhs_activations.empty()) {
+        return "Left hand side activations are not supported";
+    }
+    if (!operation_attributes.post_activations.empty()) {
+        return "Post activations are not supported";
+    }
+
+    if (operation_attributes.is_where_op) {
+        return "Where op is not supported for DRAM optimized program";
+    }
+    return std::nullopt;
+}
+
+BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::create(
+    const BinaryNgParams& operation_attributes, const BinaryNgInputs& args, Tensor& output) {
+    auto op_type = operation_attributes.binary_op_type;
+    const bool is_sfpu_op = operation_attributes.is_sfpu;
+    const bool is_quant_op = operation_attributes.is_quant_op;
+    // const bool is_where_op = operation_attributes.is_where_op;
+
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    auto* device = args.input_tensor_a.device();
+
+    // TODO: Worker core grid arg just ignored ?
+    // TODO: IF we shard across dram banks, we need to use subset of dram cores
+    CoreRangeSet dram_optimal_cores =
+        CoreRangeSet(device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0));
+
+    Program program{};
+    // const auto& all_device_cores = worker_grid;dram_optimal_cores
+    auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
+
+    /***************   CIRCULAR BUFFERS ***************/
+
+    uint32_t single_tile_size = tt::tile_size(dtype);
+
+    constexpr auto intermediate_cb0_index = tt::CBIndex::c_3;
+    constexpr auto intermediate_cb1_index = tt::CBIndex::c_4;
+
+    constexpr uint32_t num_tiles_per_batch = 4;
+    constexpr uint32_t num_batches = 2;
+    constexpr uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * (num_batches);
+
+    auto [a_tensor_cb, a_tensor_cb_handle] =
+        create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
+
+    auto [b_tensor_cb, b_tensor_cb_handle] =
+        create_cb(tt::CBIndex::c_1, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
+
+    auto [output_cb_index, cb_output] =
+        create_cb(tt::CBIndex::c_2, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
+
+    /***************   READER KERNEL ***************/
+
+    std::vector<uint32_t> reader_compile_time_vec = {
+        a_tensor_cb,
+        b_tensor_cb,
+        num_batches,
+        num_tiles_per_batch,
+    };
+    tt::tt_metal::TensorAccessorArgs(args.input_tensor_a.buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.input_tensor_b->buffer()).append_to(reader_compile_time_vec);
+
+    std::map<std::string, std::string> reader_defines;
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        kernel_prefix + "dataflow/reader_interleaved_dram_optimized.cpp",
+        dram_optimal_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
+
+    tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    /***************   WRITER KERNEL ***************/
+
+    std::vector<uint32_t> writer_compile_time_vec = {output_cb_index, num_batches, num_tiles_per_batch};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
+
+    std::map<std::string, std::string> writer_defines;
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        kernel_prefix + "dataflow/writer_interleaved_dram_optimized.cpp",
+        dram_optimal_cores,
+        tt_metal::WriterDataMovementConfig(writer_compile_time_vec, writer_defines));
+
+    /***************   COMPUTE KERNEL ***************/
+
+    const auto a_dtype = args.input_tensor_a.dtype();
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    const auto b_dtype = args.input_tensor_b.has_value()    ? args.input_tensor_b->dtype()
+                         : operation_attributes.is_quant_op ? DataType::FLOAT32
+                         : operation_attributes.is_sfpu     ? a_dtype
+                                                            : DataType::BFLOAT16;
+    const auto c_dtype = output.dtype();
+    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
+    const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    bool fp32_dest_acc_en = is_fp32_dest_acc_en(a_data_format, b_data_format, c_data_format);
+
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+
+    log_info(tt::LogOp, "is_sfpu_op: {}", is_sfpu_op);
+    auto compute_kernel_defines = op_config.as_defines(a_dtype);
+    log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
+
+    {
+        const auto input_dtype = operation_attributes.input_dtype;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
+
+        if (op_config.process_lhs.has_value()) {
+            lhs_activations.push_back(*op_config.process_lhs);
+        }
+
+        if (op_config.process_rhs.has_value()) {
+            rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        if (op_config.postprocess.has_value()) {
+            post_activations.insert(post_activations.begin(), *op_config.postprocess);
+        }
+
+        bool is_integer_division =
+            (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
+             b_dtype == DataType::INT32);
+
+        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op and !is_integer_division) {
+            post_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
+            });
+        }
+
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
+
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
+            compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
+            if (post_activations[0].type() == unary::UnaryOpType::RELU) {
+                compute_kernel_defines["PACK_RELU"] = "1";
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
+                // Zero-point is passed as the 4th run-time kernel argument
+                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
+            } else {
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+            }
+        } else {
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+        }
+
+        /////////////////////   Alocate CB memory for intermediate activations   /////////////////////
+        bool op_has_exp =
+            op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+
+        if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+            auto a_intermediate_format = is_sfpu_op   ? a_data_format
+                                         : op_has_exp ? tt::DataFormat::Float16_b
+                                                      : a_data_format;
+            uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
+            create_cb(
+                intermediate_cb0_index,
+                program,
+                dram_optimal_cores,
+                a_intermediate_single_tile_size,
+                num_tiles_per_cb,
+                a_intermediate_format);
+        }
+        if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
+            auto b_intermediate_format = is_sfpu_op   ? b_data_format
+                                         : op_has_exp ? tt::DataFormat::Float16_b
+                                                      : b_data_format;
+            uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
+            create_cb(
+                intermediate_cb1_index,
+                program,
+                dram_optimal_cores,
+                b_intermediate_single_tile_size,
+                num_tiles_per_cb,
+                b_intermediate_format);
+        }
+    }
+
+    std::vector<uint32_t> compute_compile_time_vec = {
+        num_batches,
+        num_tiles_per_batch,
+    };
+    std::string compute_kernel_path = operation_attributes.is_sfpu ? "compute/eltwise_binary_sfpu_dram_optimized.cpp"
+                                                                   : "compute/eltwise_binary_dram_optimized.cpp";
+    // if (operation_attributes.is_where_op) {
+    //     compute_kernel_path = "compute/where_compute_kernel.cpp";
+    // }
+
+    log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
+    KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        kernel_prefix + compute_kernel_path,  //"sfpu_compute_kernel.cpp",  //
+        dram_optimal_cores,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = false,
+            .compile_args = compute_compile_time_vec,
+            .defines = std::move(compute_kernel_defines)});
+
+    CMAKE_UNIQUE_NAMESPACE::set_eltwise_binary_runtime_args_for_dram_cores<true>(
+        program,
+        args.input_tensor_a,
+        args.input_tensor_b.value(),
+        output,
+        reader_kernel_id,
+        writer_kernel_id,
+        compute_kernel_id,
+        dram_optimal_cores);
+    return {
+        std::move(program),
+        {reader_kernel_id,
+         writer_kernel_id,
+         compute_kernel_id,
+         a_tensor_cb_handle,
+         b_tensor_cb_handle,
+         cb_output,
+         dram_optimal_cores,
+         single_tile_size,
+         single_tile_size,
+         single_tile_size}};
+}
+
+void BinaryNgDramOptimizedProgram::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const BinaryNgParams& /*operation_attributes*/,
+    const BinaryNgInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    const auto& sh_var = cached_program.shared_variables;
+
+    CMAKE_UNIQUE_NAMESPACE::set_eltwise_binary_runtime_args_for_dram_cores<false>(
+        cached_program.program,
+        tensor_args.input_tensor_a,
+        tensor_args.input_tensor_b.value(),
+        tensor_return_value,
+        sh_var.reader_kernel_id,
+        sh_var.writer_kernel_id,
+        sh_var.eltwise_kernel_id,
+        sh_var.dram_device_cores);
+}
+}  // namespace ttnn::operations::binary_ng::program
