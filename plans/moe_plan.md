@@ -4,12 +4,11 @@
 
 - [Goal](#goal)
 - [1. Model Registry](#1-model-registry)
-- [2. Existing TT-Metal Implementations](#2-existing-tt-metal-implementations--comparison-from-code-exploration)
-- [3. Process Notes & Learnings](#3-process-notes--learnings)
-- [4. Cross-Model MoE Parameter Comparison](#4-cross-model-moe-parameter-comparison-all-verified)
-- [5. Architecture Family Classification](#5-architecture-family-classification)
-- [6. Generalization Implications](#6-generalization-implications)
-- [7. Next Steps](#7-next-steps)
+- [2. Process Notes & Learnings](#2-process-notes--learnings)
+- [3. Cross-Model MoE Parameter Comparison](#3-cross-model-moe-parameter-comparison-all-verified)
+- [4. Architecture Family Classification](#4-architecture-family-classification)
+- [5. Generalization Implications](#5-generalization-implications)
+- [6. Next Steps](#6-next-steps)
 - [Appendix A: Model MoE Architectures (Detailed)](#appendix-a-model-moe-architectures-detailed)
   - [A.1 GPT-OSS](#a1-gpt-oss--moe-architecture-verified)
   - [A.2 DeepSeek V3](#a2-deepseek-v3--moe-architecture-verified)
@@ -24,6 +23,7 @@
   - [A.11 Mistral Large 3](#a11-mistral-large-3-675b--moe-architecture-verified) — Custom
   - [A.12 Gemma 4 (optional)](#a12-gemma-4-26b-a4b--moe-architecture-verified-optional) — Custom
   - [A.13 DeepSeek OCR](#a13-deepseek-ocr--moe-architecture-verified) — Legacy/small
+- [Appendix B: Existing TT-Metal Implementations](#appendix-b-existing-tt-metal-implementations--comparison-as-of-main437da8d3796)
 
 ---
 
@@ -61,51 +61,16 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links. All verified
 
 ---
 
-## 2. Existing TT-Metal Implementations — Comparison (from code exploration)
+## 2. Process Notes & Learnings
 
-Based on code exploration of:
-- `ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/` (DeepSeek)
-- `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/` (GPT-OSS)
-
-#### Shared (~90%)
-- Same kernel files: `dm0.cpp`, `dm1.cpp`, `tilize_reader.cpp`, `tilize_writer.cpp`, `tilize_compute.cpp`, `combine_dm1.cpp`, `compute.cpp`
-- Same CB management patterns
-- Same tilize/matmul/combine kernel invocation framework
-- Common MoE utilities from `ttnn/operations/ccl/common/host/moe_utils.hpp`
-
-#### Key Differences
-
-| Aspect | moe_compute (DeepSeek) | moe_gpt (GPT-OSS) |
-|--------|----------------------|-------------------|
-| **layer_id** | Explicit parameter | Not present |
-| **hidden_size** | Inferred from tensors | Explicit param (default 2880) |
-| **Combine module** | Delegates to `SelectiveReduceCombineDeviceOperation` | Fused combine in MoEGPTMeshWorkloadFactory |
-| **Core placement** | Hardcoded cores | Dynamic rectangle search avoiding matmul cores |
-| **Ring tile counts** | W0/W1=224, W2=64 | W0/W1=90, W2=90 (symmetric) |
-| **Activation** | Standard | Custom gated activation (see §A.1 for details; `swiglu_sfpu.h`) |
-| **Cross-device** | Full fabric support (topology, num_links, semaphores) | Simpler, cluster_axis only |
-| **Semaphores** | Init + final barrier, explicit | Optional (fused mode only) |
-| **Namespace** | `ttnn::experimental::prim` | `ttnn::operations::experimental::moe_gpt::program` |
-
-#### Implications for Generalization
-- Ring tile counts and hidden_size must be parameterized (not hardcoded)
-- Activation function must be selectable (SiLU/SwiGLU vs others)
-- Core placement strategy needs to be configurable (fixed vs dynamic)
-- Cross-device support should be optional but available
-- Combine module approach needs unification
-
----
-
-## 3. Process Notes & Learnings
-
-### 3.1 Gathering MoE info from HuggingFace — what works
+### 2.1 Gathering MoE info from HuggingFace — what works
 1. `hf download <model-id> config.json` — fastest way to get all architecture params. For multimodal models, MoE params are in `text_config` or `language_config`.
 2. `hf download <model-id> modeling_*.py` — custom modeling code has the exact MoE block implementation (only needed for custom activations/routing).
 3. Model card (README.md) — has high-level info but rarely MoE-specific dimensions.
 4. Mistral uses `params.json` instead of `config.json`.
 5. Some models (Qwen3, Qwen3.5) are in transformers proper — no custom modeling_*.py to download.
 
-### 3.2 Reliability of unverified_moe_info.md
+### 2.2 Reliability of unverified_moe_info.md
 
 | Model | Values Correct? | Notes |
 |-------|----------------|-------|
@@ -124,7 +89,7 @@ Based on code exploration of:
 
 ---
 
-## 4. Cross-Model MoE Parameter Comparison (ALL VERIFIED)
+## 3. Cross-Model MoE Parameter Comparison (ALL VERIFIED)
 
 | **Model** | **hidden_size** | **moe_intermediate** | **shared_expert_interm** | **n_routed_experts** | **n_shared_experts** | **K (top-k)** | **activation** | **scoring_func** | **topk_method** | **n_group/topk_group** | **scaling_factor** | **expert_bias** | **router_bias** | **first_k_dense** | **num_layers** | **parallel dense** | **base_arch** |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -149,7 +114,7 @@ Based on code exploration of:
 
 ---
 
-## 5. Architecture Family Classification
+## 4. Architecture Family Classification
 
 Based on the verified configs, the models cluster into clear families:
 
@@ -176,9 +141,9 @@ Based on the verified configs, the models cluster into clear families:
 
 ---
 
-## 6. Generalization Implications
+## 5. Generalization Implications
 
-### 6.1 Parameters that MUST be configurable
+### 5.1 Parameters that MUST be configurable
 1. `hidden_size` — ranges from 1024 (Qwen3-Omni Talker) to 8192 (Ling-1T)
 2. `moe_intermediate_size` — ranges from 384 to 4096 (Qwen3-Omni talker: 384, Mistral: 4096)
 3. `n_routed_experts` — ranges from 64 to 512
@@ -189,13 +154,13 @@ Based on the verified configs, the models cluster into clear families:
 8. Expert bias (on/off)
 9. Router bias / bias correction (on/off)
 
-### 6.2 Activation function strategy
+### 5.2 Activation function strategy
 - **12/14 models use SiLU/SwiGLU** (all confirmed from config or modeling code): `down(silu(gate(x)) * up(x))`
 - **Gemma 4**: GELU/SwiGLU — same gate/up/down pattern but with `gelu_pytorch_tanh` instead of SiLU
 - **GPT-OSS**: custom GELU-gated with clamping and shift — unique pattern
 - Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant
 
-### 6.3 Routing strategy
+### 5.3 Routing strategy
 - **DeepSeek family (5 rows: DS V3, GLM-5, GLM-4.7, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling (GLM-4.7 confirmed from modeling code)
 - **Standard softmax family (5 rows: Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (confirmed from modeling code)
 - **GPT-OSS**: softmax top-k with router bias
@@ -204,19 +169,19 @@ Based on the verified configs, the models cluster into clear families:
 - **DS-OCR**: softmax scoring (V2 default) + greedy top-k selection
 - Recommendation: implement sigmoid+group and softmax as two routing modes
 
-### 6.4 Expert projection layout
+### 5.4 Expert projection layout
 - **11/14 rows**: separate gate_proj + up_proj + down_proj (no bias)
 - **GPT-OSS**: fused interleaved gate_up_proj + down_proj (with bias) — split via even/odd indices
 - **GLM-4.7**: fused chunked gate_up_proj + down_proj (no bias) — split via `.chunk(2)` (same as Gemma 4)
 - **Gemma 4**: fused chunked gate_up_proj + down_proj (no bias) — split via `.chunk(2)` (first half/second half)
 - Recommendation: canonical internal layout is separate projections; fused layout handled at weight loading
 
-### 6.5 Dense+MoE parallelism
+### 5.5 Dense+MoE parallelism
 - **13/14 rows**: MoE *replaces* the FFN (with optional shared expert added)
 - **Gemma 4**: MoE runs *in parallel* with a full dense MLP, outputs summed — unique architecture
 - Recommendation: support both modes (replacement vs parallel) as a config flag
 
-### 6.6 Common tile sizes for ring distribution
+### 5.6 Common tile sizes for ring distribution
 Using tile_size=32:
 
 | Model | W0/W1 tiles (hidden→intermediate) | W2 tiles (intermediate→hidden) |
@@ -238,7 +203,7 @@ Using tile_size=32:
 
 ---
 
-## 7. Next Steps
+## 6. Next Steps
 
 - [ ] Identify the minimal set of parameters needed for the unified MoE interface
 - [ ] Design the unified operation interface (C++ struct for MoE config)
@@ -926,5 +891,40 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 | Shared expert intermediate | 1792 (= 896 × 2) | |
 
 **Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). Uses **softmax scoring** (V2 default from configuration_deepseek_v2.py L142 — config.json does not override) with **greedy top-k** selection. The unverified list values (hidden=4096, intermediate=1407, shared_intermediate=5632) were likely for the larger DeepSeek-VL-v2 7B model, not the OCR model.
+
+---
+
+## Appendix B: Existing TT-Metal Implementations — Comparison (as of main@437da8d3796)
+
+Based on code exploration of:
+- `ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/` (DeepSeek)
+- `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/` (GPT-OSS)
+
+#### Shared (~90%)
+- Same kernel files: `dm0.cpp`, `dm1.cpp`, `tilize_reader.cpp`, `tilize_writer.cpp`, `tilize_compute.cpp`, `combine_dm1.cpp`, `compute.cpp`
+- Same CB management patterns
+- Same tilize/matmul/combine kernel invocation framework
+- Common MoE utilities from `ttnn/operations/ccl/common/host/moe_utils.hpp`
+
+#### Key Differences
+
+| Aspect | moe_compute (DeepSeek) | moe_gpt (GPT-OSS) |
+|--------|----------------------|-------------------|
+| **layer_id** | Explicit parameter | Not present |
+| **hidden_size** | Inferred from tensors | Explicit param (default 2880) |
+| **Combine module** | Delegates to `SelectiveReduceCombineDeviceOperation` | Fused combine in MoEGPTMeshWorkloadFactory |
+| **Core placement** | Hardcoded cores | Dynamic rectangle search avoiding matmul cores |
+| **Ring tile counts** | W0/W1=224, W2=64 | W0/W1=90, W2=90 (symmetric) |
+| **Activation** | Standard | Custom gated activation (see §A.1 for details; `swiglu_sfpu.h`) |
+| **Cross-device** | Full fabric support (topology, num_links, semaphores) | Simpler, cluster_axis only |
+| **Semaphores** | Init + final barrier, explicit | Optional (fused mode only) |
+| **Namespace** | `ttnn::experimental::prim` | `ttnn::operations::experimental::moe_gpt::program` |
+
+#### Implications for Generalization
+- Ring tile counts and hidden_size must be parameterized (not hardcoded)
+- Activation function must be selectable (SiLU/SwiGLU vs others)
+- Core placement strategy needs to be configurable (fixed vs dynamic)
+- Cross-device support should be optional but available
+- Combine module approach needs unification
 
 ---
