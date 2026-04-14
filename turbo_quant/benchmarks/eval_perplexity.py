@@ -80,7 +80,7 @@ def compute_perplexity_with_model(
 
     print(f"Loading model: {model_name}", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16, device_map="cpu")
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16, device_map="cpu")
     model.eval()
 
     config = model.config
@@ -90,7 +90,7 @@ def compute_perplexity_with_model(
 
     print(f"Model: {num_layers} layers, head_dim={head_dim}, kv_heads={num_kv_heads}", flush=True)
     print(f"Loading dataset: {dataset_name}/{dataset_config} ({split})", flush=True)
-    dataset = load_dataset(dataset_name, dataset_config, split=split)
+    dataset = load_dataset(dataset_name, dataset_config, split=split, ignore_verifications=True)
 
     # Concatenate and tokenize
     text = "\n\n".join(t for t in dataset["text"][:max_samples] if t.strip())

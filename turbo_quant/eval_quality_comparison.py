@@ -136,14 +136,14 @@ def generate_baseline(tt_model, model_args, mesh_device, prompt_text, max_new_to
 
 
 def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new_tokens, max_seq_len, bits, seed):
-    """Generate with TurboQuant KV cache."""
+    """Generate with TurboQuant BFP4 KV cache."""
     tokenizer = model_args.tokenizer
     encoded = model_args.encode_prompt(prompt_text, instruct=True)
     prompt_len = len(encoded)
     if prompt_len >= max_seq_len:
         return "(prompt too long)", 0, 0.0
 
-    # Prefill (same as baseline — fills layer_past)
+    # Prefill (same as baseline — fills layer_past with BFP8)
     tokens_2d = torch.tensor([encoded])
     pad_to = ((prompt_len + 127) // 128) * 128
     if pad_to > prompt_len:
@@ -178,12 +178,23 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
     _, next_tok = sample_host(logits_last, temperature=0, top_p=0.8)
     current_tok_id = int(next_tok.squeeze().item())
 
-    # Build TurboQuant caches and migrate prefill KV
+    # Migrate prefill KV to BFP4 pre-rescaled format
     from turbo_quant.eval_e2e_prefill import migrate_prefill_kv_to_turbo_quant
 
+    migrate_prefill_kv_to_turbo_quant(
+        tt_model,
+        prompt_len=prompt_len,
+        bits=bits,
+        mesh_device=mesh_device,
+        seed=seed,
+        rotation_absorbed=True,
+        cache_dtype=ttnn.bfloat4_b,
+    )
+
+    # Attach TQ cache for decode quantize path (not for SDPA — standard SDPA reads BFP4)
     n_local_kv_heads = model_args.n_kv_heads // model_args.cluster_shape[1]
-    tq_caches = [
-        TTNNTurboQuantCache(
+    for layer in tt_model.layers:
+        tq = TTNNTurboQuantCache(
             mesh_device,
             num_layers=1,
             num_kv_heads=n_local_kv_heads,
@@ -191,12 +202,10 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
             max_seq_len=max_seq_len,
             bits=bits,
             seed=seed,
+            memory_efficient=False,
         )
-        for _ in tt_model.layers
-    ]
-    migrate_prefill_kv_to_turbo_quant(tt_model, tq_caches, prompt_len, bits, mesh_device, seed)
-    for layer, tq_cache in zip(tt_model.layers, tq_caches):
-        layer.attention.tq_cache = tq_cache
+        tq.rotation_absorbed = True
+        layer.attention.tq_cache = tq
 
     eot_id = tokenizer.eos_token_id
     all_new_tokens = [current_tok_id]
@@ -235,7 +244,6 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
         if tq is not None:
             tq.deallocate()
             delattr(layer.attention, "tq_cache")
-    del tq_caches
 
     output_text = tokenizer.decode(all_new_tokens)
     avg_ms = sum(times) / len(times) * 1000 if times else 0

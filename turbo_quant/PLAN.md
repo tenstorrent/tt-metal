@@ -438,6 +438,39 @@ SDPA kernel — standard SDPA's chunked online softmax handles BFP4 natively.
 | Megaliths (188-tok, avoid keywords, `******` separator) | 3 | Follows all constraints | Yes |
 | Grafton VT (3 paragraphs, start with "send") | 3 | Follows all formatting | Yes |
 
+### WikiText-2 Perplexity + KV Cache Distortion (2026-04-14)
+
+Llama-3.1-8B-Instruct, BF16 on CPU, 4550 tokens, sliding-window PPL.
+KV distortion measured on 5 captured windows × 32 layers of real KV tensors.
+
+**Baseline perplexity: 9.91**
+
+| Variant | Key MSE | Key Cosine | Value MSE | Value Cosine |
+|---------|---------|------------|-----------|--------------|
+| MSE 2-bit | 0.4725 | 0.9400 | 0.0123 | 0.9401 |
+| **MSE 3-bit** | **0.1384** | **0.9828** | **0.0036** | **0.9828** |
+| MSE 4-bit | 0.0380 | 0.9953 | 0.0010 | 0.9953 |
+| Outlier 2.25-bit | 0.3893 | 0.9508 | 0.0101 | 0.9510 |
+
+3-bit (production config): cosine 0.983 on real model KV tensors, matches paper bound.
+Monotonic quality: 2-bit → 3-bit → 4-bit. Outlier 2.25-bit outperforms plain 2-bit.
+
+### Needle-in-a-Haystack Retrieval (2026-04-14)
+
+Synthetic test: planted needle key with known high affinity, measured retrieval after
+TQ quantize/dequantize. 5 needle positions × 6 haystack lengths × 6 variants = 180 tests.
+
+| Variant | Retrieval Accuracy | Haystack lengths |
+|---------|-------------------|------------------|
+| FP32 baseline | 30/30 (100%) | 64, 256, 1K, 4K, 16K, 64K |
+| MSE 2-bit | 30/30 (100%) | " |
+| MSE 3-bit | 30/30 (100%) | " |
+| MSE 4-bit | 30/30 (100%) | " |
+| Prod 3-bit | 30/30 (100%) | " |
+| Outlier 2.25-bit | 30/30 (100%) | " |
+
+**100% retrieval across all variants**, including 2-bit, at all context lengths up to 64K.
+
 ### Optimisation History
 
 ```
