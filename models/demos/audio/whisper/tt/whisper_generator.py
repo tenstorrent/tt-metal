@@ -1101,7 +1101,6 @@ class WhisperGenerator:
                 cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
                 cross_attn_cache_valid=self.cross_attn_cache_valid,
                 current_decode_pos=self.current_decode_pos_per_size[trace_key],
-                decoder_prefill=True,
                 parameters=self.parameters.decoder,
             )
             self.cross_attn_cache_valid = True
