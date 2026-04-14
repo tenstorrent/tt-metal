@@ -88,8 +88,6 @@ CreatedProgram create_program(
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
     // Stream one expert at a time through c_0 to minimize L1 footprint.
-    // Previous: num_experts * emb_dim_tiles * tile_size (~114KB for 8 experts)
-    // Now: emb_dim_tiles * tile_size (~14KB for 1 expert)
     uint32_t combine_cb_size = emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_combine_config =
         tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})

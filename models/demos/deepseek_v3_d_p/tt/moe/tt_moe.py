@@ -278,8 +278,6 @@ class TtMoe(LightweightModule):
         seq_dim = x.shape[1]
         batch_dim = x.shape[0]
         weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
-        if weights.memory_config().buffer_type == ttnn.BufferType.L1:
-            weights = ttnn.to_memory_config(weights, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
 
         logger.debug(f"  weights.shape={weights.shape}")
@@ -327,9 +325,6 @@ class TtMoe(LightweightModule):
             self.tt_expert_dispatch_table,
         )
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
-        # tt_expert_offsets no longer needed after dispatch — free L1
-        ttnn.deallocate(tt_expert_offsets)
-        tt_expert_offsets = None
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -374,15 +369,9 @@ class TtMoe(LightweightModule):
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         #                  (1, 1, 256, 4, 2048) per device - 5D tensor, ROW_MAJOR
         #
-        # TtReduceModule uses fused deepseek_moe_post_combine_reduce kernel:
+        # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        # Free L1 tensors before fused reduce — its CBs need ~1MB of L1 per core.
-        ttnn.deallocate(tt_expert_token_counts)
-        tt_expert_token_counts = None
-        ttnn.deallocate(gate_logits)
-        gate_logits = None
-
         routed_output = self.reduce_module(combined_output, weights=weights)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
@@ -407,14 +396,12 @@ class TtMoe(LightweightModule):
         intermediates = None
         if return_intermediates:
             # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
-            max_token_count = None
-            if tt_expert_token_counts is not None:
-                _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-                _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-                _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-                max_token_count = int(_counts_host.to(torch.int64).max().item())
+            _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+            max_token_count = int(_counts_host.to(torch.int64).max().item())
             max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
-            if max_token_count is not None and max_token_count > max_capacity:
+            if max_token_count > max_capacity:
                 logger.error(
                     f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
                     f"max_dispatched_tokens_per_expert ({max_capacity}). "

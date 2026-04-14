@@ -53,7 +53,6 @@ void kernel_main() {
                 first_active = false;
             }
 
-            // Both input and weight are at offset 0 (single-buffered)
             tile_regs_acquire();
 
             for (uint32_t j = 0; j < emb_dim_tiles; j++) {

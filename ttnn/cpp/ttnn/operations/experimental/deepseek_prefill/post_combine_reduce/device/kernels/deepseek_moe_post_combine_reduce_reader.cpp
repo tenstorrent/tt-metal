@@ -22,8 +22,6 @@ void kernel_main() {
 
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr, combine_page_size);
 
-    // Stream one expert at a time to reduce L1 footprint (~100KB savings).
-    // Compute pops emb_dim_tiles per expert, so we push emb_dim_tiles per expert.
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
