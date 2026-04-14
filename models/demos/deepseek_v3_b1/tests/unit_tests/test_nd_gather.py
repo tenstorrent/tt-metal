@@ -467,6 +467,14 @@ def test_nd_gather_reduce(device, check_requires_grid_size, num_iterations):
 
         result_torch = ttnn.to_torch(result)
 
+        # Debug: print shape and first values on first 3 iterations
+        if i < 3:
+            logger.info(f"  [{i+1:>2}] result shape={result_torch.shape}, dtype={result_torch.dtype}")
+            logger.info(f"  [{i+1:>2}] result[:5]={result_torch.flatten()[:5].tolist()}")
+            logger.info(
+                f"  [{i+1:>2}] result nonzero count={result_torch.count_nonzero().item()}/{result_torch.numel()}"
+            )
+
         if reference_output is None:
             reference_output = result_torch.clone()
             # Sanity: output should not be all zeros

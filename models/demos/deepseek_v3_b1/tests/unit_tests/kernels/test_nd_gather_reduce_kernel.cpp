@@ -122,6 +122,10 @@ void kernel_main() {
         tile_regs_release();
 
         cb_pop_front(scratch_cb, 2 * num_tiles);
+
+        // Consume output CB to reset tiles_acked (no downstream consumer in this test)
+        cb_wait_front(out_cb, num_tiles);
+        cb_pop_front(out_cb, num_tiles);
     }
 #endif
 }
