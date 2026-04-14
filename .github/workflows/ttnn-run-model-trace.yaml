@@ -66,10 +66,11 @@ jobs:
 
       - name: Validate test_path exists
         id: validate
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
         run: |
           # Extract file path (strip ::test_name if present)
-          TEST_FILE="${{ inputs.test_path }}"
-          TEST_FILE="${TEST_FILE%%::*}"
+          TEST_FILE="${TEST_PATH%%::*}"
           echo "test_file=$TEST_FILE" >> $GITHUB_OUTPUT
 
           if [[ ! -f "$TEST_FILE" ]]; then
@@ -154,19 +155,28 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: Display trace configuration
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          INPUT_HF_MODEL: ${{ inputs.HF_MODEL }}
+          STORE_RAW: ${{ inputs.store-raw-traces }}
+          LOAD_DB: ${{ inputs.load-to-db }}
+          EXTRA_ARGS: ${{ inputs.extra_args }}
+          TIMEOUT: ${{ inputs.timeout-minutes }}
         run: |
           echo "::group::Trace Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    Model Trace Configuration                │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Test Path:            ${{ inputs.test_path }}"
-          echo "│ Runner:               ${{ inputs.runner-label }}"
-          echo "│ Architecture:         ${{ needs.validate-inputs.outputs.arch }}"
-          echo "│ HF_MODEL:             ${{ inputs.HF_MODEL || '(not set)' }}"
-          echo "│ Store Raw Traces:     ${{ inputs.store-raw-traces }}"
-          echo "│ Load to DB:           ${{ inputs.load-to-db }}"
-          echo "│ Extra Args:           ${{ inputs.extra_args || '(none)' }}"
-          echo "│ Timeout:              ${{ inputs.timeout-minutes }} minutes"
+          echo "│ Test Path:            $TEST_PATH"
+          echo "│ Runner:               $RUNNER_LABEL"
+          echo "│ Architecture:         $ARCH"
+          echo "│ HF_MODEL:             ${INPUT_HF_MODEL:-(not set)}"
+          echo "│ Store Raw Traces:     $STORE_RAW"
+          echo "│ Load to DB:           $LOAD_DB"
+          echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
+          echo "│ Timeout:              $TIMEOUT minutes"
           echo "│ tt-metal SHA:         ${{ github.sha }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -177,18 +187,34 @@ jobs:
         env:
           HF_MODEL: ${{ inputs.HF_MODEL }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TEST_PATH: ${{ inputs.test_path }}
+          EXTRA_ARGS: ${{ inputs.extra_args }}
+          STORE_RAW_TRACES: ${{ inputs.store-raw-traces }}
         run: |
-          STORE_FLAG=""
-          if [[ "${{ inputs.store-raw-traces }}" == "true" ]]; then
-            STORE_FLAG="--store"
+          TRACER_OUTPUT_DIR="model_tracer/traced_operations"
+
+          # Reject extra_args that override output directory
+          if [[ "$EXTRA_ARGS" =~ (^|[[:space:]])(--output-dir|-o)(=|[[:space:]]|$) ]]; then
+            echo "::error::extra_args must not override tracer output directory"
+            exit 1
           fi
 
-          python model_tracer/generic_ops_tracer.py \
-            ${{ inputs.test_path }} \
-            $STORE_FLAG \
-            ${{ inputs.extra_args }}
+          cmd=(python model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
 
-          MASTER_JSON="model_tracer/traced_operations/ttnn_operations_master.json"
+          if [[ "$STORE_RAW_TRACES" == "true" ]]; then
+            cmd+=("--store")
+          fi
+
+          if [[ -n "$EXTRA_ARGS" ]]; then
+            mapfile -d '' -t extra < <(
+              python3 -c 'import os, shlex, sys; [sys.stdout.write(a + "\0") for a in shlex.split(os.environ["EXTRA_ARGS"])]'
+            )
+            cmd+=("${extra[@]}")
+          fi
+
+          "${cmd[@]}"
+
+          MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
           echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
 
           # Extract trace_uid from the metadata file (most recent trace dir)
@@ -200,21 +226,28 @@ jobs:
 
       - name: Write job summary
         if: always() && steps.trace.outcome == 'success'
+        env:
+          MASTER_JSON: ${{ steps.trace.outputs.master_json_path }}
+          TEST_PATH: ${{ inputs.test_path }}
+          TRACE_UID: ${{ steps.trace.outputs.trace_uid }}
+          TT_METAL_SHA: ${{ github.sha }}
         run: |
-          MASTER_JSON="${{ steps.trace.outputs.master_json_path }}"
           if [[ ! -f "$MASTER_JSON" ]]; then
             echo "::warning::Master JSON not found at $MASTER_JSON"
             exit 0
           fi
 
-          # Parse master JSON for summary stats
           python3 -c "
-          import json, sys
+          import json, os, textwrap
 
-          with open('$MASTER_JSON') as f:
+          master_json = os.environ['MASTER_JSON']
+          test_path = os.environ['TEST_PATH']
+          trace_uid = os.environ.get('TRACE_UID', 'unknown')
+          tt_metal_sha = os.environ['TT_METAL_SHA']
+
+          with open(master_json) as f:
               data = json.load(f)
 
-          metadata = data.get('metadata', {})
           ops = data.get('operations', {})
           unique_ops = len(ops)
           total_configs = sum(len(op.get('configurations', [])) for op in ops.values())
@@ -240,24 +273,21 @@ jobs:
           cards = machine_info.get('card_count', '?')
           mesh = machine_info.get('mesh_device_shape', [])
 
-          summary = f'''## Model Trace Results
+          summary = textwrap.dedent(f'''
+          ## Model Trace Results
 
           | Field | Value |
           |---|---|
-          | Test Path | \`${{ inputs.test_path }}\` |
+          | Test Path | \`{test_path}\` |
           | Hardware | {board} / {series} (x{cards}) |
           | Mesh Shape | {mesh} |
           | Unique Operations | {unique_ops} |
           | Total Configurations | {total_configs} |
-          | Trace UID | \`${{ steps.trace.outputs.trace_uid }}\` |
-          | tt-metal SHA | \`${{ github.sha }}\` |
-          '''
+          | Trace UID | \`{trace_uid}\` |
+          | tt-metal SHA | \`{tt_metal_sha}\` |
+          ''').lstrip()
 
-          # Remove leading whitespace from heredoc-style indentation
-          import textwrap
-          summary = textwrap.dedent(summary)
-
-          with open('$GITHUB_STEP_SUMMARY', 'a') as f:
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
               f.write(summary)
           "
 
@@ -283,6 +313,9 @@ jobs:
     if: inputs.load-to-db && needs.trace-model.result == 'success'
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -309,24 +342,31 @@ jobs:
         id: db-load
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          TT_METAL_SHA: ${{ github.sha }}
         run: |
           python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
             model_tracer/traced_operations/ttnn_operations_master.json \
-            ${{ github.sha }}
+            "$TT_METAL_SHA"
 
       - name: Create manifest PR
         if: steps.db-load.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_PATH: ${{ inputs.test_path }}
+          TRACE_UID: ${{ needs.trace-model.outputs.trace-uid }}
+          RUN_ID: ${{ github.run_id }}
+          BASE_REF: ${{ github.ref_name }}
+          TT_METAL_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Check if manifest was actually modified
           if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
-            BRANCH_NAME="trace/auto-manifest-${{ github.run_id }}"
+            BRANCH_NAME="trace/auto-manifest-${RUN_ID}"
             git checkout -b "$BRANCH_NAME"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add model_tracer/trace_selection_registry.yaml
-            git commit -m "Add draft trace entry for ${{ inputs.test_path }}"
+            git commit -m "Add draft trace entry for ${TEST_PATH}"
             git push origin "$BRANCH_NAME"
 
             # Parse trace stats for PR body
@@ -354,23 +394,21 @@ jobs:
           print('unknown')
           ")
 
-            TRACE_UID="${{ needs.trace-model.outputs.trace-uid }}"
-
             gh pr create \
-              --base "${{ github.ref_name }}" \
+              --base "$BASE_REF" \
               --head "$BRANCH_NAME" \
-              --title "Add trace: ${{ inputs.test_path }} on ${MACHINE_INFO}" \
+              --title "Add trace: ${TEST_PATH} on ${MACHINE_INFO}" \
               --body "$(cat <<EOF
           ## New Trace Entry
 
           | Field | Value |
           |---|---|
           | Trace UID | \`${TRACE_UID}\` |
-          | Model source | \`${{ inputs.test_path }}\` |
+          | Model source | \`${TEST_PATH}\` |
           | Hardware | ${MACHINE_INFO} |
           | Config count | ${CONFIG_COUNT} |
-          | tt-metal SHA | \`${{ github.sha }}\` |
-          | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+          | tt-metal SHA | \`${TT_METAL_SHA}\` |
+          | Workflow run | ${RUN_URL} |
 
           ## Promotion checklist
           - [ ] Review trace stats in workflow job summary
