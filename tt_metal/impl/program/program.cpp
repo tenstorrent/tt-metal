@@ -19,8 +19,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -75,9 +73,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
-#include "tt_metal/jit_build/remote_compile_coordinator.hpp"
-#include "impl/jit_server/rpc_transport_adapter.hpp"
-#include "impl/jit_server/jit_compile_rpc_client.hpp"
+#include "impl/jit_server/remote_compile_coordinator.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -163,8 +159,6 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     }
 }
 
-namespace fs = std::filesystem;
-
 // Generate only the source/header files needed for compilation (no actual build).
 // These are the same files that generate_binaries() produces before calling jit_build.
 void generate_kernel_source_files(
@@ -197,6 +191,7 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
     desc.request.generated_files = jit_build::utils::read_directory_files(build_options.path, {{".h", ".hpp", ".cpp"}});
+    desc.output_dir = build_options.path;
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -1751,8 +1746,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Remote path: prep and submit are sequential (cheap CPU work;
         // the heavy lifting happens on the remote server in parallel).
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
-        RemoteCompileCoordinator coordinator(
-            std::move(endpoints), RpcTransportAdapter::create, device->build_id(), build_env.build_key());
+        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
 
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
 
@@ -1772,8 +1766,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         coordinator.finish();
 
         for (const auto& [kernel, build_options] : submitted_kernels) {
-            fs::create_directories(build_options.path);
-            std::ofstream marker(build_options.path + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
         }
     } else {

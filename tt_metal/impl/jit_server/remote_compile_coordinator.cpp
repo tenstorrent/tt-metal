@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/remote_compile_coordinator.hpp"
+#include "impl/jit_server/remote_compile_coordinator.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
 
@@ -25,25 +26,19 @@ std::unordered_map<std::string, std::shared_future<void>> RemoteCompileCoordinat
 std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> RemoteCompileCoordinator::s_fw_cache_;
 
 RemoteCompileCoordinator::RemoteCompileCoordinator(
-    std::vector<std::string> endpoints,
-    TransportFactory transport_factory,
-    ChipId device_build_id,
-    uint64_t build_key) :
+    std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key) :
     endpoints_(std::move(endpoints)),
-    transport_factory_(std::move(transport_factory)),
     device_build_id_(device_build_id),
     build_key_(build_key),
     sessions_(endpoints_.size()),
     pending_by_endpoint_(endpoints_.size()) {
     TT_FATAL(!endpoints_.empty(), "RemoteCompileCoordinator requires at least one endpoint");
-    TT_FATAL(transport_factory_ != nullptr, "RemoteCompileCoordinator requires a non-null transport factory");
 }
 
 RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
 
 void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
     const std::size_t hash = descriptor.kernel_hash;
-    const auto elf_paths = descriptor.expected_elf_paths;
 
     // Check the cross-invocation dedup cache.
     std::shared_future<void> existing_future;
@@ -60,7 +55,7 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
         }
     }
 
-    submitted_.push_back({elf_paths, existing_future});
+    submitted_.push_back(existing_future);
 
     if (!new_promise) {
         return;
@@ -76,8 +71,8 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
     pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
 }
 
-std::vector<KernelCompileResult> RemoteCompileCoordinator::finish() {
-    // Phase 1: Collect responses per endpoint, write ELFs, fulfill dedup promises.
+void RemoteCompileCoordinator::finish() {
+    // Phase 1: Collect responses per endpoint, write ELFs and markers, fulfill dedup promises.
     for (std::size_t ep_idx = 0; ep_idx < pending_by_endpoint_.size(); ++ep_idx) {
         auto& pending = pending_by_endpoint_[ep_idx];
         if (pending.empty()) {
@@ -116,17 +111,17 @@ std::vector<KernelCompileResult> RemoteCompileCoordinator::finish() {
             for (std::size_t j = 0; j < pend.descriptor.expected_elf_paths.size(); ++j) {
                 write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
             }
+
+            fs::create_directories(pend.descriptor.output_dir);
+            std::ofstream marker(pend.descriptor.output_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+
             pend.dedup_promise->set_value();
         }
     }
 
-    // Phase 2: Wait for all submitted kernels (including those fulfilled by other threads)
-    // and collect results.
-    std::vector<KernelCompileResult> results;
-    results.reserve(submitted_.size());
-    for (auto& sub : submitted_) {
-        sub.ready.get();
-        results.push_back({std::move(sub.elf_paths)});
+    // Phase 2: Wait for any dedup'd kernels fulfilled by other coordinator instances.
+    for (auto& future : submitted_) {
+        future.get();
     }
 
     // Clear per-batch state.
@@ -134,13 +129,11 @@ std::vector<KernelCompileResult> RemoteCompileCoordinator::finish() {
     for (auto& v : pending_by_endpoint_) {
         v.clear();
     }
-
-    return results;
 }
 
 void RemoteCompileCoordinator::ensure_session(std::size_t endpoint_index) {
     if (!sessions_[endpoint_index]) {
-        sessions_[endpoint_index] = transport_factory_(endpoints_[endpoint_index]);
+        sessions_[endpoint_index] = std::make_unique<jit_server::JitCompileRpcSession>(endpoints_[endpoint_index]);
     }
 }
 

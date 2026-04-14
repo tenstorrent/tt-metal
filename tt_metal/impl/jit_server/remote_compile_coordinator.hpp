@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -14,8 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "impl/jit_server/jit_compile_rpc_client.hpp"
 #include "impl/jit_server/types.hpp"
-#include "jit_build/remote_compile_transport.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
@@ -27,11 +26,8 @@ struct KernelCompileDescriptor {
     jit_server::CompileRequest request;
     // Local file paths where the resulting ELF blobs should be written.
     std::vector<std::string> expected_elf_paths;
-};
-
-// Per-kernel result returned by the coordinator after finish().
-struct KernelCompileResult {
-    std::vector<std::string> elf_paths;
+    // Kernel output directory where the .SUCCESS marker is written.
+    std::string output_dir;
 };
 
 // Orchestrates remote JIT compilation for a batch of kernels.
@@ -46,13 +42,7 @@ struct KernelCompileResult {
 // program.cpp prepares descriptors; this class owns all mechanics.
 class RemoteCompileCoordinator {
 public:
-    using TransportFactory = std::function<std::unique_ptr<RemoteCompileTransport>(const std::string& endpoint)>;
-
-    RemoteCompileCoordinator(
-        std::vector<std::string> endpoints,
-        TransportFactory transport_factory,
-        ChipId device_build_id,
-        uint64_t build_key);
+    RemoteCompileCoordinator(std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key);
     ~RemoteCompileCoordinator();
 
     RemoteCompileCoordinator(const RemoteCompileCoordinator&) = delete;
@@ -63,9 +53,9 @@ public:
     // Sends the RPC immediately for new kernels; deduped kernels just record the future.
     void submit(KernelCompileDescriptor descriptor);
 
-    // Collect all outstanding RPC responses, write ELF blobs to disk,
-    // and return results in the same order as submit() calls.
-    std::vector<KernelCompileResult> finish();
+    // Collect all outstanding RPC responses, write ELF blobs and .SUCCESS
+    // markers to disk, and wait for any dedup'd kernels to complete.
+    void finish();
 
 private:
     const jit_server::UploadFirmwareRequest& get_firmware_request();
@@ -75,7 +65,6 @@ private:
 
     // -- Configuration (immutable after construction) --
     std::vector<std::string> endpoints_;
-    TransportFactory transport_factory_;
     ChipId device_build_id_;
     uint64_t build_key_;
 
@@ -86,14 +75,10 @@ private:
         KernelCompileDescriptor descriptor;
         std::shared_ptr<std::promise<void>> dedup_promise;
     };
-    std::vector<std::unique_ptr<RemoteCompileTransport>> sessions_;
+    std::vector<std::unique_ptr<jit_server::JitCompileRpcSession>> sessions_;
     std::vector<std::vector<PendingKernel>> pending_by_endpoint_;
 
-    struct SubmittedKernel {
-        std::vector<std::string> elf_paths;
-        std::shared_future<void> ready;
-    };
-    std::vector<SubmittedKernel> submitted_;
+    std::vector<std::shared_future<void>> submitted_;
 
     // -- Global state (persists across batches within the process) --
     static std::mutex s_dedup_mutex_;
