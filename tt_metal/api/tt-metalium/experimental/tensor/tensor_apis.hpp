@@ -143,4 +143,35 @@ HostTensor unpad_from_tile(const HostTensor& input_tensor, const Shape& output_t
 
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
 
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+//
+// TODO(#40348): This is an internal utility function, we should close this up.
+bool logical_matches_physical(const TensorSpec& tensor_spec);
+
+namespace host_buffer {
+
+// TODO(#40348): This function has single device assumptions over inheritely multi-device constructs.
+HostBuffer get_host_buffer(const HostTensor& tensor);
+
+template <typename T>
+tt::stl::Span<const T> get_as(const HostBuffer& buffer);
+
+template <typename T>
+tt::stl::Span<T> get_as(HostBuffer& buffer);
+
+template <typename T>
+tt::stl::Span<const T> get_as(const HostTensor& tensor);
+
+template <typename T>
+tt::stl::Span<T> get_as(HostTensor& tensor);
+
+}  // namespace host_buffer
+
 }  // namespace tt::tt_metal

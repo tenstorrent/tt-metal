@@ -94,7 +94,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/mesh_tensor.hpp
     api/tt-metalium/experimental/tensor/tensor_types.hpp
     api/tt-metalium/experimental/tensor/tensor_apis.hpp
-    api/tt-metalium/experimental/tensor/tensor_utils.hpp
     api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
     api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
     api/tt-metalium/experimental/tensor/spec/layout/layout.hpp

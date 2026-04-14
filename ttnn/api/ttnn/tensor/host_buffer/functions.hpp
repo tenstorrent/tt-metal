@@ -6,8 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-// Exports functions
-#include <tt-metalium/experimental/tensor/tensor_utils.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+
 namespace tt::tt_metal::host_buffer {
 
 HostBuffer get_host_buffer(const Tensor& tensor);

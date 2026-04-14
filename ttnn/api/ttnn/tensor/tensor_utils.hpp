@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
-// Experts symbols for transiet includes.
-#include <tt-metalium/experimental/tensor/tensor_utils.hpp>
+// Exports symbols
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 namespace tt::tt_metal {
 

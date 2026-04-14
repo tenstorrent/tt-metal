@@ -14,7 +14,6 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
-#include <tt-metalium/experimental/tensor/tensor_utils.hpp>
 
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
