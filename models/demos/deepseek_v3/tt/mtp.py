@@ -199,7 +199,7 @@ class MTP2D(AbstractModule):
         head_norm_cfg = DistributedRMSNorm.decode_model_config(
             hf_config, mesh_device, batch_size_per_row=batch_size_per_row
         )
-        head_cfg = LMHead1D.decode_model_config(mesh_device)
+        head_cfg = LMHead1D.decode_model_config(hf_config, mesh_device)
         # Decode is single-token, so keep the MTP-specific intermediate tensors in L1.
         decode_memory_config = ttnn.L1_MEMORY_CONFIG
         return {
