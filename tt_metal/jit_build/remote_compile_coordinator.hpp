@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "impl/jit_server/types.hpp"
+#include "jit_build/remote_compile_transport.hpp"
+
+namespace tt::tt_metal {
+
+// Input descriptor for one kernel to be compiled remotely.
+// Built by program.cpp during kernel prep; consumed by the coordinator.
+struct KernelCompileDescriptor {
+    std::size_t kernel_hash = 0;
+    jit_server::CompileRequest request;
+    // Local file paths where the resulting ELF blobs should be written.
+    std::vector<std::string> expected_elf_paths;
+};
+
+// Per-kernel result returned by the coordinator after finish().
+struct KernelCompileResult {
+    std::vector<std::string> elf_paths;
+};
+
+// Orchestrates remote JIT compilation for a batch of kernels.
+//
+// One instance is created per ProgramImpl::compile invocation. It handles:
+//   - Cross-invocation in-flight dedup (same kernel hash -> compile once)
+//   - Upload-once firmware gate per (endpoint, build_key)
+//   - Endpoint sharding (kernel_hash % N)
+//   - Pipelined RPC sends during submit, batched response collection in finish
+//   - ELF blob materialization to disk
+//
+// program.cpp prepares descriptors; this class owns all mechanics.
+class RemoteCompileCoordinator {
+public:
+    using TransportFactory = std::function<std::unique_ptr<RemoteCompileTransport>(const std::string& endpoint)>;
+
+    // Called at most once per build_key for the lifetime of the process.
+    // Responsible for collecting firmware artifacts from the local build environment.
+    using FirmwareFactory = std::function<jit_server::UploadFirmwareRequest(uint64_t build_key)>;
+
+    RemoteCompileCoordinator(
+        std::vector<std::string> endpoints,
+        TransportFactory transport_factory,
+        FirmwareFactory firmware_factory,
+        uint64_t build_key);
+    ~RemoteCompileCoordinator();
+
+    RemoteCompileCoordinator(const RemoteCompileCoordinator&) = delete;
+    RemoteCompileCoordinator& operator=(const RemoteCompileCoordinator&) = delete;
+
+    // Submit a kernel for remote compilation.
+    // Deduplicates against prior submissions (even from previous batches in this process).
+    // Sends the RPC immediately for new kernels; deduped kernels just record the future.
+    void submit(KernelCompileDescriptor descriptor);
+
+    // Collect all outstanding RPC responses, write ELF blobs to disk,
+    // and return results in the same order as submit() calls.
+    std::vector<KernelCompileResult> finish();
+
+private:
+    const jit_server::UploadFirmwareRequest& get_firmware_request();
+    void ensure_firmware_uploaded(std::size_t endpoint_index);
+    void ensure_session(std::size_t endpoint_index);
+    void write_elf_blob(const std::string& path, const jit_server::ElfBlob& blob);
+
+    // -- Configuration (immutable after construction) --
+    std::vector<std::string> endpoints_;
+    TransportFactory transport_factory_;
+    FirmwareFactory firmware_factory_;
+    uint64_t build_key_;
+
+    // -- Per-batch state (between submit/finish) --
+    struct PendingKernel {
+        KernelCompileDescriptor descriptor;
+        std::shared_ptr<std::promise<void>> dedup_promise;
+    };
+    std::vector<std::unique_ptr<RemoteCompileTransport>> sessions_;
+    std::vector<std::vector<PendingKernel>> pending_by_endpoint_;
+
+    struct SubmittedKernel {
+        std::vector<std::string> elf_paths;
+        std::shared_future<void> ready;
+    };
+    std::vector<SubmittedKernel> submitted_;
+
+    // -- Global state (persists across batches within the process) --
+    static std::mutex s_dedup_mutex_;
+    static std::unordered_map<std::size_t, std::shared_future<void>> s_dedup_cache_;
+
+    static std::mutex s_fw_gate_mutex_;
+    static std::unordered_map<std::string, std::shared_future<void>> s_fw_gate_;
+    // Firmware request cache: built at most once per build_key via firmware_factory_.
+    static std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> s_fw_cache_;
+};
+
+}  // namespace tt::tt_metal

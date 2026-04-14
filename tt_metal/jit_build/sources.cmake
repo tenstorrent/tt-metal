@@ -10,4 +10,5 @@ set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_build_options.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jit_build_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/precompiled.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/remote_compile_coordinator.cpp
 )
