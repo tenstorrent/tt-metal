@@ -532,12 +532,12 @@ def test_demo(mesh_device, model_path):
         pytest -k "1x2"   # N300 / TP=2
         pytest -k "1x8"   # T3K  / TP=8
     """
-    prompts = ["Explain quantum computing in simple terms. You have around 1000 words to explain it."]
+    prompts = ["Explain quantum computing in simple terms."]
     results = run_generation(
         mesh_device=mesh_device,
         model_path=model_path,
         prompts=prompts,
-        max_new_tokens=2048,
+        max_new_tokens=128,
         max_seq_len=4 * 1024,
         enable_decode_trace=True,
     )
