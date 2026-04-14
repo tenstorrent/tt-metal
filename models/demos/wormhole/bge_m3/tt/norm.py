@@ -7,7 +7,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
-from models.demos.wormhole.bge_m3.tt.device_kernels import bge_m3_layernorm_compute_kernel_config
+from models.demos.wormhole.bge_m3.tt.device_kernels import (
+    bge_m3_layernorm_compute_kernel_config,
+    bge_m3_linear_activation_memory_config,
+    bge_m3_weight_dram_memory_config,
+)
 
 SHARD_HEIGHT = TILE_SIZE
 
@@ -26,6 +30,10 @@ class LayerNorm1DConfig:
 
     # Optional input memcfg override
     input_memcfg: ttnn.MemoryConfig | None = None
+
+    # Compile-time max sequence (matches matmul L1 policy for layernorm output buffer).
+    max_seq_len: int | None = None
+    output_memcfg: ttnn.MemoryConfig | None = None
 
     # Compute kernel config
     compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
@@ -77,20 +85,26 @@ class LayerNorm1D(LightweightModule):
         self.bias = cfg.bias.get_device_weight()
         self._device_weights_loaded = True
 
-    def forward(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
-        """Single-forward interleaved LayerNorm entrypoint."""
+    def forward(
+        self,
+        x: ttnn.Tensor | LazyWeight,
+        residual_input_tensor: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """LayerNorm over ``x``, optionally fusing ``x += residual`` before norm (Post-LN block)."""
         self.load_device_weights()
         cfg = self.config
         x = _load_input_device_tensor(x, cfg)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
 
+        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(cfg.max_seq_len)
         return ttnn.layer_norm(
             x,
             epsilon=cfg.eps,
             weight=self.weight,
             bias=self.bias,
+            residual_input_tensor=residual_input_tensor,
             program_config=None,  # None to pc
-            memory_config=None,
+            memory_config=out_mem,
             compute_kernel_config=cfg.compute_kernel_config,
         )
 
@@ -164,7 +178,15 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
 
     # --- Phase 3: compute kernel config default ---
     if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = bge_m3_layernorm_compute_kernel_config(mesh_device)
+        to_set["compute_kernel_config"] = bge_m3_layernorm_compute_kernel_config(
+            mesh_device,
+            max_seq_len=config.max_seq_len,
+        )
+
+    if config.output_memcfg is None:
+        to_set["output_memcfg"] = bge_m3_linear_activation_memory_config(config.max_seq_len)
+
+    weight_dram = bge_m3_weight_dram_memory_config()
 
     # --- Phase 4: resolve local LazyWeights for replicated execution ---
     expected_shape = (1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)
@@ -184,7 +206,7 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
     to_set["bias"] = resolve_lazy_weight(
@@ -192,7 +214,7 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
 
