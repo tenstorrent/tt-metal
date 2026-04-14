@@ -160,7 +160,7 @@ def test_whisper_attention(
             torch_hidden_states,
             attention_mask=torch_attention_mask,
             key_value_states=torch_encoder_states,
-            past_key_values=past_key_values,
+            past_key_value=past_key_values,
         )
         if isinstance(hf_attn_out, tuple):
             if len(hf_attn_out) == 2:
@@ -173,9 +173,9 @@ def test_whisper_attention(
             torch_output = hf_attn_out
 
         if use_kv_cache:
-            layer_cache = past_key_values.self_attention_cache.layers[0]
-            past_k_hf = layer_cache.keys
-            past_v_hf = layer_cache.values
+            layer_cache = past_key_values.self_attention_cache
+            past_k_hf = layer_cache.key_cache[0]
+            past_v_hf = layer_cache.value_cache[0]
         else:
             past_k_hf = past_v_hf = None
 
