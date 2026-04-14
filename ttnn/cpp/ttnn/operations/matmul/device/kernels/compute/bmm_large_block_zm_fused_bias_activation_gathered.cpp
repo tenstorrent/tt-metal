@@ -232,7 +232,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
+    PACK(SFPU_OP_INIT_ACTIVATION);
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -373,19 +373,35 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                     if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-#endif
+                        // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
                         if constexpr (untilize_out) {
                             pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
                         mm_out_cb.reserve_back(out_subblock_num_tiles);
+
+#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
+                        // Replace tile_regs_wait with PACKER synchronization for SFPU overlap
+                        PACK(TTI_SEMWAIT(
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            semaphore::t6_sem(semaphore::MATH_PACK),
+                            p_stall::STALL_ON_ZERO));
+
+                        // Flip destination register offset for PACKER access
+                        PACK(TT_SETC16(
+                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                        // Execute SFPU on PACKER thread
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            PACK(SFPU_OP_FUNC_ACTIVATION);
+                        }
+
+                        // Wait for SFPU completion before packing
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#else
                         tile_regs_wait();
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
