@@ -5,7 +5,6 @@
 SwiGLU MLP implementation for Qwen3-TTS.
 """
 
-import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -43,44 +42,96 @@ class MLP(LightweightModule):
             return weight_cache_path / f"{layer_prefix}_{name}".replace(".", "_")
 
         # Load and transpose weights (for matmul: x @ W.T -> x @ W where W is transposed)
-        gate_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.gate_proj.weight"], -2, -1)
-        up_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.up_proj.weight"], -2, -1)
-        down_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.down_proj.weight"], -2, -1)
-
+        # gate_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.gate_proj.weight"], -2, -1)
+        # up_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.up_proj.weight"], -2, -1)
+        # down_proj_weight = torch.transpose(state_dict[f"{layer_prefix}.mlp.down_proj.weight"], -2, -1)
+        #
         # Make weights 4D for TTNN [1, 1, in_features, out_features]
-        gate_proj_weight = gate_proj_weight.unsqueeze(0).unsqueeze(0)
-        up_proj_weight = up_proj_weight.unsqueeze(0).unsqueeze(0)
-        down_proj_weight = down_proj_weight.unsqueeze(0).unsqueeze(0)
+        # gate_proj_weight = gate_proj_weight.unsqueeze(0).unsqueeze(0)
+        # up_proj_weight = up_proj_weight.unsqueeze(0).unsqueeze(0)
+        # down_proj_weight = down_proj_weight.unsqueeze(0).unsqueeze(0)
+        #
+        # self.gate_proj = ttnn.as_tensor(
+        #     gate_proj_weight,
+        #     device=device,
+        #     dtype=weight_dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("gate_proj"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
+        #
+        # self.up_proj = ttnn.as_tensor(
+        #     up_proj_weight,
+        #     device=device,
+        #     dtype=weight_dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("up_proj"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
+        #
+        # self.down_proj = ttnn.as_tensor(
+        #     down_proj_weight,
+        #     device=device,
+        #     dtype=weight_dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=get_cache_name("down_proj"),
+        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        # )
 
-        self.gate_proj = ttnn.as_tensor(
-            gate_proj_weight,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("gate_proj"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        )
+        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
 
-        self.up_proj = ttnn.as_tensor(
-            up_proj_weight,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("up_proj"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        )
+        def _build_proj_weight(weight_key: str, cache_name: str):
+            weight_torch = state_dict[weight_key]
+            in_features = int(weight_torch.shape[1])
+            out_features = int(weight_torch.shape[0])
 
-        self.down_proj = ttnn.as_tensor(
-            down_proj_weight,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("down_proj"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-        )
+            weight_tt = ttnn.from_torch(
+                weight_torch,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=_mesh_mapper,
+            )
+            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(weight_tt)
+            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            # Read reshape output before freeing transpose input; reshape may alias weight_tx storage.
+            weight_host = ttnn.to_torch(weight_4d).contiguous()
+
+            ttnn.deallocate(weight_4d)
+            ttnn.deallocate(weight_tx)
+
+            #
+
+            cache_file = get_cache_name(cache_name)
+            if cache_file is not None:
+                return ttnn.as_tensor(
+                    weight_host,
+                    device=device,
+                    dtype=weight_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_dram,
+                    cache_file_name=cache_file,
+                    mesh_mapper=_mesh_mapper,
+                )
+            return ttnn.from_torch(
+                weight_host,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
+
+        self.gate_proj = _build_proj_weight(f"{layer_prefix}.mlp.gate_proj.weight", "gate_proj")
+        self.up_proj = _build_proj_weight(f"{layer_prefix}.mlp.up_proj.weight", "up_proj")
+        self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
