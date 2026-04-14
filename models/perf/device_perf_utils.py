@@ -390,6 +390,7 @@ def run_model_device_perf_test(
     batch_size: int = 1,
     margin: float = 0.015,
     comments: str = "",
+    op_support_count: int = None,
 ):
     """
     Run device performance test for a model and validate results against expected performance.
@@ -407,6 +408,7 @@ def run_model_device_perf_test(
         batch_size (int, optional): Batch size for the model. Defaults to 1.
         margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
         comments (str, optional): Additional comments or settings description for the report. Defaults to "".
+        op_support_count (int, optional): Number of operations to support. Defaults to None.
 
     Raises:
         AssertionError: If the measured performance is outside the acceptable margin from expected performance.
@@ -415,7 +417,12 @@ def run_model_device_perf_test(
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+        command,
+        subdir=subdir,
+        num_iterations=num_iterations,
+        cols=cols,
+        batch_size=batch_size,
+        op_support_count=op_support_count,
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
     expected_results = check_device_perf(
