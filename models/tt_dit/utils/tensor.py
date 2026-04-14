@@ -336,12 +336,15 @@ def _reassemble_2d(
     shard_shape: list[int],
     mesh_shape: tuple[int, ...],
     concat_dims: list[int | None],
+    permute: tuple[int, ...] | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor:
     """Reassemble per-device shards into a single tensor for a 2D mesh.
 
     For the common case where both axes are concatenated, writes each shard
-    directly into a cached output buffer (avoids torch.cat intermediate
-    allocations whose munmap costs ~42 ms per 448 MB on Linux).
+    directly into a pre-allocated output buffer.  When *permute* and/or *dtype*
+    are given the permutation and type conversion are fused into the scatter
+    write, halving total memory traffic.
     """
     d0, d1 = concat_dims
 
@@ -352,7 +355,24 @@ def _reassemble_2d(
         full_shape[d1] *= mesh_shape[1]
         ndim = len(full_shape)
 
-        out = torch.empty(full_shape, dtype=shards[0].dtype)
+        if permute is not None:
+            out_shape = [full_shape[p] for p in permute]
+            out_dtype = dtype if dtype is not None else shards[0].dtype
+            perm_list = list(permute)
+            d0_out = perm_list.index(d0)
+            d1_out = perm_list.index(d1)
+
+            out = torch.empty(out_shape, dtype=out_dtype)
+            for coord, shard in zip(mesh_coords, shards):
+                r, c = int(coord[0]), int(coord[1])
+                slices = [slice(None)] * ndim
+                slices[d0_out] = slice(r * s0, (r + 1) * s0)
+                slices[d1_out] = slice(c * s1, (c + 1) * s1)
+                out[tuple(slices)] = shard.permute(*permute)
+            return out
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        out = torch.empty(full_shape, dtype=out_dtype)
         for coord, shard in zip(mesh_coords, shards):
             r, c = int(coord[0]), int(coord[1])
             slices = [slice(None)] * ndim
@@ -376,6 +396,9 @@ def fast_device_to_host(
     concat_dims: list[int | None],
     ccl_manager=None,
     root: int | None = None,
+    *,
+    permute: tuple[int, ...] | None = None,
+    dtype: torch.dtype | None = None,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -399,6 +422,11 @@ def fast_device_to_host(
         root: If set, only the host with this MPI rank performs the D2H
             transfer and returns the assembled tensor; all other ranks return
             ``None``.  If ``None`` (default), all ranks perform D2H.
+        permute: If set, each shard is permuted before being written into the
+            output.  Fuses the permutation into the scatter write so that no
+            intermediate tensor in the original layout is ever materialised.
+        dtype: Output dtype.  When combined with ``permute``, the dtype
+            conversion is fused into the scatter write (single-pass copy).
     """
     mesh_shape = tuple(mesh_device.shape)
 
@@ -490,7 +518,7 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims)
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
 
 
 def upsample(

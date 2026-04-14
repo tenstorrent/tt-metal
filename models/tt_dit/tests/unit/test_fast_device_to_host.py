@@ -144,7 +144,8 @@ class TestFastDeviceToHost:
 
         start = time.perf_counter()
         for _ in range(n_iters):
-            fast_device_to_host(tt_tensor, mesh_device, concat_dims, ccl_manager=ccl_manager)
+            video = fast_device_to_host(tt_tensor, mesh_device, concat_dims, ccl_manager=ccl_manager)
+            video = video.permute(0, 2, 3, 4, 1).float()
         # Sync + barrier before measurement
         ttnn.synchronize_device(mesh_device)
         if ttnn.using_distributed_env():
@@ -152,15 +153,91 @@ class TestFastDeviceToHost:
         end = time.perf_counter()
 
         avg_s = (end - start) / n_iters
-        tensor_bytes = B * C * T * H * W * 2  # bfloat16 = 2 bytes
+        tensor_bytes = B * C * T * H * W * 4  # float32 = 4 bytes (full pipeline output)
         throughput_gbs = (tensor_bytes / avg_s) / 1e9
 
         rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
         if rank == 0:
-            print(f"\n--- fast_device_to_host performance (root=0) ---")
+            print(f"\n--- fast_device_to_host + permute + float performance (root=0) ---")
             print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
-            print(f"  Tensor shape:  ({B}, {C}, {T}, {H}, {W}) bfloat16")
-            print(f"  Tensor size:   {tensor_bytes / 1e6:.1f} MB")
+            print(f"  Output shape:  (1, {T}, {H}, {W}, {C}) float32 (BTHWC)")
+            print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB")
+            print(f"  Iterations:    {n_iters}")
+            print(f"  Average time:  {avg_s * 1000:.1f} ms")
+            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+    def test_fused_correctness(self, mesh_device, num_links, device_params, topology):
+        """Round-trip with fused permute + dtype conversion."""
+        import torch
+
+        ref = _make_reference_tensor()
+        tt_tensor = _shard_to_device(ref, mesh_device)
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        concat_dims = _make_concat_dims()
+
+        result = fast_device_to_host(
+            tt_tensor,
+            mesh_device,
+            concat_dims,
+            ccl_manager=ccl_manager,
+            permute=(0, 2, 3, 4, 1),
+            dtype=torch.float32,
+        )
+
+        expected = ref.permute(0, 2, 3, 4, 1).float()
+        assert result.shape == expected.shape, f"Shape mismatch: {result.shape} vs {expected.shape}"
+        assert result.dtype == torch.float32
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+    def test_fused_performance(self, mesh_device, num_links, device_params, topology):
+        """Measure fused permute+dtype D2H time over 10 iterations."""
+        import torch
+
+        n_iters = 10
+        ref = _make_reference_tensor()
+        tt_tensor = _shard_to_device(ref, mesh_device)
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        concat_dims = _make_concat_dims()
+
+        # Warmup
+        fast_device_to_host(
+            tt_tensor,
+            mesh_device,
+            concat_dims,
+            ccl_manager=ccl_manager,
+            permute=(0, 2, 3, 4, 1),
+            dtype=torch.float32,
+        )
+
+        ttnn.synchronize_device(mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            fast_device_to_host(
+                tt_tensor,
+                mesh_device,
+                concat_dims,
+                ccl_manager=ccl_manager,
+                permute=(0, 2, 3, 4, 1),
+                dtype=torch.float32,
+            )
+        ttnn.synchronize_device(mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        end = time.perf_counter()
+
+        avg_s = (end - start) / n_iters
+        tensor_bytes = B * C * T * H * W * 4  # float32 = 4 bytes
+        throughput_gbs = (tensor_bytes / avg_s) / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- fast_device_to_host FUSED performance (root=0) ---")
+            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
+            print(f"  Output shape:  (1, {T}, {H}, {W}, {C}) float32 (BTHWC)")
+            print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB")
             print(f"  Iterations:    {n_iters}")
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
