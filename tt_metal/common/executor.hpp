@@ -24,8 +24,6 @@
 #include <taskflow/taskflow.hpp>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
-#include <string_view>
 #include <thread>
 
 namespace tt::tt_metal::detail {
