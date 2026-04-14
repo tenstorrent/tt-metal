@@ -67,11 +67,15 @@ Tensor fast_reduce_nc(
     const int32_t& dim,
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
+        .dim = dim,
+        .output_mem_config = output_mem_config,
+        .compute_kernel_config = compute_kernel_config,
+        .sub_core_grids = sub_core_grids};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

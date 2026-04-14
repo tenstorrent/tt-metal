@@ -28,6 +28,13 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
+
+    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
+    // scaler twice internally (once per dimension). Here we compensate with
+    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
+    // must not reach this code path. Instead negative scalers are handled via the two-step
+    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
+    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
     float scaler = std::sqrt(operation_attributes.scaler);
 
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
@@ -64,8 +71,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
