@@ -538,13 +538,12 @@ static void run_quasar_pack_untilize_test(
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
-    bool is_int8 = (data_fmt == tt::DataFormat::Int8 || data_fmt == tt::DataFormat::UInt8);
+    bool is_8bit_integer = (data_fmt == tt::DataFormat::Int8 || data_fmt == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t input_single_tile_size = tt::tile_size(data_fmt);
     // For int8: Int8 in dest is promoted to Int32, pack writes Int32
     // For fp: output is Float32 when fp32_dest_acc_en, else same as input
-    uint32_t output_single_tile_size =
-        (is_int8 || fp32_dest_acc_en) ? 4 * 1024 : tt::tile_size(data_fmt);
+    uint32_t output_single_tile_size = (is_8bit_integer || fp32_dest_acc_en) ? 4 * 1024 : tt::tile_size(data_fmt);
     uint32_t src_dram_buffer_size = input_single_tile_size * num_tiles;
     uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
 
@@ -566,7 +565,7 @@ static void run_quasar_pack_untilize_test(
     uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
 
     tt::DataFormat output_data_fmt = data_fmt;
-    if (is_int8) {
+    if (is_8bit_integer) {
         output_data_fmt = tt::DataFormat::Int32;
     } else if (fp32_dest_acc_en) {
         output_data_fmt = tt::DataFormat::Float32;
@@ -652,14 +651,14 @@ static void run_quasar_pack_untilize_test(
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
-    uint32_t datum_bytes = is_int8 ? 1 : 2;
+    uint32_t datum_bytes = is_8bit_integer ? 1 : 2;
     ::unit_tests::compute::GoldenConfig golden_config = {
         .num_tiles_r_dim = static_cast<int>(num_tiles_r),
         .num_tiles_c_dim = static_cast<int>(num_tiles_c),
         .datum_bytes = datum_bytes};
     auto golden = ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
 
-    if (is_int8) {
+    if (is_8bit_integer) {
         // Int8/UInt8 in dest is promoted to Int32. Expand each byte to a uint32_t word.
         // Hardware uses sign-magnitude representation for Int8:
         //   bit 31 = sign (MSB of the byte), bits [6:0] = magnitude (lower 7 bits of the byte)
@@ -693,7 +692,7 @@ static void run_quasar_pack_untilize_test(
 
 // Pack Untilize (via pack_untilize_block)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
-    vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -714,7 +713,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
 
 // Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
-    vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true}) {
             for (bool fp32_dest_acc_en : {true}) {
@@ -735,7 +734,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
 
 // Pack Untilize Int8 -> Int32 dest -> Int32 (via pack_untilize_block)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
-    vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             if ((dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
@@ -755,7 +754,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
 
 // Pack Untilize Dst Int8 -> Int32 dest -> Int32 (tiles pre-loaded into dest via copy_tile)
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
-    vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
             if ((dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
