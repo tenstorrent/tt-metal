@@ -38,6 +38,15 @@ on:
         required: false
         default: false
         type: boolean
+      demo_upr_mode:
+        description: 'UPR variant for demo and stress tests'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - 32
+          - 8
       recalculate_weights_cache:
         description: 'Recalculate weights cache in a new directory'
         required: false
@@ -181,7 +190,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
 
       - name: Run quad DeepSeek V3 unit tests
         if: ${{ matrix.setup == 'quad' && inputs.deepseekv3_unit_tests }}
@@ -205,7 +214,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_unit_tests
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_unit_tests
 
       # ── DeepSeek V3 module tests ────────────────────────────────────────
       - name: Run dual DeepSeek V3 module tests
@@ -230,7 +239,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
         if: ${{ matrix.setup == 'quad' && inputs.deepseekv3_module_tests }}
@@ -254,7 +263,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_module_tests
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_module_tests
 
       # ── Teacher forced accuracy tests ───────────────────────────────────
       - name: Run dual teacher forced accuracy test
@@ -279,7 +288,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
 
       - name: Upload dual teacher forced accuracy artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.teacher_forced || github.event_name == 'schedule') }}
@@ -313,7 +322,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.teacher_forced }}
@@ -348,7 +357,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload dual demo output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
@@ -357,7 +366,7 @@ jobs:
           name: dual-demo-output-${{ github.run_id }}
           path: |
             generated/artifacts/dual_demo_output.log
-            generated/artifacts/dual_demo_full_results.json
+            generated/artifacts/dual_demo_full_results*.json
           if-no-files-found: warn
 
       - name: Run dual MTP demo parity smoke test
@@ -382,7 +391,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_mtp
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_mtp
 
       - name: Upload dual MTP demo output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
@@ -416,7 +425,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload quad demo output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo }}
@@ -425,7 +434,7 @@ jobs:
           name: quad-demo-output-${{ github.run_id }}
           path: |
             generated/artifacts/quad_demo_output.log
-            generated/artifacts/quad_demo_full_results.json
+            generated/artifacts/quad_demo_full_results*.json
           if-no-files-found: warn
 
       - name: Run quad MTP demo parity smoke test
@@ -450,7 +459,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_mtp
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_mtp
 
       - name: Upload quad MTP demo output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo }}
@@ -485,7 +494,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload dual demo stress output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo_stress || github.event_name == 'schedule') }}
@@ -494,7 +503,7 @@ jobs:
           name: dual-demo-stress-output-${{ github.run_id }}
           path: |
             generated/artifacts/dual_demo_stress_output.log
-            generated/artifacts/dual_demo_stress_results.json
+            generated/artifacts/dual_demo_stress_results*.json
           if-no-files-found: warn
 
       - name: Run quad demo stress test (56 prompts, 20 batches)
@@ -519,7 +528,7 @@ jobs:
           install_wheel: true
           run_args: |
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
+            bash ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress "${{ github.event_name == 'schedule' && 'all' || inputs.demo_upr_mode || 'all' }}"
 
       - name: Upload quad demo stress output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo_stress }}
@@ -528,5 +537,5 @@ jobs:
           name: quad-demo-stress-output-${{ github.run_id }}
           path: |
             generated/artifacts/quad_demo_stress_output.log
-            generated/artifacts/quad_demo_stress_results.json
+            generated/artifacts/quad_demo_stress_results*.json
           if-no-files-found: warn
