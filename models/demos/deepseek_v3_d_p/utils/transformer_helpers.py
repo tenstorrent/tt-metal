@@ -26,8 +26,6 @@ from transformers import DynamicCache
 from transformers.modeling_utils import no_init_weights
 
 import ttnn
-from models.common.utility_functions import profiler
-from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
 
 
@@ -274,6 +272,7 @@ def load_and_compute_layer_by_layer(
     config,
     num_layers: int,
     token_ids: torch.Tensor | None = None,
+    attention_mask: torch.Tensor | None = None,
     compute_reference: bool = True,
     build_ttnn_cache: bool = True,
     weight_cache_path: Path | None = None,
@@ -304,7 +303,7 @@ def load_and_compute_layer_by_layer(
         build_ttnn_cache: If True, build .ttnn cache files using device=None
         weight_cache_path: Cache directory (required if build_ttnn_cache=True)
         mesh_device: Mesh device reference (required if build_ttnn_cache=True)
-        ... other args for cache building
+        attention_mask: Attention mask [shape TBD] (required if compute_reference=True)
 
     Returns:
         LayerByLayerResult(state_dict=None, ref_snapshots, ref_kvpe_list)
@@ -360,7 +359,6 @@ def load_and_compute_layer_by_layer(
         # Setup forward pass inputs
         seq_len = token_ids.shape[1]
         position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-        attention_mask = torch.zeros(1, 1, seq_len, seq_len, dtype=torch.bfloat16)
         ref_cache = DynamicCache()
 
     # --- Process Embeddings ---
@@ -377,6 +375,35 @@ def load_and_compute_layer_by_layer(
         # Clear embedding weights from hf_model
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
+
+    from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+
+    attention_mask = _prepare_4d_causal_attention_mask(
+        attention_mask,
+        (1, seq_len),
+        inputs_embeds=h_ref,
+        past_key_values_length=0,
+    )
+
+    #   # Get 2D mask from tokenizer (if available)
+    #   # OR create proper 4D causal mask directly
+
+    #   # Option 1: Manual conversion (if you have 2D mask)
+    #   if attention_mask_2d is not None and len(attention_mask_2d.shape) == 2:
+    #       attention_mask = _prepare_4d_causal_attention_mask(
+    #           attention_mask_2d,
+    #           (batch_size, seq_len),
+    #           inputs_embeds=h_ref,  # from line 376
+    #           past_key_values_length=0,
+    #       )
+    #   else:
+    #       # Option 2: Create causal mask directly
+    #       attention_mask = _prepare_4d_causal_attention_mask(
+    #           None,
+    #           (1, seq_len),
+    #           inputs_embeds=h_ref,
+    #           past_key_values_length=0,
+    #       )
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
@@ -574,163 +601,55 @@ def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch
 
 
 # --- Tokenization helpers ---
-
-
-def get_pad_id(tokenizer):
-    """Resolve pad token ID, matching generator.py logic."""
-    pad_id = getattr(tokenizer, "pad_token_id", None)
-    if pad_id is None:
-        pad_id = getattr(tokenizer, "eos_token_id", None)
-    if pad_id is None:
-        pad_id = 0
-    return int(pad_id)
-
-
-def tokenize_prompts_to_isl(tokenizer, prompts_path, isl_total, sp_factor):
-    """Tokenize prompts from JSON, concatenate, truncate/pad to isl_total."""
-    prompts = load_prompts_from_json(str(prompts_path))
-    pad_id = get_pad_id(tokenizer)
-
-    all_tokens = []
-    for prompt in prompts:
-        ids = tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            add_generation_prompt=True,
-            tokenize=True,
-        )
-        all_tokens.extend(ids)
-        if len(all_tokens) >= isl_total:
-            break
-
-    # Truncate or pad
-    if len(all_tokens) >= isl_total:
-        all_tokens = all_tokens[:isl_total]
-    else:
-        all_tokens.extend([pad_id] * (isl_total - len(all_tokens)))
-
-    # Alignment check
-    isl_per_chip = isl_total // sp_factor
-    assert (
-        isl_per_chip % ttnn.TILE_SIZE == 0
-    ), f"isl_per_chip={isl_per_chip} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}"
-
-    return torch.tensor(all_tokens, dtype=torch.int64).unsqueeze(0)  # [1, isl_total]
-
-
-def tokenize_infinitebench_to_isl(tokenizer, prompt_text, isl_total, sp_factor):
-    """Tokenize a raw InfiniteBench prompt string, truncate/pad to isl_total."""
-    pad_id = get_pad_id(tokenizer)
-
-    all_tokens = tokenizer.encode(prompt_text)
-
-    if len(all_tokens) >= isl_total:
-        all_tokens = all_tokens[:isl_total]
-    else:
-        all_tokens.extend([pad_id] * (isl_total - len(all_tokens)))
-
-    isl_per_chip = isl_total // sp_factor
-    assert (
-        isl_per_chip % ttnn.TILE_SIZE == 0
-    ), f"isl_per_chip={isl_per_chip} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}"
-
-    return torch.tensor(all_tokens, dtype=torch.int64).unsqueeze(0)  # [1, isl_total]
-
-
-# --- Host reference caching ---
-
-
-def get_or_compute_host_reference(
-    hf_model,
-    token_ids,
-    num_layers,
-    cache_key,
-    is_ci,
-):
-    """
-    Get host reference snapshots and per-layer KVPE, using file cache if available.
-
-    Follows the caching pattern from test_mla.py: first run computes and saves,
-    subsequent runs load from cache. CI environments must use pre-computed cache.
-
-    Args:
-        hf_model: HF model for computing reference, or None to load from cache only
-        token_ids: Input tokens (only used if computing, not loading from cache)
-        num_layers: Number of layers
-        cache_key: Cache identifier
-        is_ci: Whether running in CI (requires cache to exist)
-
-    Returns:
-        Tuple of (ref_snapshots, ref_kvpe_list) where:
-        - ref_snapshots: [embed_out, layer0_out, ..., layerN_out, norm_out]
-        - ref_kvpe_list: [layer0_kvpe, ..., layerN_kvpe] each [batch, 1, seq, kv_lora_rank + qk_rope_head_dim]
-    """
-    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
-    cache_path = cache_dir / f"{cache_key}.pt"
-
-    if cache_path.exists():
-        logger.info(f"Loading cached reference results from {cache_path}")
-        cached = torch.load(cache_path, weights_only=True)
-        # Check if cache has all required keys (handles old cache format)
-        if "ref_snapshots" in cached and "ref_kvpe_list" in cached:
-            ref_snapshots = cached["ref_snapshots"]
-            ref_kvpe_list = cached["ref_kvpe_list"]
-            logger.info(f"Loaded {len(ref_snapshots)} cached reference snapshots and {len(ref_kvpe_list)} KVPE tensors")
-            return ref_snapshots, ref_kvpe_list
-        else:
-            logger.warning(f"Cache file {cache_path} is outdated (missing ref_kvpe_list), regenerating...")
-            cache_path.unlink()  # Delete stale cache
-
-    # Cache miss - need to compute
-    if hf_model is None:
-        error_msg = f"Reference cache missing: {cache_path}."
-        if is_ci:
-            error_msg += " Run the test locally first to generate the cache."
-        else:
-            error_msg += " hf_model is None and cannot compute reference."
-        raise RuntimeError(error_msg)
-
-    assert not is_ci, (
-        f"Host reference cache missing in CI: {cache_path}. " "Run the test locally first to generate the cache."
+def tokenize_prompt_to_isl(
+    tokenizer, max_isl: int, prompt_text: str = "Capital of France is", debug: bool = False
+) -> torch.Tensor:
+    inputs = tokenizer(
+        prompt_text,
+        return_tensors="pt",  # return PyTorch tensors
+        padding="max_length",  # pad batch to max_length
+        truncation=True,  # truncate if longer than max_length
+        max_length=max_isl,  # hard cap at <max_isl> tokens
+        return_attention_mask=True,
     )
 
-    # Compute host reference step-by-step
-    profiler.start("host_reference_forward")
+    input_ids: torch.Tensor = inputs.input_ids  # shape [B, 1024] (padded or capped)
+    attention_mask: torch.Tensor = inputs.attention_mask
+    tokens = tokenizer.convert_ids_to_tokens(input_ids[0].tolist()) if debug else None
 
-    seq_len = token_ids.shape[1]
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-    attention_mask = torch.zeros(1, 1, seq_len, seq_len, dtype=torch.bfloat16)
+    logger.debug(f"Input IDs shape: {input_ids.shape}")
+    logger.debug(f"Attention mask sum: {attention_mask.sum(dim=1)}")  # actual non‑pad tokens
 
-    with torch.no_grad():
-        h_ref = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
-    ref_snapshots = [h_ref]
-    ref_cache = DynamicCache()
+    return input_ids, attention_mask, tokens
 
-    for i in range(num_layers):
-        with torch.no_grad():
-            layer_out = hf_model.layers[i](
-                h_ref,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=ref_cache,
-                use_cache=True,
-            )
-            h_ref = layer_out[0]
-        ref_snapshots.append(h_ref)
 
-    ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
+def tokenize_prompt_to_chat_template(
+    tokenizer,
+    max_isl: int,
+    user_prompt: str = "What is the capital of France",
+    system_prompt: str = "You are friendly assistent",
+    debug: bool = False,
+) -> torch.Tensor:
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
 
-    with torch.no_grad():
-        h_ref = hf_model.norm(h_ref)
-    ref_snapshots.append(h_ref)
+    # apply chat template AND tokenize in one shot
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        padding="max_length",  # pad batch to max_len
+        truncation=True,  # truncate if longer
+        max_length=max_isl,  # hard cap at <max_isl> tokens
+        return_attention_mask=True,  # <-- ignored for some reason
+    )
+    logger.debug(f"Input IDs shape: {inputs.shape}")
+    tokens = tokenizer.convert_ids_to_tokens(inputs[0].tolist()) if debug else None
 
-    profiler.end("host_reference_forward")
-
-    # Save to cache
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({"ref_snapshots": ref_snapshots, "ref_kvpe_list": ref_kvpe_list}, cache_path)
-    logger.info(f"Saved reference results to {cache_path} ({len(ref_snapshots)} snapshots, {len(ref_kvpe_list)} KVPE)")
-
-    return ref_snapshots, ref_kvpe_list
+    return inputs, tokens
 
 
 # --- InfiniteBench download ---

@@ -402,13 +402,13 @@ def tokenizer():
         p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            return AutoTokenizer.from_pretrained(str(p), trust_remote_code=True)
+            return AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
 
     # Fall back to downloading config-only (includes tokenizer files)
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    return AutoTokenizer.from_pretrained(str(config_path), trust_remote_code=True)
+    return AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
 
 
 @pytest.fixture(scope="session")
