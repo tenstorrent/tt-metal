@@ -121,13 +121,13 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>(ckernel::sfpu::swiglu_init<APPROXIMATE>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
 inline void llk_math_eltwise_binary_sfpu_swiglu(
     uint gate_tile, uint32_t up_tile, uint32_t out_tile, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_swiglu<is_fp32_dest_acc_en, 8, Config>, gate_tile, up_tile, out_tile, vector_mode);
 }
 
