@@ -1023,16 +1023,28 @@ class Model:
         results = []
         num_rows = self.mesh_device.shape[0]
         for row in range(num_rows):
-            device_idx = row * num_cols  # First device of each row
-            torch_output = ttnn.to_torch(device_tensors[device_idx])
-            for u in range(users_per_row):
-                user_flat_idx = row * users_per_row + u
-                last_idx = last_token_idxs[user_flat_idx] if isinstance(last_token_idxs, list) else last_token_idxs
-                if users_per_row > 1:
-                    # Tokens are concatenated: user u's last token is at offset u*seq_len_per_user + last_idx
+            device_idx = row * num_cols
+            dev_out = device_tensors[device_idx]
+            if users_per_row > 1:
+                # Batch all user slices on device, single D2H per row
+                slices = []
+                for u in range(users_per_row):
+                    user_flat_idx = row * users_per_row + u
+                    last_idx = last_token_idxs[user_flat_idx] if isinstance(last_token_idxs, list) else last_token_idxs
                     global_idx = u * seq_len_per_user + last_idx
-                    result = torch_output[..., global_idx, : self.vocab_size]
-                else:
-                    result = torch_output[..., last_idx, : self.vocab_size]
+                    sl = ttnn.slice(dev_out, (0, 0, global_idx, 0), (1, 1, global_idx + 1, dev_out.shape[-1]))
+                    slices.append(sl)
+                batched = ttnn.concat(slices, dim=2)
+                for sl in slices:
+                    sl.deallocate(True)
+                torch_out = ttnn.to_torch(batched)
+                batched.deallocate(True)
+                for u in range(users_per_row):
+                    results.append(torch_out[..., u, : self.vocab_size])
+            else:
+                last_idx = last_token_idxs[row] if isinstance(last_token_idxs, list) else last_token_idxs
+                token_logit = ttnn.slice(dev_out, (0, 0, last_idx, 0), (1, 1, last_idx + 1, dev_out.shape[-1]))
+                result = ttnn.to_torch(token_logit)[..., : self.vocab_size]
+                token_logit.deallocate(True)
                 results.append(result)
         return results
