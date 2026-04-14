@@ -286,26 +286,27 @@ class TestTypecastMemoryConfigTransforms:
 
 
 # ---------------------------------------------------------------------------
-# 3. Combined transforms: layout + memory config + dtype
+# 3. Combined transforms: layout + memory config + dtype (all combos)
 # ---------------------------------------------------------------------------
-class TestTypecastCombinedTransforms:
-    """Typecast with simultaneous layout, memory config, and dtype changes."""
+COMBINED_DTYPE_PAIRS = [
+    (torch.bfloat16, ttnn.bfloat16, ttnn.float32, 0.99),
+    (torch.float32, ttnn.float32, ttnn.bfloat16, 0.99),
+    (torch.float32, ttnn.float32, ttnn.int32, 0.99),
+    (torch.int, ttnn.int32, ttnn.float32, 0.99),
+]
 
-    @pytest.mark.parametrize(
-        "pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc",
-        [
-            (torch.bfloat16, ttnn.bfloat16, ttnn.float32, 0.99),
-            (torch.float32, ttnn.float32, ttnn.int32, 0.99),
-        ],
-    )
+
+class TestTypecastCombinedTransforms:
+    """All layout × memory direction combos with dtype change."""
+
+    @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", COMBINED_DTYPE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
     def test_tile_interleaved_to_rm_sharded(
         self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape
     ):
-        """TILE + interleaved -> ROW_MAJOR + sharded with dtype change."""
+        """TILE interleaved -> RM sharded + dtype change."""
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
-
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=tt_input_dtype,
@@ -313,84 +314,30 @@ class TestTypecastCombinedTransforms:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         output_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
-
         tt_output = ttnn.typecast(
             tt_input,
             dtype=tt_output_dtype,
             memory_config=output_mem_config,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-
         assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
         assert tt_output.dtype == tt_output_dtype
         assert tt_output.is_sharded()
-
-        cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
-        cpu_cast = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
-        torch_golden = ttnn.to_torch(cpu_cast)
-        torch_output = ttnn.to_torch(tt_output)
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
-
-    @pytest.mark.parametrize(
-        "pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc",
-        [
-            (torch.bfloat16, ttnn.bfloat16, ttnn.float32, 0.99),
-            (torch.float32, ttnn.float32, ttnn.int32, 0.99),
-        ],
-    )
-    @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
-    def test_rm_sharded_to_tile_interleaved(
-        self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape
-    ):
-        """ROW_MAJOR + sharded -> TILE + interleaved with dtype change."""
-        torch.manual_seed(0)
-        torch_input = _make_torch_input(input_shape, pt_input_dtype)
-
-        input_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
-
-        tt_input = ttnn.from_torch(
-            torch_input,
-            dtype=tt_input_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=input_mem_config,
+        cpu_cast = ttnn.typecast(
+            ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT), dtype=tt_output_dtype
         )
+        assert_with_pcc(ttnn.to_torch(cpu_cast), ttnn.to_torch(tt_output), pcc=pcc)
 
-        tt_output = ttnn.typecast(
-            tt_input,
-            dtype=tt_output_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=ttnn.TILE_LAYOUT,
-        )
-
-        assert tt_output.layout == ttnn.TILE_LAYOUT
-        assert tt_output.dtype == tt_output_dtype
-        assert not tt_output.is_sharded()
-
-        cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
-        cpu_cast = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
-        torch_golden = ttnn.to_torch(cpu_cast)
-        torch_output = ttnn.to_torch(tt_output)
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
-
-    @pytest.mark.parametrize(
-        "pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc",
-        [
-            (torch.bfloat16, ttnn.bfloat16, ttnn.float32, 0.99),
-        ],
-    )
+    @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", COMBINED_DTYPE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
     def test_tile_sharded_to_rm_interleaved(
         self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape
     ):
-        """TILE + sharded -> ROW_MAJOR + interleaved with dtype change."""
+        """TILE sharded -> RM interleaved + dtype change."""
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
-
         input_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
-
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=tt_input_dtype,
@@ -398,38 +345,28 @@ class TestTypecastCombinedTransforms:
             device=device,
             memory_config=input_mem_config,
         )
-
         tt_output = ttnn.typecast(
             tt_input,
             dtype=tt_output_dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-
         assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
         assert tt_output.dtype == tt_output_dtype
         assert not tt_output.is_sharded()
+        cpu_cast = ttnn.typecast(
+            ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT), dtype=tt_output_dtype
+        )
+        assert_with_pcc(ttnn.to_torch(cpu_cast), ttnn.to_torch(tt_output), pcc=pcc)
 
-        cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
-        cpu_cast = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
-        torch_golden = ttnn.to_torch(cpu_cast)
-        torch_output = ttnn.to_torch(tt_output)
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
-
-    @pytest.mark.parametrize(
-        "pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc",
-        [
-            (torch.float32, ttnn.float32, ttnn.bfloat16, 0.99),
-        ],
-    )
+    @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", COMBINED_DTYPE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
     def test_rm_interleaved_to_tile_sharded(
         self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape
     ):
-        """ROW_MAJOR + interleaved -> TILE + sharded with dtype change."""
+        """RM interleaved -> TILE sharded + dtype change."""
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
-
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=tt_input_dtype,
@@ -437,60 +374,50 @@ class TestTypecastCombinedTransforms:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        output_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.WIDTH_SHARDED, input_shape)
-
+        output_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
         tt_output = ttnn.typecast(
             tt_input,
             dtype=tt_output_dtype,
             memory_config=output_mem_config,
             output_layout=ttnn.TILE_LAYOUT,
         )
-
         assert tt_output.layout == ttnn.TILE_LAYOUT
         assert tt_output.dtype == tt_output_dtype
         assert tt_output.is_sharded()
+        cpu_cast = ttnn.typecast(
+            ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT), dtype=tt_output_dtype
+        )
+        assert_with_pcc(ttnn.to_torch(cpu_cast), ttnn.to_torch(tt_output), pcc=pcc)
 
-        cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
-        cpu_cast = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
-        torch_golden = ttnn.to_torch(cpu_cast)
-        torch_output = ttnn.to_torch(tt_output)
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
-
+    @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", COMBINED_DTYPE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 128, 128]])
-    def test_combined_all_three_changes(self, device, input_shape):
-        """Simultaneous layout + memory config + dtype change."""
+    def test_rm_sharded_to_tile_interleaved(
+        self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape
+    ):
+        """RM sharded -> TILE interleaved + dtype change."""
         torch.manual_seed(0)
-        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-
-        # Start: TILE + interleaved DRAM + bfloat16
+        torch_input = _make_torch_input(input_shape, pt_input_dtype)
+        input_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
         tt_input = ttnn.from_torch(
             torch_input,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=tt_input_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=input_mem_config,
         )
-
-        output_mem_config = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
-
-        # Target: ROW_MAJOR + sharded L1 + float32
         tt_output = ttnn.typecast(
             tt_input,
-            dtype=ttnn.float32,
-            memory_config=output_mem_config,
-            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=tt_output_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
         )
-
-        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
-        assert tt_output.dtype == ttnn.float32
-        assert tt_output.is_sharded()
-
-        cpu_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        cpu_cast = ttnn.typecast(cpu_input, dtype=ttnn.float32)
-        torch_golden = ttnn.to_torch(cpu_cast)
-        torch_output = ttnn.to_torch(tt_output)
-        assert_with_pcc(torch_golden, torch_output, pcc=0.99)
+        assert tt_output.layout == ttnn.TILE_LAYOUT
+        assert tt_output.dtype == tt_output_dtype
+        assert not tt_output.is_sharded()
+        cpu_cast = ttnn.typecast(
+            ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT), dtype=tt_output_dtype
+        )
+        assert_with_pcc(ttnn.to_torch(cpu_cast), ttnn.to_torch(tt_output), pcc=pcc)
 
 
 # ---------------------------------------------------------------------------
