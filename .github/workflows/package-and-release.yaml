@@ -616,7 +616,7 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
           ref: stable
           inputs: |
             {
@@ -644,7 +644,7 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
           ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {
