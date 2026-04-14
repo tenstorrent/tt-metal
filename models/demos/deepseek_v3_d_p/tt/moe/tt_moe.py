@@ -372,7 +372,12 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        routed_output = self.reduce_module(combined_output, weights=weights)
+        routed_output = self.reduce_module(
+            combined_output,
+            weights=weights,
+            indices=indices,
+            expert_dispatch_table=self.tt_expert_dispatch_table,
+        )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape

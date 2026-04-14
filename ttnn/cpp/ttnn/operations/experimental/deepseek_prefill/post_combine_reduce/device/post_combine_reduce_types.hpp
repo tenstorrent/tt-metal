@@ -17,6 +17,8 @@ struct PostCombineReduceParams {
 struct PostCombineReduceInputs {
     ttnn::Tensor combine_output;
     ttnn::Tensor weights;
+    ttnn::Tensor indices;
+    ttnn::Tensor expert_dispatch_table;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce
