@@ -60,10 +60,6 @@ bool tt::is_integer_format(DataFormat format) {
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
-// Translation unit-local implementation details.
-// We can remove the anonymous namespace after the tt_backend_api_types.hpp header is moved to the tt_metal namespace.
-namespace {
-
 // TT-1.x (Wormhole / Blackhole) host-side enumeration.
 bool is_supported_wormhole_blackhole(tt::DataFormat format, bool is_blackhole) {
     switch (format) {
@@ -111,8 +107,6 @@ bool is_supported_quasar(tt::DataFormat format) {
         default: return false;
     }
 }
-
-}  // namespace
 
 bool tt::is_data_format_supported(DataFormat format, ARCH arch) {
     switch (arch) {
