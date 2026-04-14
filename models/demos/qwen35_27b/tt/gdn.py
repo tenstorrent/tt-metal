@@ -792,11 +792,12 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(zero_pad)
 
         # Compute weighted sum of shifted versions
-        # tap[0] applies to the oldest input (shift right by K-1), tap[K-1] to current (no shift)
-        # Reshape taps from [1, 1, qkv_dim_tp] to [1, 1, 1, qkv_dim_tp] for 4D broadcast
+        # Match decode shift register ordering: tap[0] * oldest, tap[K-1] * current
+        # Decode: states = [oldest, ..., current], conv = sum(tap[j] * states[j])
+        # FIR:   padded = [zeros(K-1), qkv...], shift=j means tap[j] sees (K-1-j) positions back
         conv_out_all = None
         for j in range(K):
-            shift = K - 1 - j  # tap[0] -> shift 3, tap[3] -> shift 0
+            shift = j  # tap[0] -> shift 0 (oldest/most-padded), tap[3] -> shift 3 (current)
             shifted = ttnn.slice(padded, (0, 0, shift, 0), (1, 1, shift + seq_len, qkv_dim_tp))
             tap_4d = ttnn.reshape(tw["conv_taps"][j], (1, 1, 1, qkv_dim_tp))
             if conv_out_all is None:

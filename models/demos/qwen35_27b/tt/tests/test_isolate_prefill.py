@@ -104,36 +104,39 @@ def test_isolate_gdn_layer0(mesh_device, reset_seeds, ensure_gc):
     last_pcc = pcc(baseline_last, pf_last)
     logger.info(f"GDN Layer 0 (full decoder block) - Last token PCC: {last_pcc:.6f}")
 
-    if last_pcc < 0.99:
-        logger.error(f"LOW PCC! Investigating components...")
+    # Per-token PCC breakdown from full decoder block outputs
+    logger.info(f"\n--- Per-token PCC (full decoder block 0) ---")
 
-        # Now test just the GDN attention (without MLP) to narrow down
-        logger.info("\n--- Testing GDN attention only (no MLP) ---")
-        gdn.reset_state()
-        baseline_attn_outputs = []
-        for t in range(seq_len):
-            tok_batch = torch.full((batch_size,), tokens[t], dtype=torch.long)
-            current_pos = torch.full((batch_size,), t, dtype=torch.long)
-            tt_tok, tt_pos, tt_rot, _ = model.prepare_inputs_decode(tok_batch, current_pos)
-            x_embed = model._transform_decode_inputs_device(tt_tok)
-            x_normed = layer0.attention_norm(x_embed, mode=Mode.DECODE)
-            attn_out = gdn.forward(x_normed, current_pos=tt_pos, mode=Mode.DECODE)
-            out_cpu = ttnn.to_torch(attn_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
-            baseline_attn_outputs.append(out_cpu[0, 0, 0, : args.dim].clone())
+    # Collect per-token baseline by re-running decode
+    gdn.reset_state()
+    baseline_per_token = []
+    for t in range(seq_len):
+        tok_batch = torch.full((batch_size,), tokens[t], dtype=torch.long)
+        current_pos = torch.full((batch_size,), t, dtype=torch.long)
+        tt_tok, tt_pos, tt_rot, _ = model.prepare_inputs_decode(tok_batch, current_pos)
+        x = model._transform_decode_inputs_device(tt_tok)
+        rot_mats = model.rope_setup.get_rot_mats(tt_rot)
+        x = ttnn.to_memory_config(x, args.get_residual_mem_config(Mode.DECODE))
+        x = layer0(x, tt_pos, rot_mats_global=rot_mats, mode=Mode.DECODE)
+        out_cpu = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+        baseline_per_token.append(out_cpu[0, 0, 0, : args.dim].clone())
 
-        gdn.reset_state()
-        gdn._init_prefill_states()
-        prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
-        tt_embeds = prefill_inputs[0]
-        x_normed_pf = layer0.attention_norm(tt_embeds, mode=Mode.PREFILL)
-        gdn_pf_out = gdn.forward(x_normed_pf, current_pos=None, mode=Mode.PREFILL)
-        gdn_pf_cpu = ttnn.to_torch(gdn_pf_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    # Re-run batched prefill to get per-token outputs
+    gdn.reset_state()
+    gdn._init_prefill_states()
+    prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
+    tt_embeds = prefill_inputs[0]
+    tt_rot_global = prefill_inputs[1]
+    x_pf = ttnn.to_memory_config(tt_embeds, args.get_residual_mem_config(Mode.PREFILL))
+    x_pf = layer0(x_pf, current_pos=None, rot_mats_global=tt_rot_global, mode=Mode.PREFILL)
+    pf_cpu = ttnn.to_torch(x_pf, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
 
-        for t in range(seq_len):
-            batched_t = gdn_pf_cpu[0, 0, t, : args.dim]
-            t_pcc = pcc(baseline_attn_outputs[t], batched_t)
-            status = "OK" if t_pcc > 0.99 else "BAD"
-            logger.info(f"  GDN-only Token {t} PCC: {t_pcc:.6f} [{status}]")
+    for t in range(seq_len):
+        t_pcc = pcc(baseline_per_token[t], pf_cpu[0, 0, t, : args.dim])
+        status = "OK" if t_pcc > 0.99 else "LOW"
+        logger.info(
+            f"  Token {t} PCC: {t_pcc:.6f} [{status}]  baseline_norm={baseline_per_token[t].norm():.4f}  prefill_norm={pf_cpu[0, 0, t, :args.dim].norm():.4f}"
+        )
 
     assert last_pcc > 0.95, f"GDN Layer 0 PCC too low: {last_pcc}"
 
