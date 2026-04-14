@@ -33,3 +33,6 @@ compile_flags.txt
 tests/python_tests/helpers/smoke_test_stimuli_v2.py
 tests/python_tests/helpers/plot_distributions_v2.py
 tests/python_tests/helpers/_plot_output/
+
+# Stimuli v2 test files
+tests/python_tests/helpers/test_stimuli_v2_*.py

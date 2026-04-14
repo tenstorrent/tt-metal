@@ -8,8 +8,10 @@ This module replaces the scattered boolean-flag API of stimuli_generator.py
 with a declarative :class:`StimuliSpec` that supports:
 
 * Multiple distributions per operand — ``"uniform"``, ``"gaussian"``,
-  ``"ramp"``, ``"log_uniform"``, ``"constant"``, ``"sequential"``, or any
-  custom callable.
+   ``"ramp"``, ``"log_uniform"``, ``"constant"``, ``"sequential"``,
+   ``"uniform_linspace"``, ``"gaussian_linspace"``,
+   ``"log_uniform_linspace"``, ``"identity"``, ``"face_identity"``,
+   ``"custom"``, or any custom callable.
 * Arbitrary value bounds (``low`` / ``high``) per operand with no
   hard-coded caps.
 * Per-face overrides via ``StimuliSpec.face_specs``.
@@ -51,9 +53,10 @@ Quick-start
 """
 
 import math
+import warnings
 from dataclasses import dataclass
 from dataclasses import replace as _dataclass_replace
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Set, Union
 
 import torch
 
@@ -90,8 +93,10 @@ class StimuliSpec:
         How values are sampled.  Supported string values:
 
         ``"uniform"``
-            Uniform random in ``[low, high]``.  For integer formats this maps
-            to ``torch.randint(int(low), int(high) + 1)``.
+            Uniform random in ``[low, high]``.  For integer formats the bounds
+            are narrowed to the tightest enclosing integers via
+            ``torch.randint(ceil(low), floor(high) + 1)``, so only integers
+            that actually lie within ``[low, high]`` are generated.
 
         ``"gaussian"``
             Normal distribution with *mean* and *std*.  For integer formats
@@ -131,6 +136,29 @@ class StimuliSpec:
             *high*.  Both bounds must be strictly positive.  Equivalent to
             ``torch.logspace`` in natural-log base.
 
+        ``"identity"``
+            Identity matrix pattern: *value* on the diagonal, zero
+            elsewhere.  Requires 2-D ``input_dimensions``.  For
+            rectangular matrices the diagonal has ``min(rows, cols)``
+            entries.  Bypasses the face loop (tensor-level operation).
+            Ignores *low*, *high*, *seed*.
+
+        ``"face_identity"``
+            Per-face identity block: each face is treated as a
+            ``(face_r_dim, FACE_C_DIM)`` matrix with *value* on the
+            diagonal and zero elsewhere.  The diagonal length is
+            ``min(face_r_dim, FACE_C_DIM)``.  Participates in the
+            normal face loop, so it works naturally with ``face_specs``
+            and ``masked_faces``.  Ignores *low*, *high*, *seed*.
+
+        ``"custom"``
+            Explicit per-face values: the elements from *values* are
+            written at the start of the flattened face, and every
+            remaining element is zero.  Values are **not** repeated.
+            Participates in the normal face loop, so it works naturally
+            with ``face_specs`` and ``masked_faces``.  Ignores *low*,
+            *high*, *seed*, *value*.
+
         callable
             ``fn(size: int, dtype: torch.dtype, generator: Optional[torch.Generator]) -> torch.Tensor``.
             The *generator* argument carries the per-operand RNG state (or
@@ -148,8 +176,14 @@ class StimuliSpec:
         ``"uniform_linspace"``, and ``"log_uniform_linspace"``.
         Defaults to ``1.0``.
     value : float
-        Constant fill value (only used by ``"constant"``).  Defaults to
-        ``1.0``.
+        Fill value used by ``"constant"`` (all elements), ``"identity"``
+        (diagonal elements), and ``"face_identity"`` (face diagonal
+        elements).  Defaults to ``1.0``.
+    values : list[float], optional
+        Explicit value list for ``"custom"``.  Written at the start of
+        the flattened face; remaining elements are zero.  For integer
+        formats each value is rounded and clamped to the representable
+        range.  Must not be empty when ``distribution="custom"``.
     mean : float
         Mean for ``"gaussian"`` and ``"gaussian_linspace"``.  Defaults to
         ``0.0``.
@@ -165,16 +199,25 @@ class StimuliSpec:
         Per-face overrides.  Face *i* is generated with ``face_specs[i]``
         when ``i < len(face_specs)``; any remaining faces fall back to this
         spec.
+    masked_faces : set[int], optional
+        Set of 0-based face indices whose output should be zeroed.
+        Masking is applied *after* face generation (including any
+        ``face_specs`` overrides), so it always wins.  Not compatible
+        with global short-circuit distributions (``"identity"``,
+        ``"sequential"``, linspace variants) — raises ``ValueError``
+        if combined.
     """
 
     distribution: Union[str, Callable] = "uniform"
     low: float = 0.0
     high: float = 1.0
     value: float = 1.0
+    values: Optional[List[float]] = None
     mean: float = 0.0
     std: float = 1.0
     seed: Optional[int] = None
     face_specs: Optional[List["StimuliSpec"]] = None
+    masked_faces: Optional[Set[int]] = None
 
     # ── convenience constructors ──────────────────────────────────────────────
 
@@ -182,6 +225,78 @@ class StimuliSpec:
     def constant(cls, value: float = 1.0, **kwargs) -> "StimuliSpec":
         """All elements equal to *value*."""
         return cls(distribution="constant", value=value, **kwargs)
+
+    @classmethod
+    def identity(cls, diagonal_value: float = 1.0, **kwargs) -> "StimuliSpec":
+        """Identity matrix: *diagonal_value* on the diagonal, zero elsewhere."""
+        return cls(distribution="identity", value=diagonal_value, **kwargs)
+
+    @classmethod
+    def face_identity(cls, diagonal_value: float = 1.0, **kwargs) -> "StimuliSpec":
+        """Per-face identity block: *diagonal_value* on the face diagonal, zero elsewhere."""
+        return cls(distribution="face_identity", value=diagonal_value, **kwargs)
+
+    @classmethod
+    def custom(cls, values: List[float], **kwargs) -> "StimuliSpec":
+        """Explicit values at the start of each face, zero-filled remainder.
+
+        Example
+        -------
+        >>> spec = StimuliSpec.custom(values=[2, 5, 12, 7, 1])
+        >>> # face → [2, 5, 12, 7, 1, 0, 0, ..., 0]
+        """
+        return cls(distribution="custom", values=list(values), **kwargs)
+
+    @classmethod
+    def custom_faces(
+        cls,
+        face_values: Dict[int, List[float]],
+        **kwargs,
+    ) -> "StimuliSpec":
+        """Sparse per-face custom values; unspecified faces default to zeros.
+
+        Builds a spec with ``distribution="constant", value=0.0`` and
+        populates ``face_specs`` so that only the faces named in
+        *face_values* receive data.
+
+        Parameters
+        ----------
+        face_values : dict[int, list[float]]
+            Mapping of 0-based face index to the values for that face.
+        **kwargs
+            Forwarded to the outer :class:`StimuliSpec` (e.g.
+            ``masked_faces``).
+
+        Example
+        -------
+        >>> spec = StimuliSpec.custom_faces({
+        ...     2: [2, 5, 12, 7, 1],
+        ...     4: [8, 3],
+        ... })
+        >>> # face 0,1,3 → all zeros; face 2 → [2,5,12,7,1,0,...]; face 4 → [8,3,0,...]
+        """
+        if not face_values:
+            raise ValueError("face_values must be a non-empty dict")
+        if any(idx < 0 for idx in face_values):
+            raise ValueError(
+                f"face_values keys must be non-negative, "
+                f"got {sorted(k for k in face_values if k < 0)}"
+            )
+        if "face_specs" in kwargs:
+            raise ValueError(
+                "Cannot combine custom_faces() with an explicit face_specs "
+                "argument — custom_faces builds face_specs internally"
+            )
+        max_idx = max(face_values)
+        face_specs: List[Optional["StimuliSpec"]] = [None] * (max_idx + 1)
+        for idx, vals in face_values.items():
+            face_specs[idx] = cls.custom(values=vals)
+        return cls(
+            distribution="constant",
+            value=0.0,
+            face_specs=face_specs,
+            **kwargs,
+        )
 
     @classmethod
     def sequential(cls, **kwargs) -> "StimuliSpec":
@@ -710,18 +825,27 @@ def _generate_integer_face(
     """
     Generate one face of integer-format data according to *spec*.
 
-    User-specified ``low`` / ``high`` are clamped to the representable range
-    of *stimuli_format* so that the result is always a valid value for the
-    hardware type.  Distributions that produce floats (``"gaussian"``,
-    ``"log_uniform"``, ``"ramp"``) are rounded and clamped before casting.
+    User-specified ``low`` / ``high`` are **narrowed** to the set of integers
+    that lie within the closed interval ``[spec.low, spec.high]``:
 
-    Collapsed ranges
-    ~~~~~~~~~~~~~~~~
-    If clamping the user bounds to the format's representable range makes
-    ``high <= low``, a constant tensor filled with ``low`` is returned rather
-    than silently adjusting the bounds.  This makes the degenerate condition
-    observable: the caller gets a constant tensor and can decide whether the
-    spec is misconfigured.
+    * ``low_int  = max(ceil(spec.low),  format_min)``
+    * ``high_int = min(floor(spec.high), format_max)``
+
+    This ensures every generated value is an integer that satisfies
+    ``spec.low <= value <= spec.high`` **and** is representable in the target
+    format.  Distributions that produce floats (``"gaussian"``,
+    ``"log_uniform"``, ``"ramp"``) are rounded and clamped to
+    ``[low_int, high_int]`` before casting.
+
+    Degenerate ranges
+    ~~~~~~~~~~~~~~~~~
+    * ``high_int == low_int`` (single valid integer, e.g. ``[2.0, 2.9]``):
+      a constant tensor filled with that integer is returned.
+    * ``high_int < low_int`` (no valid integer in the interval, e.g.
+      ``[0.1, 0.9]``): a constant tensor filled with
+      ``round((spec.low + spec.high) / 2)`` is returned and a
+      ``UserWarning`` is emitted.  This avoids crashing the test generator
+      while making the degenerate condition observable.
 
     ``log_uniform`` for integers
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -731,12 +855,27 @@ def _generate_integer_face(
     the *spec* bounds are positive (the result is always positive).
     """
     int_min, int_max = _get_integer_bounds(stimuli_format)
-    # Clamp both bounds to the representable range before any comparison
-    low = min(max(int(math.floor(spec.low)), int_min), int_max)
-    high = min(max(int(math.ceil(spec.high)), int_min), int_max)
+    # Narrow to the tightest set of integers that lie *within* [spec.low, spec.high]:
+    #   ceil(low)  = smallest integer ≥ spec.low
+    #   floor(high) = largest integer ≤ spec.high
+    # Then clamp to the format's representable range.
+    low = max(math.ceil(spec.low), int_min)
+    high = min(math.floor(spec.high), int_max)
 
-    # Degenerate range: spec bounds collapsed after clamping — return constant
-    if high <= low:
+    if high < low:
+        # No integer exists in [spec.low, spec.high] after clamping —
+        # fall back to the nearest representable integer (midpoint, rounded).
+        fallback = max(int_min, min(round((spec.low + spec.high) / 2), int_max))
+        warnings.warn(
+            f"No integer exists in [{spec.low}, {spec.high}] for "
+            f"{stimuli_format.name} (representable range [{int_min}, {int_max}]). "
+            f"Returning constant tensor filled with {fallback}.",
+            stacklevel=3,
+        )
+        return torch.full((size,), fallback, dtype=dtype)
+
+    # Single valid integer — return constant tensor
+    if high == low:
         return torch.full((size,), low, dtype=dtype)
 
     distribution = spec.distribution
@@ -750,7 +889,7 @@ def _generate_integer_face(
         return (
             torch.linspace(spec.low, spec.high, size, dtype=torch.float32)
             .round()
-            .clamp(int_min, int_max)
+            .clamp(low, high)
             .to(dtype=dtype)
         )
 
@@ -759,7 +898,7 @@ def _generate_integer_face(
             torch.randn(size, dtype=torch.float32, generator=generator) * spec.std
             + spec.mean
         )
-        return raw.round().clamp(int_min, int_max).to(dtype=dtype)
+        return raw.round().clamp(low, high).to(dtype=dtype)
 
     if distribution == "log_uniform":
         if spec.low <= 0 or spec.high <= 0:
@@ -773,17 +912,17 @@ def _generate_integer_face(
         log_high = math.log(spec.high)
         raw_u = torch.rand(size, dtype=torch.float32, generator=generator)
         raw = torch.exp(raw_u * (log_high - log_low) + log_low)
-        return raw.round().clamp(int_min, int_max).to(dtype=dtype)
+        return raw.round().clamp(low, high).to(dtype=dtype)
 
     if distribution in _LINSPACE_DISTRIBUTIONS:
         raw = _generate_linspace_tensor(spec, size, torch.float32)
-        return raw.round().clamp(int_min, int_max).to(dtype=dtype)
+        return raw.round().clamp(low, high).to(dtype=dtype)
 
     raise ValueError(
         f"Unknown distribution {distribution!r} for integer format. "
         f"Expected one of 'uniform', 'gaussian', 'ramp', 'log_uniform', "
         f"'uniform_linspace', 'gaussian_linspace', 'log_uniform_linspace', "
-        f"'constant', 'sequential', or a callable."
+        f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
     )
 
 
@@ -870,6 +1009,40 @@ def generate_face_v2(
             return result.to(dtype=dtype)
         return torch.arange(1, size + 1, dtype=dtype)
 
+    if distribution == "identity":
+        raise ValueError(
+            "distribution='identity' is a tensor-level operation and cannot "
+            "be used in a per-face context (e.g. inside face_specs). "
+            "Use distribution='face_identity' for per-face identity blocks."
+        )
+
+    if distribution == "face_identity":
+        diag_val = spec.value
+        if stimuli_format.is_integer():
+            int_min, int_max = _get_integer_bounds(stimuli_format)
+            diag_val = max(int_min, min(int(round(diag_val)), int_max))
+        face = torch.zeros(face_r_dim, FACE_C_DIM, dtype=dtype)
+        face.diagonal()[:] = diag_val
+        return face.reshape(-1)
+
+    if distribution == "custom":
+        if spec.values is None or len(spec.values) == 0:
+            raise ValueError("distribution='custom' requires a non-empty 'values' list")
+        if len(spec.values) > size:
+            raise ValueError(
+                f"custom values list has {len(spec.values)} elements "
+                f"but face has only {size} "
+                f"({face_r_dim} rows × {FACE_C_DIM} cols)"
+            )
+        if stimuli_format.is_integer():
+            int_min, int_max = _get_integer_bounds(stimuli_format)
+            vals = [max(int_min, min(int(round(v)), int_max)) for v in spec.values]
+        else:
+            vals = list(spec.values)
+        tensor = torch.zeros(size, dtype=dtype)
+        tensor[: len(vals)] = torch.tensor(vals, dtype=dtype)
+        return tensor
+
     # ── integer formats ───────────────────────────────────────────────────────
     if stimuli_format.is_integer():
         return _generate_integer_face(spec, stimuli_format, size, dtype, generator)
@@ -907,7 +1080,7 @@ def generate_face_v2(
         f"Unknown distribution {distribution!r}. "
         f"Expected one of 'uniform', 'gaussian', 'ramp', 'log_uniform', "
         f"'uniform_linspace', 'gaussian_linspace', 'log_uniform_linspace', "
-        f"'constant', 'sequential', or a callable."
+        f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
     )
 
 
@@ -921,6 +1094,7 @@ def _generate_source_tensor_v2(
     num_elements: int,
     face_r_dim: int,
     spec: StimuliSpec,
+    input_dimensions: Optional[list] = None,
 ) -> torch.Tensor:
     """
     Generate a source tensor of *num_elements* using *spec*.
@@ -939,11 +1113,44 @@ def _generate_source_tensor_v2(
 
     Notes
     -----
-    The ``"sequential"`` and linspace distributions (``"uniform_linspace"``,
-    ``"gaussian_linspace"``, ``"log_uniform_linspace"``) short-circuit the
-    face loop and produce a single global sweep across *num_elements*.
+    The ``"identity"``, ``"sequential"`` and linspace distributions
+    (``"uniform_linspace"``, ``"gaussian_linspace"``,
+    ``"log_uniform_linspace"``) short-circuit the face loop and produce a
+    single structured / swept tensor across *num_elements*.
+
+    The ``"identity"`` distribution requires *input_dimensions* to determine
+    the 2-D shape for placing diagonal values.
     """
     dtype = _get_dtype_for_format(stimuli_format)
+
+    # ── masked_faces validation for short-circuit distributions ──────────
+    _SHORT_CIRCUIT_DISTRIBUTIONS = frozenset(
+        {"identity", "sequential"} | _LINSPACE_DISTRIBUTIONS
+    )
+    if spec.masked_faces and spec.distribution in _SHORT_CIRCUIT_DISTRIBUTIONS:
+        raise ValueError(
+            f"masked_faces cannot be used with distribution={spec.distribution!r} "
+            f"because it bypasses the face loop.  Use a per-face distribution "
+            f"(uniform, gaussian, ramp, …) instead."
+        )
+
+    # ── identity: tensor-level structured pattern (no face loop) ───────
+    if spec.distribution == "identity":
+        if input_dimensions is None or len(input_dimensions) != 2:
+            raise ValueError(
+                "distribution='identity' requires input_dimensions=[rows, cols]"
+            )
+        rows, cols = input_dimensions
+        diag_val = spec.value
+        if stimuli_format.is_integer():
+            int_min, int_max = _get_integer_bounds(stimuli_format)
+            diag_val = max(int_min, min(int(round(diag_val)), int_max))
+        tensor = torch.zeros(rows, cols, dtype=dtype)
+        tensor.diagonal()[:] = diag_val
+        tensor = tensor.reshape(-1)
+        if stimuli_format == DataFormat.Bfp4_b:
+            tensor = bfp4b_to_float16b(tensor)
+        return tensor
 
     if spec.distribution == "sequential":
         if stimuli_format.is_integer():
@@ -982,7 +1189,9 @@ def _generate_source_tensor_v2(
     for face_idx in range(faces_needed):
         face_spec = spec
         if spec.face_specs and face_idx < len(spec.face_specs):
-            face_spec = spec.face_specs[face_idx]
+            override = spec.face_specs[face_idx]
+            if override is not None:
+                face_spec = override
 
         face_tensor = generate_face_v2(
             spec=face_spec,
@@ -990,6 +1199,11 @@ def _generate_source_tensor_v2(
             face_r_dim=face_r_dim,
             generator=gen,
         )
+
+        # ── face masking: zero out selected faces ────────────────────────
+        if spec.masked_faces and face_idx in spec.masked_faces:
+            face_tensor = torch.zeros_like(face_tensor)
+
         face_tensors.append(face_tensor)
 
     tensor = torch.cat(face_tensors)[:num_elements]
@@ -1150,12 +1364,14 @@ def generate_stimuli_v2(
         num_elements=num_elements_A,
         face_r_dim=face_r_dim,
         spec=spec_A,
+        input_dimensions=input_dimensions_A,
     )
     srcB_tensor = _generate_source_tensor_v2(
         stimuli_format=stimuli_format_B,
         num_elements=num_elements_B,
         face_r_dim=face_r_dim,
         spec=spec_B,
+        input_dimensions=input_dimensions_B,
     )
 
     srcA_tensor, srcB_tensor = _clamp_mx_tensors(
