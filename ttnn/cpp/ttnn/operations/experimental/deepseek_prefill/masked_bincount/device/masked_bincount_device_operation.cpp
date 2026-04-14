@@ -60,11 +60,6 @@ tt::stl::hash::hash_t MaskedBincountDeviceOperation::compute_program_hash(
     return hash;
 }
 
-MaskedBincountDeviceOperation::tensor_return_value_t MaskedBincountDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

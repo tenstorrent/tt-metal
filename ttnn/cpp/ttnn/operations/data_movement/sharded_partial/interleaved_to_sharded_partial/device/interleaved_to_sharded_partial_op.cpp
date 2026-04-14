@@ -65,12 +65,6 @@ TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
             operation_attributes.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
 }
 
-Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
-    auto output_spec = compute_output_specs(operation_attributes, input_tensor);
-    return create_device_tensor(output_spec, input_tensor.device());
-}
-
 ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(

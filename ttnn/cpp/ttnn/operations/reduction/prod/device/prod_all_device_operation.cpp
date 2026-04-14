@@ -36,11 +36,6 @@ ProdAllDeviceOperation::spec_return_value_t ProdAllDeviceOperation::compute_outp
             input.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), args.output_mem_config));
 }
 
-ProdAllDeviceOperation::tensor_return_value_t ProdAllDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttnn::Tensor prod_all(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
     using OperationType = ProdAllDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(

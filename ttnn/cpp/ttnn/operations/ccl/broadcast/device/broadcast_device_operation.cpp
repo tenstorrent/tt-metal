@@ -46,12 +46,6 @@ TensorSpec BroadcastDeviceOperation::compute_output_specs(
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), operation_attributes.output_mem_config));
 }
 
-Tensor BroadcastDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(spec, tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "BroadcastDeviceOperation::compute_program_hash is called");

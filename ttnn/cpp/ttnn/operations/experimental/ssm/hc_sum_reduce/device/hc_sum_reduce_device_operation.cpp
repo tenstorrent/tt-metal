@@ -54,11 +54,6 @@ TensorSpec HCSumReduceDeviceOperation::compute_output_specs(
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
-Tensor HCSumReduceDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t HCSumReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

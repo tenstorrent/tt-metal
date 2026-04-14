@@ -101,9 +101,13 @@ struct UnaryDeviceOperation {
         const operation_attributes_t&,
         const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t&);
+    // Optional: only needed for custom allocation logic (preallocated outputs,
+    // in-place ops, attribute-conditional allocation, multi-output, etc.).
+    // When omitted, the framework creates output tensors automatically from
+    // compute_output_specs.
+    // static tensor_return_value_t create_output_tensors(
+    //     const operation_attributes_t& operation_attributes,
+    //     const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t&,
@@ -661,7 +665,7 @@ Use this checklist to ensure all steps are completed:
 - [ ] **Step 2**: Created `tensor_args_t` struct with all Tensor parameters from invoke signature
 - [ ] **Step 3**: Defined `tensor_return_value_t` and `spec_return_value_t` appropriately
 - [ ] **Step 4**: Implemented `compute_output_specs`
-- [ ] **Step 5**: [Optional] Implemented `create_output_tensors` (if legacy had it)
+- [ ] **Step 5**: [Optional] Implemented `create_output_tensors` (only needed for preallocated outputs, in-place ops, attribute-conditional allocation, multi-output, or no-input ops — the framework handles standard single-output allocation automatically)
 - [ ] **Step 6**: [If multi-variant] Implemented `select_program_factory` returning correct variant type (not needed for single-variant `program_factory_t`)
 - [ ] **Step 6a**: [If needed] Created separate mesh workload factory for `mesh_coords` filtering support
 - [ ] **Step 7**: Implemented `validate_on_program_cache_miss`
@@ -684,7 +688,7 @@ Use this checklist to ensure all steps are completed:
 1. **Forgetting to register the prim**: Always register in `ttnn::prim` namespace and use it instead of direct calls
 2. **Including runtime-only values in hash**: Only hash compile-time constants that affect program structure
 3. **Not including values that affect the program structure in hash**: Every parameter that has an effect on program structure must be taken into account in the hash
-4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
+4. **Implementing `create_output_tensors` unnecessarily**: The framework provides a default that calls `compute_output_specs` and `create_device_tensor` for simple single-output operations. You must implement `create_output_tensors` if your operation has preallocated output tensors (`std::optional<Tensor>` output fields), custom logic (in-place, attribute-conditional, multi-output, or no-input ops).
 5. **Mesh workload factories not working with `mesh_coords`**: If your operation supports `mesh_coords` filtering, you MUST create a separate mesh workload factory. The infrastructure's `MeshWorkloadFactoryAdapter` will create programs for ALL tensor coordinates, ignoring `mesh_coords`. Only factories that implement `MeshWorkloadFactoryConcept` (and NOT `ProgramFactoryConcept`) will use the direct path that allows coordinate filtering.
 
 ---

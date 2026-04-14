@@ -63,11 +63,6 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
         TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
 }
 
-ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<ScatterDeviceOperation::tensor_return_value_t>
 ScatterDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {

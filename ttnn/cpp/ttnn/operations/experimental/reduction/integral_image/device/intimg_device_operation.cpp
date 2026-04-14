@@ -33,11 +33,6 @@ IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output
     return TensorSpec{output_shape, TensorLayout{input_tensor.dtype(), output_layout, input_tensor.memory_config()}};
 }
 
-IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

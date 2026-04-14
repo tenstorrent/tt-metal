@@ -39,11 +39,6 @@ PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::co
     return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), args.memory_config));
 }
 
-PreAllGatherDeviceOperation::tensor_return_value_t PreAllGatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

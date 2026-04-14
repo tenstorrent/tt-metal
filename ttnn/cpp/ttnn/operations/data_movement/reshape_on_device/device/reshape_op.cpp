@@ -75,12 +75,6 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
             operation_attributes.padded_output_shape));
 }
 
-ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

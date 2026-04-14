@@ -95,11 +95,6 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
 }
 
-Fold::tensor_return_value_t Fold::create_output_tensors(
-    const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return create_device_tensor(compute_output_specs(op_attr, tensors), tensors.input_tensor.device());
-}
-
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {

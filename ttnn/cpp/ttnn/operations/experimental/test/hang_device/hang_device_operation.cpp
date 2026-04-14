@@ -24,12 +24,6 @@ ExecuteTestHangDeviceOperation::spec_return_value_t ExecuteTestHangDeviceOperati
             tensor_args.tensor.dtype(), tt::tt_metal::PageConfig(tensor_args.tensor.layout()), MemoryConfig{}));
 }
 
-ExecuteTestHangDeviceOperation::tensor_return_value_t ExecuteTestHangDeviceOperation::create_output_tensors(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.tensor.device());
-}
-
 std::tuple<ExecuteTestHangDeviceOperation::operation_attributes_t, ExecuteTestHangDeviceOperation::tensor_args_t>
 ExecuteTestHangDeviceOperation::invoke(const Tensor& input_tensor) {
     return {operation_attributes_t{}, tensor_args_t{input_tensor}};

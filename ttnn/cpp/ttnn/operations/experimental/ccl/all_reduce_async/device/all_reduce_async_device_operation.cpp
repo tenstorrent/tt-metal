@@ -80,12 +80,6 @@ AllReduceAsyncDeviceOperation::spec_return_value_t AllReduceAsyncDeviceOperation
     return TensorSpec(shape, output_tensor_layout);
 }
 
-AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
-}
-
 ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -303,12 +302,6 @@ TensorSpec GridSampleOperation::compute_output_specs(
             output_memory_config,
             output_logical_shape,
             output_padded_shape));
-}
-
-Tensor GridSampleOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
 ttnn::Tensor grid_sample(

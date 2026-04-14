@@ -94,12 +94,6 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     return output_spec;
 }
 
-CombineDeviceOperation::tensor_return_value_t CombineDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.dispatched_buffer.device());
-}
-
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 
 namespace ttnn::prim {

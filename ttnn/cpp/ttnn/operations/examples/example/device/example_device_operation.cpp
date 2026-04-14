@@ -29,12 +29,6 @@ ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_outp
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{}));
 }
 
-ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
-}
-
 }  // namespace ttnn::operations::examples
 
 namespace ttnn::prim {

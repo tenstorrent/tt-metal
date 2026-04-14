@@ -27,8 +27,6 @@ struct RepeatDeviceOperation {
 
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes,

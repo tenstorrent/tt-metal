@@ -51,11 +51,6 @@ TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
         TensorLayout(args.dtype, PageConfig(Layout::ROW_MAJOR), args.memory_config));
 }
 
-Tensor ConvertToHWCDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 ttsl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return ttsl::hash::hash_objects_with_default_seed(

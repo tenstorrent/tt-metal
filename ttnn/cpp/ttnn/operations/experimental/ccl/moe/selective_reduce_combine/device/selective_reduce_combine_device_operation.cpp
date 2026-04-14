@@ -69,14 +69,6 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
         Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), mem_config));
 }
 
-SelectiveReduceCombineDeviceOperation::tensor_return_value_t
-SelectiveReduceCombineDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return tensor_args.optional_output_tensor.value_or(
-        create_device_tensor(output_spec, tensor_args.dense_input_tensor.device()));
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

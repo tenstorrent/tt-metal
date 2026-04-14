@@ -235,12 +235,6 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
         TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }
 
-Tensor UntilizeWithUnpaddingDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
-    auto output_spec = compute_output_specs(operation_attributes, input);
-    return create_device_tensor(output_spec, input.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>
 UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_rmsnorm_pre_all_gather_device_operation.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -40,11 +39,6 @@ TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(
     output_shape[-1] = num_tiles_w * TILE_WIDTH;
 
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
-}
-
-Tensor FusedRMSNormPreAllGatherDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
 }  // namespace ttnn::experimental::prim

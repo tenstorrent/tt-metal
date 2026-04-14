@@ -87,12 +87,6 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
             output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));
 }
 
-HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.device());
-}
-
 Tensor halo(
     const Tensor& input_tensor,
     const ttnn::operations::sliding_window::SlidingWindowConfig& config,

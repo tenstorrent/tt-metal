@@ -96,13 +96,6 @@ ttnn::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_spe
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
-ttnn::Tensor DeepseekMoEPostCombineTilizeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const ttnn::TensorSpec& output_tensor_spec = compute_output_specs(operation_attributes, tensor_args);
-
-    return create_device_tensor(output_tensor_spec, tensor_args.input_tensor.device());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

@@ -164,11 +164,6 @@ TensorSpec TransposeDeviceOperation::compute_output_specs(
             output_padded_shape));
 }
 
-Tensor TransposeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> TransposeDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;

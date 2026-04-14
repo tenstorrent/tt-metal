@@ -188,11 +188,6 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
             operation_attributes.output_padded_shape));
 }
 
-Tensor TilizeWithValPaddingDeviceOperation::create_output_tensors(
-    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    return create_device_tensor(compute_output_specs(operation_attributes, input_tensor), input_tensor.device());
-}
-
 Tensor tilize_with_val_padding(
     const Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,

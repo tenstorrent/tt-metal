@@ -61,12 +61,6 @@ CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
             input.padded_shape()));
 };
 
-CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(spec, tensor_args.input.device());
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<CloneOperation::tensor_return_value_t>
 CloneOperation::create_op_performance_model(
     const operation_attributes_t& /*op_attr*/, const tensor_args_t& inputs, const Tensor& output) {
