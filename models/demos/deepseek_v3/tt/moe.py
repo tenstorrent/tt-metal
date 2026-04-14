@@ -831,7 +831,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
 
-        if batches_per_device == ttnn.TILE_SIZE:
+        if combine_output.shape[2] == ttnn.TILE_SIZE:
             combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
                 combine_output,
                 **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"],
