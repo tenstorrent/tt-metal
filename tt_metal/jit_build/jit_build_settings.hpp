@@ -31,8 +31,8 @@ public:
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
-    // DataflowBuffer local accessor name -> logical DFB id (device JIT header generation). Immutable after Kernel
-    // construction; empty when the kernel has no ProgramSpec DFB bindings.
+    // Called to process the user kernel resource bindings (Metal 2.0 APIs)
+    // (Initially just DFB local accessor bindings, but will be extended.)
     virtual void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
 

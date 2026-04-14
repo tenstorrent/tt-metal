@@ -173,9 +173,8 @@ void accumulate_nodes(
     }
 }
 
-// TODO -- figure out if there's a nicer spot for this in program_spec.cpp
-// This is nice, but we don't really do it for CTAs or defines...
-// I guess it's more necessary though?
+// Local accessor names for kernel resource bindings must be valid C++ identifiers
+// They are used verbatim in the generated kernel source code.
 bool IsValidCppIdentifier(std::string_view s) {
     if (s.empty()) {
         return false;
@@ -1068,7 +1067,6 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // ============================================================================
 
 // Create map of local accessor name -> logical DFB id
-// TODO: Should probably get rid of the need for uint16_t cast in a future refactor
 tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
