@@ -380,7 +380,7 @@ jobs:
       - name: Load into database
         id: db-load
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_MODEL_TRACE_STAGING_DATABASE_URL }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
           python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
