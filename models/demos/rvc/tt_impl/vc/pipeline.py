@@ -149,6 +149,13 @@ class Pipeline:
         version: str = "v1",
         num: str = "48k",
         config: Config | None = None,
+        speaker_id: int = 0,
+        f0_up_key: int = 0,
+        f0_method: str = "pm",
+        index_rate: float = 0.75,
+        resample_sr: int = 0,
+        rms_mix_rate: float = 0.25,
+        protect: float = 0.33,
     ):
         hubert_cfg_path, hubert_path = _get_hubert_paths()
         if not os.path.exists(hubert_path):
@@ -159,6 +166,13 @@ class Pipeline:
         self.if_f0 = if_f0
         self.version = version
         self.num = num
+        self.speaker_id = speaker_id
+        self.f0_up_key = f0_up_key
+        self.f0_method = f0_method
+        self.index_rate = index_rate
+        self.resample_sr = resample_sr
+        self.rms_mix_rate = rms_mix_rate
+        self.protect = protect
 
         self.synthesizer, data_cfg = _load_synthesizer(self.tt_device, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
@@ -181,12 +195,12 @@ class Pipeline:
         self.t_max = self.sr * x_max
         self.device = config.device
 
-    def _get_f0(self, audio, num_frames, f0_up_key, f0_method):
+    def _get_f0(self, audio, num_frames):
         f0_min = 50
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
-        if f0_method == "pm":
+        if self.f0_method == "pm":
             f0 = (
                 parselmouth.Sound(audio, self.sr)
                 .to_pitch_ac(
@@ -204,7 +218,7 @@ class Pipeline:
         else:
             raise ValueError("f0_method must be 'pm'.")
 
-        f0 *= pow(2, f0_up_key / 12)
+        f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()
         f0_mel = 1127 * torch.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
@@ -221,14 +235,12 @@ class Pipeline:
     def _vc(
         self,
         audio,
-        speaker_id,
         pitch,
         pitchf,
         index,
         big_npy,
-        index_rate,
-        protect,
     ):
+        speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
         speaker_id = ttnn.from_torch(
             speaker_id,
             dtype=ttnn.uint32,
@@ -252,16 +264,16 @@ class Pipeline:
         feats = ttnn.to_layout(feats, ttnn.ROW_MAJOR_LAYOUT)
         num_frames = feats.shape[1] * 2
 
-        if protect < 0.5 and pitch is not None and pitchf is not None:
+        if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = _interpolate_1d(feats, scale_factor=2, mode="linear")
-        if index is not None and big_npy is not None and index_rate != 0:
+        if index is not None and big_npy is not None and self.index_rate != 0:
             index_features = feats[0].cpu().numpy()
             scores, indices = index.search(index_features, k=8)
             scores, indices = torch.from_numpy(scores), torch.from_numpy(indices)
             weights = torch.square(1 / scores)
             weights /= weights.sum(dim=1, keepdim=True)
             index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
-            feats = index_features * index_rate + (1 - index_rate) * feats
+            feats = index_features * self.index_rate + (1 - self.index_rate) * feats
 
         feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
 
@@ -282,8 +294,8 @@ class Pipeline:
                 device=self.tt_device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            if protect < 0.5:
-                pitchff = protect + (1 - protect) * (pitchf >= 1)
+            if self.protect < 0.5:
+                pitchff = self.protect + (1 - self.protect) * (pitchf >= 1)
                 pitchff = ttnn.unsqueeze(pitchff, -1)
                 feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
                 ttnn.deallocate(protected_features)
@@ -302,14 +314,6 @@ class Pipeline:
     def _run_pipeline(
         self,
         audio,
-        speaker_id,
-        f0_up_key,
-        f0_method,
-        file_index,
-        index_rate,
-        resample_sr,
-        rms_mix_rate,
-        protect,
     ):
         index = big_npy = None
         audio = signal.filtfilt(bh, ah, audio)
@@ -334,10 +338,9 @@ class Pipeline:
             idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
             s = t
         idx_list.append((s // self.window, num_frames))
-        speaker_id = torch.tensor(speaker_id, device=self.device).unsqueeze(0).long()
         pitch, pitchf = None, None
         if self.if_f0:
-            pitch, pitchf = self._get_f0(audio_padded, num_frames, f0_up_key, f0_method)
+            pitch, pitchf = self._get_f0(audio_padded, num_frames)
 
         for idx_s, idx_e in idx_list:
             if self.if_f0:
@@ -350,22 +353,19 @@ class Pipeline:
             audio_output.append(
                 self._vc(
                     audio_padded[idx_s * self.window : idx_e * self.window],
-                    speaker_id,
                     pitch_slice,
                     pitchf_slice,
                     index,
                     big_npy,
-                    index_rate,
-                    protect,
                 )[self.t_pad_tgt : -self.t_pad_tgt]
             )
 
         audio_output = torch.cat(audio_output)
-        if rms_mix_rate != 1:
-            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, rms_mix_rate)
-        if self.tgt_sr != resample_sr and resample_sr >= 16000:
+        if self.rms_mix_rate != 1:
+            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, self.rms_mix_rate)
+        if self.tgt_sr != self.resample_sr and self.resample_sr >= 16000:
             audio_output_np = audio_output.numpy()
-            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=resample_sr)
+            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=self.resample_sr)
             audio_output = torch.from_numpy(audio_output_np)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
@@ -375,18 +375,7 @@ class Pipeline:
         audio_output = (audio_output * max_int16).to(torch.int16)
         return audio_output
 
-    def infer(
-        self,
-        audio_path: str,
-        speaker_id: int,
-        f0_up_key: int = 0,
-        f0_method: str = "pm",
-        index_file: str | None = None,
-        index_rate: float = 0.75,
-        resample_sr: int = 0,
-        rms_mix_rate: float = 0.25,
-        protect: float = 0.33,
-    ):
+    def infer(self, audio_path: str):
         if not os.path.exists(audio_path):
             raise FileNotFoundError("input_audio_path not found.")
 
@@ -395,14 +384,4 @@ class Pipeline:
         if audio_max > 1:
             audio /= audio_max
 
-        return self._run_pipeline(
-            audio,
-            speaker_id,
-            f0_up_key,
-            f0_method,
-            index_file,
-            index_rate,
-            resample_sr,
-            rms_mix_rate,
-            protect,
-        )
+        return self._run_pipeline(audio)
