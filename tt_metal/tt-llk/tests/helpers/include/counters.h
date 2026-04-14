@@ -733,28 +733,34 @@ public:
             return;
         }
 
-        // Thread 0 configures and arms counters. configure_hardware writes
-        // ref_period/mode registers; this must happen here (not in BRISC)
-        // because writing hw registers from BRISC adds ~5 cycle overhead
-        // to pack operations during profiler measurement.
+        // Thread 0 configures (first zone only) and arms counters.
+        // configure_hardware writes ref_period/mode registers — only needed once
+        // since all zones use the same counter configuration. Subsequent zones
+        // just re-arm (clear+start) which resets counter values to 0 per RTL.
         if (thread_info::get_thread_id() == 0)
         {
-            configure_hardware(zone);
+            if (zone == 0)
+            {
+                configure_hardware(zone);
+            }
             arm_hardware();
         }
         else
         {
             // Match arm_hardware's bus latency: arm does 2 writes per bank,
             // writes are ~2x slower than reads, so do 4 reads per bank.
+            // Only for zone 0 (configure+arm has more latency); zone > 0
+            // just needs arm (2 writes) = fewer dummy reads.
+            const std::uint32_t reads_per_bank = (zone == 0) ? 4 : 1;
             for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
             {
                 if (get_active_bank_mask() & (1u << b))
                 {
                     std::uint32_t base = hw_access::get_counter_base_addr(static_cast<counter_bank>(b));
-                    (void)hw_access::read_reg(base + 8);
-                    (void)hw_access::read_reg(base + 8);
-                    (void)hw_access::read_reg(base + 8);
-                    (void)hw_access::read_reg(base + 8);
+                    for (std::uint32_t r = 0; r < reads_per_bank; ++r)
+                    {
+                        (void)hw_access::read_reg(base + 8);
+                    }
                 }
             }
         }
@@ -815,12 +821,16 @@ public:
             return;
         }
 
-        // Last thread out: complete ALL hardware ops before signaling.
-        // read_hardware writes mode registers which cause bus contention
-        // with FPU operations if done concurrently with the next zone.
+        // Last thread out: freeze counters and read values.
+        // Skip deconfigure for zone 0 — zone 1 reuses the same hw config.
+        // Only deconfigure after the last zone to avoid register writes
+        // that cause bus contention with the next zone's FPU operations.
         freeze_hardware();
         read_hardware(zone);
-        deconfigure_hardware();
+        if (zone > 0)
+        {
+            deconfigure_hardware();
+        }
 
         // Clear stop flags AND start flags for next zone.
         stop_flags[0] = 0;
