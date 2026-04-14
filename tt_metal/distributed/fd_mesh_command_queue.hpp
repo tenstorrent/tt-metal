@@ -289,7 +289,7 @@ public:
 
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
-    bool in_use() override { return in_use_.load(); }
+    bool in_use() const override { return in_use_.load(); }
 
     // Called at every site that sets in_use_=true.  If transitioning from idle
     // (post-quiesce) to active, clears the quiesced flag on every device's CQ so

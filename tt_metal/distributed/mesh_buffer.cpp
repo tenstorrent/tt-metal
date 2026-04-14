@@ -348,6 +348,19 @@ void MeshBuffer::wait_for_pending_events() {
         if (event_id == 0) {
             continue;
         }
+        // If the parent mesh CQ has been quiesced (in_use_==false) and no new work submitted
+        // on the parent mesh CQ since, then finish_and_reset_in_use() already drained all
+        // outstanding work — including the work behind this event — and reset the event counters.
+        // Calling EventSynchronize() here would spin forever because:
+        //   1. The per-device quiesced flag may have been cleared by a submesh mark_in_use()
+        //      (submeshes share the same physical devices and their sysmem_managers), and
+        //   2. The event counter was reset to 0 by finish_and_reset_in_use(), so
+        //      last_completed_event (now tracking the new submesh event sequence) will never
+        //      reach the pre-reset event_id stored in this buffer.
+        // Skip safely: all work on the parent mesh CQ has already completed.
+        if (!mesh_device->mesh_command_queue(cq_id).in_use()) {
+            continue;
+        }
         EventSynchronize(MeshEvent(event_id, mesh_device.get(), cq_id, device_range));
     }
 }

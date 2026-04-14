@@ -74,6 +74,9 @@ public:
 
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
+    // Returns true if this CQ has had work submitted since the last quiesce (finish_and_reset_in_use).
+    // Used by MeshBuffer::wait_for_pending_events to determine if an old event is still relevant.
+    virtual bool in_use() const { return false; }
     virtual std::optional<MeshTraceId> trace_id() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
