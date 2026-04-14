@@ -26,7 +26,7 @@ def _require_assets_env() -> None:
 def run_rvc_e2e_inference(device) -> None:
     _require_assets_env()
     model = RVCRunner()
-    inference_config = RVCInferenceConfig(num_secs=3.0)
+    inference_config = RVCInferenceConfig(num_secs=33.0)
 
     model.initialize_inference(device, {"inference": inference_config})
     torch_input_tensor, _ = model.test_infra.setup_l1_sharded_input(device)
@@ -42,12 +42,23 @@ def run_rvc_e2e_inference(device) -> None:
 
     inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(
-        f"ttnn_rvc. One inference iteration time (sec): {inference_time_avg}, num_input_samples: {torch_input_tensor.shape[0]}"
+        f"ttnn_rvc. One inference iteration time (sec): {inference_time_avg}, batch_size: {torch_input_tensor.shape[0]}, num_input_samples: {torch_input_tensor.shape[1]}"
     )
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65384}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
+)
 def test_rvc_e2e(device):
     run_rvc_e2e_inference(device)
+
+
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
+)
+def test_rvc_e2e_dp(mesh_device):
+    run_rvc_e2e_inference(mesh_device)

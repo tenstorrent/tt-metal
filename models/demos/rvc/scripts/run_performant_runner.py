@@ -67,8 +67,9 @@ def main() -> None:
         passed, message = runner.validate()
         avg_sec = (end_time - start_time) / args.iters
         print(f"avg_sec={avg_sec:.6f}")
-        print(f"num_samples={len(output_np)}")
-        print(f"num_input_samples={torch_input_tensor.shape[0]}")
+        print(f"output_shape={output_np.shape}")
+        print(f"batch_size={torch_input_tensor.shape[0]}")
+        print(f"num_input_samples={torch_input_tensor.shape[1]}")
         print(f"passed={passed}")
         print(f"message={message}")
     finally:

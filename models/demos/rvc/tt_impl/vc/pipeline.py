@@ -65,7 +65,7 @@ def rms_numpy(
 ) -> np.ndarray:
     """NumPy reimplementation of ``librosa.feature.rms(y=...)`` for batched audio (2D).
 
-    Returns an array of shape ``(batch_size, 1, num_frames)`` to match librosa.
+    Returns an array of shape ``(batch_size, num_frames)`` to match librosa.
     """
     y = np.asarray(y, dtype=dtype)
     frames_list = []
@@ -82,7 +82,7 @@ def rms_numpy(
 
     power = np.mean(np.square(frames), axis=1, dtype=np.float64)
     rms = np.sqrt(power, dtype=np.float64).astype(dtype, copy=False)
-    return rms[np.newaxis, :]
+    return rms
 
 
 def _interpolate_1d(
@@ -169,9 +169,9 @@ def _change_rms(source_audio, source_sr, target_audio, target_sr, rate):
     source_rms = rms_numpy(source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
     target_rms = rms_numpy(target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
     source_rms = torch.from_numpy(source_rms)
-    source_rms = F.interpolate(source_rms, size=target_audio.shape[0], mode="linear").squeeze()
+    source_rms = F.interpolate(source_rms.unsqueeze(1), size=target_audio.shape[1], mode="linear").squeeze(1)
     target_rms = torch.from_numpy(target_rms)
-    target_rms = F.interpolate(target_rms, size=target_audio.shape[0], mode="linear").squeeze()
+    target_rms = F.interpolate(target_rms.unsqueeze(1), size=target_audio.shape[1], mode="linear").squeeze(1)
     target_rms = torch.max(target_rms, torch.zeros_like(target_rms) + 1e-6)
     target_audio *= torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
     return target_audio
@@ -232,6 +232,12 @@ class Pipeline:
         self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
+        if self.tt_device.get_num_devices() > 1:
+            self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.tt_device, dim=0)
+            self.output_mesh_composer = ttnn.ConcatMeshToTensor(self.tt_device, dim=0)
+        else:
+            self.input_mesh_mapper = None
+            self.output_mesh_composer = None
 
         self.synthesizer, data_cfg = _load_synthesizer(self.tt_device, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
@@ -255,13 +261,22 @@ class Pipeline:
         self.device = config.device
 
     def _get_f0(self, audio, num_frames):
+        if audio.dim() == 2:
+            coarse_batch = []
+            continuous_batch = []
+            for batch_idx in range(audio.shape[0]):
+                coarse, continuous = self._get_f0(audio[batch_idx], num_frames)
+                coarse_batch.append(coarse)
+                continuous_batch.append(continuous)
+            return torch.cat(coarse_batch, dim=0), torch.cat(continuous_batch, dim=0)
+
         f0_min = 50
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
         if self.f0_method == "pm":
             f0 = (
-                parselmouth.Sound(audio, self.sr)
+                parselmouth.Sound(audio.detach().cpu().numpy(), self.sr)
                 .to_pitch_ac(
                     time_step=self.window / self.sr,
                     voicing_threshold=0.6,
@@ -327,13 +342,14 @@ class Pipeline:
         big_npy,
     ):
         batch_size = audio.shape[0]
-        speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
+        speaker_id = torch.full((batch_size,), self.speaker_id, device=self.device, dtype=torch.long)
         speaker_id = ttnn.from_torch(
             speaker_id,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.tt_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=self.input_mesh_mapper,
         )
         assert audio.dim() == 2, audio.dim()
         hubert_input = ttnn.from_torch(
@@ -341,6 +357,7 @@ class Pipeline:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.tt_device,
+            mesh_mapper=self.input_mesh_mapper,
         )
         logits = self.hubert_model(
             source=hubert_input,
@@ -373,6 +390,7 @@ class Pipeline:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=self.input_mesh_mapper,
             )
             pitchf = ttnn.from_torch(
                 pitchf,
@@ -380,6 +398,7 @@ class Pipeline:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=self.input_mesh_mapper,
             )
             if self.protect < 0.5:
                 pitchff = self.protect + (1 - self.protect) * (pitchf >= 1)
@@ -394,7 +413,7 @@ class Pipeline:
         else:
             output = self.synthesizer(feats, speaker_id)
 
-        output_torch = ttnn.to_torch(output).to(torch.float32)
+        output_torch = ttnn.to_torch(output, mesh_composer=self.output_mesh_composer).to(torch.float32)
         output = output_torch[:, :, 0].contiguous()
         return output
 

@@ -61,6 +61,8 @@ class RVCTestInfra:
         validation_config: RVCValidationConfig | None = None,
     ):
         self.device = device
+        self.num_devices = self.device.get_num_devices()
+        self.batch_size = self.num_devices
         self.inference_config = inference_config
         self.model_config = model_config or RVCModelConfig()
         self.validation_config = validation_config or RVCValidationConfig()
@@ -79,14 +81,14 @@ class RVCTestInfra:
         num_secs = self.inference_config.num_secs if num_secs is None else num_secs
         num_samples = max(int(num_secs * 16000), 1)
         generator = torch.Generator().manual_seed(0)
-        batch_size = 1
-        return torch.randn(batch_size, num_samples, generator=generator, dtype=torch.float32)
+        audio = torch.randn(num_samples, generator=generator, dtype=torch.float32)
+        return audio.unsqueeze(0).repeat(self.batch_size, 1)
 
     @staticmethod
     def _to_numpy(audio) -> np.ndarray:
         if hasattr(audio, "detach"):
             audio = audio.detach().cpu().numpy()
-        return np.asarray(audio, dtype=np.float32).reshape(-1)
+        return np.asarray(audio, dtype=np.float32)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if torch_input_tensor is None:
@@ -109,14 +111,14 @@ class RVCTestInfra:
         if tt_output is None:
             tt_output = self.run()
 
-        if tt_output.shape[0] == 0:
+        if tt_output.size == 0:
             self.pcc_passed = False
             self.pcc_message = "Empty output tensor."
             return self.pcc_passed, self.pcc_message
 
         self.non_silent_output = float(np.max(np.abs(tt_output))) > 0.0
         self.pcc_passed = self.non_silent_output
-        self.pcc_message = f"num_samples={tt_output.shape[0]}, non_silent_output={self.non_silent_output}"
+        self.pcc_message = f"output_shape={tt_output.shape}, non_silent_output={self.non_silent_output}"
         logger.info(f"RVC, {self.pcc_message}")
 
         passed = self.pcc_passed

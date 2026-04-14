@@ -17,22 +17,36 @@ from models.demos.rvc.tt_impl.linear import Linear
 LRELU_SLOPE = 0.1
 
 
+def _mesh_mapper_and_composer(device):
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        return ttnn.ShardTensorToMesh(device, dim=0), ttnn.ConcatMeshToTensor(device, dim=0)
+    return None, None
+
+
 def ttnn_randn_fallback(shape, dtype, device):
     # Fallback random generator using PyTorch, since TTNN's random generation is not available in the current version.
+    mesh_mapper, _ = _mesh_mapper_and_composer(device)
     return ttnn.from_torch(
         torch.randn(shape, dtype=torch.float32),
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
+        mesh_mapper=mesh_mapper,
     )
 
 
 def ttnn_cumsum_fallback(x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
     # Fallback implementation of cumsum using to_host, torch.cumsum, and from_torch.
-    x_torch = ttnn.to_torch(x)
+    mesh_mapper, mesh_composer = _mesh_mapper_and_composer(x.device())
+    x_torch = ttnn.to_torch(x, mesh_composer=mesh_composer)
     cumsum_torch = torch.cumsum(x_torch, dim=dim)
     cumsum = ttnn.from_torch(
-        cumsum_torch, dtype=x.dtype, layout=x.layout, device=x.device(), memory_config=x.memory_config()
+        cumsum_torch,
+        dtype=x.dtype,
+        layout=x.layout,
+        device=x.device(),
+        memory_config=x.memory_config(),
+        mesh_mapper=mesh_mapper,
     )
     return cumsum
 
@@ -76,10 +90,11 @@ def _flip_last_dim_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
 def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -> ttnn.Tensor:
     # Fallback implementation of gather using to_host, torch.gather, and from_torch.
     # needed since ttnn.gather is 4-8x slower than this fallback version
-    x_torch = ttnn.to_torch(x)
-    index_torch = ttnn.to_torch(index).to(torch.int64)
+    mesh_mapper, mesh_composer = _mesh_mapper_and_composer(device)
+    x_torch = ttnn.to_torch(x, mesh_composer=mesh_composer)
+    index_torch = ttnn.to_torch(index, mesh_composer=mesh_composer).to(torch.int64)
     gathered_torch = torch.gather(x_torch, dim=dim, index=index_torch)
-    gathered = ttnn.from_torch(gathered_torch, dtype=x.dtype, layout=x.layout, device=device)
+    gathered = ttnn.from_torch(gathered_torch, dtype=x.dtype, layout=x.layout, device=device, mesh_mapper=mesh_mapper)
     return gathered
 
 
