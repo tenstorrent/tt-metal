@@ -284,7 +284,6 @@ class Pipeline:
         f0_method,
         file_index,
         index_rate,
-        resample_sr,
         rms_mix_rate,
         protect,
     ):
@@ -360,10 +359,6 @@ class Pipeline:
         audio_output = torch.cat(audio_output)
         if rms_mix_rate != 1:
             audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, rms_mix_rate)
-        if self.tgt_sr != resample_sr and resample_sr >= 16000:
-            audio_output_np = audio_output.numpy()
-            audio_output_np = librosa.resample(audio_output_np, orig_sr=self.tgt_sr, target_sr=resample_sr)
-            audio_output = torch.from_numpy(audio_output_np)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
         if audio_max > 1:
@@ -380,7 +375,6 @@ class Pipeline:
         f0_method: str = "pm",
         index_file: str | None = None,
         index_rate: float = 0.75,
-        resample_sr: int = 0,
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
     ):
@@ -399,7 +393,6 @@ class Pipeline:
             f0_method,
             index_file,
             index_rate,
-            resample_sr,
             rms_mix_rate,
             protect,
         )

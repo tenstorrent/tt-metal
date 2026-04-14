@@ -305,8 +305,6 @@ class MelSpectrogram(nn.Module):
 
 class RMVPE:
     def __init__(self, model_path: str, device=None):
-        self.resample_kernel = {}
-        self.resample_kernel = {}
         if device is None:
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.device = device
