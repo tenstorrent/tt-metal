@@ -143,23 +143,22 @@ constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
+// Drain output tile-rows [start_row, end_row) from cb_out to DRAM, one sbh-group at a time.
+// Waits for each row group, writes to DRAM, pops. Overlaps DMA with compute.
 template <typename ReaderType>
-void write_out_row_by_row(
+void drain_output_rows(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t cb_out,
     const uint32_t tile_bytes,
-    const uint32_t sbh) {
-    const uint32_t out_rows = out_slice.get_d2_size();
+    const uint32_t sbh,
+    const uint32_t start_row,
+    const uint32_t end_row) {
     const uint32_t out_cols = out_slice.get_d3_size();
     const uint32_t row_tiles = sbh * out_cols;
-    const uint32_t num_row_groups = out_rows / sbh;
 
-    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
+    for (uint32_t row = start_row; row < end_row; row += sbh) {
         cb_wait_front(cb_out, row_tiles);
         uint32_t read_ptr = get_read_ptr(cb_out);
         for (uint32_t r = 0; r < sbh; r++) {
@@ -167,7 +166,7 @@ void write_out_row_by_row(
                 cat_out_generator.maybe_write_tile(
                     out_slice.d0,
                     out_slice.d1,
-                    out_slice.d2_start + rg * sbh + r,
+                    out_slice.d2_start + row + r,
                     out_slice.d3_start + col,
                     end_seq_tile,
                     read_ptr);
@@ -178,55 +177,98 @@ void write_out_row_by_row(
     }
 }
 
-// Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
-// Output is drained row-by-row (overlapping with compute's SALAD pushes); max/sum are bulk-drained.
-template <typename ReaderType, typename TensorAccessorType>
-void save_accumulators_with_trid(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+// Deferred work from one Q chunk's save: stats (always deferred) + output tail (conditional).
+// Stats writes are deferred to the next Q chunk's K-loop window to avoid DRAM bank contention
+// from synchronized writes. Output tail rows may also be deferred when the split-save doesn't
+// drain all row groups in the immediate window.
+struct DeferredSave {
+    uint32_t save_trid;
+    // Stats
+    uint32_t nb;
+    uint32_t nq;
+    uint32_t stats_seq_start_tile;
+    uint32_t stats_seq_end_tile;
+    // Output tail (valid when has_output is true)
+    bool has_output;
+    Slice out_slice;
+    uint32_t output_start_row;
+    uint32_t output_end_seq_tile;
+    bool is_joint_q;
+};
+
+// Flush deferred stats (max/sum) from CBs to DRAM, then pop.
+template <typename TensorAccessorType>
+void flush_deferred_stats(
+    const DeferredSave& ds,
     const TensorAccessorType& stats_writer,
     const TensorTileShape& stats_tile_logical,
-    const uint32_t nb,
-    const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t stats_seq_start_tile,
-    const uint32_t stats_seq_end_tile,
     const uint32_t sum_offset,
-    const uint32_t cb_out,
     const uint32_t cb_max_out,
     const uint32_t cb_sum_out,
-    const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes,
-    const uint32_t sbh,
-    const uint32_t save_trid) {
-    noc_async_write_set_trid(save_trid);
+    const uint32_t stats_tile_bytes) {
+    noc_async_write_set_trid(ds.save_trid);
 
-    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh);
-
-    // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
     cb_wait_front(cb_sum_out, Sq_chunk_t);
 
-    uint32_t max_write_addr = get_read_ptr(cb_max_out);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
-        max_write_addr += stats_tile_bytes;
+    uint32_t max_addr = get_read_ptr(cb_max_out);
+    uint32_t sum_addr = get_read_ptr(cb_sum_out);
+
+    for (uint32_t i = ds.stats_seq_start_tile; i < ds.stats_seq_end_tile; i++) {
+        noc_async_write_tile(stats_tile_logical.id_of(ds.nb, ds.nq, i, 0), stats_writer, max_addr);
+        max_addr += stats_tile_bytes;
+
+        noc_async_write_tile(stats_tile_logical.id_of(ds.nb, ds.nq, sum_offset + i, 0), stats_writer, sum_addr);
+        sum_addr += stats_tile_bytes;
     }
 
-    uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
-        sum_write_addr += stats_tile_bytes;
-    }
-
-    noc_async_write_flushed_with_trid(save_trid);
-    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row on last ring iter).
-    // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
-    // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
+    noc_async_write_flushed_with_trid(ds.save_trid);
     noc_async_write_set_trid(0);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
+}
+
+// Save output accumulator to DRAM and populate deferred work for next Q's flush window.
+// Writes the first half of row groups immediately; defers the tail (if any) plus stats.
+// The split avoids DRAM bank contention from synchronized writes across all cores.
+template <typename ReaderType>
+void save_and_defer(
+    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const Slice& out_slice,
+    const uint32_t cb_out,
+    const uint32_t tile_bytes,
+    const uint32_t sbh,
+    const uint32_t save_trid,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t stats_seq_start_tile,
+    const uint32_t stats_seq_end_tile,
+    const bool is_joint_q,
+    DeferredSave& ds) {
+    constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
+    const uint32_t out_rows = out_slice.get_d2_size();
+    const uint32_t num_row_groups = out_rows / sbh;
+    const uint32_t immediate_groups = num_row_groups > 1 ? num_row_groups / 2 : num_row_groups;
+    const uint32_t immediate_rows = immediate_groups * sbh;
+
+    noc_async_write_set_trid(save_trid);
+    drain_output_rows(cat_out_generator, out_slice, all_tiles_valid, cb_out, tile_bytes, sbh, 0, immediate_rows);
+    noc_async_write_flushed_with_trid(save_trid);
+    noc_async_write_set_trid(0);
+
+    ds.save_trid = save_trid;
+    ds.nb = nb;
+    ds.nq = nq;
+    ds.stats_seq_start_tile = stats_seq_start_tile;
+    ds.stats_seq_end_tile = stats_seq_end_tile;
+    ds.has_output = (immediate_rows < out_rows);
+    if (ds.has_output) {
+        ds.out_slice = out_slice;
+        ds.output_start_row = immediate_rows;
+        ds.output_end_seq_tile = all_tiles_valid;
+        ds.is_joint_q = is_joint_q;
+    }
 }
 
 // Eager-path writer: writes normalized output and LSE to DRAM every ring iteration.
@@ -415,6 +457,11 @@ void kernel_main() {
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+
+    // Deferred save state persists across ring iterations.
+    bool has_deferred_save = false;
+    DeferredSave deferred_save{};
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -572,6 +619,34 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
 
+                // Flush deferred work from previous Q during K-loop window.
+                if (has_deferred_save) {
+                    if (deferred_save.has_output) {
+                        noc_async_write_set_trid(deferred_save.save_trid);
+                        drain_output_rows(
+                            deferred_save.is_joint_q ? joint_out_generator : out_generator,
+                            deferred_save.out_slice,
+                            deferred_save.output_end_seq_tile,
+                            cb_out,
+                            tile_bytes,
+                            out_subblock_h,
+                            deferred_save.output_start_row,
+                            deferred_save.out_slice.get_d2_size());
+                        noc_async_write_flushed_with_trid(deferred_save.save_trid);
+                        noc_async_write_set_trid(0);
+                    }
+                    flush_deferred_stats(
+                        deferred_save,
+                        stats_writer,
+                        stats_tile_logical,
+                        Sq_chunk_t,
+                        sum_offset,
+                        cb_max_out,
+                        cb_sum_out,
+                        stats_tile_bytes);
+                    has_deferred_save = false;
+                }
+
                 // === Compute runs K-loop for this Q chunk ===
 
                 // Wait for compute to signal last K-chunk start (multi-Q only).
@@ -581,41 +656,33 @@ void kernel_main() {
                 }
 
                 if (is_last_ring_iter) {
-                    write_out_row_by_row(
+                    drain_output_rows(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         end_seq_tile,
                         cb_out,
                         tile_bytes,
-                        out_subblock_h);
+                        out_subblock_h,
+                        0,
+                        qi.out_slice.get_d2_size());
                     noc_async_write_barrier();
                 } else if (!single_q_chunk) {
-                    // Accumulators are raw compute state — all tiles are valid (including padded rows),
-                    // so bypass maybe_write_tile's padding skip (same convention as restore reads).
-                    constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
-                    save_accumulators_with_trid(
+                    save_and_defer(
                         qi.is_joint_q ? joint_out_generator : out_generator,
-                        stats_writer,
-                        stats_tile_logical,
+                        qi.out_slice,
+                        cb_out,
+                        tile_bytes,
+                        out_subblock_h,
+                        q_trid(q_index),
                         nb,
                         nq,
-                        Sq_chunk_t,
-                        qi.out_slice,
-                        all_tiles_valid,
                         qi.stats_seq_start_tile,
                         qi.stats_seq_end_tile,
-                        sum_offset,
-                        cb_out,
-                        cb_max_out,
-                        cb_sum_out,
-                        tile_bytes,
-                        stats_tile_bytes,
-                        out_subblock_h,
-                        q_trid(q_index));
+                        qi.is_joint_q,
+                        deferred_save);
+                    has_deferred_save = true;
                 }
             }
-            // No global write_barrier — per-trid barriers in the Q loop
-            // ensure each save has landed before its data is read back.
         } else {
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
                 uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
