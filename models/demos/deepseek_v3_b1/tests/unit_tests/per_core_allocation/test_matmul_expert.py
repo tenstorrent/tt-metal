@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     ExpertKernel,
     create_dram_expert_tensors_multi_device,
     create_expert_selection_meta,
+    encode_expert_indices,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
@@ -734,11 +735,15 @@ def _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores,
     )
 
 
-def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores):
-    """Create HEIGHT_SHARDED uint16 index tensor, replicated across devices."""
+def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags):
+    """Create HEIGHT_SHARDED uint16 index tensor, replicated across devices.
+
+    SRAM experts (is_dram_flags[eid]==0) get bit 15 set in the index value.
+    """
+    encoded_ids = encode_expert_indices(active_expert_ids, is_dram_flags)
     index_torch = torch.zeros(num_cores, 16, dtype=torch.int32)
-    for i, expert_id in enumerate(active_expert_ids):
-        index_torch[:, i] = expert_id
+    for i, eid in enumerate(encoded_ids):
+        index_torch[:, i] = eid
     index_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -756,7 +761,7 @@ def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_c
 
 
 def _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags):
-    """Build per-device expert selection metadata (is_dram + table_idx) for expert dispatch."""
+    """Build per-device expert selection metadata (table_idx) for expert dispatch."""
     mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
     a_per_device = ttnn.get_device_tensors(a_tensor)
     expert_selection_meta = {}
@@ -908,7 +913,7 @@ def _run_standard(
         )
 
     a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
-    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
 
     active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
     active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
@@ -974,7 +979,6 @@ def _run_standard(
         dram_cts,
         out_tensor,
         index_tensor,
-        is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
         dram_core_grid=dram_core_grid,
@@ -1105,7 +1109,7 @@ def _run_accum(
     a_tensor = _build_activation_tensor(
         torch_a_all, mesh_device, compute_core_grid, num_cores, M, K * num_active, tile_w
     )
-    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
 
     active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
     active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
@@ -1166,7 +1170,6 @@ def _run_accum(
         dram_cts,
         out_tensor,
         index_tensor,
-        is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
         dram_core_grid=dram_core_grid,
@@ -1290,7 +1293,7 @@ def _run_slice_k(
         tile_w,
     )
     a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
-    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
 
     active_sram = [eid for eid in active_expert_ids if eid in sram_id_set]
     active_dram = [eid for eid in active_expert_ids if eid not in sram_id_set]
@@ -1352,7 +1355,6 @@ def _run_slice_k(
         dram_cts,
         out_tensor,
         index_tensor,
-        is_dram_flags,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
         dram_core_grid=dram_core_grid,
