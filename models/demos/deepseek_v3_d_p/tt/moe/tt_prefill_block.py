@@ -192,7 +192,14 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
         )
 
-    def forward(self, x: ttnn.Tensor, rope_tensors: dict, return_kv_cache: bool = False):
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: ttnn.Tensor,
+        cache_layer_idx: int = 0,
+        return_kv_cache: bool = False,
+    ):
         """
         Args:
             x: [1, 1, seq_len_local, emb_dim_per_tp] TILE_LAYOUT, TP-sharded
@@ -204,7 +211,7 @@ class TtPrefillBlock(LightweightModule):
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
-        mla_out = self.mla.forward(attn_norm_out, rope_tensors)
+        mla_out = self.mla.forward(attn_norm_out, rope_tensors, kvpe_cache, cache_user_idx=cache_layer_idx)
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
@@ -221,7 +228,7 @@ class TtPrefillBlock(LightweightModule):
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
 
-        kv_cache = self.mla.kv_cache_to_host() if return_kv_cache else None
+        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 
     def _moe_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
@@ -237,13 +244,16 @@ class TtPrefillBlock(LightweightModule):
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
-        gathered = ttnn.all_gather(
-            ffn_norm_out,
-            dim=-1,
-            cluster_axis=1,
-            num_links=self.num_links,
-            topology=self.topology,
-        )
-        ffn_out = self.ffn(gathered)
-        ttnn.deallocate(gathered)
+        if self.mesh_device.shape[1] > 1:
+            gathered = ttnn.all_gather(
+                ffn_norm_out,
+                dim=-1,
+                cluster_axis=1,
+                num_links=self.num_links,
+                topology=self.topology,
+            )
+            ffn_out = self.ffn(gathered)
+            ttnn.deallocate(gathered)
+        else:
+            ffn_out = self.ffn(ffn_norm_out)
         return ffn_out

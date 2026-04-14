@@ -57,8 +57,8 @@ class TtSharedExpert(LightweightModule):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
@@ -73,8 +73,8 @@ class TtSharedExpert(LightweightModule):
             torch_weights: Optional dict with keys 'gate_proj', 'up_proj', 'down_proj' containing torch tensors
             num_links: Number of ethernet links to use for CCL (default: 1)
             topology: CCL topology - Linear or Ring (default: Linear)
-            activations_dtype: Data type for activations (default: bfloat8_b)
-            weights_dtype: Data type for weights (default: bfloat4_b)
+            activations_dtype: Data type for activations (default: bfloat16)
+            weights_dtype: Data type for weights (default: bfloat8_b)
             compute_kernel_config: Compute kernel configuration
             weight_cache_path: Optional path for caching TTNN weight tensors
             cache_name_prefix: Optional prefix for cache file names

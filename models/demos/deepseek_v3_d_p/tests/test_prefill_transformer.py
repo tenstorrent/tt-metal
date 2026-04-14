@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPTS_PATH,
     create_hf_model,
@@ -57,7 +58,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [1024, 6400])
-@pytest.mark.parametrize("num_layers", [6])
+@pytest.mark.parametrize("num_layers", [12])
 @pytest.mark.parametrize(
     "n_routed_experts, capacity_factor, gate_fallback_mode",
     [
@@ -211,6 +212,17 @@ def test_prefill_transformer(
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_transformer_creation")
 
+    # --- Create external KVPE cache ---
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=isl_total,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+    )
+
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
     token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
@@ -228,16 +240,13 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    result = transformer(tt_tokens, return_intermediates=pcc_validation, return_kv_cache=do_return_kv)
+    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
 
     if pcc_validation:
-        if do_return_kv:
-            tt_output, tt_snapshots, tt_kv_caches = result
-        else:
-            tt_output, tt_snapshots = result
+        tt_output, tt_snapshots = result
     else:
         tt_output = result
 
@@ -277,16 +286,25 @@ def test_prefill_transformer(
                 logger.error(f"{label:<20s}  PCC comparison failed: {e}")
                 pcc_results.append((label, -1.0))
 
-        # Per-layer KVPE PCC comparison
+        # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv:
+            tt_kvpe_all = ttnn.to_torch(
+                tt_kvpe_cache,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+            ).to(torch.bfloat16)
+            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
             kv_lora_rank = config.kv_lora_rank
-            for (label, tt_kvpe), ref_kvpe in zip(tt_kv_caches, ref_kvpe_list):
+            for i, ref_kvpe in enumerate(ref_kvpe_list):
+                tt_kvpe_layer = tt_kvpe_all[i : i + 1, :1, :, :]
+                label = f"layer_{i}_kvpe"
                 try:
                     _, kv_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float()
+                        ref_kvpe[:, :, :, :kv_lora_rank].float(),
+                        tt_kvpe_layer[:, :, :, :kv_lora_rank].float(),
                     )
                     _, pe_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float()
+                        ref_kvpe[:, :, :, kv_lora_rank:].float(),
+                        tt_kvpe_layer[:, :, :, kv_lora_rank:].float(),
                     )
                     logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
                     pcc_results.append((f"{label}_kv", kv_pcc))

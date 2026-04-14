@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -178,10 +179,20 @@ def test_prefill_block(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=isl_total,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+
     profiler.start("tt_forward")
     logger.info("Running TtPrefillBlock forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    tt_output, tt_kvpe = block(tt_input, rope_tensors, return_kv_cache=do_return_kv)
+    tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=do_return_kv)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
