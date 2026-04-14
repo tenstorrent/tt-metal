@@ -9,7 +9,7 @@ Example:
     export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
 
     ./python_env/bin/python models/demos/rvc/scripts/run_performant_runner.py \
-      --input-audio models/demos/rvc/data/sample-speech.wav \
+      --num-secs 3.0 \
       --device-id 0 \
       --warmup-runs 1 \
       --iters 5
@@ -25,11 +25,7 @@ from models.demos.rvc.runner.performant_runner_infra import RVCInferenceConfig
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the TT-only RVC performant runner.")
-    parser.add_argument(
-        "--input-audio",
-        default="models/demos/rvc/data/sample-speech.wav",
-        help="Input audio file for the fixed runner invocation.",
-    )
+    parser.add_argument("--num-secs", type=float, default=3.0, help="Prepared input audio duration at 16 kHz.")
     parser.add_argument("--speaker-id", type=int, default=0, help="Speaker ID.")
     parser.add_argument("--f0-up-key", type=int, default=0, help="Pitch shift in semitones.")
     parser.add_argument("--f0-method", default="pm", choices=["pm"], help="F0 method.")
@@ -50,7 +46,7 @@ def main() -> None:
     device = ttnn.CreateDevice(device_id=args.device_id, l1_small_size=args.l1_small_size)
     try:
         inference_config = RVCInferenceConfig(
-            audio_path=args.input_audio,
+            num_secs=args.num_secs,
             speaker_id=args.speaker_id,
             f0_up_key=args.f0_up_key,
             f0_method=args.f0_method,
@@ -59,16 +55,13 @@ def main() -> None:
             rms_mix_rate=args.rms_mix_rate,
             protect=args.protect,
         )
-        runner.initialize_inference(
-            device,
-            inference_config,
-            warmup_runs=args.warmup_runs,
-        )
+        runner.initialize_inference(device, {"inference": inference_config, "warmup_runs": args.warmup_runs})
+        torch_input_tensor, _ = runner.test_infra.setup_l1_sharded_input(device)
 
         start_time = time.time()
         output = None
         for _ in range(args.iters):
-            output = runner.execute_inference()
+            output = runner.run(torch_input_tensor)
         ttnn.synchronize_device(device)
         end_time = time.time()
 
@@ -77,6 +70,7 @@ def main() -> None:
         avg_sec = (end_time - start_time) / args.iters
         print(f"avg_sec={avg_sec:.6f}")
         print(f"num_samples={len(output_np)}")
+        print(f"num_input_samples={torch_input_tensor.shape[0]}")
         print(f"passed={passed}")
         print(f"message={message}")
     finally:

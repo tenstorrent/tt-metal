@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
+import torch
 from loguru import logger
 
 
@@ -20,7 +20,7 @@ class RVCModelConfig:
 
 @dataclass(frozen=True)
 class RVCInferenceConfig:
-    audio_path: str
+    num_secs: float
     speaker_id: int = 0
     f0_up_key: int = 0
     f0_method: str = "pm"
@@ -66,9 +66,6 @@ class RVCTestInfra:
         self.inference_config = inference_config
         self.model_config = model_config or RVCModelConfig()
         self.validation_config = validation_config or RVCValidationConfig()
-        self.audio_path = Path(self.inference_config.audio_path)
-        if not self.audio_path.exists():
-            raise FileNotFoundError(f"RVC input audio path does not exist: {self.audio_path}")
 
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
@@ -80,14 +77,32 @@ class RVCTestInfra:
     def _load_pipeline(self):
         return load_ttnn_pipeline(self.device, self.model_config, self.inference_config)
 
+    def _prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
+        num_secs = self.inference_config.num_secs if num_secs is None else num_secs
+        num_samples = max(int(num_secs * 16000), 1)
+        generator = torch.Generator().manual_seed(0)
+        return torch.randn(num_samples, generator=generator, dtype=torch.float32)
+
     @staticmethod
     def _to_numpy(audio) -> np.ndarray:
         if hasattr(audio, "detach"):
             audio = audio.detach().cpu().numpy()
         return np.asarray(audio, dtype=np.float32).reshape(-1)
 
-    def run(self) -> np.ndarray:
-        self.tt_output = self._to_numpy(self.ttnn_pipeline.infer(str(self.audio_path)))
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        if torch_input_tensor is None:
+            return self._prepare_audio_input(), None
+        if isinstance(torch_input_tensor, torch.Tensor):
+            return torch_input_tensor, None
+        raise TypeError(f"Expected preprocessed audio tensor, got {type(torch_input_tensor)!r}")
+
+    def setup_dram_sharded_input(self, device, torch_input_tensor=None):
+        audio_tensor, input_mem_config = self.setup_l1_sharded_input(device, torch_input_tensor)
+        return audio_tensor, None, input_mem_config
+
+    def run(self, input_tensor=None) -> np.ndarray:
+        audio_tensor, _ = self.setup_l1_sharded_input(self.device, input_tensor)
+        self.tt_output = self._to_numpy(self.ttnn_pipeline._run_pipeline(audio_tensor))
         return self.tt_output
 
     def validate(self, output_tensor=None) -> tuple[bool, str]:
