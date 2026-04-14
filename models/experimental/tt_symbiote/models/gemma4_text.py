@@ -20,6 +20,30 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.gemma4_modules import TTNNGemma4LayerStack
+from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
+
+
+def pad_seq_len_to_mult32(seq_len: int) -> int:
+    return _next_power_of_2(seq_len)
+
+
+def _correct_kv_cache_counters(past_key_values, target_seq_len, ttnn_object):
+    if not hasattr(past_key_values, "_get_cache_and_idx"):
+        return
+
+    for layer in ttnn_object.layer_stack.layers:
+        if not hasattr(layer, "self_attn") or not hasattr(layer.self_attn, "layer_idx"):
+            continue
+        layer_idx = layer.self_attn.layer_idx
+        current = past_key_values.get_seq_length(layer_idx)
+        if current != target_seq_len:
+            cache, cache_idx = past_key_values._get_cache_and_idx(layer_idx)
+            cache._seq_lengths[cache_idx] = target_seq_len
+
+    if hasattr(past_key_values, "sliding_cache"):
+        past_key_values.sliding_cache._seen_tokens = target_seq_len
+    if hasattr(past_key_values, "global_cache"):
+        past_key_values.global_cache._seen_tokens = target_seq_len
 
 
 class TTNNGemma4TextModel(TTNNModule):
@@ -111,6 +135,33 @@ class TTNNGemma4TextModel(TTNNModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_object.device),
             )
             inputs_embeds = self.embed_tokens(input_ids_tt)
+
+        # --- Pad inputs_embeds to multiple of 32 for tile alignment (prefill only) ---
+        original_seq_len = inputs_embeds.shape[1]
+        is_prefill = original_seq_len > 1
+        if is_prefill:
+            padded_seq_len = pad_seq_len_to_mult32(original_seq_len)
+            pad_amount = padded_seq_len - original_seq_len
+        else:
+            pad_amount = 0
+
+        if pad_amount > 0:
+            inputs_embeds = ttnn.pad(inputs_embeds.to_ttnn, ((0, 0), (0, pad_amount), (0, 0)), 0.0)
+            if attention_mask is not None and not isinstance(attention_mask, dict):
+                pad_mask = torch.zeros(
+                    (attention_mask.shape[0], pad_amount),
+                    dtype=attention_mask.dtype,
+                    device=attention_mask.device,
+                )
+                attention_mask = torch.cat([attention_mask, pad_mask], dim=1)
+
+            if per_layer_inputs is not None:
+                ple_pad = torch.zeros(
+                    (per_layer_inputs.shape[0], pad_amount, *per_layer_inputs.shape[2:]),
+                    dtype=per_layer_inputs.dtype,
+                    device=per_layer_inputs.device,
+                )
+                per_layer_inputs = torch.cat([per_layer_inputs, ple_pad], dim=1)
 
         if use_cache and past_key_values is None:
             from transformers import DynamicCache
@@ -220,6 +271,9 @@ class TTNNGemma4TextModel(TTNNModule):
         # TTNNGemma4DecoderLayer always passes position_embeddings=None to attention anyway.
         position_embeddings = {layer_type: None for layer_type in self.unique_layer_types}
 
+        if is_prefill and pad_amount > 0:
+            kwargs["unpadded_seq_len"] = original_seq_len
+
         hidden_states = ttnn_object.layer_stack(
             hidden_states,
             attention_mask=causal_mask_mapping,
@@ -230,7 +284,13 @@ class TTNNGemma4TextModel(TTNNModule):
             **kwargs,
         )
 
+        if is_prefill and pad_amount > 0 and past_key_values is not None:
+            _correct_kv_cache_counters(past_key_values, original_seq_len, ttnn_object)
+
         hidden_states = self.norm(hidden_states)
+
+        if pad_amount > 0:
+            hidden_states = hidden_states[:, :original_seq_len, :]
 
         return BaseModelOutputWithPast(
             last_hidden_state=TorchTTNNTensor(hidden_states),

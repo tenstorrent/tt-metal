@@ -136,6 +136,9 @@ class TTNNGemma4DecoderLayer(TTNNModule):
             return
         hidden_states = func_args[0]
         seq_len = hidden_states.shape[-2]
+        unpadded_seq_len = func_kwargs.get("unpadded_seq_len")
+        if unpadded_seq_len is not None and unpadded_seq_len < seq_len:
+            seq_len = unpadded_seq_len
         layer_idx = self.self_attn.layer_idx
         past_key_values.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
@@ -233,6 +236,9 @@ class TTNNGemma4LayerStack(TTNNLayerStack):
             return
         hidden_states = func_args[0]
         seq_len = hidden_states.shape[-2]
+        unpadded_seq_len = func_kwargs.get("unpadded_seq_len")
+        if unpadded_seq_len is not None and unpadded_seq_len < seq_len:
+            seq_len = unpadded_seq_len
         for layer in self.layers:
             if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "layer_idx"):
                 layer_idx = layer.self_attn.layer_idx

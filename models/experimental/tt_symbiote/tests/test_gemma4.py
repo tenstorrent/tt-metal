@@ -107,7 +107,7 @@ def test_gemma4(mesh_device, max_new_tokens):
     # Gemma4 tokenizer does not have a chat_template set, so we manually
     # construct the prompt using Gemma4's turn tokens: <|turn> and <turn|>
     # The tokenizer auto-prepends <bos>, so we don't include it in the string.
-    prompt = "<|turn>user\nWhat is your favorite condiment?<turn|>\n<|turn>model\n"
+    prompt = "<|turn>user\nWhat is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?<turn|>\n<|turn>model\n"
     # Use first parameter's device (model.device may not exist for multi-modal models)
     model_device = next(model.parameters()).device
     inputs = tokenizer(prompt, return_tensors="pt").to(model_device)
