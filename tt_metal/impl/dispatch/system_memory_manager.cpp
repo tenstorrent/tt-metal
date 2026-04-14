@@ -115,8 +115,7 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs),
-    cq_to_quiesced(std::make_unique<std::atomic<bool>[]>(num_hw_cqs)),
-    num_cqs(num_hw_cqs) {
+    cq_to_quiesced(std::make_unique<std::atomic<bool>[]>(num_hw_cqs)) {
     this->prefetch_q_writers.reserve(num_hw_cqs);
     this->completion_q_writers.reserve(num_hw_cqs);
 
