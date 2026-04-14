@@ -4,26 +4,26 @@
 
 - [Goal](#goal)
 - [1. Model Registry](#1-model-registry)
-- [2. Process Notes & Learnings](#2-process-notes--learnings)
+- [2. Process Notes & Learnings](#2-process-notes-learnings)
 - [3. Cross-Model MoE Parameter Comparison](#3-cross-model-moe-parameter-comparison-all-verified)
 - [4. Architecture Family Classification](#4-architecture-family-classification)
 - [5. Generalization Implications](#5-generalization-implications)
 - [6. Next Steps](#6-next-steps)
 - [Appendix A: Model MoE Architectures (Detailed)](#appendix-a-model-moe-architectures-detailed)
-  - [A.1 GPT-OSS](#a1-gpt-oss--moe-architecture-verified)
-  - [A.2 DeepSeek V3](#a2-deepseek-v3--moe-architecture-verified)
-  - [A.3 GLM-5](#a3-glm-5--moe-architecture-verified) — DeepSeek family
-  - [A.4 Kimi K2.5](#a4-kimi-k25--moe-architecture-verified) — DeepSeek family
-  - [A.5 Ling-1T](#a5-ling-1t--moe-architecture-verified) — DeepSeek family
-  - [A.6 GLM-4.7](#a6-glm-47--moe-architecture-verified) — DeepSeek family (confirmed from modeling code)
-  - [A.7 Qwen3 MoE](#a7-qwen3-moe--moe-architecture-verified) — Standard softmax
-  - [A.8 Qwen3.5 MoE (397B)](#a8-qwen35-moe--moe-architecture-verified) — Standard softmax
-  - [A.9 Qwen3.5 35B](#a9-qwen35-35b-a3b--moe-architecture-verified) — Standard softmax
-  - [A.10 Qwen3-Omni 30B](#a10-qwen3-omni-30b-a3b--moe-architecture-verified) — Standard softmax
-  - [A.11 Mistral Large 3](#a11-mistral-large-3-675b--moe-architecture-verified) — Custom
-  - [A.12 Gemma 4 (optional)](#a12-gemma-4-26b-a4b--moe-architecture-verified-optional) — Custom
-  - [A.13 DeepSeek OCR](#a13-deepseek-ocr--moe-architecture-verified) — Legacy/small
-- [Appendix B: Existing TT-Metal Implementations](#appendix-b-existing-tt-metal-implementations--comparison-as-of-main437da8d3796)
+  - [A.1 GPT-OSS](#a1-gpt-oss-moe-architecture-verified)
+  - [A.2 DeepSeek V3](#a2-deepseek-v3-moe-architecture-verified)
+  - [A.3 GLM-5](#a3-glm-5-moe-architecture-verified) — DeepSeek family
+  - [A.4 Kimi K2.5](#a4-kimi-k25-moe-architecture-verified) — DeepSeek family
+  - [A.5 Ling-1T](#a5-ling-1t-moe-architecture-verified) — DeepSeek family
+  - [A.6 GLM-4.7](#a6-glm-47-moe-architecture-verified) — DeepSeek family (confirmed from modeling code)
+  - [A.7 Qwen3 MoE](#a7-qwen3-moe-moe-architecture-verified) — Standard softmax
+  - [A.8 Qwen3.5 MoE (397B)](#a8-qwen35-moe-moe-architecture-verified) — Standard softmax
+  - [A.9 Qwen3.5 35B](#a9-qwen35-35b-a3b-moe-architecture-verified) — Standard softmax
+  - [A.10 Qwen3-Omni 30B](#a10-qwen3-omni-30b-a3b-moe-architecture-verified) — Standard softmax
+  - [A.11 Mistral Large 3](#a11-mistral-large-3-675b-moe-architecture-verified) — Custom
+  - [A.12 Gemma 4 (optional)](#a12-gemma-4-26b-a4b-moe-architecture-verified-optional) — Custom
+  - [A.13 DeepSeek OCR](#a13-deepseek-ocr-moe-architecture-verified) — Legacy/small
+- [Appendix B: Existing TT-Metal Implementations](#appendix-b-existing-tt-metal-implementations-comparison-as-of-main437da8d3796)
 
 ---
 
