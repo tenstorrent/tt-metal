@@ -56,6 +56,9 @@ jobs:
   validate-inputs:
     name: Validate inputs & derive arch
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      members: read
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
