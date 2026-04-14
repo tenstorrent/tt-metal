@@ -416,7 +416,7 @@ def passed_test(
     elif output_data_format == DataFormat.Bfp4_b:
         target_pcc = 0.98
     elif output_data_format == DataFormat.MxFp4:
-        target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and negative representable values)
+        target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
 
     if custom_pcc_threshold is not None:
         logger.info(

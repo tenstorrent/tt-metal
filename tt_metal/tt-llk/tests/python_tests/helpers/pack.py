@@ -8,18 +8,19 @@ import numpy as np
 import torch
 
 from .format_config import (
-    MXFP8_BLOCK_SIZE,
+    MX_FORMAT_BLOCK_SIZE,
+    MX_FORMAT_MAX_NORMAL,
+    DataFormat,
     l1_align,
 )
 from .tile_constants import (
     FACE_C_DIM,
     MAX_TILE_ELEMENTS,
     MIN_BFP_EXPONENTS,
-    MX_FORMAT_BLOCK_SIZE,
-    MX_FORMAT_MAX_NORMAL,
+    SRCS_SLICE_32B_ELEMENT_COUNT,
+    SRCS_SLICE_32B_ROW_DIM,
     SRCS_SLICE_ELEMENT_COUNT,
     SRCS_SLICE_ROW_DIM,
-    DataFormat,
 )
 
 
@@ -271,7 +272,7 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
     - Full tile: 32 scales (32 B, aligned) + 1024 FP8 (aligned) → 1056 B.
     - SrcS slice (8×16): 4 scales + pad to 16 B + 128 FP8 (aligned) → 144 B per slice.
 
-    Element count must be a multiple of MXFP8_BLOCK_SIZE (32).
+    Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
 
     Uses ml_dtypes for FP8 element conversion and E8M0 scale encoding.
 
@@ -294,9 +295,9 @@ def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=1
     assert (
         len(fp32_array) >= elements_to_pack
     ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    assert elements_to_pack % MXFP8_BLOCK_SIZE == 0, (
+    assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
         f"Element count ({elements_to_pack}) must be a multiple of "
-        f"MXFP8_BLOCK_SIZE ({MXFP8_BLOCK_SIZE})"
+        f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
     )
 
     fp32_array = fp32_array[:elements_to_pack]
@@ -408,7 +409,10 @@ def pack_mxfp8r(
     )
     if use_srcs:
         return _pack_mxfp8_srcs(
-            tensor, ml_dtypes.float8_e5m2, MXFP8_E5M2_MAX_NORMAL, dest_acc
+            tensor,
+            ml_dtypes.float8_e5m2,
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
+            dest_acc,
         )
     return _pack_mxfp8(
         tensor,
@@ -452,7 +456,10 @@ def pack_mxfp8p(
     )
     if use_srcs:
         return _pack_mxfp8_srcs(
-            tensor, ml_dtypes.float8_e4m3fn, MXFP8_E4M3_MAX_NORMAL, dest_acc
+            tensor,
+            ml_dtypes.float8_e4m3fn,
+            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
+            dest_acc,
         )
     return _pack_mxfp8(
         tensor,
@@ -463,7 +470,9 @@ def pack_mxfp8p(
     )
 
 
-def pack_mxfp4(tensor, num_faces=4, face_r_dim=16):
+def pack_mxfp4(
+    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
 
@@ -487,11 +496,19 @@ def pack_mxfp4(tensor, num_faces=4, face_r_dim=16):
         tensor: Input tensor (typically 1024 elements for full tile)
         num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
         face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
+            (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
         Layout: [32 scales (1 per block)][512 packed bytes (2 FP4/byte)]
     """
+    # For now, use_srcs is not implemented for MxFp4
+    # If needed in the future, implement similar to _pack_mxfp8_srcs
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxfp4")
+
     # Convert to numpy and prepare data
     fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
 
@@ -510,36 +527,40 @@ def pack_mxfp4(tensor, num_faces=4, face_r_dim=16):
         num_blocks, MX_FORMAT_BLOCK_SIZE
     )
 
-    # Pre-process blocks to handle NaN per hardware spec: NaN → +0.0
-    # (Hardware: "NaN → Zero" for MXFP4)
-    blocks = np.where(np.isnan(blocks), 0.0, blocks)
+    # Pre-process blocks for element conversion: NaN -> 0.0 (MXFP4 has no NaN)
+    blocks_raw = blocks
+    blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
-    # Scale selection (E8M0) should follow the OCP MX-style encoding rule:
-    #   e = ceil(log2(amax / element_max_normal))
-    # using the maximum absolute value in the block.
-    #
-    # This is important for MXFP4 because blocks can contain only sub-1.0 values;
-    # we still want to pick a useful scale (e.g. 0.125) rather than collapsing
-    # the whole block toward ~0.
-    has_inf = np.any(np.isinf(blocks), axis=1)
+    # Scale selection aligned to storage.py verification model:
+    # shared_exp = floor(log2(amax))
+    # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
+    # E8M0 = shared_exp_adj + 127
+    # (elem_exp_max_unbiased is 2 for E2M1)
+    elem_exp_max_unbiased = 2
 
-    # Max abs over *finite* values in the block (NaNs already converted to 0.0).
-    finite_blocks = np.where(np.isfinite(blocks), blocks, 0.0)
+    # Max abs over finite values only (NaN/Inf ignored for scale selection)
+    finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
 
-    scale_ratio = max_abs_values / MX_FORMAT_MAX_NORMAL[DataFormat.MxFp4]
-    exponents = np.ceil(
-        np.log2(scale_ratio, where=(scale_ratio > 0), out=np.zeros_like(scale_ratio))
+    max_abs_exp = np.where(max_abs_values == 0, 0, np.floor(np.log2(max_abs_values)))
+    shared_exp_adj = np.where(
+        (max_abs_exp - elem_exp_max_unbiased) >= -127,
+        max_abs_exp - elem_exp_max_unbiased,
+        -127,
     )
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
 
-    # Special cases:
-    # - All zeros (or all NaNs → zeros): neutral scale exponent 0 (scale=1)
-    # - Any Inf: force saturation scale exponent 127 (E8M0=254)
-    exponents = np.where(max_abs_values == 0, 0, exponents)
-    exponents = np.where(has_inf, 127, exponents)
+    # Special cases (match storage.py):
+    # - All NaN -> 0xFF (NaN block)
+    # - Block contains only {Inf, NaN, 0} and has at least one Inf -> 0xFE
+    all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
+    inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
+    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
+    has_inf = np.any(np.isinf(blocks_raw), axis=1)
 
-    # Clamp to E8M0 range [-127, 127] and add bias
-    scales_e8m0_array = np.clip(exponents, -127, 127).astype(np.int32) + 127
+    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
+    scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
     # Vectorized scale decoding for applying to blocks
@@ -549,23 +570,94 @@ def pack_mxfp4(tensor, num_faces=4, face_r_dim=16):
         np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
     )
 
-    # Scale blocks and convert to FP4
-    # Keep Inf through scaling so ml_dtypes can saturate to max FP4 value
-    # (Inf / scale_factor = Inf, then dtype conversion saturates to ±6.0)
+    # Scale blocks and convert to FP4 using storage.py-style rounding.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
-    fp4_blocks = scaled_blocks.astype(ml_dtypes.float4_e2m1fn)
+    fp4_nibbles = _quantize_fp4_storage_model(scaled_blocks)
 
-    # Pack FP4 elements: 2 per byte
-    # ml_dtypes stores each FP4 value in a byte, we need to pack 2 FP4 values per byte
-    # Hardware convention: low nibble = element 0, high nibble = element 1
-    fp4_bytes_array = np.frombuffer(fp4_blocks.tobytes(), dtype=np.uint8)
-
-    # Pack pairs: byte = (element[i+1] << 4) | element[i]
-    # This packs element i in low nibble, element i+1 in high nibble
-    # Both elements must be masked to ensure only the low 4 bits are used
-    packed_bytes = ((fp4_bytes_array[1::2] & 0x0F) << 4) | (
-        fp4_bytes_array[0::2] & 0x0F
-    )
+    # Pack FP4 elements: 2 per byte (low nibble = element 0)
+    packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
 
     # FULLY SEPARATED layout: all scales first, then all packed elements
     return scales_e8m0 + packed_bytes.tolist()
+
+
+def _round_ties_even(
+    input_mantissa: int, output_width: int, input_width: int = 23
+) -> tuple[int, int]:
+    if output_width < 0:
+        return 0, 0
+    if input_width == output_width:
+        return input_mantissa, 0
+    shift_out = input_width - output_width
+    rounded_bits = input_mantissa & ((1 << shift_out) - 1)
+    rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
+    rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
+    mantissa_lsb = (input_mantissa >> shift_out) & 0x1
+
+    if rounded_msb and rounded_lsbs != 0:
+        round_inc = 1
+    elif rounded_msb and rounded_lsbs == 0:
+        round_inc = 1 if mantissa_lsb == 0x1 else 0
+    else:
+        round_inc = 0
+
+    if output_width == 0:
+        round_inc = rounded_msb if rounded_lsbs != 0x0 else 0
+        output_width = 1
+
+    new_mantissa = (input_mantissa >> shift_out) + round_inc
+    return new_mantissa & ((1 << output_width) - 1), new_mantissa >> output_width
+
+
+def _float_to_fp4_bits_storage(value: float) -> int:
+    """Quantize to FP4 E2M1 using storage.py rules (round-to-nearest-even)."""
+    if np.isnan(value):
+        return 0x0
+    if np.isinf(value):
+        return 0x7 if value > 0 else 0xF
+
+    ui32 = np.float32(value).view(np.uint32)
+    sign = (ui32 >> 31) & 0x1
+    exp_biased = (ui32 >> 23) & 0xFF
+    mant = ui32 & 0x7FFFFF
+
+    # Zero (preserve sign for -0.0)
+    if exp_biased == 0 and mant == 0:
+        return int(sign << 3)
+
+    exp_unbiased = int(exp_biased) - 127
+
+    mant_round, expo_inc = _round_ties_even(mant, 1, 23)
+    mant_round = int(mant_round)
+    expo_inc = int(expo_inc)
+    elem_exp_unbiased = exp_unbiased + expo_inc
+
+    # Subnormal handling (elem_exp_min_unbiased = 0, elem_exp_bias = 1)
+    if elem_exp_unbiased < 0:
+        elem_exp_unbiased = exp_unbiased
+        mant_with_hb = mant | (1 << 23)
+        shift = abs(elem_exp_unbiased)
+        mant_exp_adjusted = mant_with_hb >> shift
+        mant_round, expo_inc = _round_ties_even(mant_exp_adjusted, 1, 23)
+        mant_round = int(mant_round)
+        expo_inc = int(expo_inc)
+        elem_exp_unbiased = -1 + expo_inc
+
+    # Saturate if exponent/mantissa overflow
+    if elem_exp_unbiased > 2 or (elem_exp_unbiased == 2 and mant_round > 1):
+        return 0x7 if sign == 0 else 0xF
+
+    elem_exp_biased = elem_exp_unbiased + 1
+    elem_bits = (elem_exp_biased << 1) | (mant_round & 0x1)
+    if sign:
+        elem_bits |= 0x8
+    return int(elem_bits)
+
+
+def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
+    """Quantize scaled values to FP4 nibbles using storage.py conversion rules."""
+    flat = scaled_blocks.astype(np.float32).ravel()
+    out = np.empty_like(flat, dtype=np.uint8)
+    for i, v in enumerate(flat):
+        out[i] = _float_to_fp4_bits_storage(float(v)) & 0xF
+    return out

@@ -13,8 +13,7 @@ from typing import List
 import pytest
 import torch
 from helpers.format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E5M2_MAX_NORMAL,
+    MX_FORMAT_MAX_NORMAL,
     DataFormat,
     FormatConfig,
 )
@@ -68,11 +67,7 @@ def prepare_square_inputs(
     output_finfo = torch.finfo(output_torch_format)
 
     def mx_elem_max(df: DataFormat) -> float:
-        if df == DataFormat.MxFp8R:
-            return MXFP8_E5M2_MAX_NORMAL
-        if df == DataFormat.MxFp8P:
-            return MXFP8_E4M3_MAX_NORMAL
-        raise ValueError(f"mx_elem_max: not an MX format: {df}")
+        return MX_FORMAT_MAX_NORMAL[df]
 
     # For squaring, x² must fit in the OUTPUT format; |x| must fit the INPUT format.
     if output_format.is_mx_format():

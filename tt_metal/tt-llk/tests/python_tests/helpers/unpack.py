@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from helpers.format_config import (
     MX_FORMAT_BLOCK_SIZE,
+    MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
+    MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
     DataFormat,
 )
 
@@ -246,13 +248,9 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
     scales_e8m0 = packed_bytes[:num_scales]
     elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
 
-    # Convert all elements to FP8 array using ml_dtypes
-    fp8_array = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype)
-
-    # Reshape into blocks: (num_blocks, 32)
-    # We could use MxFp8P here as well since block size is the same.
-    fp8_blocks = fp8_array[: num_blocks * MX_FORMAT_BLOCK_SIZE].reshape(
-        num_blocks, MX_FORMAT_BLOCK_SIZE
+    # Convert elements bytes to FP8 blocks and reshape to (num_scales, 32)
+    fp8_blocks = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype).reshape(
+        num_scales, MX_FORMAT_BLOCK_SIZE
     )
 
     # Vectorized scale decoding - decode all E8M0 scales at once
@@ -357,7 +355,13 @@ def unpack_mxfp8p(
     return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
 
 
-def unpack_mxfp4(packed_bytes, num_faces=4):
+def unpack_mxfp4(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
 
@@ -375,12 +379,20 @@ def unpack_mxfp4(packed_bytes, num_faces=4):
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, unpack sequential SrcS slices (not yet implemented for MxFp4).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry (not yet implemented for MxFp4).
 
     Returns:
         torch.Tensor of bfloat16 values
     """
+    if use_srcs:
+        # SrcS mode not yet implemented for MxFp4
+        raise NotImplementedError("use_srcs mode is not yet supported for MxFp4")
+
     block_size = MX_FORMAT_BLOCK_SIZE
-    num_blocks = num_faces * 256 // block_size
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_blocks = num_elements // block_size
 
     scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
     packed_u8 = np.frombuffer(bytes(packed_bytes[num_blocks:]), dtype=np.uint8)

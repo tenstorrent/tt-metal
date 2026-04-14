@@ -2270,11 +2270,14 @@ class ReduceGolden:
         if reduce_dim not in self.dim_handlers:
             raise ValueError(f"Unsupported reduce dimension: {reduce_dim}")
 
-        # Quantize input to match what hardware actually unpacks from BFP L1 memory
+        # Quantize input to match what hardware actually unpacks from L1 memory
         if input_format == DataFormat.Bfp4_b:
             operand = _bfp4b_to_float16b(operand)
         elif input_format == DataFormat.Bfp8_b:
             operand = _bfp8b_to_float16b(operand)
+        elif input_format is not None and input_format.is_mx_format():
+            # MX formats need to be quantized before reduce
+            operand = quantize_mx_tensor_chunked(operand, input_format)
 
         if reduce_to_one:
             # Accumulate all tiles into a single result
@@ -2452,7 +2455,11 @@ class ReduceGapoolGolden(FidelityMasking):
         reduce_dim,
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
+        input_format=None,
     ):
+        # Quantize MX format inputs to match hardware behavior
+        if input_format is not None and input_format.is_mx_format():
+            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
