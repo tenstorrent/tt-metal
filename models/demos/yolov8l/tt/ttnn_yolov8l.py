@@ -441,6 +441,7 @@ class TtC2f:
         y = [cv1_a, cv1_b]
 
         for i in range(self.n):
+            print(f"bottleneck_modules[i]: {i}")
             z = self.bottleneck_modules[i](y[-1], ensure_dram=reshard_bottleneck_input)
             if (not self.shortcut) and reshard_bottleneck_input:
                 z = ttnn.to_memory_config(z, ttnn.L1_MEMORY_CONFIG)
