@@ -214,11 +214,11 @@ def test_nd_gather(device, check_requires_grid_size, num_iterations):
         result = ttnn.generic_op([ttnn_input, ttnn_output], program)
 
         result_torch = ttnn.to_torch(result)
-        passing, pcc_msg = comp_pcc(torch_input, result_torch, 0.9999)
-        pcc_values.append(float(pcc_msg.split("=")[-1].strip()))
+        passing, pcc_val = comp_pcc(torch_input, result_torch, 0.9999)
+        pcc_values.append(float(pcc_val))
 
         status = "PASS" if passing else "FAIL"
-        logger.info(f"  [{i+1:>2}/{num_iterations}] {status} {pcc_msg}")
+        logger.info(f"  [{i+1:>2}/{num_iterations}] {status} PCC={pcc_val:.6f}")
 
         if not passing:
             all_pass = False
