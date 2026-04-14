@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 820" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="orchGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="discGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="analGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+    <linearGradient id="implGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+    <linearGradient id="testGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#f87171"/>
+    </linearGradient>
+    <linearGradient id="docGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+    <linearGradient id="reflGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+    <linearGradient id="inputGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#f43f5e"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrowWhite" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f87171"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="820" fill="url(#bgGrad)" rx="12"/>
+
+  <!-- Title -->
+  <text x="550" y="45" text-anchor="middle" fill="#e2e8f0" font-size="22" font-weight="700" letter-spacing="0.5">SFPU Unary Operation Agentic Pipeline</text>
+  <text x="550" y="68" text-anchor="middle" fill="#64748b" font-size="13">End-to-end AI kernel generation for Tenstorrent Tensix SFPU</text>
+
+  <!-- Phase labels on the left -->
+  <text x="30" y="155" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 155)">PHASE 1</text>
+  <text x="30" y="310" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 310)">PHASE 2</text>
+  <text x="30" y="455" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 455)">PHASE 3</text>
+  <text x="30" y="580" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 580)">PHASE 4</text>
+  <text x="30" y="690" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 690)">PHASE 5</text>
+  <text x="30" y="780" fill="#475569" font-size="11" font-weight="600" transform="rotate(-90 30 780)">PHASE 6</text>
+
+  <!-- ==================== INPUT ==================== -->
+  <!-- Input box -->
+  <rect x="350" y="88" width="400" height="50" rx="25" fill="none" stroke="url(#inputGrad)" stroke-width="2" filter="shadow"/>
+  <text x="550" y="110" text-anchor="middle" fill="#fda4af" font-size="11" font-weight="600">USER INPUT</text>
+  <text x="550" y="126" text-anchor="middle" fill="#e2e8f0" font-size="12">Operation Name + Math Definition / URL</text>
+
+  <!-- Arrow from input to orchestrator -->
+  <line x1="550" y1="138" x2="550" y2="158" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowWhite)"/>
+
+  <!-- ==================== ORCHESTRATOR ==================== -->
+  <!-- Orchestrator - spans full width as a container -->
+  <rect x="60" y="160" width="980" height="640" rx="10" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6 3" opacity="0.4"/>
+  <rect x="180" y="160" width="740" height="44" rx="8" fill="url(#orchGrad)" filter="shadow"/>
+  <text x="550" y="177" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">GENERATOR  (Orchestrator)</text>
+  <text x="550" y="195" text-anchor="middle" fill="#c7d2fe" font-size="10">ttnn-unary-sfpu-operation-generator</text>
+  <text x="1020" y="185" text-anchor="end" fill="#6366f1" font-size="10" font-weight="600" opacity="0.7">orchestrates all phases</text>
+
+  <!-- ==================== PHASE 1: DISCOVERY ==================== -->
+  <line x1="550" y1="204" x2="550" y2="228" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowCyan)"/>
+
+  <rect x="300" y="230" width="500" height="58" rx="10" fill="#0e2a32" stroke="url(#discGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="330" cy="259" r="14" fill="url(#discGrad)" opacity="0.8"/>
+  <text x="330" y="263" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">1</text>
+  <text x="550" y="253" text-anchor="middle" fill="#22d3ee" font-size="13" font-weight="600">Reference Discoverer</text>
+  <text x="550" y="270" text-anchor="middle" fill="#94a3b8" font-size="10">Analyzes math definition, searches codebase, ranks top 5 reference SFPU ops</text>
+  <text x="550" y="283" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: reference_selection.md</text>
+
+  <!-- ==================== PHASE 2: ANALYSIS ==================== -->
+  <line x1="550" y1="288" x2="550" y2="315" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrowWhite)"/>
+
+  <!-- Parallel fan-out -->
+  <rect x="85" y="317" width="930" height="92" rx="10" fill="#0f1a2e" stroke="url(#analGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="115" cy="345" r="14" fill="url(#analGrad)" opacity="0.8"/>
+  <text x="115" y="349" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">2</text>
+  <text x="550" y="340" text-anchor="middle" fill="#60a5fa" font-size="13" font-weight="600">SFPU Operation Analyzers  (parallel)</text>
+  <text x="550" y="357" text-anchor="middle" fill="#94a3b8" font-size="10">Deep-dive into each reference: SFPU instructions, CB layout, tile math, register usage</text>
+
+  <!-- Parallel boxes -->
+  <rect x="110" y="370" width="160" height="30" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="190" y="389" text-anchor="middle" fill="#93c5fd" font-size="9">Ref Op 1 Analysis</text>
+
+  <rect x="290" y="370" width="160" height="30" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="370" y="389" text-anchor="middle" fill="#93c5fd" font-size="9">Ref Op 2 Analysis</text>
+
+  <rect x="470" y="370" width="160" height="30" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="550" y="389" text-anchor="middle" fill="#93c5fd" font-size="9">Ref Op 3 Analysis</text>
+
+  <rect x="650" y="370" width="160" height="30" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="730" y="389" text-anchor="middle" fill="#93c5fd" font-size="9">Ref Op 4 Analysis</text>
+
+  <rect x="830" y="370" width="160" height="30" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+  <text x="910" y="389" text-anchor="middle" fill="#93c5fd" font-size="9">Ref Op 5 Analysis</text>
+
+  <text x="550" y="403" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: {op}_analysis.md per reference</text>
+
+  <!-- ==================== PHASE 3: IMPLEMENTATION ==================== -->
+  <line x1="550" y1="409" x2="550" y2="436" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrowOrange)"/>
+
+  <rect x="160" y="438" width="780" height="100" rx="10" fill="#1a1408" stroke="url(#implGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="190" cy="468" r="14" fill="url(#implGrad)" opacity="0.8"/>
+  <text x="190" y="472" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">3</text>
+  <text x="550" y="462" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="600">Implementor  (Mode A: Implementation)</text>
+  <text x="550" y="479" text-anchor="middle" fill="#94a3b8" font-size="10">Reads all analyses, implements across all 11 abstraction layers</text>
+
+  <!-- Layer chips -->
+  <rect x="185" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="230" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">UnaryOpType</text>
+
+  <rect x="283" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="328" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">OpDispatch</text>
+
+  <rect x="381" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="426" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">SFPU Kernel</text>
+
+  <rect x="479" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="524" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">CKernel API</text>
+
+  <rect x="577" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="622" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">LLK Wrapper</text>
+
+  <rect x="675" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="720" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">Python Bind</text>
+
+  <rect x="773" y="492" width="90" height="20" rx="4" fill="#292524" stroke="#78716c" stroke-width="0.5"/>
+  <text x="818" y="506" text-anchor="middle" fill="#d6d3d1" font-size="8">Header / API</text>
+
+  <text x="550" y="530" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: implementation_notes.md + all source files</text>
+
+  <!-- ==================== PHASE 4: TESTING ==================== -->
+  <line x1="550" y1="538" x2="550" y2="558" stroke="#f87171" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+
+  <rect x="200" y="560" width="700" height="72" rx="10" fill="#1a0a0a" stroke="url(#testGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="230" cy="590" r="14" fill="url(#testGrad)" opacity="0.8"/>
+  <text x="230" y="594" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">4</text>
+  <text x="550" y="582" text-anchor="middle" fill="#f87171" font-size="13" font-weight="600">Tester</text>
+  <text x="550" y="599" text-anchor="middle" fill="#94a3b8" font-size="10">Creates exhaustive bfloat16 tests, runs on hardware, iterates on failures</text>
+  <text x="550" y="614" text-anchor="middle" fill="#94a3b8" font-size="10">Hang detection, error classification, SFPU debugging strategies</text>
+
+  <!-- Retry loop arrow -->
+  <path d="M 890 596 C 930 596, 940 530, 940 490 C 940 470, 930 460, 900 460" fill="none" stroke="#f87171" stroke-width="1.2" stroke-dasharray="4 2" marker-end="url(#arrowRed)" opacity="0.6"/>
+  <text x="960" y="530" fill="#f87171" font-size="9" opacity="0.7">retry loop</text>
+
+  <text x="550" y="627" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: test_file.py + pass/fail results</text>
+
+  <!-- ==================== PHASE 5: DOCUMENTATION ==================== -->
+  <line x1="550" y1="632" x2="550" y2="652" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <rect x="250" y="654" width="600" height="52" rx="10" fill="#081a14" stroke="url(#docGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="280" cy="680" r="14" fill="url(#docGrad)" opacity="0.8"/>
+  <text x="280" y="684" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">5</text>
+  <text x="550" y="674" text-anchor="middle" fill="#34d399" font-size="13" font-weight="600">Implementation Notes Enricher</text>
+  <text x="550" y="691" text-anchor="middle" fill="#94a3b8" font-size="10">Embeds full source code and diffs into implementation notes</text>
+  <text x="550" y="702" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: enriched implementation_notes.md</text>
+
+  <!-- ==================== PHASE 6: SELF-REFLECTION ==================== -->
+  <line x1="550" y1="706" x2="550" y2="726" stroke="#c084fc" stroke-width="1.5" marker-end="url(#arrowWhite)"/>
+
+  <rect x="250" y="728" width="600" height="58" rx="10" fill="#1a0f2e" stroke="url(#reflGrad)" stroke-width="1.5" filter="shadow"/>
+  <circle cx="280" cy="757" r="14" fill="url(#reflGrad)" opacity="0.8"/>
+  <text x="280" y="761" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">6</text>
+  <text x="550" y="749" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="600">Self-Reflection</text>
+  <text x="550" y="766" text-anchor="middle" fill="#94a3b8" font-size="10">Analyzes full pipeline run: confusion points, inefficiencies, improvements</text>
+  <text x="550" y="779" text-anchor="middle" fill="#64748b" font-size="9" font-style="italic">output: sfpu_reflection.md</text>
+
+  <!-- ==================== LEGEND ==================== -->
+  <rect x="73" y="230" width="12" height="12" rx="2" fill="#22d3ee" opacity="0.6"/>
+  <text x="90" y="240" fill="#64748b" font-size="9">Discovery</text>
+
+  <rect x="73" y="250" width="12" height="12" rx="2" fill="#60a5fa" opacity="0.6"/>
+  <text x="90" y="260" fill="#64748b" font-size="9">Analysis</text>
+
+  <rect x="73" y="270" width="12" height="12" rx="2" fill="#fb923c" opacity="0.6"/>
+  <text x="90" y="280" fill="#64748b" font-size="9">Build</text>
+
+  <rect x="73" y="290" width="12" height="12" rx="2" fill="#f87171" opacity="0.6"/>
+  <text x="90" y="300" fill="#64748b" font-size="9">Test</text>
+
+  <rect x="73" y="310" width="12" height="12" rx="2" fill="#34d399" opacity="0.6"/>
+  <text x="90" y="320" fill="#64748b" font-size="9">Document</text>
+
+  <rect x="73" y="330" width="12" height="12" rx="2" fill="#c084fc" opacity="0.6"/>
+  <text x="90" y="340" fill="#64748b" font-size="9">Reflect</text>
+
+</svg>
