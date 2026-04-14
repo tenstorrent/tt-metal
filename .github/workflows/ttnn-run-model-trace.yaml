@@ -1,4 +1,4 @@
-name: "(T) [ttnn] Run model trace"
+name: "ttnn run model trace"
 
 on:
   workflow_dispatch:
