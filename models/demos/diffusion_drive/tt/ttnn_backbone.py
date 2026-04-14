@@ -93,6 +93,9 @@ class TtnnTransfuserBackbone:
             self._img_stages.append(prepare_resnet34_stage_params(img_layer))
             self._lidar_stages.append(prepare_resnet34_stage_params(lidar_layer))
 
+        # Stage 3: optional TTNN FPN (set by build_stage3)
+        self._ttnn_fpn = None
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -177,9 +180,14 @@ class TtnnTransfuserBackbone:
             img_feats, lidar_feats = ref._fuse_features(img_feats, lidar_feats, i)
 
         # ------------------------------------------------------------------
-        # Step 6: 3-level top-down FPN — PyTorch (bilinear Upsample).
+        # Step 6: 3-level top-down FPN.
+        # Stage 3+: TTNN conv2d (bilinear upsample stays in PyTorch).
+        # Stage 2:  pure PyTorch reference.
         # ------------------------------------------------------------------
-        bev_upscale = ref._top_down(lidar_feats)
+        if self._ttnn_fpn is not None:
+            bev_upscale = self._ttnn_fpn(lidar_feats)
+        else:
+            bev_upscale = ref._top_down(lidar_feats)
         return bev_upscale, lidar_feats, None
 
 
