@@ -1450,11 +1450,14 @@ class TTNNExperts(TTNNModule):
         combined_output = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
 
         # 9. Apply expert weights
+        # combined_output is (K, 1, T, H) with K = num_experts_per_tok on dim 0.  Weights from the gate are
+        # (T, K) in row-major.  Reshape to (K, 1, T, 1) so ttnn.mul broadcasts over H; (1,1,T,K) would put K on
+        # the last dim next to H=2048 and triggers "Invalid subtile broadcast type" on Wormhole.
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        t_flat = batch_size_per_device * seq_len
+        k = int(self.num_experts_per_tok)
+        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (1, 0))
+        topk_experts_weights_rm = ttnn.reshape(topk_experts_weights_rm, (k, 1, t_flat, 1))
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
 
