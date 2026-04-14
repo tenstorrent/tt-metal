@@ -246,7 +246,7 @@
 
 - name: Llama 3.3-70B unit tests (Galaxy)
   cmd: |
-    export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
