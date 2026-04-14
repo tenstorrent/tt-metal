@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 import inspect
 import json
+import logging
 import random
 from datetime import datetime, timezone
 from typing import List, Callable, Sequence
@@ -118,8 +119,8 @@ def save_checkpoint(
 
             hf_config = AutoConfig.from_pretrained(model_source)
             hf_config.save_pretrained(ckpt_dir)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.warning("Could not save HF config for %s: %s", model_source, exc)
 
     if tokenizer is not None:
         tokenizer.save_pretrained(ckpt_dir)
@@ -280,6 +281,7 @@ class GrpoTrainer:
                     )
 
                     loss.backward(retain_graph=False)
+                    ttml.autograd.AutoContext.get_instance().reset_graph()
 
                     deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 

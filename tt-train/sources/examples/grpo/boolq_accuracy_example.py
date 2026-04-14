@@ -100,73 +100,74 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     csv_path = os.path.join(output_dir, "accuracy_results.csv")
-    csv_file = open(csv_path, "w", newline="")
-    csv_writer = csv.DictWriter(
-        csv_file,
-        fieldnames=[
-            "question_idx",
-            "correct",
-            "golden_answer",
-            "model_answer",
-            "correct_so_far",
-            "total_so_far",
-            "running_accuracy",
-        ],
-    )
-    csv_writer.writeheader()
+    with open(csv_path, "w", newline="") as csv_file:
+        csv_writer = csv.DictWriter(
+            csv_file,
+            fieldnames=[
+                "question_idx",
+                "correct",
+                "golden_answer",
+                "model_answer",
+                "correct_so_far",
+                "total_so_far",
+                "running_accuracy",
+            ],
+        )
+        csv_writer.writeheader()
 
-    transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
-    device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
+        transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
+        device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
 
-    if device_config.total_devices() > 1:
-        ttml.core.distributed.enable_fabric(device_config.total_devices())
-    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
+        if device_config.total_devices() > 1:
+            ttml.core.distributed.enable_fabric(device_config.total_devices())
+        ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
-    ctx = setup_inference(
-        TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, MODEL_ID
-    )
+        ctx = setup_inference(
+            TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, MODEL_ID
+        )
 
-    correct_answers = 0
-    wrong_answers = 0
-    total_chars = 0
-    start_time = time.perf_counter()
+        correct_answers = 0
+        wrong_answers = 0
+        total_chars = 0
+        start_time = time.perf_counter()
 
-    for i, prompt, completion in iter_generated_completions(ctx, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE):
-        correct, model_answer = compare_boolq_answers(completion, answers[i])
-        total_chars += len(completion)
-        if correct:
-            correct_answers += 1
-        else:
-            wrong_answers += 1
+        for i, prompt, completion in iter_generated_completions(
+            ctx, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
+        ):
+            correct, model_answer = compare_boolq_answers(completion, answers[i])
+            total_chars += len(completion)
+            if correct:
+                correct_answers += 1
+            else:
+                wrong_answers += 1
 
-        total = correct_answers + wrong_answers
-        accuracy = correct_answers / total
-        status = "CORRECT" if correct else "WRONG"
+            total = correct_answers + wrong_answers
+            accuracy = correct_answers / total
+            status = "CORRECT" if correct else "WRONG"
+            print(
+                f"Q{i}: {status} | model={model_answer}, golden={answers[i]} | Accuracy: {accuracy:.4f} ({correct_answers}/{total})"
+            )
+
+            csv_writer.writerow(
+                {
+                    "question_idx": i,
+                    "correct": correct,
+                    "golden_answer": answers[i],
+                    "model_answer": model_answer,
+                    "correct_so_far": correct_answers,
+                    "total_so_far": total,
+                    "running_accuracy": f"{accuracy:.4f}",
+                }
+            )
+            csv_file.flush()
+
+        total_answered = correct_answers + wrong_answers
+        elapsed = time.perf_counter() - start_time
+        avg_chars = total_chars / total_answered if total_answered > 0 else 0
         print(
-            f"Q{i}: {status} | model={model_answer}, golden={answers[i]} | Accuracy: {accuracy:.4f} ({correct_answers}/{total})"
+            f"Done: correct={correct_answers}, wrong={wrong_answers}, "
+            f"total={total_answered}, "
+            f"accuracy={correct_answers / total_answered:.4f}, "
+            f"avg_response_chars={avg_chars:.2f}, "
+            f"elapsed={elapsed:.1f}s"
         )
-
-        csv_writer.writerow(
-            {
-                "question_idx": i,
-                "correct": correct,
-                "golden_answer": answers[i],
-                "model_answer": model_answer,
-                "correct_so_far": correct_answers,
-                "total_so_far": total,
-                "running_accuracy": f"{accuracy:.4f}",
-            }
-        )
-        csv_file.flush()
-
-    total_answered = correct_answers + wrong_answers
-    elapsed = time.perf_counter() - start_time
-    avg_chars = total_chars / total_answered if total_answered > 0 else 0
-    print(
-        f"Done: correct={correct_answers}, wrong={wrong_answers}, "
-        f"total={total_answered}, "
-        f"accuracy={correct_answers / total_answered:.4f}, "
-        f"avg_response_chars={avg_chars:.2f}, "
-        f"elapsed={elapsed:.1f}s"
-    )
-    csv_file.close()

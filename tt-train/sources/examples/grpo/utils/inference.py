@@ -37,8 +37,6 @@ def load_checkpoint(model, checkpoint_path, dp_mapper=None):
     from safetensors.numpy import load_file
     import numpy as np
     import ml_dtypes
-    import ttml
-    import ttnn
 
     checkpoint = load_file(checkpoint_path)
     parameters = model.parameters()
@@ -118,9 +116,10 @@ def setup_inference(
 
     local_safetensors = os.path.isdir(model_source) and any(f == "model.safetensors" for f in os.listdir(model_source))
     if local_safetensors:
+        checkpoint_path = os.path.join(model_source, "model.safetensors")
         logging.info("Loading model from local safetensors: %s", model_source)
-        logging.info(f"load_checkpoint({model_source}/model.safetensors)")
-        load_checkpoint(tt_model, model_source, dp_mapper=dp_mapper)
+        logging.info(f"load_checkpoint({checkpoint_path})")
+        load_checkpoint(tt_model, checkpoint_path, dp_mapper=dp_mapper)
     else:
         logging.info("Downloading model from HuggingFace: %s", model_source)
         logging.info(f"snapshot_download({model_source})")
@@ -350,7 +349,7 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
 
 def completion_batched_one_prompt(ctx: InferenceCtx, prompt_tokens: List[int]) -> List[List[int]]:
     B = ctx._B = ctx.group_size
-    N = ctx._N = len(prompt_tokens)
+    ctx._N = len(prompt_tokens)
     prompt_tokens_np = np.tile(prompt_tokens, (B, 1))
 
     pad_lengths = [0] * ctx.group_size  # no padding
@@ -365,7 +364,7 @@ def completion_batched_multiple_prompts(ctx: InferenceCtx, prompts: List[List[in
     pad_lengths = [max_len - len(row) for row in prompts for _ in range(ctx.group_size)]
     prompts_cnt = len(prompts)
     B = ctx._B = ctx.group_size * prompts_cnt
-    N = ctx._N = max_len
+    ctx._N = max_len
 
     # add the pad_token to the left of the shorter prompts, so that all prompts end at the same column
     prompt_tokens_np = np.full((B, max_len), ctx.pad_token)

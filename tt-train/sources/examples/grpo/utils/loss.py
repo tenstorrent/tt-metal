@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List
 import ttnn
 import ttml
 import numpy as np
@@ -16,7 +16,7 @@ def compute_grpo_loss(
     completions_batch_len: int,
     eps: float,
     ctx: InferenceCtx,
-) -> Tuple[ttml.autograd.Tensor, list]:
+) -> ttml.autograd.Tensor:
     assert B % ctx.total_devices == 0
     B_local = B // ctx.total_devices
     ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
