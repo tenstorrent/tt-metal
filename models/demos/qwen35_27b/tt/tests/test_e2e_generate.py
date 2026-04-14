@@ -385,12 +385,14 @@ def test_e2e_generate_device_sampling(mesh_device, reset_seeds, ensure_gc):
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_256.json",
         "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k.json",
+        "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k.json",
     ],
     ids=[
         "default",
         "prefill-128",
         "prefill-256",
         "long-1k",
+        "long-2k",
     ],
 )
 def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts):
@@ -403,7 +405,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
 
     model_path = _get_model_path()
     batch_size = 32
-    max_seq_len = 2048
+    max_seq_len = 4096
     max_gen_tokens = 128
 
     if mesh_device.get_num_devices() < 4:
@@ -439,19 +441,6 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     prompt_tokens = _apply_chat_template(tokenizer, prompt)
     logger.info(f"Prompt ({len(prompt_tokens)} tokens): '{prompt[:80]}{'...' if len(prompt) > 80 else ''}'")
 
-    # === DIAG: log chat template output and token details ===
-    chat_text = tokenizer.apply_chat_template(
-        [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": prompt}],
-        add_generation_prompt=True,
-        tokenize=False,
-    )
-    logger.info(f"DIAG chat template text:\n{chat_text}")
-    logger.info(f"DIAG token count: {len(prompt_tokens)}")
-    logger.info(f"DIAG first 20 token IDs: {prompt_tokens[:20]}")
-    logger.info(f"DIAG last 20 token IDs: {prompt_tokens[-20:]}")
-    logger.info(f"DIAG decoded first 20 tokens: {[tokenizer.decode([t]) for t in prompt_tokens[:20]]}")
-    logger.info(f"DIAG round-trip decode: '{tokenizer.decode(prompt_tokens)[:200]}'")
-
     # === HELPER: reset prefill states ===
     def _reset_prefill_states():
         """Reset all layer states and init B=1 prefill states for GDN layers."""
@@ -475,27 +464,28 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     seq_len = len(prompt_tokens)
     tokens_tensor = torch.tensor([prompt_tokens], dtype=torch.long)  # [1, seq_len]
     last_token_idx = ((seq_len - 1) // 32) * 32
-    logger.info(
-        f"DIAG seq_len={seq_len}, last_token_idx={last_token_idx}, "
-        f"actual_last_pos={seq_len - 1}, alignment_gap={seq_len - 1 - last_token_idx}"
-    )
+    use_chunked = seq_len > 1024
 
     # === PREFILL (compile run) ===
-    logger.info(f"Prefilling {len(prompt_tokens)} tokens (true batched prefill, compile run)...")
+    logger.info(f"Prefilling {len(prompt_tokens)} tokens ({'chunked' if use_chunked else 'batched'}, compile run)...")
     _reset_prefill_states()
-    prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
-    tt_embeds = prefill_inputs[0]
-    tt_rot_global = prefill_inputs[1]
 
     t_prefill = time.time()
-    tt_out = model.ttnn_prefill_forward(
-        tt_embeds,
-        rot_mats_global=tt_rot_global,
-        get_last_token=last_token_idx,
-    )
+    if use_chunked:
+        tt_out = model.prefill_layer_chunked(tokens_tensor, chunk_size=2048)
+    else:
+        prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
+        tt_embeds = prefill_inputs[0]
+        tt_rot_global = prefill_inputs[1]
+        tt_out = model.ttnn_prefill_forward(
+            tt_embeds,
+            rot_mats_global=tt_rot_global,
+            get_last_token=last_token_idx,
+        )
     ttnn.synchronize_device(mesh_device)
     logger.info(f"Prefill compile done in {time.time() - t_prefill:.1f}s")
-    _replicate_to_batch()
+    if not use_chunked:
+        _replicate_to_batch()
 
     # === COMPILE RUN for decode (with device sampling) ===
     logger.info("Compile run (decode with device sampling)...")
@@ -513,29 +503,28 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     toks_cpu = ttnn.to_torch(tt_toks, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     first_token = toks_cpu[0].flatten()[0].int().item()
     logger.info(f"Compile done, first token: '{tokenizer.decode([first_token])}'")
-    logger.info(
-        f"DIAG compile decode: input_token_id={prompt_tokens[-1]} "
-        f"('{tokenizer.decode([prompt_tokens[-1]])}'), position={compile_pos}, "
-        f"output_token_id={first_token} ('{tokenizer.decode([first_token])}')"
-    )
 
     # === RE-PREFILL for trace (timed TTFT with warm tensors) ===
     logger.info("Re-prefilling for trace (timed)...")
     _reset_prefill_states()
-    prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
-    tt_embeds = prefill_inputs[0]
-    tt_rot_global = prefill_inputs[1]
 
     t_prefill_trace = time.time()
-    tt_out = model.ttnn_prefill_forward(
-        tt_embeds,
-        rot_mats_global=tt_rot_global,
-        get_last_token=last_token_idx,
-    )
+    if use_chunked:
+        tt_out = model.prefill_layer_chunked(tokens_tensor, chunk_size=2048)
+    else:
+        prefill_inputs = model.prepare_inputs_prefill(tokens_tensor)
+        tt_embeds = prefill_inputs[0]
+        tt_rot_global = prefill_inputs[1]
+        tt_out = model.ttnn_prefill_forward(
+            tt_embeds,
+            rot_mats_global=tt_rot_global,
+            get_last_token=last_token_idx,
+        )
     ttnn.synchronize_device(mesh_device)
     prefill_time = time.time() - t_prefill_trace
     logger.info(f"Re-prefill done in {prefill_time*1000:.1f}ms (TTFT)")
-    _replicate_to_batch()
+    if not use_chunked:
+        _replicate_to_batch()
 
     # === CAPTURE TRACE ===
     logger.info("Capturing trace...")
@@ -562,11 +551,6 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     toks_cpu = ttnn.to_torch(tt_toks_trace, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     current_token = toks_cpu[0].flatten()[0].int().item()
     logger.info(f"Trace capture token: '{tokenizer.decode([current_token])}'")
-    logger.info(
-        f"DIAG trace capture: input_token_id={prompt_tokens[-1]} "
-        f"('{tokenizer.decode([prompt_tokens[-1]])}'), trace_pos={trace_pos}, "
-        f"output_token_id={current_token} ('{tokenizer.decode([current_token])}')"
-    )
 
     # === TRACED DECODE LOOP ===
     logger.info(f"Decoding {max_gen_tokens} tokens with traced execution...")
@@ -613,14 +597,6 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts)
     generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
     full_text = prompt + generated_text
     logger.info(f"\nFull output: '{full_text}'")
-    logger.info(f"DIAG generated token IDs ({len(generated_tokens)}): {generated_tokens}")
-    logger.info(f"DIAG generated text (raw, no skip_special): '{tokenizer.decode(generated_tokens)[:500]}'")
-    # Check for repetition/stuck tokens
-    from collections import Counter
-
-    tok_counts = Counter(generated_tokens)
-    most_common = tok_counts.most_common(5)
-    logger.info(f"DIAG top-5 most frequent tokens: {[(tokenizer.decode([t]), count) for t, count in most_common]}")
 
     if len(decode_times) > 1:
         steady_times = decode_times[1:]
