@@ -96,6 +96,7 @@ bool is_supported_quasar(tt::DataFormat format) {
         case tt::DataFormat::Float32:
         case tt::DataFormat::Fp8_e4m3:
         case tt::DataFormat::Int8:
+        case tt::DataFormat::Int16:
         case tt::DataFormat::Int32:
         case tt::DataFormat::Lf8:
         case tt::DataFormat::RawUInt8:
