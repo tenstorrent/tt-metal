@@ -8,14 +8,19 @@ Stage 1: run the reference PyTorch model entirely on CPU (TorchModuleFallback).
 Stage 2: replace ResNet-34 BasicBlock stages with native TTNN conv2d ops via
          TtnnTransfuserBackbone; GPT fusion, FPN, perception decoder, and
          trajectory head remain in PyTorch.
+Stage 3: additionally replace the 3-level FPN (c5_conv + up_conv5 + up_conv4)
+         with native TTNN conv2d ops via TtnnFPN; bilinear upsampling stays in
+         PyTorch (ttnn.upsample does not support bilinear at these scales).
 
 Public API:
     model = TtnnDiffusionDriveModel(reference_model, config, device)
     out = model(features)              # Stage-1 forward (full PyTorch)
     model.build_stage2(device)         # install TTNN backbone in-place
     out = model(features)              # Stage-2 forward (TTNN backbone)
-    model.compile(device)              # (Stage 3+) trace capture
-    model.execute_compiled(features)   # (Stage 3+) trace replay
+    model.build_stage3(device)         # install TTNN FPN in-place (requires Stage 2)
+    out = model(features)              # Stage-3 forward (TTNN backbone + TTNN FPN)
+    model.compile(device)              # (Stage 4+) trace capture
+    model.execute_compiled(features)   # (Stage 4+) trace replay
 """
 
 from __future__ import annotations
@@ -75,7 +80,30 @@ class TtnnDiffusionDriveModel:
         return self
 
     # ------------------------------------------------------------------
-    # Forward (Stage 1 / Stage 2)
+    # Stage 3: install TTNN FPN (requires Stage 2 first)
+    # ------------------------------------------------------------------
+
+    def build_stage3(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the PyTorch FPN with the TTNN Stage-3 implementation.
+
+        Installs ``TtnnFPN`` into the ``TtnnTransfuserBackbone`` so that the
+        three FPN conv2d layers (c5_conv, up_conv5, up_conv4) run on-device.
+        Bilinear upsampling steps remain in PyTorch.
+
+        Must be called after ``build_stage2``.  Returns self for chaining.
+        """
+        if not hasattr(self._model._backbone, "_ttnn"):
+            raise RuntimeError("build_stage3 requires build_stage2 to be called first")
+
+        from models.demos.diffusion_drive.tt.ttnn_fpn import TtnnFPN
+
+        ref_backbone = self._model._backbone._ttnn._ref
+        ttnn_fpn = TtnnFPN(ref_backbone, device)
+        self._model._backbone._ttnn._ttnn_fpn = ttnn_fpn
+        return self
+
+    # ------------------------------------------------------------------
+    # Forward (Stage 1 / Stage 2 / Stage 3)
     # ------------------------------------------------------------------
 
     def __call__(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
