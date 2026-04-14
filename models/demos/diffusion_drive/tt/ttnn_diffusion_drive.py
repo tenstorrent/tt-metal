@@ -2,16 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-TTNN wrapper for DiffusionDrive — Stage 1 bring-up.
+TTNN wrapper for DiffusionDrive.
 
-Stage 1 strategy: run the reference PyTorch model via TorchModuleFallback
-(inputs converted to TTNN tensors on device; model runs on CPU via fallback).
-PCC ≥ 0.99 is the gate.  Subsequent stages replace submodules with native
-TTNN ops (Conv2d with BN-folded weights, linear, layer_norm, SDPA, …).
+Stage 1: run the reference PyTorch model entirely on CPU (TorchModuleFallback).
+Stage 2: replace ResNet-34 BasicBlock stages with native TTNN conv2d ops via
+         TtnnTransfuserBackbone; GPT fusion, FPN, perception decoder, and
+         trajectory head remain in PyTorch.
 
 Public API:
     model = TtnnDiffusionDriveModel(reference_model, config, device)
-    out = model(features)  # same dict interface as DiffusionDriveModel.forward()
+    out = model(features)              # Stage-1 forward (full PyTorch)
+    model.build_stage2(device)         # install TTNN backbone in-place
+    out = model(features)              # Stage-2 forward (TTNN backbone)
     model.compile(device)              # (Stage 3+) trace capture
     model.execute_compiled(features)   # (Stage 3+) trace replay
 """
@@ -53,18 +55,36 @@ class TtnnDiffusionDriveModel:
         self._device = device
 
     # ------------------------------------------------------------------
-    # Forward (Stage 1: full fallback via CPU)
+    # Stage 2: install TTNN backbone
+    # ------------------------------------------------------------------
+
+    def build_stage2(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Replace the PyTorch backbone with the TTNN Stage-2 implementation.
+
+        Swaps ``DiffusionDriveModel._backbone`` for a ``_TtnnBackboneAdapter``
+        wrapping a ``TtnnTransfuserBackbone``.  All downstream modules (GPT
+        fusion, FPN, perception decoder, trajectory head) remain in PyTorch.
+
+        After this call, ``__call__`` automatically runs the TTNN backbone.
+        Returns self for chaining.
+        """
+        from models.demos.diffusion_drive.tt.ttnn_backbone import TtnnTransfuserBackbone, _TtnnBackboneAdapter
+
+        ttnn_bb = TtnnTransfuserBackbone(self._model._backbone, device)
+        self._model._backbone = _TtnnBackboneAdapter(ttnn_bb)
+        return self
+
+    # ------------------------------------------------------------------
+    # Forward (Stage 1 / Stage 2)
     # ------------------------------------------------------------------
 
     def __call__(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Run the model.
 
-        Accepts CPU torch tensors (matching DiffusionDriveModel.forward interface)
-        and returns CPU torch tensors.  The tensors are converted to/from TTNN
-        device format at the boundary; the computation runs via TorchModuleFallback
-        until individual submodules are replaced with native TTNN ops.
+        Stage 1 (before build_stage2): runs entirely on CPU via PyTorch.
+        Stage 2+ (after build_stage2): ResNet-34 BasicBlock stages run on
+        the TTNN device; everything else stays on CPU.
         """
-        # Stage 1: run entirely in PyTorch (no TTNN ops yet)
         with torch.no_grad():
             return self._model(features)
 
