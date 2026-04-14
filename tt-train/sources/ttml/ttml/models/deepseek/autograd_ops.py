@@ -23,15 +23,14 @@ class Slice(ttml.autograd.Function):
 
     @staticmethod
     def forward(ctx, input, start, end):
-        ctx.save_for_backward(input)
+        ctx.input_shape = list(input.get_value().shape)
         ctx.start = start
         ctx.end = end
         return ttnn.slice(input.get_value(), start, end)
 
     @staticmethod
     def backward(ctx, grad_output):
-        (input,) = ctx.saved_tensors
-        input_shape = list(input.get_value().shape)
+        input_shape = ctx.input_shape
         start = ctx.start
         end = ctx.end
         device = grad_output.device()
@@ -78,7 +77,6 @@ class Concat(ttml.autograd.Function):
         ctx.sizes = sizes
         ctx.dim = dim
         ctx.num_tensors = len(tensors)
-        ctx.save_for_backward(*tensors)
 
         raw_tensors = [t.get_value() for t in tensors]
         return ttnn.concat(raw_tensors, dim)
@@ -113,7 +111,6 @@ class Sigmoid(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         y = ttnn.sigmoid(input.get_value())
-        ctx.save_for_backward(input)
         ctx.y = y
         return y
 
@@ -135,7 +132,6 @@ class Softmax(ttml.autograd.Function):
     @staticmethod
     def forward(ctx, input):
         y = ttnn.softmax(input.get_value(), dim=-1)
-        ctx.save_for_backward(input)
         ctx.y = y
         return y
 
@@ -159,7 +155,6 @@ class SplitHeads(ttml.autograd.Function):
         val = input.get_value()
         B, _, S, HD = list(val.shape)
         head_dim = HD // num_heads
-        ctx.save_for_backward(input)
         ctx.num_heads = num_heads
         ctx.B = B
         ctx.S = S
