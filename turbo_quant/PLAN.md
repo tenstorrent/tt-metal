@@ -14,6 +14,7 @@
 | | Baseline BFP8 | TurboQuant 3-bit BFP4 |
 |--|--|--|
 | **Latency** | 37.0 ms/tok | **37.1–37.2 ms/tok** (identical) |
+| **E2E overhead** | — | **+0.2 ms/tok (+0.5%)** |
 | **KV cache memory** | 1× (~1 byte/elem) | **0.5×** (~0.5 byte/elem) |
 | **Quality** | — | Correct output at all seq lengths 128–131072 |
 | **Cosine vs CPU ref** | — | > 0.999 (synthetic SDPA test at all seqlens) |
@@ -24,6 +25,24 @@ Verified 2026-04-14: BFP4 paged cache + standard SDPA decode, flat 37.1–37.2 m
 from seq=128 to seq=131072. Pre-rescaled centroid×norm values stored as BFP4 in paged
 `layer_past`, fed directly to `scaled_dot_product_attention_decode` which natively
 accepts BFP4 inputs. No custom SDPA kernel needed for this path.
+
+### E2E Overhead: TQ BFP4 vs Baseline BFP8 (2026-04-14)
+
+Back-to-back comparison, same machine, same prompt, traced, 10 generated tokens.
+
+| max_seq | Baseline BFP8 | TQ BFP4 Paged | Overhead |
+|---------|--------------|---------------|----------|
+| 128 | 36.9 ms/tok | 37.1 ms/tok | +0.2ms (+0.5%) |
+| 1,024 | 36.9 ms/tok | 37.2 ms/tok | +0.3ms (+0.8%) |
+| 4,096 | 37.0 ms/tok | 37.2 ms/tok | +0.2ms (+0.5%) |
+| 16,384 | 37.0 ms/tok | 37.2 ms/tok | +0.2ms (+0.5%) |
+| 65,536 | 37.0 ms/tok | 37.2 ms/tok | +0.2ms (+0.5%) |
+| 131,072 | 37.0 ms/tok | 37.1 ms/tok | +0.1ms (+0.3%) |
+
+Overhead is **constant O(1)** — only touches the 1 new token per step:
+permute → centroid lookup (fused bucketize) → norm → pre-rescale (centroid×norm)
+→ permute back → paged_update_cache scatter (BF16→BFP4 hardware conversion).
+Rotation cost is zero (absorbed into W_v/W_o at model load time).
 
 ### Core Idea
 
