@@ -76,10 +76,36 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
+    model_config = {"arbitrary_types_allowed": True}
+
     rank: int = Field(..., ge=0, description="MPI rank (must be >= 0)")
     mesh_id: int = Field(..., ge=0, description="`MeshId` defines the mesh to which the rank belongs")
     mesh_host_rank: Optional[int] = Field(None, ge=0, description="Host rank within the mesh")
     env_overrides: Dict[str, str] = Field(default_factory=dict, description="Environment variable overrides")
+    subcontext_id: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Launcher sub-context id when using merged --rank-bindings-mapping (sets TT_RUN_SUBCONTEXT_ID)",
+    )
+    subcontext_size: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Number of ranks in this sub-context (sets TT_RUN_SUBCONTEXT_SIZE)",
+    )
+    mesh_graph_desc_path: Optional[Path] = Field(
+        None,
+        description=(
+            "When set (e.g. from merged --rank-bindings-mapping), overrides TTRunConfig.mesh_graph_desc_path "
+            "for TT_MESH_GRAPH_DESC_PATH for this rank only."
+        ),
+    )
+
+    @field_validator("mesh_graph_desc_path", mode="before")
+    @classmethod
+    def validate_optional_per_rank_mesh(cls, v: Union[str, Path, None]) -> Optional[Path]:
+        if v is None or v == "":
+            return None
+        return resolve_path(v, description="Per-rank mesh graph descriptor", must_be_file=True)
 
 
 class TTRunConfig(BaseModel):
@@ -210,6 +236,20 @@ def resolve_path(
     return (ORIGINAL_CWD / expanded_path).resolve()
 
 
+def _load_mock_cluster_rank_binding(mock_cluster_rank_binding: Path) -> Dict[int, Path]:
+    resolved_mock_path = resolve_path(
+        mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
+    )
+    with open(resolved_mock_path, "r") as f:
+        mock_data = yaml.safe_load(f)
+
+    resolved_mock_bindings: Dict[int, Path] = {}
+    for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+        resolved_path = resolve_path(path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True)
+        resolved_mock_bindings[int(rank)] = resolved_path
+    return resolved_mock_bindings
+
+
 def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
     """Parse YAML configuration file with schema validation.
 
@@ -230,25 +270,95 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}")
 
-    # Parse mock cluster rank binding configuration
     if mock_cluster_rank_binding:
-        resolved_mock_path = resolve_path(
-            mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
-        )
-        with open(resolved_mock_path, "r") as f:
-            mock_data = yaml.safe_load(f)
-
-        # Validate and resolve mock cluster rank binding configuration paths
-        resolved_mock_bindings: Dict[int, Path] = {}
-        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            resolved_path = resolve_path(
-                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
-            )
-            resolved_mock_bindings[rank] = resolved_path
-
-        config.mock_cluster_rank_binding = resolved_mock_bindings
+        config.mock_cluster_rank_binding = _load_mock_cluster_rank_binding(mock_cluster_rank_binding)
 
     return config
+
+
+def parse_rank_bindings_mapping(
+    mapping_yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None
+) -> TTRunConfig:
+    """Load subcontext_id_to_rank_bindings, merge overlays into one TTRunConfig (global MPI ranks)."""
+    resolved_mapping = resolve_path(mapping_yaml_path, description="Rank bindings mapping file", must_be_file=True)
+    mapping_dir = resolved_mapping.parent
+
+    with open(resolved_mapping, "r") as f:
+        data = yaml.safe_load(f)
+
+    map_key = "subcontext_id_to_rank_bindings"
+    if not data or map_key not in data:
+        raise ValueError(f"Rank bindings mapping must contain '{map_key}'")
+
+    raw_map = data[map_key]
+    if not raw_map:
+        raise ValueError(f"'{map_key}' must not be empty")
+
+    sub_ids = sorted(raw_map.keys(), key=lambda k: int(k))
+    merged_rank_bindings: List[RankBinding] = []
+    first_mesh: Optional[Path] = None
+    merged_global_env: Dict[str, str] = {}
+    global_offset = 0
+    subcontext_sizes_ordered: List[int] = []
+
+    for sub_id in sub_ids:
+        overlay_value = raw_map[sub_id]
+        overlay_path = Path(overlay_value)
+        if not overlay_path.is_absolute():
+            candidate = (mapping_dir / overlay_path).resolve()
+            if candidate.is_file():
+                sub_config = parse_binding_config(candidate, None)
+            else:
+                sub_config = parse_binding_config(overlay_path, None)
+        else:
+            sub_config = parse_binding_config(overlay_path, None)
+
+        if first_mesh is None:
+            first_mesh = sub_config.mesh_graph_desc_path
+            merged_global_env = dict(sub_config.global_env)
+        else:
+            for k, v in sub_config.global_env.items():
+                if k in merged_global_env and merged_global_env[k] != v:
+                    raise ValueError(f"global_env conflict on key {k!r} between sub-contexts")
+                merged_global_env[k] = v
+
+        sub_n = len(sub_config.rank_bindings)
+        subcontext_sizes_ordered.append(sub_n)
+        sid_int = int(sub_id)
+        for binding in sorted(sub_config.rank_bindings, key=lambda b: b.rank):
+            merged_rank_bindings.append(
+                binding.model_copy(
+                    update={
+                        "rank": global_offset + binding.rank,
+                        "subcontext_id": sid_int,
+                        "subcontext_size": sub_n,
+                        "mesh_graph_desc_path": sub_config.mesh_graph_desc_path,
+                    }
+                )
+            )
+        global_offset += sub_n
+
+    merged_global_env["TT_RUN_SUBCONTEXT_COUNT"] = str(len(subcontext_sizes_ordered))
+    merged_global_env["TT_RUN_SUBCONTEXT_SIZES"] = ",".join(str(s) for s in subcontext_sizes_ordered)
+
+    merged = TTRunConfig(
+        rank_bindings=merged_rank_bindings,
+        global_env=merged_global_env,
+        mesh_graph_desc_path=first_mesh,  # type: ignore[arg-type]
+        mock_cluster_rank_binding={},
+    )
+
+    if mock_cluster_rank_binding:
+        resolved_mock_bindings = _load_mock_cluster_rank_binding(mock_cluster_rank_binding)
+        expected_ranks = set(range(global_offset))
+        if set(resolved_mock_bindings.keys()) != expected_ranks:
+            raise ValueError(
+                f"Mock cluster mapping ranks {sorted(resolved_mock_bindings.keys())} "
+                f"do not match merged rank bindings {sorted(expected_ranks)}"
+            )
+        merged.mock_cluster_rank_binding = resolved_mock_bindings
+
+    return merged
 
 
 # Environment variable prefixes that should be automatically passed through to MPI processes
@@ -284,6 +394,10 @@ ENV_BLOCKLIST = frozenset(
         "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
         "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
         "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
+        "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
+        "TT_RUN_SUBCONTEXT_SIZE",
+        "TT_RUN_SUBCONTEXT_COUNT",
+        "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
         # Should only come from rank binding env_overrides
         "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
@@ -331,12 +445,16 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
     default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
 
+    mesh_graph_path = (
+        binding.mesh_graph_desc_path if binding.mesh_graph_desc_path is not None else config.mesh_graph_desc_path
+    )
+
     # Set/override core tt-run managed variables
     # Note: Path objects are converted to str here at the env var boundary
     env.update(
         {
             "TT_MESH_ID": str(binding.mesh_id),
-            "TT_MESH_GRAPH_DESC_PATH": str(config.mesh_graph_desc_path),
+            "TT_MESH_GRAPH_DESC_PATH": str(mesh_graph_path),
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
             "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
@@ -368,6 +486,11 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
         env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
+
+    if binding.subcontext_id is not None:
+        env["TT_RUN_SUBCONTEXT_ID"] = str(binding.subcontext_id)
+    if binding.subcontext_size is not None:
+        env["TT_RUN_SUBCONTEXT_SIZE"] = str(binding.subcontext_size)
 
     if config.mock_cluster_rank_binding:
         env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
@@ -487,8 +610,20 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.option(
     "--rank-binding",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
+    required=False,
+    default=None,
+    help="Rank binding configuration file (YAML). Use this or --rank-bindings-mapping (not both).",
+)
+@click.option(
+    "--rank-bindings-mapping",
+    type=click.Path(path_type=Path),
+    required=False,
+    default=None,
+    help=(
+        "YAML with subcontext_id_to_rank_bindings: sub-context id -> rank-binding overlay path. "
+        "Overlays are merged into global MPI ranks in ascending sub-context id order. "
+        "Each overlay may use a different mesh_graph_desc_path; tt-run sets TT_MESH_GRAPH_DESC_PATH per rank."
+    ),
 )
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
 @click.option(
@@ -526,7 +661,8 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
 @click.pass_context
 def main(
     ctx: click.Context,
-    rank_binding: Path,
+    rank_binding: Optional[Path],
+    rank_bindings_mapping: Optional[Path],
     dry_run: bool,
     verbose: bool,
     mpi_args: Optional[List[str]],
@@ -758,12 +894,18 @@ def main(
     """
     program = ctx.args
 
+    if bool(rank_binding) == bool(rank_bindings_mapping):
+        raise click.ClickException("Specify exactly one of --rank-binding or --rank-bindings-mapping")
+
     # Log diagnostic information for path resolution debugging
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
         logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
         logger.info(f"{TT_RUN_PREFIX}   Current CWD: {Path.cwd()}")
-        logger.info(f"{TT_RUN_PREFIX}   rank-binding input: {rank_binding}")
+        if rank_bindings_mapping:
+            logger.info(f"{TT_RUN_PREFIX}   rank-bindings-mapping input: {rank_bindings_mapping}")
+        else:
+            logger.info(f"{TT_RUN_PREFIX}   rank-binding input: {rank_binding}")
         logger.info(f"{TT_RUN_PREFIX}   TT_METAL_HOME env: {os.environ.get('TT_METAL_HOME', '<not set>')}")
         logger.info(f"{TT_RUN_PREFIX}   HOME env: {os.environ.get('HOME', '<not set>')}")
         logger.info(f"{TT_RUN_PREFIX}   PYTHONPATH env: {os.environ.get('PYTHONPATH', '<not set>')}")
@@ -774,7 +916,10 @@ def main(
             logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
 
     try:
-        config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
+        if rank_bindings_mapping:
+            config = parse_rank_bindings_mapping(rank_bindings_mapping, mock_cluster_rank_binding)
+        else:
+            config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
 
