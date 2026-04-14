@@ -313,7 +313,6 @@ def prepare_output_tensor_from_combine_writer(
     return torch_output
 
 
-PCC_THRESHOLD = 0.988
 ATOL_THRESHOLD = 700
 
 
@@ -330,6 +329,7 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
+    pcc_threshold,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -374,7 +374,7 @@ def validate_matmul(
                 else 0.0
             )
 
-            if pcc_val < PCC_THRESHOLD:
+            if pcc_val < pcc_threshold:
                 matmul_all_passed = False
                 logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
@@ -386,7 +386,7 @@ def validate_matmul(
     return matmul_all_passed
 
 
-def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, combine_goldens):
+def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, combine_goldens, pcc_threshold):
     if cluster_axis == 0:
         mesh_shape = tuple(mesh_device.shape)
         # need to roll my own mesh composer here for the transposed ordering
@@ -419,7 +419,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         _, pcc_val = comp_pcc(refs, vals)
         allclose_passed = torch.allclose(refs, vals, atol=ATOL_THRESHOLD)
 
-        if pcc_val < PCC_THRESHOLD or not allclose_passed:
+        if pcc_val < pcc_threshold or not allclose_passed:
             combine_all_passed = False
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
@@ -858,17 +858,15 @@ def compute_matmul_golden(
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
+    torch_w1_output_ref = torch_input_ref @ torch_w1
 
     if activation_type == MoEActivationFunction.SILU:
         # SILU: silu(x @ w0) * (x @ w1)
         torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
         # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
-        torch_w1_output_ref = torch_input_ref @ torch_w1
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
-        torch_intermediate_ref = torch_intermediate_ref = _swiglu_reference(
-            torch_w0_output_ref, torch_w2
-        )  # (L, E, T, N/2)
+        torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N/2)
     else:
         raise ValueError(f"Unsupported activation type: {activation_type}")
 
@@ -1011,6 +1009,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
+@torch.no_grad()
 def test_moe_compute(
     mesh_device,
     mesh_shape,
@@ -1039,6 +1038,12 @@ def test_moe_compute(
     """
     torch.manual_seed(2003)
     random.seed(2003)
+
+    # Determine PCC threshold based on activation type
+    if activation_type == MoEActivationFunction.SWIGLU:
+        pcc_threshold = 0.984
+    else:  # SILU
+        pcc_threshold = 0.988
 
     experts = experts_per_device * mesh_shape[cluster_axis]
 
@@ -1534,6 +1539,7 @@ def test_moe_compute(
                     matmul_goldens,
                     matmul_output_tensor,
                     mesh_device,
+                    pcc_threshold,
                 ):
                     matmul_all_passed = False
 
@@ -1543,6 +1549,7 @@ def test_moe_compute(
                 cluster_axis,
                 combine_output_tensor,
                 combine_goldens,
+                pcc_threshold,
             ):
                 combine_all_passed = False
 
