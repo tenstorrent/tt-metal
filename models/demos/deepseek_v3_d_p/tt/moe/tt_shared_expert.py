@@ -11,14 +11,17 @@ This module demonstrates:
 - SiLU activation fusion
 """
 
+from pathlib import Path
+from typing import Optional
+
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.LoFi,
+COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
@@ -54,9 +57,11 @@ class TtSharedExpert(LightweightModule):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        activations_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat4_b,
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -68,9 +73,11 @@ class TtSharedExpert(LightweightModule):
             torch_weights: Optional dict with keys 'gate_proj', 'up_proj', 'down_proj' containing torch tensors
             num_links: Number of ethernet links to use for CCL (default: 1)
             topology: CCL topology - Linear or Ring (default: Linear)
-            activations_dtype: Data type for activations (default: bfloat8_b)
-            weights_dtype: Data type for weights (default: bfloat4_b)
+            activations_dtype: Data type for activations (default: bfloat16)
+            weights_dtype: Data type for weights (default: bfloat8_b)
             compute_kernel_config: Compute kernel configuration
+            weight_cache_path: Optional path for caching TTNN weight tensors
+            cache_name_prefix: Optional prefix for cache file names
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -82,6 +89,8 @@ class TtSharedExpert(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+        self.weight_cache_path = weight_cache_path
+        self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -111,6 +120,11 @@ class TtSharedExpert(LightweightModule):
                 shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
             )
 
+    def _cache_name(self, name: str) -> Optional[str]:
+        if self.weight_cache_path is None or self.cache_name_prefix is None:
+            return None
+        return str(self.weight_cache_path / f"{self.cache_name_prefix}.{name}")
+
     def _to_sharded_ttnn(self, torch_weight: torch.Tensor, dims: tuple, name: str, dtype: ttnn.DataType) -> ttnn.Tensor:
         """
         Convert torch weight to sharded ttnn tensor.
@@ -132,12 +146,14 @@ class TtSharedExpert(LightweightModule):
             dims=dims,
         )
 
-        tt_weight = ttnn.from_torch(
+        tt_weight = ttnn.as_tensor(
             torch_weight,
             mesh_mapper=mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=self._cache_name(name),
         )
 
         logger.debug(f"Created {name}: {tt_weight.shape}")

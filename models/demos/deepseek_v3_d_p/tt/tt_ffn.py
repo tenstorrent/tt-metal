@@ -8,6 +8,9 @@ TTNN implementation of FFN (Feed-Forward Network) module for DeepSeek V3 dense l
 TtFFN (TP=4) module uses the shared expert architecture with DeepSeek 671B config dimensions.
 """
 
+from pathlib import Path
+from typing import Optional
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 
@@ -42,6 +45,8 @@ class TtFfn(TtSharedExpert):
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,  # explore bfp4 ?
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,  # explore COMPUTE_KERNEL_CONFIG_LOFI with bfp4
+        weight_cache_path: Optional[Path] = None,
+        cache_name_prefix: Optional[str] = None,
     ):
         """
         Initialize TtFfn module.
@@ -53,6 +58,8 @@ class TtFfn(TtSharedExpert):
             topology: CCL topology - Linear or Ring (default: Linear)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
+            weight_cache_path: Optional path for caching TTNN weight tensors
+            cache_name_prefix: Optional prefix for cache file names
         """
         super().__init__(
             mesh_device=mesh_device,
@@ -64,4 +71,6 @@ class TtFfn(TtSharedExpert):
             activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
             compute_kernel_config=compute_kernel_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
