@@ -58,16 +58,17 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)
-    passing_pcc, output_pcc = comp_pcc(actual, expected, 0.999)
-    logger.debug(f"Out passing={passing_pcc}")
+    output_passing_pcc, output_pcc = comp_pcc(actual, expected, 0.999)
+    logger.debug(f"Out passing={output_passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
 
     h_prev = tt2torch_tensor(h_prev)
-    passing_pcc, output_pcc = comp_pcc(h_prev, expected[0, 0, -1, :], 0.999)
-    logger.debug(f"Hidden state passing={passing_pcc}")
-    logger.debug(f"Hidden state pcc={output_pcc}")
+    hidden_passing_pcc, hidden_pcc = comp_pcc(h_prev, expected[0, 0, -1, :], 0.999)
+    logger.debug(f"Hidden state passing={hidden_passing_pcc}")
+    logger.debug(f"Hidden state pcc={hidden_pcc}")
 
-    assert passing_pcc
+    assert output_passing_pcc, f"Output PCC {output_pcc} below threshold"
+    assert hidden_passing_pcc, f"Hidden state PCC {hidden_pcc} below threshold"
 
 
 @pytest.mark.parametrize(

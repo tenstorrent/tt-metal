@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_sfpu.h"
+#include "sfpu/ckernel_sfpu_topk.h"
 #include "ckernel_sfpu_add_top_row.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_sfpu_types.h"

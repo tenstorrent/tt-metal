@@ -5,8 +5,10 @@
 TT-Train metrics schema and serialization utilities.
 
 """
-from pydantic import BaseModel, Field
 import json
+from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class TtTrainMetricsData(BaseModel):
@@ -79,6 +81,34 @@ class TtTrainMetricsData(BaseModel):
     average_iteration_time_ms: float = Field(
         ...,
         description="The average iteration time after skipping the first 2 iterations (ms).",
+    )
+    arch_name: Optional[str] = Field(
+        default=None,
+        description="Name of the architecture used in the run.",
+    )
+    ci_runner_label: Optional[str] = Field(
+        default=None,
+        description="Name of the runner from the CI used to run the model.",
+    )
+    step_time_1st: Optional[float] = Field(
+        default=None,
+        description="Iteration time of the 1st step (ms); skipped when computing average iteration time.",
+    )
+    step_time_2nd: Optional[float] = Field(
+        default=None,
+        description="Iteration time of the 2nd step (ms); skipped when computing average iteration time.",
+    )
+    step_time_p50: Optional[float] = Field(
+        default=None,
+        description="Iteration time at the 50th percentile (median) (ms).",
+    )
+    step_time_p95: Optional[float] = Field(
+        default=None,
+        description="Iteration time at the 95th percentile (ms).",
+    )
+    step_time_p99: Optional[float] = Field(
+        default=None,
+        description="Iteration time at the 99th percentile (ms).",
     )
 
     model_config = {"from_attributes": True, "protected_namespaces": ()}

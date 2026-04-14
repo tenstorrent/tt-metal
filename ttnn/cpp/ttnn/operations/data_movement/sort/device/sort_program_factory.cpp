@@ -92,7 +92,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(
                     {0, core_grid_calculated_rows_number},
-                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                    {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number});
                 core_range = core_range.merge(CoreRangeSet(additional_range));
             }
         }
@@ -204,11 +204,11 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         synchronization_cb_index};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
-    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -606,13 +606,13 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     };
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
-    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -796,7 +796,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(
                     {0, core_grid_calculated_rows_number},
-                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                    {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number});
                 core_range = core_range.merge(CoreRangeSet(additional_range));
             }
         }
@@ -964,11 +964,11 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         log2Wt};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
-    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
