@@ -67,6 +67,30 @@ def prepare_basic_block_params(
     return params
 
 
+def prepare_resnet34_stage_params(layer: nn.Sequential) -> list:
+    """Fold BN for every BasicBlock in one timm ResNet-34 stage.
+
+    Args:
+        layer: nn.Sequential of timm BasicBlock objects (e.g. model.layer1).
+
+    Returns:
+        List of (stride: int, params: dict) tuples, one per block.
+        ``stride`` is the block's stride (1 or 2); ``params`` is suitable
+        for TtnnBasicBlock's constructor.
+    """
+    result = []
+    for block in layer:
+        params = prepare_basic_block_params(
+            block.conv1,
+            block.bn1,
+            block.conv2,
+            block.bn2,
+            downsample=block.downsample,
+        )
+        result.append((int(block.stride), params))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # TTNN BasicBlock
 # ---------------------------------------------------------------------------
