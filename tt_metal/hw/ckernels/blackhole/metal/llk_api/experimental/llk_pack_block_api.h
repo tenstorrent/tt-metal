@@ -38,6 +38,11 @@ inline void llk_pack_block_contiguous_mop_config(const std::uint32_t output) {
 // num_tiles: number of tiles to pack (1-8, runtime parameter).
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_contiguous(std::uint32_t tile_index, std::uint32_t output, std::uint32_t num_tiles) {
+    LLK_ASSERT(
+        ((num_tiles > 0) &&
+         ((tile_index + num_tiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>())),
+        "");
+
     std::uint8_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;

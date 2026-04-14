@@ -479,6 +479,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
+        PACK((llk_pack_mop_config<false, false>(cb_cur_ms)));
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
         tile_regs_wait();

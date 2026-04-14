@@ -248,6 +248,7 @@ ALWI void sdpa_tail_streaming(
         pack_untilize_uninit(cb_l_out);
     } else {
         bool acquire_regs = !normalize;
+        pack_block_contiguous_init(cb_l_out);
         for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
@@ -273,6 +274,7 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l_out,
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
+    PACK((llk_pack_mop_config<false, false>(cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -285,22 +287,20 @@ ALWI void sdpa_forward_data(
     tile_regs_release();
 
     cb_push_back(cb_cur_max_sum, 1);
-
+    pack_block_contiguous_init(cb_l_out);
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
 
         uint32_t tile_index = chunk * block_size;
+        tile_regs_acquire();
         for (uint32_t i = 0; i < block_size; i++) {
-            tile_regs_acquire();
             copy_tile(cb_l1, tile_index + i, i);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(i, cb_l_out);
-            tile_regs_release();
         }
-
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, cb_l_out, block_size);
+        tile_regs_release();
         cb_push_back(cb_l_out, block_size);
     }
 }
@@ -768,7 +768,6 @@ struct SdpaReduceWorker {
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE, false>();
-            pack_block_contiguous_init(CTArgs::cb_l_out);
 
             bool local_valid = true;
             bool r1_neighbor_valid = true;
