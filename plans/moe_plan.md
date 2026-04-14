@@ -24,6 +24,7 @@
   - [A.12 Gemma 4 (optional)](#a12-gemma-4-26b-a4b-moe-architecture-verified-optional) — Custom
   - [A.13 DeepSeek OCR](#a13-deepseek-ocr-moe-architecture-verified) — Legacy/small
 - [Appendix B: Existing TT-Metal Implementations](#appendix-b-existing-tt-metal-implementations-comparison-as-of-main437da8d3796)
+- [Appendix C: Verification of unverified_moe_info.md](#appendix-c-verification-of-unverified_moe_infomd)
 
 ---
 
@@ -35,7 +36,7 @@ Unify the two near-duplicate MoE implementations (`moe_compute` for DeepSeek, `m
 
 ## 1. Model Registry
 
-Models from `plans/unverified_moe_info.md`, with HuggingFace links. All verified from config.json and/or modeling code.
+All verified from config.json and/or modeling code.
 
 | Model | HuggingFace ID |
 |-------|---------------|
@@ -56,36 +57,19 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links. All verified
 ### Notes
 - **GLM-4.7** uses the same `glm4_moe` architecture as GLM-4.5 but with extended context (202752 vs 131072). Also has a Flash variant: `zai-org/GLM-4.7-Flash` (`glm4_moe_lite`).
 - **GLM-4.5** MoE params match GLM-4.7 exactly (same `glm4_moe` arch, same hidden/expert/routing values). Not a separate plan entry.
-- **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096** (not 2048), 128 experts, 1 shared, K=**4** (not 8). The unverified list had incorrect intermediate size and K values. Mistral Small 3.2 is a 24B dense model (no MoE).
+- **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096**, 128 experts, 1 shared, K=**4**. Mistral Small 3.2 is a 24B dense model (no MoE).
 - **Qwen n_shared_experts**: No Qwen config contains an explicit `n_shared_experts` or `num_shared_experts` field. Shared expert count is inferred: present if `shared_expert_intermediate_size > 0`, absent if field is 0 or missing. Marked "(inferred)" in the comparison table.
 
 ---
 
 ## 2. Process Notes & Learnings
 
-### 2.1 Gathering MoE info from HuggingFace — what works
+### Gathering MoE info from HuggingFace — what works
 1. `hf download <model-id> config.json` — fastest way to get all architecture params. For multimodal models, MoE params are in `text_config` or `language_config`.
 2. `hf download <model-id> modeling_*.py` — custom modeling code has the exact MoE block implementation (only needed for custom activations/routing).
 3. Model card (README.md) — has high-level info but rarely MoE-specific dimensions.
 4. Mistral uses `params.json` instead of `config.json`.
 5. Some models (Qwen3, Qwen3.5) are in transformers proper — no custom modeling_*.py to download.
-
-### 2.2 Reliability of unverified_moe_info.md
-
-| Model | Values Correct? | Notes |
-|-------|----------------|-------|
-| DeepSeek V3 | ✓ All correct | |
-| GPT-OSS | **Wrong** on hidden (2048→2880), intermediate (2048→2880), K (8→4) | |
-| GLM-4.7 | ✓ Same arch as GLM-4.5, extended context | |
-| GLM-5 | ✓ All correct (K was unspecified) | |
-| Kimi K2.5 | ✓ All correct | |
-| Qwen 3.5 | **Wrong** on hidden (2048→4096), intermediate (512→1024), experts (256→512) | |
-| Qwen3 | **Wrong** on hidden (2048→4096), intermediate (768→1536) | |
-| DeepSeek OCR | **Wrong** on hidden (4096→1280), intermediate (1407→896), shared_intermediate (5632→1792) | Was likely a different model |
-| Mistral | **Wrong** on hidden (6144→7168), intermediate (2048→4096), K (8→4), name was wrong | |
-| Ling-1T | **Wrong** on intermediate (1536→2048), shared experts (2→1) | |
-
-**5 out of 10 models had significant errors. Always verify from config.json.**
 
 ---
 
@@ -255,12 +239,6 @@ Using tile_size=32:
 | `num_hidden_layers` | 36 | 24 | Total transformer layers |
 | Total / Active params | 117B / 5.1B | 21B / 3.6B | |
 
-**Verification vs unverified_moe_info.md:** Several values differ:
-- hidden_size: **2880** (not 2048) -- existing moe_gpt code already uses 2880, so the unverified list was wrong
-- intermediate_size: **2880** (not 2048)
-- K: **4** (not 8)
-- n_routed_experts: 128 matches, no shared experts matches
-
 #### MoE Block Structure (from modeling_gpt_oss.py)
 
 ```
@@ -383,8 +361,6 @@ input x: [batch, seq_len, 2880]
 | `ep_size` | 1 | Expert parallelism size |
 | `num_hidden_layers` | 61 | Total transformer layers |
 
-**Verification vs unverified_moe_info.md:** All values match (hidden=7168, intermediate=2048, 256 routed, 1 shared, K=8). ✓
-
 #### MoE Block Structure (from modeling_deepseek.py)
 
 ```
@@ -465,24 +441,24 @@ output = routed_output + shared_output
 #### Downloaded Files
 - `config.json` — `hf download zai-org/GLM-5 config.json`
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **6144** | ✓ |
-| `moe_intermediate_size` | **2048** | ✓ |
-| `n_routed_experts` | **256** | ✓ |
-| `n_shared_experts` | **1** | ✓ |
-| `num_experts_per_tok` (K) | **8** | (not specified in unverified) |
-| `hidden_act` | `silu` | |
-| `scoring_func` | **sigmoid** | Same as DeepSeek |
-| `topk_method` | **noaux_tc** | Same as DeepSeek |
-| `routed_scaling_factor` | 2.5 | Same as DeepSeek |
-| `n_group` / `topk_group` | 1 / 1 | No grouping |
-| `first_k_dense_replace` | 3 | |
-| `num_hidden_layers` | 78 | |
-| `num_nextn_predict_layers` | 1 | |
-| Architecture | `GlmMoeDsaForCausalLM` | "DSA" = DeepSeek Architecture |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **6144** |
+| `moe_intermediate_size` | **2048** |
+| `n_routed_experts` | **256** |
+| `n_shared_experts` | **1** |
+| `num_experts_per_tok` (K) | **8** |
+| `hidden_act` | `silu` |
+| `scoring_func` | **sigmoid** |
+| `topk_method` | **noaux_tc** |
+| `routed_scaling_factor` | 2.5 |
+| `n_group` / `topk_group` | 1 / 1 |
+| `first_k_dense_replace` | 3 |
+| `num_hidden_layers` | 78 |
+| `num_nextn_predict_layers` | 1 |
+| Architecture | `GlmMoeDsaForCausalLM` ("DSA" = DeepSeek Architecture) |
 
-**Notes:** GLM-5's MoE module is essentially identical to DeepSeek V3 — same sigmoid+noaux_tc routing, same SwiGLU activation, same scaling factor. Key difference: no expert grouping (n_group=1). All unverified values were correct.
+**Notes:** GLM-5's MoE module is essentially identical to DeepSeek V3 — same sigmoid+noaux_tc routing, same SwiGLU activation, same scaling factor. Key difference: no expert grouping (n_group=1).
 
 ---
 
@@ -498,24 +474,24 @@ output = routed_output + shared_output
 #### Downloaded Files
 - `config.json` — `hf download moonshotai/Kimi-K2.5 config.json`
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **7168** | ✓ (same as DeepSeek V3) |
-| `moe_intermediate_size` | **2048** | ✓ |
-| `n_routed_experts` | **384** | ✓ |
-| `n_shared_experts` | **1** | ✓ |
-| `num_experts_per_tok` (K) | **8** | ✓ |
-| `hidden_act` | `silu` | |
-| `scoring_func` | **sigmoid** | Same as DeepSeek |
-| `topk_method` | **noaux_tc** | Same as DeepSeek |
-| `routed_scaling_factor` | **2.827** | Different from DeepSeek (2.5) |
-| `n_group` / `topk_group` | **1 / 1** | No grouping (DeepSeek uses 8/4) |
-| `first_k_dense_replace` | **1** | Only 1 dense layer (DeepSeek has 3) |
-| `num_hidden_layers` | 61 | Same as DeepSeek |
-| `num_nextn_predict_layers` | 0 | No MTP (DeepSeek has 1) |
-| Base architecture | **DeepseekV3ForCausalLM** | Literally DeepSeek V3 |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **7168** |
+| `moe_intermediate_size` | **2048** |
+| `n_routed_experts` | **384** |
+| `n_shared_experts` | **1** |
+| `num_experts_per_tok` (K) | **8** |
+| `hidden_act` | `silu` |
+| `scoring_func` | **sigmoid** |
+| `topk_method` | **noaux_tc** |
+| `routed_scaling_factor` | **2.827** |
+| `n_group` / `topk_group` | **1 / 1** |
+| `first_k_dense_replace` | **1** |
+| `num_hidden_layers` | 61 |
+| `num_nextn_predict_layers` | 0 |
+| Base architecture | **DeepseekV3ForCausalLM** |
 
-**Notes:** Kimi K2.5 is a multimodal model built directly on DeepSeek V3 architecture (config explicitly references `DeepseekV3ForCausalLM`). MoE-wise nearly identical to DS V3 but with 384 experts (vs 256), higher scaling factor (2.827 vs 2.5), no expert grouping, and fewer dense layers. All unverified values were correct.
+**Notes:** Kimi K2.5 is a multimodal model built directly on DeepSeek V3 architecture (config explicitly references `DeepseekV3ForCausalLM`). MoE-wise nearly identical to DS V3 but with 384 experts (vs 256), higher scaling factor (2.827 vs 2.5), no expert grouping, and fewer dense layers.
 
 ---
 
@@ -534,26 +510,26 @@ output = routed_output + shared_output
 - `modeling_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T modeling_bailing_moe_v2.py`
 - `configuration_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T configuration_bailing_moe_v2.py`
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **8192** | ✓ |
-| `moe_intermediate_size` | **2048** | **No** (unverified said 1536) |
-| `num_experts` | **256** | ✓ |
-| `num_shared_experts` | **1** | **No** (unverified said 2) |
-| `num_experts_per_tok` (K) | **8** | ✓ |
-| `hidden_act` | `silu` | |
-| `score_function` | **sigmoid** | Same as DeepSeek |
-| `topk_method` | group_limited_topk (from modeling code L310-331) | Same algorithm as DeepSeek noaux_tc |
-| `moe_router_enable_expert_bias` | **true** | Has bias correction (L302, L340) |
-| `routed_scaling_factor` | **2.5** | Same as DeepSeek |
-| `n_group` / `topk_group` | **8 / 4** | Same as DeepSeek V3! |
-| `norm_topk_prob` | true | |
-| `first_k_dense_replace` | 4 | |
-| `num_hidden_layers` | 80 | |
-| `use_bias` | false | No bias on expert projections |
-| Shared expert intermediate | 2048 (= moe_intermediate × 1) | |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **8192** |
+| `moe_intermediate_size` | **2048** |
+| `num_experts` | **256** |
+| `num_shared_experts` | **1** |
+| `num_experts_per_tok` (K) | **8** |
+| `hidden_act` | `silu` |
+| `score_function` | **sigmoid** |
+| `topk_method` | group_limited_topk (from modeling code L310-331) |
+| `moe_router_enable_expert_bias` | **true** (L302, L340) |
+| `routed_scaling_factor` | **2.5** |
+| `n_group` / `topk_group` | **8 / 4** |
+| `norm_topk_prob` | true |
+| `first_k_dense_replace` | 4 |
+| `num_hidden_layers` | 80 |
+| `use_bias` | false (no bias on expert projections) |
+| Shared expert intermediate | 2048 (= moe_intermediate × 1) |
 
-**Notes:** Ling-1T is very similar to DeepSeek V3 in routing — same sigmoid scoring, same 8/4 group-based routing (`group_limited_topk` at L310-331), same scaling factor, same expert bias correction. Confirmed from `modeling_bailing_moe_v2.py`: sigmoid (L338), expert_bias (L302, L340), group_limited_topk (L310-331), routed_scaling_factor (L346). The unverified list had the wrong intermediate size (1536→2048) and wrong shared expert count (2→1). The unverified claim of "shared expert intermediate: 12288" is wrong — from code, shared expert uses `moe_intermediate_size * num_shared_experts = 2048`.
+**Notes:** Ling-1T is very similar to DeepSeek V3 in routing — same sigmoid scoring, same 8/4 group-based routing (`group_limited_topk` at L310-331), same scaling factor, same expert bias correction. Confirmed from `modeling_bailing_moe_v2.py`: sigmoid (L338), expert_bias (L302, L340), group_limited_topk (L310-331), routed_scaling_factor (L346). Shared expert uses `moe_intermediate_size * num_shared_experts = 2048`.
 
 ---
 
@@ -610,21 +586,21 @@ output = routed_output + shared_output
 - `config.json` — `hf download Qwen/Qwen3-235B-A22B config.json`
 - `modeling_qwen3_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **4096** | **No** (unverified said 2048) |
-| `moe_intermediate_size` | **1536** | **No** (unverified said 768) |
-| `num_experts` | **128** | ✓ |
-| `num_experts_per_tok` (K) | **8** | (not in unverified) |
-| `hidden_act` | `silu` | |
-| `scoring_func` | softmax (from modeling code L266) | |
-| `norm_topk_prob` | true | |
-| `router_aux_loss_coef` | 0.001 | |
-| `intermediate_size` | 12288 | Dense FFN dim |
-| `num_hidden_layers` | 94 | |
-| Shared experts | **None** | No shared expert fields in config |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **4096** |
+| `moe_intermediate_size` | **1536** |
+| `num_experts` | **128** |
+| `num_experts_per_tok` (K) | **8** |
+| `hidden_act` | `silu` |
+| `scoring_func` | softmax (from modeling code L266) |
+| `norm_topk_prob` | true |
+| `router_aux_loss_coef` | 0.001 |
+| `intermediate_size` | 12288 (dense FFN dim) |
+| `num_hidden_layers` | 94 |
+| Shared experts | **None** (no shared expert fields in config) |
 
-**Notes:** Qwen3 MoE uses **softmax routing** confirmed from modeling code (L266: `softmax(router_logits)` → top-k → optional normalization). No shared experts. Unverified list was wrong on hidden_size and intermediate_size (both doubled).
+**Notes:** Qwen3 MoE uses **softmax routing** confirmed from modeling code (L266: `softmax(router_logits)` → top-k → optional normalization). No shared experts.
 
 ---
 
@@ -642,21 +618,21 @@ output = routed_output + shared_output
 - `config.json` — `hf download Qwen/Qwen3.5-397B-A17B config.json`
 - `modeling_qwen3_5_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **4096** | **No** (unverified said 2048) |
-| `moe_intermediate_size` | **1024** | **No** (unverified said 512) |
-| `num_experts` | **512** | **No** (unverified said 256) |
-| `num_experts_per_tok` (K) | **10** | (not in unverified) |
-| `shared_expert_intermediate_size` | **1024** | Explicit field, same as moe_intermediate |
-| `hidden_act` | `silu` | |
-| `scoring_func` | softmax (from modeling code L765) | |
-| `router_aux_loss_coef` | 0.001 | |
-| `num_hidden_layers` | 60 | |
-| `mtp_num_hidden_layers` | 1 | Multi-token prediction |
-| Shared expert gating | sigmoid gate on shared expert output (L788) | Unique to Qwen3.5 |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **4096** |
+| `moe_intermediate_size` | **1024** |
+| `num_experts` | **512** |
+| `num_experts_per_tok` (K) | **10** |
+| `shared_expert_intermediate_size` | **1024** (same as moe_intermediate) |
+| `hidden_act` | `silu` |
+| `scoring_func` | softmax (from modeling code L765) |
+| `router_aux_loss_coef` | 0.001 |
+| `num_hidden_layers` | 60 |
+| `mtp_num_hidden_layers` | 1 (multi-token prediction) |
+| Shared expert gating | sigmoid gate on shared expert output (L788, unique to Qwen3.5) |
 
-**Notes:** Qwen3.5 has 512 experts (most of any model here), K=10 (highest), and an explicit `shared_expert_intermediate_size` field. Uses **softmax routing** confirmed from modeling code (L765). Shared expert has a **sigmoid gate** (L788: `sigmoid(gate(x)) * shared_output`) before being added to routed output — this is different from DeepSeek-family models which add shared expert output directly. The unverified list was significantly wrong on all dimension values.
+**Notes:** Qwen3.5 has 512 experts (most of any model here), K=10 (highest), and an explicit `shared_expert_intermediate_size` field. Uses **softmax routing** confirmed from modeling code (L765). Shared expert has a **sigmoid gate** (L788: `sigmoid(gate(x)) * shared_output`) before being added to routed output — this is different from DeepSeek-family models which add shared expert output directly.
 
 ---
 
@@ -776,7 +752,7 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 | Expert layout | Separate w1/w2/w3 (gate/down/up), no bias |
 | Total / Active params | 675B / 41B |
 
-**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing), softmax routing. vLLM implements Mistral Large 3 as a **subclass of DeepseekV3ForCausalLM** with weight name remapping (vllm_mistral_large_3.py L11), confirming shared experts use the same w1/w2/w3 structure as routed experts. Shared expert intermediate size is 4096 (same as expert_hidden_dim) — inferred from vLLM remapping using the same gate_proj/up_proj/down_proj pattern with no separate size config. The unverified list had incorrect hidden size (6144→7168), intermediate size (2048→4096), and K value (8→4).
+**Notes:** Mistral uses a custom config format (`params.json` not `config.json`). The MoE params are nested under `moe` key. Uses `routed_scale=1.0` (no scaling), single expert group (no group-based routing), softmax routing. vLLM implements Mistral Large 3 as a **subclass of DeepseekV3ForCausalLM** with weight name remapping (vllm_mistral_large_3.py L11), confirming shared experts use the same w1/w2/w3 structure as routed experts. Shared expert intermediate size is 4096 (same as expert_hidden_dim) — inferred from vLLM remapping using the same gate_proj/up_proj/down_proj pattern with no separate size config.
 
 ---
 
@@ -873,22 +849,22 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 - `configuration_deepseek_v2.py` — `hf download deepseek-ai/DeepSeek-OCR --include '*.py'`
 - `modeling_deepseekocr.py` — `hf download deepseek-ai/DeepSeek-OCR modeling_deepseekocr.py`
 
-| Parameter | Value | Unverified Match? |
-|-----------|-------|-------------------|
-| `hidden_size` | **1280** | **No** (unverified said 4096) |
-| `moe_intermediate_size` | **896** | **No** (unverified said 1407) |
-| `n_routed_experts` | **64** | ✓ |
-| `n_shared_experts` | **2** | ✓ |
-| `num_experts_per_tok` (K) | **6** | ✓ |
-| `scoring_func` | softmax (default from configuration_deepseek_v2.py L142) | Not in config.json; V2 default is softmax |
-| `topk_method` | **greedy** | Different from DeepSeek V3 (noaux_tc) |
-| `n_group` / `topk_group` | 1 / 1 | No grouping |
-| Base architecture | **DeepseekV2ForCausalLM** | Based on V2, not V3 |
-| `num_hidden_layers` | **12** | Very small model |
-| `first_k_dense_replace` | 1 | |
-| Shared expert intermediate | 1792 (= 896 × 2) | |
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **1280** |
+| `moe_intermediate_size` | **896** |
+| `n_routed_experts` | **64** |
+| `n_shared_experts` | **2** |
+| `num_experts_per_tok` (K) | **6** |
+| `scoring_func` | softmax (default from configuration_deepseek_v2.py L142) |
+| `topk_method` | **greedy** |
+| `n_group` / `topk_group` | 1 / 1 |
+| Base architecture | **DeepseekV2ForCausalLM** (V2, not V3) |
+| `num_hidden_layers` | **12** |
+| `first_k_dense_replace` | 1 |
+| Shared expert intermediate | 1792 (= 896 × 2) |
 
-**Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). Uses **softmax scoring** (V2 default from configuration_deepseek_v2.py L142 — config.json does not override) with **greedy top-k** selection. The unverified list values (hidden=4096, intermediate=1407, shared_intermediate=5632) were likely for the larger DeepSeek-VL-v2 7B model, not the OCR model.
+**Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). Uses **softmax scoring** (V2 default from configuration_deepseek_v2.py L142 — config.json does not override) with **greedy top-k** selection.
 
 ---
 
@@ -926,3 +902,22 @@ Based on code exploration of:
 - Combine module approach needs unification
 
 ---
+
+## Appendix C: Verification of `unverified_moe_info.md`
+
+This appendix records the accuracy of the original unverified parameter list (`plans/unverified_moe_info.md`) against verified config.json values. Kept for provenance; the unverified file may be discarded.
+
+| Model | Values Correct? | Notes |
+|-------|----------------|-------|
+| DeepSeek V3 | ✓ All correct | |
+| GPT-OSS | **Wrong** on hidden (2048→2880), intermediate (2048→2880), K (8→4) | |
+| GLM-4.7 | ✓ Same arch as GLM-4.5, extended context | |
+| GLM-5 | ✓ All correct (K was unspecified) | |
+| Kimi K2.5 | ✓ All correct | |
+| Qwen 3.5 | **Wrong** on hidden (2048→4096), intermediate (512→1024), experts (256→512) | |
+| Qwen3 | **Wrong** on hidden (2048→4096), intermediate (768→1536) | |
+| DeepSeek OCR | **Wrong** on hidden (4096→1280), intermediate (1407→896), shared_intermediate (5632→1792) | Was likely a different model |
+| Mistral | **Wrong** on hidden (6144→7168), intermediate (2048→4096), K (8→4), name was wrong | |
+| Ling-1T | **Wrong** on intermediate (1536→2048), shared experts (2→1) | |
+
+**5 out of 10 models had significant errors. Always verify from config.json.**
