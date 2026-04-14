@@ -311,13 +311,7 @@ class Pipeline:
         output = output_torch[0, :, 0].contiguous()
         return output
 
-    def _run_pipeline(
-        self,
-        audio,
-    ):
-        index = big_npy = None
-        audio = signal.filtfilt(bh, ah, audio)
-        audio = torch.from_numpy(audio.copy())
+    def _get_time_stamps(self, audio, num_frames):
         audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
         opt_ts = []
         if audio_padded.shape[0] > self.t_max:
@@ -330,18 +324,28 @@ class Pipeline:
                 segment = audio_avg[t - self.t_query : t + self.t_query]
                 opt_ts.append(t - self.t_query + torch.argmin(segment).item())
         audio_output = []
-        audio_padded = F.pad(audio.unsqueeze(0), (self.t_pad, self.t_pad), mode="reflect").squeeze(0)
-        num_frames = audio_padded.shape[0] // self.window
         s = 0
         idx_list = []
         for t in opt_ts:
             idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
             s = t
         idx_list.append((s // self.window, num_frames))
+
+        return idx_list
+
+    def _run_pipeline(
+        self,
+        audio,
+    ):
+        index = big_npy = None
+        audio_padded = F.pad(audio.unsqueeze(0), (self.t_pad, self.t_pad), mode="reflect").squeeze(0)
+        num_frames = audio_padded.shape[0] // self.window
+        idx_list = self._get_time_stamps(audio, num_frames)
         pitch, pitchf = None, None
         if self.if_f0:
             pitch, pitchf = self._get_f0(audio_padded, num_frames)
 
+        audio_output = []
         for idx_s, idx_e in idx_list:
             if self.if_f0:
                 chunk_end = min(idx_e, pitch.shape[1])
@@ -361,6 +365,24 @@ class Pipeline:
             )
 
         audio_output = torch.cat(audio_output)
+        return audio_output
+
+    def infer(self, audio_path: str):
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError("input_audio_path not found.")
+
+        audio = load_audio(audio_path, 16000)
+        # preprocess
+        audio_max = torch.abs(audio).max().item() / 0.95
+        if audio_max > 1:
+            audio /= audio_max
+
+        audio = signal.filtfilt(bh, ah, audio)
+        audio = torch.from_numpy(audio.copy())
+
+        audio_output = self._run_pipeline(audio)
+
+        # post-process
         if self.rms_mix_rate != 1:
             audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, self.rms_mix_rate)
         if self.tgt_sr != self.resample_sr and self.resample_sr >= 16000:
@@ -374,14 +396,3 @@ class Pipeline:
         # use torch
         audio_output = (audio_output * max_int16).to(torch.int16)
         return audio_output
-
-    def infer(self, audio_path: str):
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError("input_audio_path not found.")
-
-        audio = load_audio(audio_path, 16000)
-        audio_max = torch.abs(audio).max().item() / 0.95
-        if audio_max > 1:
-            audio /= audio_max
-
-        return self._run_pipeline(audio)
