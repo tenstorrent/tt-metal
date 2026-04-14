@@ -554,7 +554,8 @@ jobs:
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
-         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-build-quasar.yaml
     secrets: inherit
