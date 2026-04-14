@@ -86,7 +86,13 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
             auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
+        log_info(tt::LogMetal, "[test_body] EXPECT_EQ loop done for dev_idx={}", dev_idx);
     }
+    log_info(tt::LogMetal, "[test_body] all loops done, destroying disaggregated_output_tensors");
+    disaggregated_output_tensors.clear();
+    log_info(tt::LogMetal, "[test_body] disaggregated_output_tensors destroyed, destroying all_gathered_tensor");
+    { auto tmp = std::move(all_gathered_tensor); }
+    log_info(tt::LogMetal, "[test_body] all_gathered_tensor destroyed, test body finishing");
 }
 
 TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
