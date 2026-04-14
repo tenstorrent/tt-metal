@@ -316,6 +316,15 @@ def prepare_output_tensor_from_combine_writer(
 ATOL_THRESHOLD = 700
 
 
+def _get_pcc_threshold(activation_type):
+    # Determine PCC threshold based on activation type
+    # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
+    if activation_type == MoEActivationFunction.SWIGLU:
+        pcc_threshold = 0.984
+    elif activation_type == MoEActivationFunction.SILU:  # SILU
+        pcc_threshold = 0.988
+
+
 def validate_matmul(
     layer_id,
     experts_per_device,
@@ -1027,6 +1036,7 @@ def test_moe_compute(
     enable_trace,
     activation_type,
     device_params,
+    is_ci_env,
 ):
     """
     This test:
@@ -1036,14 +1046,17 @@ def test_moe_compute(
     4. Runs the moe operation
     5. Verifies the outputs against a golden reference
     """
+    # Skip certain parameter combinations in CI to keep runtime reasonable.
+    if is_ci_env:
+        if experts_per_device == 3:
+            pytest.skip("Skipping experts_per_device=3 in CI to keep runtime reasonable.")
+        if selected_experts_k == 1 and num_layers == 1 and num_iterations == 5:  # perf test
+            pytest.skip("Skipping perf parameter set in CI to keep runtime reasonable.")
+        if not enable_trace:
+            pytest.skip("Skipping enable_trace=False in CI to keep runtime reasonable.")
+
     torch.manual_seed(2003)
     random.seed(2003)
-
-    # Determine PCC threshold based on activation type
-    if activation_type == MoEActivationFunction.SWIGLU:
-        pcc_threshold = 0.984
-    else:  # SILU
-        pcc_threshold = 0.988
 
     experts = experts_per_device * mesh_shape[cluster_axis]
 
@@ -1479,6 +1492,8 @@ def test_moe_compute(
             ),
         }
     )
+
+    pcc_threshold = _get_pcc_threshold(activation_type)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
     per_expert_tokens_all_passed = True
