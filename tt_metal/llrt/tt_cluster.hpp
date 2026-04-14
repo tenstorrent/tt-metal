@@ -229,6 +229,9 @@ public:
         ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
+    uint32_t get_device_input_power(const ChipId& chip_id) const;
+    double get_device_asic_temperature(const ChipId& chip_id) const;
+    double get_device_board_temperature(const ChipId& chip_id) const;
 
     void dram_barrier(ChipId chip_id) const;
     void l1_barrier(ChipId chip_id) const;

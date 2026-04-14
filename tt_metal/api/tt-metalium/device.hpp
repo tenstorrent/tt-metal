@@ -87,6 +87,15 @@ public:
     // This value is queried from the actual hardware via the cluster API
     // and reflects the device's current operating frequency.
     virtual int get_clock_rate_mhz() const = 0;
+    // Returns the real-time input power draw in watts for this device,
+    // read directly from ARC telemetry on each call.
+    virtual uint32_t get_input_power_watts() const = 0;
+    // Returns the real-time ASIC temperature in Celsius for this device.
+    virtual double get_asic_temperature() const = 0;
+    // Returns the real-time board temperature in Celsius for this device.
+    // Returns 0.0 if the reading is not available on this firmware/arch.
+    virtual double get_board_temperature() const = 0;
+
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;

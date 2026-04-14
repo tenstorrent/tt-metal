@@ -72,6 +72,14 @@ class DistributedContext;
 
 using DeviceIds = std::vector<int>;
 
+struct DeviceTelemetry {
+    ChipId chip_id;
+    int aiclk_mhz;
+    uint32_t input_power_w;
+    double asic_temperature_c;
+    double board_temperature_c;
+};
+
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
     friend class tt::tt_metal::MetalEnv;
@@ -107,6 +115,9 @@ public:
     // This value is queried from the actual hardware via the cluster API
     // and reflects the device's current operating frequency.
     int get_clock_rate_mhz() const override;
+    uint32_t get_input_power_watts() const override;
+    double get_asic_temperature() const override;
+    double get_board_temperature() const override;
 
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
@@ -216,6 +227,10 @@ public:
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
+
+    // Returns real-time telemetry (AICLK, power, temperatures) for every device in the mesh.
+    // Each call reads fresh values from the hardware via ARC telemetry.
+    std::vector<DeviceTelemetry> get_device_telemetry() const;
 
     size_t num_devices() const;
 

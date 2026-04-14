@@ -1128,6 +1128,27 @@ int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_d
 
 int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
 
+uint32_t MeshDeviceImpl::get_input_power_watts() const { return reference_device()->get_input_power_watts(); }
+
+double MeshDeviceImpl::get_asic_temperature() const { return reference_device()->get_asic_temperature(); }
+
+double MeshDeviceImpl::get_board_temperature() const { return reference_device()->get_board_temperature(); }
+
+std::vector<distributed::DeviceTelemetry> MeshDeviceImpl::get_device_telemetry() const {
+    std::vector<distributed::DeviceTelemetry> result;
+    result.reserve(num_devices());
+    for (auto* device : get_devices()) {
+        result.push_back({
+            .chip_id = device->id(),
+            .aiclk_mhz = device->get_clock_rate_mhz(),
+            .input_power_w = device->get_input_power_watts(),
+            .asic_temperature_c = device->get_asic_temperature(),
+            .board_temperature_c = device->get_board_temperature(),
+        });
+    }
+    return result;
+}
+
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
         return device->logical_core_from_dram_channel(dram_channel);
@@ -1495,6 +1516,12 @@ int MeshDevice::num_dram_channels() const { return pimpl_->num_dram_channels(); 
 uint32_t MeshDevice::l1_size_per_core() const { return pimpl_->l1_size_per_core(); }
 uint32_t MeshDevice::dram_size_per_channel() const { return pimpl_->dram_size_per_channel(); }
 int MeshDevice::get_clock_rate_mhz() const { return pimpl_->get_clock_rate_mhz(); }
+uint32_t MeshDevice::get_input_power_watts() const { return pimpl_->get_input_power_watts(); }
+double MeshDevice::get_asic_temperature() const { return pimpl_->get_asic_temperature(); }
+double MeshDevice::get_board_temperature() const { return pimpl_->get_board_temperature(); }
+std::vector<distributed::DeviceTelemetry> MeshDevice::get_device_telemetry() const {
+    return pimpl_->get_device_telemetry();
+}
 CoreCoord MeshDevice::grid_size() const { return pimpl_->grid_size(); }
 CoreCoord MeshDevice::logical_grid_size() const { return pimpl_->logical_grid_size(); }
 CoreCoord MeshDevice::dram_grid_size() const { return pimpl_->dram_grid_size(); }
