@@ -466,6 +466,19 @@ SDPA kernel — standard SDPA's chunked online softmax handles BFP4 natively.
 | TQ BFP4 Fused SDPA | = baseline | 0.5× baseline | 2K | Dev track — needs chunked dequant |
 | Baseline BFP8 | = baseline | 1× | 128K | Reference |
 
+### Prefill → BFP4 decode: paged prefill path (follow-up)
+
+`eval_e2e_prefill.py --bfp4-cache` works with non-paged model: prefill (BFP8) →
+migrate (BFP4) → decode (BFP4, non-paged SDPA). Output is correct ("Paris.") with
+no repetitive output issue. Decode latency is ~43ms/tok (non-paged SDPA) vs 37ms
+(paged SDPA in eval_e2e.py).
+
+To get 37ms decode after prefill, the model needs paged attention for decode. Paged
+prefill currently fails with block_size mismatch (`Input tensor height (128) must be
+<= cache tensor height (32)`). This is a model-level issue with how `prepare_inputs_prefill`
+handles paged KV caches, not a TurboQuant issue. Follow-up: investigate paged prefill
+setup or two-phase model init (non-paged prefill → paged decode).
+
 ### Fused SDPA kernel — Chunked dequant (development track)
 
 The custom fused SDPA kernel pre-fills ALL dequantized BF16 K/V into L1
