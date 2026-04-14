@@ -134,7 +134,7 @@ def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enabl
     )
 
     def run_op():
-        return ttnn.interleaved_to_sharded(tt_input, output_mem_config)
+        return ttnn.to_memory_config(tt_input, output_mem_config)
 
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
