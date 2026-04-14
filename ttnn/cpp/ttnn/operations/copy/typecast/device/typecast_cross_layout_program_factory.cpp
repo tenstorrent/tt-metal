@@ -59,16 +59,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
             .set_page_size(input_cb_index, single_tile_size_input);
     CreateCircularBuffer(program, all_cores, cb_input_config);
 
-    // Intermediate CB: tile pages in output dtype (typecast writes here, untilize reads from here)
-    constexpr uint32_t intermediate_cb_index = tt::CBIndex::c_1;
-    const uint32_t intermediate_cb_num_tiles = ntiles_per_row * 2;
-    CircularBufferConfig cb_intermediate_config =
-        CircularBufferConfig(
-            intermediate_cb_num_tiles * single_tile_size_output, {{intermediate_cb_index, cb_data_format_output}})
-            .set_page_size(intermediate_cb_index, single_tile_size_output);
-    CreateCircularBuffer(program, all_cores, cb_intermediate_config);
-
-    // Output CB: tile-sized pages in output dtype (untilize writes RM data here using tile page accounting)
+    // Output CB: tile-sized pages in output dtype (pack_untilize_dest writes RM data here)
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
     const uint32_t output_cb_num_tiles = ntiles_per_row * 2;
     CircularBufferConfig cb_output_config =
@@ -108,6 +99,9 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
         WriterDataMovementConfig(writer_ct_args));
 
     // ── Compute kernel ───────────────────────────────────────────────────
+    // Fused typecast + pack_untilize_dest: SFPU typecast writes to DEST, then
+    // pack_untilize_dest writes DEST to output CB in RM format. No intermediate CB.
+
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
@@ -130,11 +124,10 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
     // Core group 1 (full cores)
     if (!core_range.ranges().empty()) {
         std::vector<uint32_t> compute_args = {
-            nblocks_per_core,       // per_core_block_cnt (tile-rows per core)
-            ntiles_per_row,         // per_core_block_dim (tiles per row)
-            input_cb_index,         // input_cb
-            output_cb_index,        // output_cb
-            intermediate_cb_index,  // intermediate_cb
+            nblocks_per_core,  // per_core_block_cnt (tile-rows per core)
+            ntiles_per_row,    // per_core_block_dim (tiles per row)
+            input_cb_index,    // input_cb
+            output_cb_index,   // output_cb
         };
         CreateKernel(
             program,
@@ -157,7 +150,6 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
             ntiles_per_row,
             input_cb_index,
             output_cb_index,
-            intermediate_cb_index,
         };
         CreateKernel(
             program,

@@ -6,10 +6,9 @@
 //
 // Handles two modes via compile-time defines:
 //
-//   TILIZE_INPUT  (RM→TILE): tilize input_cb → intermediate_cb, then typecast intermediate_cb → output_cb
-//   UNTILIZE_OUTPUT (TILE→RM): typecast input_cb → intermediate_cb, then untilize intermediate_cb → output_cb
-//
-// Uses two-pass approach with an intermediate CB to leverage well-tested LLK tilize/untilize helpers.
+//   TILIZE_INPUT    (RM→TILE): tilize input_cb → intermediate_cb, then typecast intermediate_cb → output_cb
+//   UNTILIZE_OUTPUT (TILE→RM): fused typecast + pack_untilize_dest — typecast tiles into DEST,
+//                               then pack_untilize_dest writes DEST in RM format to output_cb
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -23,7 +22,6 @@
 
 #ifdef UNTILIZE_OUTPUT
 #include "api/compute/pack_untilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #endif
 
 void kernel_main() {
@@ -31,16 +29,16 @@ void kernel_main() {
     constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     constexpr uint32_t input_cb = get_compile_time_arg_val(2);
     constexpr uint32_t output_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(4);
 #ifdef TILIZE_INPUT
+    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(4);
     constexpr uint32_t total_input_pages = get_compile_time_arg_val(5);
 #endif
 
 #if defined(TILIZE_INPUT)
-    // RM→TILE: Phase 1 — tilize input_cb → intermediate_cb
-    //          Phase 2 — typecast intermediate_cb → output_cb
+    // RM→TILE: tilize all blocks into intermediate_cb, then typecast to output_cb.
+    // Tilize pushes tiles to intermediate_cb per block; typecast consumes them.
+    // CB double-buffering handles the producer-consumer flow.
 
-    // Phase 1: tilize
     compute_kernel_hw_startup(input_cb, intermediate_cb);
 
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<input_cb>()
@@ -56,7 +54,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
         fp32_mode>(per_core_block_cnt, total_input_pages);
 
-    // Phase 2: typecast from intermediate_cb → output_cb
+    // Phase 2: typecast tiles from intermediate_cb → output_cb
     init_sfpu(intermediate_cb, output_cb);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(output_cb, per_core_block_dim);
@@ -76,38 +74,42 @@ void kernel_main() {
     }
 
 #elif defined(UNTILIZE_OUTPUT)
-    // TILE→RM: Phase 1 — typecast input_cb → intermediate_cb
-    //          Phase 2 — untilize intermediate_cb → output_cb
+    // TILE→RM: Fused typecast + untilize using pack_untilize_dest.
+    //
+    // For each tile-row (block):
+    //   1. Typecast per_core_block_dim tiles into DEST registers 0..N-1
+    //   2. pack_untilize_dest writes all DEST data to output_cb in RM format
+    //
+    // This avoids a two-phase approach that causes hardware state conflicts.
+    // Constraint: per_core_block_dim must fit in DEST (max 8 tiles in half-sync 32-bit).
 
-    // Phase 1: typecast
-    init_sfpu(input_cb, intermediate_cb);
+    init_sfpu(input_cb, output_cb);
+    pack_untilize_dest_init<per_core_block_dim>(output_cb);
+
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(intermediate_cb, per_core_block_dim);
+        tile_regs_acquire();
+
+        // Typecast each tile in the row into a separate DEST register
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();
             cb_wait_front(input_cb, 1);
-            copy_tile(input_cb, 0, 0);
+            copy_tile(input_cb, 0, tile_index);
             TYPECAST_LLK_INIT();
-            TYPECAST_LLK(0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, intermediate_cb);
+            TYPECAST_LLK(tile_index);
             cb_pop_front(input_cb, 1);
-            tile_regs_release();
         }
-        cb_push_back(intermediate_cb, per_core_block_dim);
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        // Write all DEST tiles to output CB in RM format
+        cb_reserve_back(output_cb, per_core_block_dim);
+        pack_untilize_dest<per_core_block_dim>(output_cb);
+        cb_push_back(output_cb, per_core_block_dim);
+
+        tile_regs_release();
     }
 
-    // Phase 2: untilize from intermediate_cb → output_cb
-    // Reconfigure hardware for the untilize path
-    compute_kernel_lib::untilize<
-        per_core_block_dim,
-        intermediate_cb,
-        output_cb,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-        per_core_block_cnt);
+    pack_untilize_uninit(output_cb);
 
 #else
     static_assert(false, "eltwise_typecast_cross_layout.cpp requires TILIZE_INPUT or UNTILIZE_OUTPUT define");
