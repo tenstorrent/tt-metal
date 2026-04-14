@@ -48,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -63,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en = false;
 
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
         // copy srca to dest
 #ifdef ARCH_BLACKHOLE
         // set tilize flag to true
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -208,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNTILIZE = false;
 
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -222,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

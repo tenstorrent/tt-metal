@@ -47,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t TILE_SIZE = 2048 / 16; // size of tile in 16B words
 
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile += FULL_CT_DIM)
         {
@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool UNTILIZE = false;
 
     {
-        PERF_ZONE_SCOPED("INIT")
+        ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -169,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        PERF_ZONE_SCOPED("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {

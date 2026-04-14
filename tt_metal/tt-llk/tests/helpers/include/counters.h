@@ -1172,6 +1172,37 @@ __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t h
     return (hash_val < detail::ZONE_LOOKUP_SIZE) ? detail::zone_lookup[hash_val] : 0;
 }
 
+// Profiler-integrated counter hooks (called from zone_scoped ctor/dtor).
+// Auto-incrementing zone_id: first call = zone 0 (INIT), second = zone 1 (TILE_LOOP).
+// The static counter resets naturally because BRISC clears .bss between runs.
+namespace detail
+{
+__attribute__((section(".bss.perf_counters"))) static std::uint32_t profiler_zone_counter;
+} // namespace detail
+
+} // namespace llk_perf
+
+namespace llk_profiler
+{
+__attribute__((noinline)) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out)
+{
+    zone_out   = llk_perf::detail::profiler_zone_counter++;
+    active_out = true;
+    llk_perf::start_perf_counters(zone_out);
+}
+
+__attribute__((noinline)) void _profiler_counter_stop(std::uint32_t zone, bool active)
+{
+    if (active)
+    {
+        llk_perf::stop_perf_counters(zone);
+    }
+}
+} // namespace llk_profiler
+
+namespace llk_perf // reopen
+{
+
 // RAII wrapper for automatic per-zone counter start/stop.
 // May already be defined by perf.h (forward-declaration version).
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
