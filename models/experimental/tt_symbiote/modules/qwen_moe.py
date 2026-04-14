@@ -807,6 +807,10 @@ class TTNNQwen3MoE(TTNNMoE):
 
         return tree_map(set_col_sharded_config, output_tensors)
 
+    def _ttnn_routed_experts(self, x, topk_experts_indices, topk_experts_weights):
+        """Hook for subclasses; default is a single TTNNExperts call (Omni talker uses moe.TTNNQwen3TalkerMoE)."""
+        return self.experts(x, topk_experts_indices, topk_experts_weights)
+
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with shared_expert_gate support.
@@ -905,7 +909,7 @@ class TTNNQwen3MoE(TTNNMoE):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
+            routed_output = self._ttnn_routed_experts(x, topk_experts_indices, topk_experts_weights)
 
         # 4. Reduce-scatter final output.
         n_rs = self.device.get_num_devices()  # devices along cluster_axis=1

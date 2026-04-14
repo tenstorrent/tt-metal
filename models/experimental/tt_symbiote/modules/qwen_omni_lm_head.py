@@ -19,6 +19,13 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 
+# Prefill can build a full ``[batch, seq, vocab]`` logits tensor (~GB bf16). One ``ttnn.linear`` output buffer
+# (and internal layout / transpose temps) can exceed Wormhole DRAM — especially when DRAM is fragmented.
+# Chunk along flattened batch×seq and stitch on host (see :meth:`TTNNQwenOmniThinkerLmHead.forward`).
+# Large prefills: optional chunking when estimated logits/hidden bytes exceed thresholds (see ``forward``).
+
+# Per-chunk caps (fixed defaults; row count is also bounded in :meth:`TTNNQwenOmniThinkerLmHead._effective_lm_head_chunk_rows`).
+
 
 def _lm_head_logits_dtensor_config(mesh_device):
     """Replicated logits: compose then slice dim 0 so HF sampling sees ``[batch, …]`` not ``[batch*n_dev, …]``."""
@@ -47,14 +54,50 @@ def _thinker_lm_head_chunk_seq() -> int:
     return max(1, v)
 
 
+def _thinker_lm_head_chunk_seq() -> int:
+    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
+
+    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
+    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
+    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
+    to talker ``codec_head`` / code_predictor heads).
+    """
+    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
+    try:
+        v = int(raw)
+    except ValueError:
+        v = 8
+    return max(1, v)
+
+
+def _thinker_lm_head_chunk_seq() -> int:
+    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
+
+    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
+    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
+    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
+    to talker ``codec_head`` / code_predictor heads).
+    """
+    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
+    try:
+        v = int(raw)
+    except ValueError:
+        v = 8
+    return max(1, v)
+
+
 class TTNNQwenOmniThinkerLmHead(TTNNModule):
     """
     Final logits projection for the thinker.
 
     Final RMSNorm output may be **width-sharded** on a multi-device mesh; this layer
     all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
-    then runs ``ttnn.linear`` with replicated weights on **sequence chunks**, reads each logits chunk
-    to host, and **concatenates on CPU** into the final ``[batch, seq, vocab]`` tensor.
+    then runs ``ttnn.linear`` with replicated weights, reads each logits chunk to host, and **concatenates
+    on CPU** into the final ``[batch, seq, vocab]`` tensor.
+
+    When estimated activations stay below ``TT_SYMBIOTE_LM_HEAD_MAX_{INPUT,OUTPUT}_BYTES``, a single
+    ``ttnn.linear`` on flattened ``batch×seq`` is used; otherwise rows are split using
+    ``TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS`` and per-chunk byte caps (``TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_*``).
 
     Full prefill logits do not fit device DRAM (~1.7 GiB+); re-uploading them with ``from_torch`` OOMs,
     so the merged result stays **host ``torch``** (wrapped as :class:`TorchTTNNTensor` by symbiote).
