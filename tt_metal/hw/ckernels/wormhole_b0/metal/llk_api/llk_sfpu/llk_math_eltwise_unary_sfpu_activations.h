@@ -15,8 +15,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid, APPROXIMATE>(
-        ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
@@ -30,7 +29,7 @@ inline void llk_math_eltwise_unary_sfpu_hardsigmoid(uint dst_index, int vector_m
 // softsign
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_softsign_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::softsign, APPROXIMATE>(ckernel::sfpu::init_softsign<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::softsign>(ckernel::sfpu::init_softsign<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
@@ -42,7 +41,7 @@ inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode
 // celu
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_celu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::celu>();
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
@@ -61,7 +60,7 @@ inline void llk_math_eltwise_unary_sfpu_celu(
 // softshrink
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_softshrink_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
@@ -73,7 +72,7 @@ inline void llk_math_eltwise_unary_sfpu_softshrink(uint dst_index, uint param0, 
 // hardshrink
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardshrink_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardshrink, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardshrink>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>

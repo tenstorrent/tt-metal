@@ -431,8 +431,7 @@ inline void _top8_merge_() {
 }  // namespace sfpu
 
 inline void _llk_math_top8_merge_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROXIMATE=*/true>(
-        ckernel::sfpu::_top8_merge_configure_addrmod_);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top8_merge_configure_addrmod_);
 }
 
 template <uint32_t column_idx>

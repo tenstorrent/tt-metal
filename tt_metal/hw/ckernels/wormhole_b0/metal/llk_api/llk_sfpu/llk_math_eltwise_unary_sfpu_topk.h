@@ -13,7 +13,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, APPROXIMATE>(sfpu::topk_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort>(sfpu::topk_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>

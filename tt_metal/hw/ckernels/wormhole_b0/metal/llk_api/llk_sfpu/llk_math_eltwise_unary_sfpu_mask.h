@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_mask_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::mask, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::mask>();
 }
 
 template <bool APPROXIMATE>

@@ -13,7 +13,7 @@ namespace ckernel {
 // Unary maximum
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max, APPROXIMATE>(sfpu::unary_max_min_init<true>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max>(sfpu::unary_max_min_init<true>);
 }
 
 template <bool APPROXIMATE>
@@ -24,8 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_max(uint dst_index, uint param0, i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_max_int32_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max_int32, APPROXIMATE>(
-        sfpu::unary_max_min_int32_init<true, false>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max_int32>(sfpu::unary_max_min_int32_init<true, false>);
 }
 
 template <bool APPROXIMATE>
@@ -37,8 +36,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_max_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_max_uint32_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max_uint32, APPROXIMATE>(
-        sfpu::unary_max_min_int32_init<true, true>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max_uint32>(sfpu::unary_max_min_int32_init<true, true>);
 }
 
 template <bool APPROXIMATE>
@@ -51,7 +49,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_max_uint32(
 // Unary minimum
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min, APPROXIMATE>(sfpu::unary_max_min_init<false>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min>(sfpu::unary_max_min_init<false>);
 }
 
 template <bool APPROXIMATE>
@@ -62,8 +60,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_min(uint dst_index, uint param0, i
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_min_int32_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min_int32, APPROXIMATE>(
-        sfpu::unary_max_min_int32_init<false, false>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min_int32>(sfpu::unary_max_min_int32_init<false, false>);
 }
 
 template <bool APPROXIMATE>
@@ -75,8 +72,7 @@ inline void llk_math_eltwise_unary_sfpu_unary_min_int32(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_min_uint32_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min_uint32, APPROXIMATE>(
-        sfpu::unary_max_min_int32_init<false, true>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min_uint32>(sfpu::unary_max_min_int32_init<false, true>);
 }
 
 template <bool APPROXIMATE>

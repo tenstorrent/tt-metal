@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cast_fp32_to_fp16a_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cast_fp32_to_fp16a, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cast_fp32_to_fp16a>();
 }
 
 template <bool APPROXIMATE>

@@ -152,7 +152,7 @@ inline void _top2_calculate_top2_() {
 }  // namespace sfpu
 
 inline void _llk_math_sum_top2_tile_init_() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, /*APPROXIMATE=*/true>(ckernel::sfpu::_top2_configure_addrmod_);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_top2_configure_addrmod_);
 }
 
 inline void _llk_math_sum_top2_tile_(uint32_t dst_index) {

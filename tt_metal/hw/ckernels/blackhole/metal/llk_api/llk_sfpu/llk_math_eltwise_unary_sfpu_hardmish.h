@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
