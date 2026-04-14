@@ -97,16 +97,29 @@ def test_all_gather_16x4(
 
 @pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}],
-    indirect=True,
+    "device_params, topology",
+    [
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            ttnn.Topology.Linear,
+            id="fabric_1d-linear",
+        ),
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Linear,
+            id="fabric_1d_ring-linear",
+        ),
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            id="fabric_1d_ring-ring",
+        ),
+    ],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((32, 4), id="32x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [pytest.param(0, id="axis0"), pytest.param(1, id="axis1")])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize(
-    "topology", [pytest.param(ttnn.Topology.Linear, id="linear"), pytest.param(ttnn.Topology.Ring, id="ring")]
-)
 @pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize(
     "input_shape, dtype, buffer_type",
