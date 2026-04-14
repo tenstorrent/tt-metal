@@ -524,76 +524,24 @@ class Attention(LightweightModule):
     def _should_use_hf_rotary_width_workaround(self, rotary_tensor):
         return self.partial_rotary_factor != 1.0 and rotary_tensor.shape[-1] == 32
 
-    def _pad_hf_rotary_width_to_64(self, rotary_tensor, cos_matrix, sin_matrix):
-        # Partial-HF RoPE workaround for Phi-style models where only 32 dims are rotated.
-        # Pack [q1..q16, q17..q32] as [q1..q16, 0..0 | q17..q32, 0..0] and apply
-        # the same layout to cos/sin, using identity padding for inserted lanes.
+    def _pad_hf_rotary_tensor_only_to_64(self, rotary_tensor):
+        # Fast path when cos/sin are pre-padded at rope init: only pad the rotary tensor.
+        # Same block-interleaved layout: [q1..q_n/2, 0..0 | q_{n/2+1}..q_n, 0..0].
         assert rotary_tensor.shape[-1] == 32, "HF rotary width workaround expects a 32-wide rotary slice"
-        assert cos_matrix.shape[-1] == 32, "HF rotary width workaround expects 32-wide cos cache"
-        assert sin_matrix.shape[-1] == 32, "HF rotary width workaround expects 32-wide sin cache"
-
         rotary_tensor = ttnn.to_memory_config(rotary_tensor, ttnn.L1_MEMORY_CONFIG)
-        cos_matrix = ttnn.to_memory_config(cos_matrix, ttnn.L1_MEMORY_CONFIG)
-        sin_matrix = ttnn.to_memory_config(sin_matrix, ttnn.L1_MEMORY_CONFIG)
-
-        rotary_half_width = rotary_tensor.shape[-1] // 2
-
-        rotary_first_half, rotary_second_half = ttnn.split(
-            rotary_tensor, split_size=[rotary_half_width, rotary_half_width], dim=3
-        )
-        cos_first_half, cos_second_half = ttnn.split(
-            cos_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3
-        )
-        sin_first_half, sin_second_half = ttnn.split(
-            sin_matrix, split_size=[rotary_half_width, rotary_half_width], dim=3
-        )
-
-        rotary_first_half_padded = ttnn.pad(
-            rotary_first_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=0.0
-        )
-        rotary_second_half_padded = ttnn.pad(
-            rotary_second_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=0.0
-        )
-        cos_first_half_padded = ttnn.pad(
-            cos_first_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=1.0
-        )
-        cos_second_half_padded = ttnn.pad(
-            cos_second_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=1.0
-        )
-        sin_first_half_padded = ttnn.pad(
-            sin_first_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=0.0
-        )
-        sin_second_half_padded = ttnn.pad(
-            sin_second_half, padding=[(0, 0), (0, 0), (0, 0), (0, rotary_half_width)], value=0.0
-        )
-
-        ttnn.deallocate(rotary_first_half)
-        ttnn.deallocate(rotary_second_half)
-        ttnn.deallocate(cos_first_half)
-        ttnn.deallocate(cos_second_half)
-        ttnn.deallocate(sin_first_half)
-        ttnn.deallocate(sin_second_half)
-
-        rotary_padded = ttnn.concat([rotary_first_half_padded, rotary_second_half_padded], dim=3)
-        cos_padded = ttnn.concat([cos_first_half_padded, cos_second_half_padded], dim=3)
-        sin_padded = ttnn.concat([sin_first_half_padded, sin_second_half_padded], dim=3)
-
-        assert rotary_padded.shape[-1] == 64, "HF rotary width workaround must expand rotary inputs to width 64"
-        assert cos_padded.shape[-1] == 64, "HF rotary width workaround must expand cos cache to width 64"
-        assert sin_padded.shape[-1] == 64, "HF rotary width workaround must expand sin cache to width 64"
-
-        ttnn.deallocate(rotary_first_half_padded)
-        ttnn.deallocate(rotary_second_half_padded)
-        ttnn.deallocate(cos_first_half_padded)
-        ttnn.deallocate(cos_second_half_padded)
-        ttnn.deallocate(sin_first_half_padded)
-        ttnn.deallocate(sin_second_half_padded)
-
-        return rotary_padded, cos_padded, sin_padded
+        half = rotary_tensor.shape[-1] // 2
+        first, second = ttnn.split(rotary_tensor, split_size=[half, half], dim=3)
+        first_padded = ttnn.pad(first, padding=[(0, 0), (0, 0), (0, 0), (0, half)], value=0.0)
+        second_padded = ttnn.pad(second, padding=[(0, 0), (0, 0), (0, 0), (0, half)], value=0.0)
+        ttnn.deallocate(first)
+        ttnn.deallocate(second)
+        out = ttnn.concat([first_padded, second_padded], dim=3)
+        ttnn.deallocate(first_padded)
+        ttnn.deallocate(second_padded)
+        return out
 
     def _unpad_hf_rotary_width_from_64(self, rotary_tensor):
         rotary_tensor = ttnn.to_memory_config(rotary_tensor, ttnn.L1_MEMORY_CONFIG)
-
         padded_half_width = rotary_tensor.shape[-1] // 2
         rotary_half_width = padded_half_width // 2
 
@@ -615,13 +563,6 @@ class Attention(LightweightModule):
             steps=(1, 1, 1, 1),
         )
         rotary_unpadded = ttnn.concat([rotary_first_block, rotary_second_block], dim=3)
-        rotary_unpadded = ttnn.reshape(
-            rotary_unpadded,
-            (rotary_tensor.shape[0], rotary_tensor.shape[1], rotary_tensor.shape[2], rotary_half_width * 2),
-            (rotary_tensor.shape[0], rotary_tensor.shape[1], rotary_tensor.shape[2], rotary_half_width * 2),
-        )
-        rotary_unpadded = ttnn.to_layout(rotary_unpadded, ttnn.ROW_MAJOR_LAYOUT)
-        rotary_unpadded = ttnn.to_layout(rotary_unpadded, ttnn.TILE_LAYOUT)
 
         ttnn.deallocate(rotary_first_block)
         ttnn.deallocate(rotary_second_block)
@@ -643,8 +584,17 @@ class Attention(LightweightModule):
         q_out_mem = q_heads_pre_rot_1BQD.memory_config()
         k_out_mem = k_heads_pre_rot_1BKD.memory_config()
 
-        use_width_workaround_q = self._should_use_hf_rotary_width_workaround(q_heads_pre_rot_1BQD)
-        use_width_workaround_k = self._should_use_hf_rotary_width_workaround(k_heads_pre_rot_1BKD)
+        use_width_workaround = self._should_use_hf_rotary_width_workaround(q_heads_pre_rot_1BQD)
+
+        # Partial-HF RoPE width workaround: pad q/k rotary tensors to width 64.
+        # cos/sin are expected to be pre-padded at rope init (see HfRotarySetup.hf_rotary_pre_padded_width);
+        # if they are still 32-wide (legacy/test path), pad them here as a fallback.
+        if use_width_workaround:
+            # Invariant: when rotary tensor is 32-wide, HfRotarySetup pre-pads cos/sin to 64.
+            assert cos.shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
+            q_heads_pre_rot_1BQD = self._pad_hf_rotary_tensor_only_to_64(q_heads_pre_rot_1BQD)
+            k_heads_pre_rot_1BKD = self._pad_hf_rotary_tensor_only_to_64(k_heads_pre_rot_1BKD)
+        cos_padded, sin_padded = cos, sin
 
         # Sharded concat only supports the last dim (width) on height-sharded tensors, not batch (dim=1).
         # Merge per-batch rotary outputs in interleaved space, then resharding to match create_qkv_heads.
@@ -653,32 +603,15 @@ class Attention(LightweightModule):
         for b in range(B_iter):
             q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
             k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
-            cos_b = cos[:, :, b : b + 1, :]
-            sin_b = sin[:, :, b : b + 1, :]
+            cos_b = cos_padded[:, :, b : b + 1, :]
+            sin_b = sin_padded[:, :, b : b + 1, :]
 
-            if use_width_workaround_q:
-                q_padded, q_cos, q_sin = self._pad_hf_rotary_width_to_64(q_b, cos_b, sin_b)
-                q_rot = ttnn.experimental.rotary_embedding(q_padded, q_cos, q_sin, 0)
-                q_rot = self._unpad_hf_rotary_width_from_64(q_rot)
-                ttnn.deallocate(q_padded)
-                ttnn.deallocate(q_cos)
-                ttnn.deallocate(q_sin)
-            else:
-                q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
-
-            if use_width_workaround_k:
-                k_padded, k_cos, k_sin = self._pad_hf_rotary_width_to_64(k_b, cos_b, sin_b)
-                k_rot = ttnn.experimental.rotary_embedding(k_padded, k_cos, k_sin, 0)
-                k_rot = self._unpad_hf_rotary_width_from_64(k_rot)
-                ttnn.deallocate(k_padded)
-                ttnn.deallocate(k_cos)
-                ttnn.deallocate(k_sin)
-            else:
-                k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
-
-            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
-            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
-
+            q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
+            k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
+            # Convert to interleaved so per-batch pieces can be concat'd on dim=1 regardless of
+            # whether the inputs came in sharded (full-rotary) or interleaved (partial-rotary).
+            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG))
+            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG))
             ttnn.deallocate(q_rot)
             ttnn.deallocate(k_rot)
 
@@ -693,13 +626,21 @@ class Attention(LightweightModule):
             for t in k_il_parts:
                 ttnn.deallocate(t)
 
+        # Unpad once on the merged 64-wide tensor; output width drops back to rotary_ndims.
+        if use_width_workaround:
+            q_merged_il_unpadded = self._unpad_hf_rotary_width_from_64(q_merged_il)
+            k_merged_il_unpadded = self._unpad_hf_rotary_width_from_64(k_merged_il)
+            ttnn.deallocate(q_merged_il)
+            ttnn.deallocate(k_merged_il)
+            q_merged_il = q_merged_il_unpadded
+            k_merged_il = k_merged_il_unpadded
+
         q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
         k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
         ttnn.deallocate(q_merged_il)
         ttnn.deallocate(k_merged_il)
-        # ttnn.experimental.rotary_embedding pads the head count on axis=-2 up to 32 (tile alignment).
-        # After per-batch rotary + merge, tensors still carry that padding; reshape states the true logical
-        # head count vs padded shape, then we slice to the real n_local_*_heads for SDPA / cache.
+        # rotary_embedding pads head count on axis=-2 up to 32 (tile alignment); reshape states the
+        # logical head count vs padded shape, then slice to the real n_local_*_heads.
         q_heads_1BQD = ttnn.reshape(
             q_heads_1BQD,
             (1, self.batch_size_per_device_group, self.n_local_heads, rotary_ndims),
@@ -741,21 +682,15 @@ class Attention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
         if self._should_use_hf_rotary_width_workaround(q_heads_1QSD_pre_rot):
-            is_sharded = q_heads_1QSD_pre_rot.is_sharded()
-
-            q_heads_1QSD_pre_rot_padded, q_cos_matrix, q_sin_matrix = self._pad_hf_rotary_width_to_64(
-                q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1]
-            )
+            assert rot_mats[0].shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
+            q_heads_1QSD_pre_rot_padded = self._pad_hf_rotary_tensor_only_to_64(q_heads_1QSD_pre_rot)
             q_heads_1QSD = ttnn.experimental.rotary_embedding(
                 q_heads_1QSD_pre_rot_padded,
-                q_cos_matrix,
-                q_sin_matrix,
+                rot_mats[0],
+                rot_mats[1],
             )
             q_heads_1QSD = self._unpad_hf_rotary_width_from_64(q_heads_1QSD)
-
             ttnn.deallocate(q_heads_1QSD_pre_rot_padded)
-            ttnn.deallocate(q_cos_matrix)
-            ttnn.deallocate(q_sin_matrix)
         else:
             q_heads_1QSD = ttnn.experimental.rotary_embedding(
                 q_heads_1QSD_pre_rot,
@@ -768,19 +703,15 @@ class Attention(LightweightModule):
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
         if self._should_use_hf_rotary_width_workaround(k_heads_1KSD_pre_rot):
-            k_heads_1KSD_pre_rot_padded, k_cos_matrix, k_sin_matrix = self._pad_hf_rotary_width_to_64(
-                k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1]
-            )
+            assert rot_mats[0].shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
+            k_heads_1KSD_pre_rot_padded = self._pad_hf_rotary_tensor_only_to_64(k_heads_1KSD_pre_rot)
             k_heads_1KSD = ttnn.experimental.rotary_embedding(
                 k_heads_1KSD_pre_rot_padded,
-                k_cos_matrix,
-                k_sin_matrix,
+                rot_mats[0],
+                rot_mats[1],
             )
             k_heads_1KSD = self._unpad_hf_rotary_width_from_64(k_heads_1KSD)
-
             ttnn.deallocate(k_heads_1KSD_pre_rot_padded)
-            ttnn.deallocate(k_cos_matrix)
-            ttnn.deallocate(k_sin_matrix)
         else:
             k_heads_1KSD = ttnn.experimental.rotary_embedding(
                 k_heads_1KSD_pre_rot,
@@ -877,16 +808,19 @@ class Attention(LightweightModule):
             # TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
             rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
 
+            # Shard grid must have at least batch_size_per_device_group cores so each batch slot
+            # maps to its own shard (HEIGHT-sharded: batch dim packed into shard-height dim).
+            batch_core_grid = ttnn.CoreRangeSet({num_to_corerange(self.batch_size_per_device_group)})
             height_sharded_memory_config = ttnn.create_sharded_memory_config(
                 shape=(nearest_32(self.n_local_heads), self.head_dim),
-                core_grid=ttnn.CoreGrid(y=1, x=1),
+                core_grid=batch_core_grid,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             k_height_sharded_memory_config = ttnn.create_sharded_memory_config(
                 shape=(nearest_32(self.n_local_kv_heads), self.head_dim),
-                core_grid=ttnn.CoreGrid(y=1, x=1),
+                core_grid=batch_core_grid,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -908,7 +842,6 @@ class Attention(LightweightModule):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=False,
             )
-
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, height_sharded_memory_config_half)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, height_sharded_memory_config_half)
 
@@ -922,19 +855,14 @@ class Attention(LightweightModule):
 
         # Partial rotary embedding
         if self.partial_rotary_factor != 1.0:
-            # HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
+            # q/k come back sharded from _hf_rope_decode; unshard to concat with passthrough,
+            # then reshard to the full-head_dim sharded layout expected by SDPA.
             q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.L1_MEMORY_CONFIG)
-            q_heads_1BQD = ttnn.to_layout(q_heads_1BQD, ttnn.ROW_MAJOR_LAYOUT)
-            query_pass = ttnn.to_layout(query_pass, ttnn.ROW_MAJOR_LAYOUT)
             q_heads_1BQD = ttnn.concat([q_heads_1BQD, query_pass], dim=-1)
-            q_heads_1BQD = ttnn.to_layout(q_heads_1BQD, ttnn.TILE_LAYOUT)
             q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, height_sharded_memory_config)
 
             k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, ttnn.L1_MEMORY_CONFIG)
-            k_heads_1BKD = ttnn.to_layout(k_heads_1BKD, ttnn.ROW_MAJOR_LAYOUT)
-            key_pass = ttnn.to_layout(key_pass, ttnn.ROW_MAJOR_LAYOUT)
             k_heads_1BKD = ttnn.concat([k_heads_1BKD, key_pass], dim=-1)
-            k_heads_1BKD = ttnn.to_layout(k_heads_1BKD, ttnn.TILE_LAYOUT)
             k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, k_height_sharded_memory_config)
 
             ttnn.deallocate(query_pass)
@@ -1147,12 +1075,19 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
-        # concat before QKV matmul, then reshape back to batch after
-        batch_size = x_11SH.shape[0]
-        if batch_size > 1:
-            # Concatenate batch dimension into sequence for matmul compatibility
+        # For batched prefill, x_11SH arrives in one of two shapes:
+        #   (a) [B, 1, S, H]        — non-traced path, needs to be concatenated along seq
+        #   (b) [1, 1, B*S, H]      — traced path, already flattened upstream
+        # When user_id is a list, its length is authoritative for the batch size.
+        if isinstance(user_id, (list, tuple)) and len(user_id) > 1:
+            batch_size = len(user_id)
+        else:
+            batch_size = x_11SH.shape[0]
+
+        if x_11SH.shape[0] == batch_size and batch_size > 1:
+            # Case (a): concatenate batch dimension into sequence for matmul compatibility
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+        # Case (b): already flattened; nothing to do.
 
         seq_len = x_11SH.shape[-2]
         original_seq_len = seq_len  # Track original for later unpadding
