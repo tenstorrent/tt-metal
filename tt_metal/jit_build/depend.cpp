@@ -124,7 +124,7 @@ public:
         const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
             [&](std::error_code& ec) {
                 dep_file.open(path, std::ios::binary);
-                if (!deph_file.is_open()) {
+                if (!dep_file.is_open()) {
                     ec.assign(errno, std::system_category());
                     return false;
                 }
@@ -132,9 +132,8 @@ public:
             },
             open_ec);
 
-        if (!dep_file_opened) {) {
+        if (!dep_file_opened) {
             return {0, false};
-        }
         }
         uint64_t hash = hash_file_content(dep_file);
         if (dep_file.fail() && !dep_file.eof()) {

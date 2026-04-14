@@ -820,14 +820,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
-<<<<<<< HEAD
                 hard_link_or_copy(out_dir / this->objs_[i], temp_obj);
-||||||| 67f98f6c470
-                hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
-=======
-                hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
                 ++reused_objs;
->>>>>>> origin/main
             }
             link_objs += temp_obj;
             link_objs += " ";
