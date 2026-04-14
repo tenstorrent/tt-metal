@@ -187,8 +187,6 @@ void kernel_main() {
         upstream_socket_packet_header_addr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
 
-        upstream_fabric_connection.open();
-
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
@@ -212,11 +210,13 @@ void kernel_main() {
             dst_addr);
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
+            upstream_fabric_connection.open();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
+            upstream_fabric_connection.close();
         } else {
             socket_notify_sender(receiver_socket);
         }
@@ -224,10 +224,6 @@ void kernel_main() {
 
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
-
-    if constexpr (use_fabric_on_receiver) {
-        upstream_fabric_connection.close();
-    }
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();

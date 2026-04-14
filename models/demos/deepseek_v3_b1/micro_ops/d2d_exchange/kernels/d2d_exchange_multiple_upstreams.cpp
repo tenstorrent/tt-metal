@@ -179,8 +179,6 @@ void kernel_main() {
     if constexpr (use_fabric_on_receiver) {
         upstream_socket_packet_header_addr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
-
-        upstream_fabric_connection.open();
     }
 
     tt::tt_fabric::WorkerToFabricEdmSender* fabric_links[2] = {
@@ -233,11 +231,13 @@ void kernel_main() {
 
                 if constexpr (use_fabric_on_receiver) {
                     fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_sockets[worker_idx]);
+                    upstream_fabric_connection.open();
                     fabric_socket_notify_sender_stateful(
                         receiver_sockets[worker_idx],
                         upstream_fabric_connection,
                         upstream_socket_packet_header_addr,
                         upstream_bytes_acked_noc_addrs[worker_idx]);
+                    upstream_fabric_connection.close();
                 } else {
                     socket_notify_sender(receiver_sockets[worker_idx]);
                 }
@@ -263,10 +263,6 @@ void kernel_main() {
     update_socket_config(sender_socket);
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         update_socket_config(receiver_sockets[i]);
-    }
-
-    if constexpr (use_fabric_on_receiver) {
-        upstream_fabric_connection.close();
     }
 
     if constexpr (use_fabric_on_sender) {

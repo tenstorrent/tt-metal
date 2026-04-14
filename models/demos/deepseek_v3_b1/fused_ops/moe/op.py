@@ -4620,13 +4620,32 @@ class MoeOp:
                 ncrisc_idx = fc_group.ncrisc_kernel_index
 
                 link_idx = 0 if col_idx < num_columns // 2 else 1
+
+                print(f"[MoE fabric] row={row} col={col} fc=({fc.x},{fc.y}) link={link_idx}", flush=True)
+                print(
+                    f"  src_node={fabric_node_id} fwd_node={fwd_fabric_node_id} r3_node={r3_fabric_node_id} bwd_node={bwd_fabric_node_id}",
+                    flush=True,
+                )
+
                 fwd_conn = ttnn.setup_fabric_connection(fabric_node_id, fwd_fabric_node_id, link_idx, program, fc)
+                print(
+                    f"  fwd_conn (BRISC): eth_ch={list(fwd_conn)[0] if fwd_conn else '?'} args={list(fwd_conn)}",
+                    flush=True,
+                )
                 program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn)
 
                 r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
+                print(
+                    f"  r3_conn  (BRISC): eth_ch={list(r3_conn)[0] if r3_conn else '?'} args={list(r3_conn)} link={link_idx}",
+                    flush=True,
+                )
                 program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn)
 
                 bwd_conn = ttnn.setup_fabric_connection(fabric_node_id, bwd_fabric_node_id, link_idx, program, fc)
+                print(
+                    f"  bwd_conn (NCRISC): eth_ch={list(bwd_conn)[0] if bwd_conn else '?'} args={list(bwd_conn)}",
+                    flush=True,
+                )
                 program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn)
 
         # Persistent next-iteration signal: a fabric core on the designated device sends
