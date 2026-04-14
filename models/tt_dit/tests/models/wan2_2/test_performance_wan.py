@@ -7,7 +7,6 @@ import statistics
 import numpy as np
 import pytest
 import torch
-from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
 
@@ -20,6 +19,82 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from ....utils.test import line_params, ring_params, ring_params_8k
 
 DEVICE_PARAMS = {"trace_region_size": 120000000}
+
+
+def export_to_video_simple(frames, output_video_path, fps=10, quality=5.0, crf=25):
+    # import imageio
+    # import numpy as np
+
+    # with imageio.get_writer(output_video_path, fps=fps, quality=quality, bitrate=None, macro_block_size=16) as writer:
+    #     for frame in frames:
+    #         frame_uint8 = (frame * 255).clip(0, 255).astype(np.uint8)
+    #         writer.append_data(frame_uint8)
+
+    # return output_video_path
+    import subprocess
+
+    import numpy as np
+
+    frames = np.asarray(frames)
+    if frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError(f"Expected frames with shape (T, H, W, 3), got {frames.shape}")
+
+    t, h, w, c = frames.shape
+    if c != 3:
+        raise ValueError("Expected RGB frames with 3 channels")
+
+    exe = "/data/cglagovich/tt-metal/python_env/lib/python3.10/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2"
+
+    cmd = [
+        exe,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-s",
+        f"{w}x{h}",
+        "-pix_fmt",
+        "rgb24",
+        "-r",
+        f"{fps:.2f}",
+        "-i",
+        "-",
+        "-an",
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        str(crf),
+        "-v",
+        "warning",
+        output_video_path,
+    ]
+
+    p = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        for frame in frames:
+            frame_uint8 = (frame * 255).clip(0, 255).astype(np.uint8)
+            p.stdin.write(frame_uint8.tobytes())
+        p.stdin.close()
+        stderr = p.stderr.read().decode("utf-8", errors="ignore")
+        rc = p.wait()
+    except Exception:
+        p.kill()
+        p.wait()
+        raise
+
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg failed with return code {rc}:\n{stderr}")
+
+    return output_video_path
 
 
 def t2v_metrics(mesh_device, height):
@@ -285,7 +360,9 @@ def test_pipeline_performance(
     try:
         if not is_ci_env:
             if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
+                export_to_video_simple(
+                    frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16
+                )
                 print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
             else:
                 print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
