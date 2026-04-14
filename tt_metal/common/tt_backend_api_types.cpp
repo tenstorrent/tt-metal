@@ -55,8 +55,8 @@ tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
 bool tt::is_integer_format(DataFormat format) {
     return (
         (format == DataFormat::UInt32) || (format == DataFormat::Int8) || (format == DataFormat::UInt16) ||
-        (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::RawUInt32) ||
-        (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+        (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32) ||
+        (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
 std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
@@ -76,6 +76,7 @@ std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::Fp8_e4m3: os << "Fp8_e4m3"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
+        case DataFormat::Int16: os << "Int16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::Int32: os << "Int32"; break;
         case DataFormat::RawUInt8: os << "RawUInt8"; break;
