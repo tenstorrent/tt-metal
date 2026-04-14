@@ -288,7 +288,8 @@ jobs:
               --manifest-path "$MANIFEST_PATH" \
               --master-json-path "$MASTER_JSON_PATH" \
               --vectors-root "$VECTORS_ROOT" \
-              --scope-target "$SCOPE_TARGET"
+              --scope-target "$SCOPE_TARGET" \
+              --write-to-file
           )
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
 
