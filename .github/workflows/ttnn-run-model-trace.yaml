@@ -56,20 +56,22 @@ jobs:
   validate-inputs:
     name: Validate inputs & derive arch
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      members: read
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
     steps:
       - name: Verify tenstorrent org membership
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::Missing secret TENSTORRENT_ORG_READ_TOKEN (PAT with read:org)"
+            exit 1
+          fi
+
           if ! gh api "orgs/tenstorrent/members/${ACTOR}" --silent 2>/dev/null; then
-            echo "::error::Only tenstorrent organization members can run this workflow"
+            echo "::error::GitHub user ${ACTOR} is not recognized as a tenstorrent organization member"
             exit 1
           fi
 
