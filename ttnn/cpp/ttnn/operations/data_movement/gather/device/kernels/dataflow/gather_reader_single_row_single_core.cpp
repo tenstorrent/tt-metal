@@ -170,7 +170,7 @@ void kernel_main() {
 
             const uint32_t input_tensor_l1_read_addr = input_cb.get_read_ptr();
             const uint32_t input_index_tensor_l1_read_addr = input_index_cb.get_read_ptr();
-            const uint32_t output_tensor_l1_read_addr = output_cb.get_read_ptr();
+            const uint32_t output_tensor_l1_write_addr = output_cb.get_write_ptr();
 
             uint32_t count = 0;
             constexpr uint32_t tile_faces = 2;
@@ -208,7 +208,7 @@ void kernel_main() {
 
                             // Write value to output
                             write_value_to_tile(
-                                output_tensor_l1_read_addr, count, output_tensor_data_format_size, value);
+                                output_tensor_l1_write_addr, count, output_tensor_data_format_size, value);
                             count++;
                         }  // l loop
                     }  // k loop
