@@ -242,7 +242,11 @@ class PaliGemmaBackboneTTNN:
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
-                    w_dtype = vlm_weight_dtype if ("weight" in new_key and "norm" not in new_key and "layernorm" not in new_key) else ttnn.bfloat16
+                    w_dtype = (
+                        vlm_weight_dtype
+                        if ("weight" in new_key and "norm" not in new_key and "layernorm" not in new_key)
+                        else ttnn.bfloat16
+                    )
                     block_weights[new_key] = ttnn.from_torch(
                         value,
                         dtype=w_dtype,
@@ -441,6 +445,7 @@ class PaliGemmaBackboneTTNN:
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
         adarms_cond: Optional[ttnn.Tensor] = None,
+        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through action expert using TTNN.
@@ -452,6 +457,9 @@ class PaliGemmaBackboneTTNN:
             past_key_values: Cached KV from VLM prefix (for cross-attention)
             use_cache: Whether to return updated cache
             adarms_cond: Pi0.5 time conditioning vector (TTNN tensor)
+            prefix_offset: RoPE phase shift — non-pad prefix length. Suffix Q and
+                K are rotated starting at this global position to match lerobot's
+                `prefix_offset + cumsum(suffix_mask) - 1` scheme.
 
         Returns:
             Tuple of (output, optional_new_cache)
@@ -473,6 +481,7 @@ class PaliGemmaBackboneTTNN:
                 past_kv,
                 use_cache,
                 adarms_cond=adarms_cond,
+                prefix_offset=prefix_offset,
             )
             if use_cache:
                 new_cache.append(new_kv)
@@ -536,6 +545,7 @@ class PaliGemmaBackboneTTNN:
             suffix_position_ids,
             past_key_values=None,
             use_cache=False,
+            prefix_offset=0,
         )
 
         return vlm_output, expert_output

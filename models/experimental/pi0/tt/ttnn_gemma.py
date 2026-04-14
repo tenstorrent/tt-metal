@@ -75,7 +75,7 @@ def adarms_norm_ttnn(
     use_fused: bool = True,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     # Use fused C++ op if available (source build custom op)
-    if use_fused and hasattr(ttnn.experimental, 'fused_adarms'):
+    if use_fused and hasattr(ttnn.experimental, "fused_adarms"):
         return ttnn.experimental.fused_adarms(x, dense_weight, dense_bias, cond, eps)
     """
     Adaptive RMSNorm (Pi0.5) using TTNN operations.
@@ -307,7 +307,6 @@ class GemmaAttentionTTNN:
         self._kv_concat_k = None
         self._kv_concat_v = None
 
-
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -317,6 +316,7 @@ class GemmaAttentionTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
+        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN operations.
@@ -334,6 +334,10 @@ class GemmaAttentionTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
+            prefix_offset: RoPE phase shift — index of the first row of cos/sin to
+                use for Q and K rotation. For the expert path, this should equal
+                the non-pad prefix length so suffix tokens are rotated starting at
+                the correct global position. Default 0 preserves VLM behavior.
 
         Returns:
             Tuple of (output, optional_cache)
@@ -369,14 +373,31 @@ class GemmaAttentionTTNN:
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Use pre-sliced cos/sin when available (saves 2 slice ops per forward)
-        if self._cos_presliced is not None and seq_len == self._presliced_seq_len:
+        # Use pre-sliced cos/sin when available (saves 2 slice ops per forward).
+        # Pre-sliced path is only valid when prefix_offset == 0 (i.e. rotating
+        # from position 0). Expert path with a non-zero prefix_offset must take
+        # the shifted slow path so both Q and K are rotated starting at the
+        # correct global position.
+        if self._cos_presliced is not None and prefix_offset == 0 and seq_len == self._presliced_seq_len:
             cos_sliced = self._cos_presliced
             sin_sliced = self._sin_presliced
             needs_dealloc = False
         else:
-            cos_sliced = ttnn.slice(self.cos_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
-            sin_sliced = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            # Slow path: non-zero prefix_offset → slice cos/sin starting at
+            # that row. `ttnn.slice` on TILE_LAYOUT tensors handles non-tile-
+            # aligned bounds correctly (verified empirically — numbers are
+            # identical with or without a row-major detour), so slice the
+            # tile-layout tensor directly and avoid the extra layout churn.
+            cos_sliced = ttnn.slice(
+                self.cos_meta,
+                [0, 0, prefix_offset, 0],
+                [1, 1, prefix_offset + seq_len, self.head_dim],
+            )
+            sin_sliced = ttnn.slice(
+                self.sin_meta,
+                [0, 0, prefix_offset, 0],
+                [1, 1, prefix_offset + seq_len, self.head_dim],
+            )
             needs_dealloc = True
 
         # Q: normal rotary_embedding (output used immediately for SDPA)
@@ -395,16 +416,38 @@ class GemmaAttentionTTNN:
                 cache_dtype = past_k.dtype
                 self._kv_concat_k = ttnn.zeros(
                     [1, self.num_kv_heads, full_seq, self.head_dim],
-                    dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
+                    dtype=cache_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 self._kv_concat_v = ttnn.zeros(
                     [1, self.num_kv_heads, full_seq, self.head_dim],
-                    dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
+                    dtype=cache_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
-                ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
+            # Refill the prefix portion from the incoming `past_key_value` on
+            # every call. Across rollout replans, `past_k`/`past_v` are the
+            # fresh VLM output for a new observation, so the cached prefix
+            # must be refreshed — failing to do so leaves every expert layer
+            # cross-attending to the stale first-call prefix and silently
+            # collapses the policy (gripper saturates and per-replan PCC drops
+            # from 0.999 to negative within a few replans).
+            #
+            # This refill is idempotent across the 10 denoise steps within a
+            # single `sample_actions` call (same `past_kv_cache` object each
+            # iteration), so it runs more often than strictly necessary. An
+            # optimization that skips redundant fills based on tensor identity
+            # is possible but silently breaks the trace path: `setup_trace`
+            # runs the denoise loop twice (compile pass + capture pass) with
+            # the same Python object, so any Python-level de-dup causes the
+            # `fill_cache` op to never get captured into the trace, which in
+            # turn means `execute_trace` never refreshes the cache even after
+            # `ttnn.copy` of a new prefix KV. Keep the refill unconditional.
+            ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
+            ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
             # Ensure dtype match for cache write
             if k.dtype != self._kv_concat_k.dtype:
                 k = ttnn.typecast(k, self._kv_concat_k.dtype)
@@ -547,13 +590,31 @@ class GemmaMLPTTNN:
         """Fast path only: return hidden_out (pre-down-projection) for external fusion."""
         mlp_ckc = self.compute_kernel_config_hifi2
         if self.fused_gate_up is not None:
-            gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+            gate_up = ttnn.linear(
+                x,
+                self.fused_gate_up,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=mlp_ckc,
+            )
             gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
             up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
             ttnn.deallocate(gate_up)
         else:
-            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
-            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+            gate = ttnn.linear(
+                x,
+                self.gate_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=mlp_ckc,
+            )
+            up = ttnn.linear(
+                x,
+                self.up_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=mlp_ckc,
+            )
         gate_activated = ttnn.gelu(gate)
         ttnn.deallocate(gate)
         hidden_out = ttnn.multiply(gate_activated, up)
@@ -589,19 +650,43 @@ class GemmaMLPTTNN:
         if seq_dim <= self.chunk_size:
             mlp_ckc = self.compute_kernel_config_hifi2
             if self.fused_gate_up is not None:
-                gate_up = ttnn.linear(x, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                gate_up = ttnn.linear(
+                    x,
+                    self.fused_gate_up,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
                 gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
                 up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
                 ttnn.deallocate(gate_up)
             else:
-                gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
-                up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                gate = ttnn.linear(
+                    x,
+                    self.gate_proj,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
+                up = ttnn.linear(
+                    x,
+                    self.up_proj,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
             gate_activated = ttnn.gelu(gate)
             ttnn.deallocate(gate)
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
-            output = ttnn.linear(hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+            output = ttnn.linear(
+                hidden_out,
+                self.down_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=mlp_ckc,
+            )
             ttnn.deallocate(hidden_out)
             if was_torch:
                 output = ttnn.to_torch(output)
@@ -642,14 +727,38 @@ class GemmaMLPTTNN:
             # Fused gate+up projection — single matmul instead of 2 separate
             mlp_ckc = self.compute_kernel_config_hifi2
             if self.fused_gate_up is not None:
-                gate_up = ttnn.linear(x_chunk, self.fused_gate_up, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                gate_up = ttnn.linear(
+                    x_chunk,
+                    self.fused_gate_up,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
                 ttnn.deallocate(x_chunk)
-                gate = ttnn.slice(gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim])
-                up = ttnn.slice(gate_up, [0, 0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim * 2])
+                gate = ttnn.slice(
+                    gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim]
+                )
+                up = ttnn.slice(
+                    gate_up,
+                    [0, 0, 0, self.mlp_dim],
+                    [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim * 2],
+                )
                 ttnn.deallocate(gate_up)
             else:
-                gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
-                up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc)
+                gate = ttnn.linear(
+                    x_chunk,
+                    self.gate_proj,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
+                up = ttnn.linear(
+                    x_chunk,
+                    self.up_proj,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=mlp_ckc,
+                )
                 ttnn.deallocate(x_chunk)
 
             # GELU activation
@@ -663,7 +772,11 @@ class GemmaMLPTTNN:
 
             # Down projection
             output_chunk = ttnn.linear(
-                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=mlp_ckc
+                hidden_out,
+                self.down_proj,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=mlp_ckc,
             )
             ttnn.deallocate(hidden_out)
 
@@ -763,6 +876,7 @@ class GemmaBlockTTNN:
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
         adarms_cond: Optional[ttnn.Tensor] = None,
+        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -775,6 +889,10 @@ class GemmaBlockTTNN:
             past_key_value: Cached KV
             use_cache: Whether to return cache
             adarms_cond: Pi0.5 time conditioning vector (TTNN tensor)
+            prefix_offset: RoPE phase shift to apply when rotating Q and K.
+                Passed through to the attention layer. Default 0 preserves VLM
+                behavior; the action expert path sets this to the non-pad prefix
+                length.
 
         Returns:
             Tuple of (output, optional_cache)
@@ -807,6 +925,7 @@ class GemmaBlockTTNN:
             position_ids,
             past_key_value,
             use_cache,
+            prefix_offset=prefix_offset,
         )
         hidden_states = gated_residual_ttnn(hidden_states, attn_output, attn_gate)
         ttnn.deallocate(attn_output)
