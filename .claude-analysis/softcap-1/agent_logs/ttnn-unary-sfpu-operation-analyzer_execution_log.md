@@ -192,3 +192,54 @@ No errors encountered. Analysis completed on first attempt. The primary challeng
 - The dispatch path is also broken (no TANHSHRINK cases in utility functions)
 - The `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>` pattern is valuable: it shows how to perform in-place DEST reuse with FPU subtraction, moving the SFPU result to SRCB and unpacking the original input for subtraction
 - This pattern is directly relevant to softcap's implementation, which also needs to transform a value in DEST and then combine it with the original input
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (hardtanh)
+
+## Metadata
+- **Operation**: hardtanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/softcap-1/hardtanh_analysis.md`
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | hardtanh | HIGH |
+| UnaryOpType | HARDTANH | HIGH |
+| Output location | `.claude-analysis/softcap-1/` | HIGH (explicit override) |
+
+## Execution Timeline
+
+1. **Dispatch tracing**: Read `unary_op_utils.cpp` to find compute kernel path (`eltwise_sfpu.cpp` via default case), approx mode (`false` via default case). Found `is_parametrized_type(HARDTANH) = true` in utils header. Discovered that `get_op_init_and_func_parameterized()` has no HARDTANH case -- not yet wired. Include guard expected: `SFPU_OP_HARDTANH_INCLUDE`.
+2. **Integration gap discovery**: No compute API header, no metal LLK dispatch header, and no entry in `sfpu_split_includes.h`. The SFPU kernel exists but the dispatch layers are not yet connected.
+3. **Core SFPU read**: Read `ckernel_sfpu_hardtanh.h` for both WH and BH. Found byte-for-byte identical implementations. SFPI-based kernel using algebraic clamping with 3 pre-computed FP16_B parameters and 2 conditional zeroing blocks.
+4. **Params dispatch read**: Read `llk_math_eltwise_unary_sfpu_params.h` for both WH and BH. WH uses inline TTI_SETRWC, BH uses helper functions -- same logical behavior.
+5. **Init/ADDR_MOD analysis**: Confirmed default `ADDR_MOD_7` with `dest.incr=0` (no special case for Hardtanh in `eltwise_unary_sfpu_configure_addrmod`).
+6. **Algorithm verification**: Performed algebraic analysis of the three-addition clamping algorithm. Discovered source code comment for `param2` claims `-(pos_threshold)` but algebraic derivation proves it must be `pos_threshold` (positive) for correctness.
+7. **SFPI instruction mapping**: `s2vFloat16b` -> SFPLOADI, `dst_reg` read/write -> SFPLOAD/SFPSTORE, `+=` (vFloat) -> SFPMAD, `v_if (< 0)` -> SFPSETCC(LT0)+SFPPUSHC, `v_if (>= 0)` -> SFPSETCC(GTE0)+SFPPUSHC, `v_endif` -> SFPPOPC, `val = 0.0f` -> SFPLOADI.
+8. **Verification**: All function names (`_calculate_hardtanh_`) and file paths verified via grep. All exist.
+9. **Analysis written**: Complete analysis file written to `.claude-analysis/softcap-1/hardtanh_analysis.md`.
+
+## Recovery Summary
+No errors or recovery needed. All analysis steps completed successfully on first attempt.
+
+## Deviations
+- **Incomplete integration**: Unlike previously analyzed operations (swish, atanh, sinh), hardtanh's API header and LLK dispatch layers do not exist yet. The analysis documents the expected call chain based on the established patterns from other operations.
+- **Documentation bug found**: Source code comment for `param2` appears incorrect based on algebraic analysis.
+
+## Artifacts
+- `.claude-analysis/softcap-1/hardtanh_analysis.md` -- SFPU kernel analysis
+- `.claude-analysis/softcap-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` -- Breadcrumb trail (appended)
+- `.claude-analysis/softcap-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` -- This file (appended)
+
+## Key Findings
+- Hardtanh SFPU kernel is complete in both WH and BH variants, but not yet integrated into the compute API layer
+- Uses an elegant algebraic clamping approach: 3 additions + 2 conditional zeroing operations (vs. clamp's direct comparison approach)
+- Algorithm requires 3 pre-computed FP16_B parameters: p0 = -neg_threshold, p1 = neg_threshold - pos_threshold, p2 = pos_threshold
+- Source code comment for param2 says `-(pos_threshold)` but algebraic verification proves it must be positive `pos_threshold` -- documentation bug
+- `APPROXIMATION_MODE` template parameter is unused -- identical code path regardless
+- WH and BH implementations are byte-for-byte identical
+- Low register pressure: only 4 vFloat LREGs (p0, p1, p2, val) needed
+- Two sequential (non-nested) `v_if`/`v_endif` blocks, max CC stack depth = 1
