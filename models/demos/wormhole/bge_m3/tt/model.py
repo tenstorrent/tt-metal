@@ -46,6 +46,7 @@ class BgeM3Model(LightweightModule):
             embedding_weights.layer_norm,
             eps=args.norm_eps,
             mesh_device=mesh_device,
+            max_seq_len=args.max_seq_len,
         )
         self.layers = [
             BgeM3TransformerBlock(
@@ -223,6 +224,7 @@ def _build_optional_layer_norm(
     layer_norm_weights: LayerNormWeights | None,
     eps: float,
     mesh_device,
+    max_seq_len: int | None = None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
@@ -233,6 +235,7 @@ def _build_optional_layer_norm(
             bias=layer_norm_weights.bias,
             eps=eps,
             mesh_device=mesh_device,
+            max_seq_len=max_seq_len,
         )
     )
 

@@ -8,7 +8,12 @@ from dataclasses import dataclass, replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.demos.wormhole.bge_m3.tt.device_kernels import bge_m3_matmul_compute_kernel_config
+from models.demos.wormhole.bge_m3.tt.device_kernels import (
+    bge_m3_linear_activation_memory_config,
+    bge_m3_matmul_compute_kernel_config,
+    bge_m3_matmul_core_grid,
+    bge_m3_weight_dram_memory_config,
+)
 
 
 @dataclass
@@ -101,8 +106,12 @@ class BgeM3MLP(LightweightModule):
         """
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
+        _, _, seq_len, _ = hidden_states.shape
+        core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len))
 
-        intermediate = ttnn.linear(
+        # Fused Wi + GELU in the matmul kernel (bias + activation) removes a standalone Unary GELU pass
+        # and the extra intermediate buffer vs wi -> gelu -> wo.
+        activated = ttnn.linear(
             hidden_states,
             self.wi_weight,
             memory_config=self.config.wi_memcfg,
@@ -110,13 +119,9 @@ class BgeM3MLP(LightweightModule):
             bias=self.wi_bias,
             program_config=self.config.wi_prg_config,
             compute_kernel_config=self.config.wi_compute_kernel_cfg,
+            activation="gelu",
+            core_grid=core_grid,
         )
-        activated = ttnn.gelu(
-            intermediate,
-            memory_config=self.config.activation_memcfg,
-            fast_and_approximate_mode=False,
-        )
-        ttnn.deallocate(intermediate)
 
         output = ttnn.linear(
             activated,
@@ -126,6 +131,7 @@ class BgeM3MLP(LightweightModule):
             bias=self.wo_bias,
             program_config=self.config.wo_prg_config,
             compute_kernel_config=self.config.wo_compute_kernel_cfg,
+            core_grid=core_grid,
         )
         ttnn.deallocate(activated)
 
@@ -148,12 +154,14 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         to_set["wo_dtype"] = ttnn.bfloat16
     if config.activation_dtype is None:
         to_set["activation_dtype"] = ttnn.bfloat16
+    max_seq = config.max_seq_len
+    act_mem = bge_m3_linear_activation_memory_config(max_seq)
     if config.wi_memcfg is None:
-        to_set["wi_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["wi_memcfg"] = act_mem
     if config.wo_memcfg is None:
-        to_set["wo_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["wo_memcfg"] = act_mem
     if config.activation_memcfg is None:
-        to_set["activation_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["activation_memcfg"] = act_mem
 
     # All parameters must target a single device.
     param_devices = [
@@ -177,7 +185,6 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
 
-    max_seq = config.max_seq_len
     if config.wi_compute_kernel_cfg is None:
         to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
     if config.wo_compute_kernel_cfg is None:
@@ -185,15 +192,14 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
 
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
-    wi_memcfg = to_set.get("wi_memcfg", config.wi_memcfg)
-    wo_memcfg = to_set.get("wo_memcfg", config.wo_memcfg)
+    weight_dram = bge_m3_weight_dram_memory_config()
 
     to_set["wi_weight"] = resolve_lazy_weight(
         config.wi_weight,
         device=mesh_device,
         dtype=wi_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=wi_memcfg,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
@@ -201,7 +207,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         device=mesh_device,
         dtype=wo_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=wo_memcfg,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
     if config.wi_bias is not None:
@@ -210,7 +216,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
             device=mesh_device,
             dtype=wi_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=wi_memcfg,
+            memory_config=weight_dram,
             mesh_mapper_config=None,
         )
     if config.wo_bias is not None:
@@ -219,7 +225,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
             device=mesh_device,
             dtype=wo_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=wo_memcfg,
+            memory_config=weight_dram,
             mesh_mapper_config=None,
         )
 
