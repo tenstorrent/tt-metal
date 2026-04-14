@@ -433,7 +433,7 @@ class MLA1D(AbstractModule):
     ) -> ttnn.Tensor:
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1),
+            torch_metaweight.transpose(-2, -1).contiguous(),
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
