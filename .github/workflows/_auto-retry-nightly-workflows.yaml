@@ -15,6 +15,7 @@ on:
     workflows:
       - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
+      - "(Release) Model Status for Console Deployment"
     types:
       - completed
 
