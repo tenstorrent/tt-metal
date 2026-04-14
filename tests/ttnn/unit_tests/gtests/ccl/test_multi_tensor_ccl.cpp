@@ -72,10 +72,15 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
 
     // Quiesce parent mesh after all gather
     mesh_device_->quiesce_devices();
+    log_info(tt::LogMetal, "[test_body] second quiesce_devices() returned");
 
+    log_info(tt::LogMetal, "[test_body] calling disaggregate()");
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+    log_info(tt::LogMetal, "[test_body] disaggregate() returned, {} tensors", disaggregated_output_tensors.size());
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        log_info(tt::LogMetal, "[test_body] calling to_vector() for dev_idx={}", dev_idx);
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
+        log_info(tt::LogMetal, "[test_body] to_vector() returned for dev_idx={}, {} elements", dev_idx, data.size());
         for (int i = 0; i < data.size(); i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
             auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
