@@ -237,6 +237,9 @@ void kernel_main() {
     // Track K read count for K chain forwarding (batch-level, for MLA mode)
     uint32_t k_total_reads = 0;
 
+    const bool profile_k_chain_overhead = true;
+    const bool profile_v_chain_overhead = true;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -284,7 +287,8 @@ void kernel_main() {
 
         // When K mcast is enabled, loop max_q_per_core times to stay synchronized with injector
         // Cores with less work do padded iterations (K mcast sync only, no real work)
-        const uint32_t loop_q_count = (k_mcast_enabled && k_use_mcast) ? max_q_per_core : q_per_core;
+        const uint32_t loop_q_count =
+            (k_mcast_enabled && k_use_mcast && !profile_k_chain_overhead) ? max_q_per_core : q_per_core;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
             // Check if this is a real iteration (has actual work) or padded (K mcast sync only)
@@ -323,20 +327,23 @@ void kernel_main() {
 
             // V chain forwarding conditions (head-level, existing logic)
             const uint32_t q_iter_local = q_iter;
-            const bool should_forward_v = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+            const bool should_forward_v = !profile_v_chain_overhead && is_chain_participant && !is_sink &&
+                                          (nb == chain_batch && nq == chain_head) &&
                                           (q_iter_local < next_core_q_chunks);
-            const bool should_receive_v =
-                is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+            const bool should_receive_v = !profile_v_chain_overhead && is_chain_participant && !is_injector &&
+                                          (nb == chain_batch && nq == chain_head);
 
             // K chain forwarding conditions (batch-level, for MLA mode)
             // K chain is active when k_is_chain_participant is true (NHK < NH case)
             // For K mcast: all non-injectors receive via mcast (batch condition handled by k_use_mcast)
-            const bool should_receive_k_unicast = k_is_chain_participant && !k_is_injector && (nb == k_chain_batch);
-            const bool should_receive_k_mcast = k_use_mcast && !k_is_injector;
+            const bool should_receive_k_unicast =
+                !profile_k_chain_overhead && k_is_chain_participant && !k_is_injector && (nb == k_chain_batch);
+            const bool should_receive_k_mcast = !profile_k_chain_overhead && k_use_mcast && !k_is_injector;
             // When k_mcast_enabled is true but k_use_mcast is false at runtime, fall back to unicast
-            const bool should_receive_k = k_mcast_enabled
-                                              ? (k_use_mcast ? should_receive_k_mcast : should_receive_k_unicast)
-                                              : should_receive_k_unicast;
+            const bool should_receive_k =
+                !profile_k_chain_overhead &&
+                (k_mcast_enabled ? (k_use_mcast ? should_receive_k_mcast : should_receive_k_unicast)
+                                 : should_receive_k_unicast);
             // Note: should_forward_k depends on k_total_reads which is updated inside the k_chunk loop
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
@@ -440,13 +447,15 @@ void kernel_main() {
                 // Forward K chunk via K chain (batch-level, for MLA mode)
                 // For K mcast: injector multicasts to all receivers
                 // For K unicast: forward to next core based on q_iter condition
-                const bool should_forward_k_mcast = k_use_mcast && k_is_injector;
-                const bool should_forward_k_unicast = k_is_chain_participant && !k_is_sink && (nb == k_chain_batch) &&
+                const bool should_forward_k_mcast = !profile_k_chain_overhead && k_use_mcast && k_is_injector;
+                const bool should_forward_k_unicast = !profile_k_chain_overhead && k_is_chain_participant &&
+                                                      !k_is_sink && (nb == k_chain_batch) &&
                                                       (q_iter_local < k_next_core_total_reads);
                 // When k_mcast_enabled is true but k_use_mcast is false at runtime, fall back to unicast
-                const bool should_forward_k = k_mcast_enabled
-                                                  ? (k_use_mcast ? should_forward_k_mcast : should_forward_k_unicast)
-                                                  : should_forward_k_unicast;
+                const bool should_forward_k =
+                    !profile_k_chain_overhead &&
+                    (k_mcast_enabled ? (k_use_mcast ? should_forward_k_mcast : should_forward_k_unicast)
+                                     : should_forward_k_unicast);
 
                 if (should_forward_k) {
                     if constexpr (k_mcast_enabled) {
