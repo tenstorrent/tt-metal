@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
 #include "api/tensor/page.h"
 
 namespace tensor_accessor {
@@ -25,7 +24,6 @@ public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
     using PageMapping = typename Accessor::PageMapping;
 
-    using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
     using difference_type = std::ptrdiff_t;
     using reference = const Page&;
