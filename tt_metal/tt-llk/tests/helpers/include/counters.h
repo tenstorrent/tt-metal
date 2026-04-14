@@ -747,10 +747,9 @@ public:
         }
         else
         {
-            // Match arm_hardware's bus latency: arm does 2 writes per bank,
-            // writes are ~2x slower than reads, so do 4 reads per bank.
-            // Only for zone 0 (configure+arm has more latency); zone > 0
-            // just needs arm (2 writes) = fewer dummy reads.
+            // Match arm_hardware's bus latency with dummy reads.
+            // Zone 0: configure+arm = more latency (4 reads/bank).
+            // Zone > 0: arm only = less latency (1 read/bank).
             const std::uint32_t reads_per_bank = (zone == 0) ? 4 : 1;
             for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
             {
@@ -766,8 +765,9 @@ public:
         }
 
         // L1-flag barrier: all threads must arrive before entering profiler zone.
-        // Without this barrier, L1_TO_L1 run type produces corrupted profiler data
-        // because threads enter zones asynchronously and race on shared resources.
+        // Required for ALL zones — without it, threads enter zones at different
+        // times, causing inconsistent ZONE_START timestamps and biased measurements
+        // (L1_TO_L1 TILE_LOOP shows +17% without barrier vs +0.3% with it).
         volatile std::uint32_t* start_flags       = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
         start_flags[thread_info::get_thread_id()] = 1;
         asm volatile("fence" ::: "memory");
