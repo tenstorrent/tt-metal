@@ -262,6 +262,7 @@ def test_ds_moe_forward_device_perf(mode, seq_len):
     total_op_to_op_us = total_op_to_op_ns / 1000.0
     logger.info(f"Device perf per-op averages (ns): {json.dumps(op_stats, indent=2)}")
     logger.info(f"Device perf totals: kernel={total_kernel_us:.3f} us, op_to_op={total_op_to_op_us:.3f} us")
+    print(f"[DS_MOE_PERF] op_to_op_latency_us={total_op_to_op_us:.3f}, kernel_time_us={total_kernel_us:.3f}")
     assert total_kernel_ns > 0, "Total kernel duration must be positive."
     assert total_op_to_op_ns >= 0, "Total op-to-op latency must be non-negative."
     targets = DEVICE_PERF_TARGETS_US.get((mode, seq_len))
