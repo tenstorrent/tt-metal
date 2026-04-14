@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlapEntry, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.weights.overlap.spec import OverlappedTensorSpec
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -98,6 +99,35 @@ def shared_down_torch_for_cache(
         .permute(0, 2, 1, 3)
         .reshape(mesh_rows * K_down_per_device, mesh_cols * N_down)
     ).contiguous()
+
+
+def expected_shared_down_torch_shape(mesh_shape: tuple[int, int]) -> tuple[int, int]:
+    """Shape of one down matrix after :func:`shared_down_torch_for_cache` for ``mesh_shape``."""
+    dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
+    mesh_rows, mesh_cols = mesh_shape
+    n_down = 64 * dp_spec.NUM_MATMUL_CORES
+    return (mesh_rows * 256, mesh_cols * n_down)
+
+
+def down_proj_sram_slot_overlap_spec(mesh_shape: tuple[int, int], dtype: ttnn.DataType) -> OverlappedTensorSpec:
+    """Spec for one routed-expert ``down_proj`` in ``shared_down_torch_for_cache`` layout on the matmul grid.
+
+    Matches the WIDTH_SHARDED L1 layout used for ``down_proj`` in :func:`fuse_gate_up` (112 cores,
+    shard ``(256, 64)``, tile 32×32).  The torch tensor must have shape
+    :func:`expected_shared_down_torch_shape`\\ ``(mesh_shape)`` — i.e. the same layout as
+    ``dp_combined`` there, with ``tp_dim=(0, 1)`` for per-mesh-device slices.
+    """
+    raw_h, raw_w = expected_shared_down_torch_shape(mesh_shape)
+    dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
+    return OverlappedTensorSpec(
+        core_range_set=dp_spec.build_matmul_core_grid(),
+        raw_tensor_shape=(raw_h, raw_w),
+        dtype=dtype,
+        sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        tp_dim=(0, 1),
+        tile_h=32,
+        tile_w=32,
+    )
 
 
 def moe_routed_expert_torch_for_cache(w: torch.Tensor, num_banks: int) -> torch.Tensor:

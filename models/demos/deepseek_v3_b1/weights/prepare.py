@@ -50,7 +50,11 @@ KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
-from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots,
+    preprocess_kv_b12,
+    preprocess_q_ab_kv_a,
+)
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
@@ -66,9 +70,17 @@ MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
 
 
+# Default number of routed-expert down_proj slots in the Blitz TP4+fused SRAM layout (typical decode).
+DEFAULT_SRAM_DOWN_SLOT_COUNT = 17
+
+
 @dataclass
 class AttentionWeights:
-    """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms."""
+    """Attention fusion groups: q_ab_kv_a + kv_b12 + o_proj_gate_mm_norms.
+
+    When ``sram_down_expert_indices`` is non-empty, the o_proj / gate_mm / norms / q_ab / kv_a
+    views share a single fused buffer that also contains ``sram_down_proj_*`` views.
+    """
 
     q_a_proj: OverlappedTensor
     q_b_proj: OverlappedTensor
@@ -82,6 +94,9 @@ class AttentionWeights:
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
     gate_bias: ttnn.Tensor | None  # e_score_correction_bias for MoE only
+
+    sram_down_expert_indices: tuple[int, ...] = ()
+    sram_down_proj: dict[int, OverlappedTensor] | None = None
 
 
 @dataclass
@@ -667,16 +682,27 @@ def prepare_attention_weights(
     is_moe: bool,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    sram_down_expert_indices: list[int] | None = None,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    down_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
 ) -> AttentionWeights:
-    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
+    """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms).
+
+    When ``sram_down_expert_indices`` is provided (and the mesh is 4×2 + MoE), the o_proj / gate_mm
+    / norms / q_a / q_b / kv_a tensors are packed into a single fused buffer together with the
+    listed routed-expert ``down_proj`` views (``sram_down_proj_*``).  Otherwise (``None`` — default)
+    the function behaves exactly as before.
+    """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
-    mla_tp, _ = _tp_factors(device)
+    mla_tp, moe_tp = _tp_factors(device)
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
 
     logger.debug(
-        "Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)",
+        "Converting attention fusion groups for layer {} (is_moe={})",
         layer_idx,
+        is_moe,
     )
     t0 = time.perf_counter()
 
@@ -690,30 +716,7 @@ def prepare_attention_weights(
     kv_norm_key = _key(layer_idx, "self_attn.kv_a_layernorm.weight")
     ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
-    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        q_a = t[q_a_key].T.contiguous()
-        q_b = deinterleave_q_b_proj(t[q_b_key])
-        kv_a = t[kv_a_key].T.contiguous()
-        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
-            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
-
-    q_ab_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
-        target=Q_AB_KV_A_SPEC,
-    )
-    q_ab_views = cache_config.cache.get_or_create(
-        q_ab_fp,
-        device,
-        preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
-    )
-    if not isinstance(q_ab_views, dict):
-        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
-    q_a_proj = q_ab_views["q_a_proj"]
-    q_b_proj = q_ab_views["q_b_proj"]
-    kv_a_proj = q_ab_views["kv_a_proj"]
-
+    # ---- kv_b12: always a separate overlap group ----
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
         if mla_tp == 1:
@@ -739,46 +742,47 @@ def prepare_attention_weights(
     kv_b2_proj = kv_views["kv_b2_proj"]
 
     if is_moe:
+        if mesh_shape != (4, 2):
+            raise ValueError(f"MoE attention fusion requires a 4x2 mesh; got {mesh_shape[0]}x{mesh_shape[1]}")
         gate_key = _key(layer_idx, "mlp.gate.weight")
+        if sram_down_expert_indices is None:
+            sram_down_expert_indices = list(range(DEFAULT_SRAM_DOWN_SLOT_COUNT))
 
-        def _preprocess_o_proj_moe(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            o_proj = t[o_proj_key].T.contiguous()
-            gate_mm = t[gate_key].T.contiguous()
-            attn_norm = t[attn_norm_key].unsqueeze(0)
-            q_norm = t[q_norm_key].unsqueeze(0)
-            kv_norm = t[kv_norm_key].unsqueeze(0)
-            ffn_norm = t[ffn_norm_key].unsqueeze(0)
-            if mla_tp == 1:
-                if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
-                    o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
-            return {
-                "o_proj": o_proj,
-                "gate_mm": gate_mm,
-                "attn_norm": attn_norm,
-                "q_norm": q_norm,
-                "kv_norm": kv_norm,
-                "ffn_norm": ffn_norm,
-            }
+        q_a = state_dict[q_a_key].T.contiguous()
+        q_b = deinterleave_q_b_proj(state_dict[q_b_key])
+        kv_a = state_dict[kv_a_key].T.contiguous()
+        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+        q_pre = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
 
-        o_src = (o_proj_key, gate_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key)
-        o_fp = cache_config.context.fingerprint(
-            source=SourceTensorSelection(names=o_src),
-            target=O_PROJ_GATE_MM_NORMS_SPEC,
-        )
-        o_views = cache_config.cache.get_or_create(
-            o_fp,
+        o_proj_w = state_dict[o_proj_key].T.contiguous()
+        gate_mm_w = state_dict[gate_key].T.contiguous()
+        attn_norm_w = state_dict[attn_norm_key].unsqueeze(0)
+        q_norm_w = state_dict[q_norm_key].unsqueeze(0)
+        kv_norm_w = state_dict[kv_norm_key].unsqueeze(0)
+        ffn_norm_w = state_dict[ffn_norm_key].unsqueeze(0)
+        if mla_tp == 1 and o_proj_w.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+            o_proj_w = o_proj_w[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
+
+        slots = load_sram_down_proj_slots_torch(state_dict, layer_idx, sram_down_expert_indices, moe_tp, mesh_shape)
+
+        fused_views = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots(
+            o_proj_w,
+            gate_mm_w,
+            attn_norm_w,
+            q_norm_w,
+            kv_norm_w,
+            ffn_norm_w,
+            q_pre["q_a_proj"],
+            q_pre["q_b_proj"],
+            q_pre["kv_a_proj"],
+            slots,
             device,
-            preprocess=_preprocess_o_proj_moe,
-            raw_tensors=lambda: {k: state_dict[k] for k in o_src},
+            o_proj_dtype=o_proj_dtype,
+            mla_proj_dtype=mla_proj_dtype,
+            down_proj_dtype=down_proj_dtype,
+            move_to_device=move_to_device,
         )
-        if not isinstance(o_views, dict):
-            raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
-        o_proj_ot = o_views["o_proj"]
-        gate_mm_ot = o_views["gate_mm"]
-        attn_norm_ot = o_views["attn_norm"]
-        q_norm_ot = o_views["q_norm"]
-        kv_norm_ot = o_views["kv_norm"]
-        ffn_norm_ot = o_views["ffn_norm"]
 
         _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
         target = _gate_bias_target(layer_idx)
@@ -795,25 +799,57 @@ def prepare_attention_weights(
         if not isinstance(gate_bias_tt, ttnn.Tensor):
             raise TypeError("expected ttnn.Tensor for gate_bias cache entry")
 
+        sram_down_map = {
+            sram_down_expert_indices[i]: fused_views[f"sram_down_proj_{i}"]
+            for i in range(len(sram_down_expert_indices))
+        }
         logger.debug(
-            "Attention fusion groups (MoE) for layer {} in {:.3f}s",
+            "Attention fusion groups (MoE + {} SRAM down slots) for layer {} in {:.3f}s",
+            len(sram_down_expert_indices),
             layer_idx,
             time.perf_counter() - t0,
         )
         return AttentionWeights(
-            q_a_proj=q_a_proj,
-            q_b_proj=q_b_proj,
-            kv_a_proj=kv_a_proj,
-            o_proj=o_proj_ot,
-            gate_mm=gate_mm_ot,
-            attn_norm=attn_norm_ot,
-            q_norm=q_norm_ot,
-            kv_norm=kv_norm_ot,
-            ffn_norm=ffn_norm_ot,
+            q_a_proj=fused_views["q_a_proj"],
+            q_b_proj=fused_views["q_b_proj"],
+            kv_a_proj=fused_views["kv_a_proj"],
+            o_proj=fused_views["o_proj"],
+            gate_mm=fused_views["gate_mm"],
+            attn_norm=fused_views["attn_norm"],
+            q_norm=fused_views["q_norm"],
+            kv_norm=fused_views["kv_norm"],
+            ffn_norm=fused_views["ffn_norm"],
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
             gate_bias=gate_bias_tt,
+            sram_down_expert_indices=tuple(sram_down_expert_indices),
+            sram_down_proj=sram_down_map,
         )
+
+    # ---- Dense (non-MoE) path: separate q_ab_kv_a + o_proj_norms overlap groups ----
+    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        q_a = t[q_a_key].T.contiguous()
+        q_b = deinterleave_q_b_proj(t[q_b_key])
+        kv_a = t[kv_a_key].T.contiguous()
+        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+
+    q_ab_fp = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
+        target=Q_AB_KV_A_SPEC,
+    )
+    q_ab_views = cache_config.cache.get_or_create(
+        q_ab_fp,
+        device,
+        preprocess=_preprocess_q_ab_kv_a,
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+    )
+    if not isinstance(q_ab_views, dict):
+        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
+    q_a_proj = q_ab_views["q_a_proj"]
+    q_b_proj = q_ab_views["q_b_proj"]
+    kv_a_proj = q_ab_views["kv_a_proj"]
 
     def _preprocess_o_proj_dense(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         o_proj = t[o_proj_key].T.contiguous()
@@ -871,6 +907,28 @@ def prepare_attention_weights(
         kv_b2_proj=kv_b2_proj,
         gate_bias=None,
     )
+
+
+def load_sram_down_proj_slots_torch(
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    expert_indices: list[int],
+    moe_tp: int,
+    mesh_shape: tuple[int, int],
+) -> list[torch.Tensor]:
+    """Load routed-expert ``mlp.experts.*.down_proj`` weights and apply :func:`shared_down_torch_for_cache`.
+
+    Returns one torch tensor per expert index, each with shape
+    :func:`~models.demos.deepseek_v3_b1.weights.transforms.moe.expected_shared_down_torch_shape`\\ ``(mesh_shape)``.
+    """
+    out: list[torch.Tensor] = []
+    for e in expert_indices:
+        if not (0 <= e < NUM_ROUTED_EXPERTS):
+            raise ValueError(f"expert index {e} out of range [0, {NUM_ROUTED_EXPERTS})")
+        dk = _key(layer_idx, f"mlp.experts.{e}.down_proj.weight")
+        down_w = state_dict[dk].T.contiguous()
+        out.append(shared_down_torch_for_cache(down_w, moe_tp, mesh_shape))
+    return out
 
 
 def prepare_shared_expert_weights(

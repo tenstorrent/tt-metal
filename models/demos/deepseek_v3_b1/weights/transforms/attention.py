@@ -12,6 +12,7 @@ and the ``fuse_*`` helpers delegate to these.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Sequence
 
 import torch
 
@@ -23,7 +24,11 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SingleDeviceOverlapSpec,
 )
-from models.demos.deepseek_v3_b1.weights.transforms.moe import _tp_factors
+from models.demos.deepseek_v3_b1.weights.transforms.moe import (
+    _tp_factors,
+    down_proj_sram_slot_overlap_spec,
+    expected_shared_down_torch_shape,
+)
 
 
 def preprocess_q_ab_kv_a(
@@ -228,6 +233,100 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
             OverlapEntry("ffn_norm", ffn_norm, o_cfg.ffn_norm),
             OverlapEntry("kv_norm", kv_norm, o_cfg.kv_norm),
             *q_entries,
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+
+def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots(
+    o_proj_weights: torch.Tensor,
+    gate_mm_weights: torch.Tensor,
+    attn_norm: torch.Tensor,
+    q_norm: torch.Tensor,
+    kv_norm: torch.Tensor,
+    ffn_norm: torch.Tensor,
+    q_a_proj_weights: torch.Tensor,
+    q_b_proj_weights: torch.Tensor,
+    kv_a_proj_weights: torch.Tensor,
+    sram_down_proj_slots: Sequence[torch.Tensor],
+    device,
+    *,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    down_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> dict[str, OverlappedTensor]:
+    """Like :func:`fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a`, plus SRAM down_proj slots.
+
+    Appends one ``down_proj`` matrix per element of ``sram_down_proj_slots`` (often **17** routed
+    experts) in the same layout as :func:`shared_down_torch_for_cache` — WIDTH_SHARDED on the
+    **112** matmul cores
+    (:class:`~models.demos.deepseek_v3_b1.weights.specs.overlap_configs.DOWN_PROJ_SingleDeviceSpec`).
+
+    Each entry in ``sram_down_proj_slots`` must have shape
+    :func:`~models.demos.deepseek_v3_b1.weights.transforms.moe.expected_shared_down_torch_shape`\\ ``(mesh_shape)``
+    (the output of ``shared_down_torch_for_cache``, not the raw ``(256 * moe_tp, 7168)`` slice).
+
+    Returns the same keys as :func:`fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a`, plus
+    ``sram_down_proj_0`` … ``sram_down_proj_{len(sram_down_proj_slots) - 1}`` (none if the sequence
+    is empty).
+    """
+    o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh_shape = (device.shape[0], device.shape[1])
+    if mesh_shape != (4, 2):
+        raise ValueError(
+            "fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots requires a 4x2 mesh; "
+            f"got {mesh_shape[0]}x{mesh_shape[1]}"
+        )
+    if tuple(o_proj_weights.shape) != (16384, 7168):
+        raise ValueError(
+            "o_proj_weights must have shape (16384, 7168) for TP4+shuffle layout; " f"got {tuple(o_proj_weights.shape)}"
+        )
+
+    expected_down = expected_shared_down_torch_shape(mesh_shape)
+    for i, d in enumerate(sram_down_proj_slots):
+        if tuple(d.shape) != expected_down:
+            raise ValueError(
+                f"sram_down_proj_slots[{i}] must have shape {expected_down} (shared_down_torch_for_cache output), "
+                f"got {tuple(d.shape)}"
+            )
+
+    device_grid = device.compute_with_storage_grid_size()
+    q_ab_bb = q_cfg.q_a_shard_spec.core_range_set.bounding_box()
+    kv_bb = q_cfg.kv_a_shard_spec.core_range_set.bounding_box()
+    required_rows = max(q_ab_bb.end.y, kv_bb.end.y) + 1
+    required_cols = max(q_ab_bb.end.x, kv_bb.end.x) + 1
+    assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
+    assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
+
+    o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights)
+    o_spec = replace(
+        o_cfg.o_proj,
+        raw_tensor_shape=tuple(o_packed.shape),
+        dtype=o_proj_dtype,
+        tp_dim=(1, 0),
+    )
+
+    q_entries = _make_q_ab_kv_a_overlap_entries(
+        q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mla_proj_dtype
+    )
+
+    down_spec = down_proj_sram_slot_overlap_spec(mesh_shape, down_proj_dtype)
+    n_down = len(sram_down_proj_slots)
+    down_entries = [OverlapEntry(f"sram_down_proj_{i}", sram_down_proj_slots[i], down_spec) for i in range(n_down)]
+
+    return overlap_tensors(
+        [
+            OverlapEntry("o_proj", o_packed, o_spec),
+            OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm),
+            OverlapEntry("attn_norm", attn_norm, o_cfg.attn_norm),
+            OverlapEntry("q_norm", q_norm, o_cfg.q_norm),
+            OverlapEntry("ffn_norm", ffn_norm, o_cfg.ffn_norm),
+            OverlapEntry("kv_norm", kv_norm, o_cfg.kv_norm),
+            *q_entries,
+            *down_entries,
         ],
         device=device,
         move_to_device=move_to_device,
