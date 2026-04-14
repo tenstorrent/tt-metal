@@ -398,6 +398,7 @@ def fast_device_to_host(
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
+            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
         # Step 2: Only root rank (if specified) does D2H.
         if root is not None and rank != root:
