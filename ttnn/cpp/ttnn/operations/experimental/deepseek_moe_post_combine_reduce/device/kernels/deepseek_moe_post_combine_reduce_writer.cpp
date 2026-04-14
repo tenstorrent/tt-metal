@@ -26,20 +26,19 @@ void kernel_main() {
     const auto weight_addrg = TensorAccessor(weight_accessor_args, weight_addr);
     const auto output_addrg = TensorAccessor(output_accessor_args, output_addr, output_tile_size);
 
-    // Phase 1: Read weights into CB while compute waits for combine data from reader
+    // Phase 1: Stream one weight per expert per token (matching expert-by-expert compute).
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
-        cb_reserve_back(cb_weights, num_experts);
-        uint32_t weight_cb_base = get_write_ptr(cb_weights);
-
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+            cb_reserve_back(cb_weights, 1);
+            uint32_t cb_write_addr = get_write_ptr(cb_weights);
+
             uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-            uint32_t tile_addr = weight_cb_base + expert_idx * weight_tile_size;
-            noc_async_read_page(weight_page_idx, weight_addrg, tile_addr);
+            noc_async_read_page(weight_page_idx, weight_addrg, cb_write_addr);
+            noc_async_read_barrier();
+            cb_push_back(cb_weights, 1);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_weights, num_experts);
     }
 
     // Phase 2: Write output tiles after compute finishes

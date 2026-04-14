@@ -96,7 +96,8 @@ CreatedProgram create_program(
             .set_page_size(tt::CBIndex::c_0, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_combine_config);
 
-    uint32_t weight_cb_size = num_experts * tile_size;
+    // Stream one weight at a time (matching expert-by-expert input streaming).
+    uint32_t weight_cb_size = tile_size;
     tt::tt_metal::CircularBufferConfig cb_weight_config =
         tt::tt_metal::CircularBufferConfig(weight_cb_size, {{tt::CBIndex::c_1, weight_cb_data_format}})
             .set_page_size(tt::CBIndex::c_1, tile_size);
