@@ -21,6 +21,7 @@ from models.experimental.tt_symbiote.modules.gemma4_mlp import TTNNGemma4TextMLP
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
+@trace_enabled
 class TTNNGemma4ScaledEmbedding(TTNNModule):
     """TTNN-accelerated scaled word embedding for Gemma 4 models.
 
@@ -43,25 +44,38 @@ class TTNNGemma4ScaledEmbedding(TTNNModule):
         new_layer._fallback_torch_layer = embedding
         new_layer.embed_scale = float(getattr(embedding, "embed_scale", math.sqrt(embedding.embedding_dim)))
         new_layer.embedder = TTNNEmbedding.from_torch(embedding, scale_factor=new_layer.embed_scale)
+        new_layer._typecast_pad_buffers = {}
         return new_layer
 
     def forward(self, tt_indices):
         # Ensure indices are UINT32 for the TTNN embedding op.
-        # The framework may pass torch.Tensor or TTNN Tensor (INT32).
-        # TTNN typecast requires last dim % 32 == 0, so we convert via host if needed.
         if isinstance(tt_indices, ttnn.Tensor) and tt_indices.dtype != ttnn.uint32:
-            # Roundtrip through host to cast INT32 -> UINT32 without padding constraints
-            torch_indices = ttnn.to_torch(tt_indices, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-            # Take first device shard (all shards are identical for replicated input)
-            if torch_indices.shape[0] > tt_indices.shape[0]:
-                torch_indices = torch_indices[: tt_indices.shape[0]]
-            tt_indices = ttnn.from_torch(
-                torch_indices.to(torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            )
-            tt_indices = ttnn.to_device(tt_indices, self.device)
+            # On-device cast INT32 -> UINT32 using pad-typecast-slice pattern.
+            # ttnn.typecast requires padded_shape[-1] % 32 == 0; for decode (seq=1)
+            # we concat with a pre-allocated zeros buffer, typecast, then slice back.
+            orig_size = tt_indices.shape[-1] if len(tt_indices.shape) > 0 else 1
+            if orig_size % 32 != 0:
+                pad_amount = 32 - (orig_size % 32)
+                if pad_amount not in self._typecast_pad_buffers:
+                    pad_torch = torch.zeros(1, pad_amount, dtype=torch.int32)
+                    self._typecast_pad_buffers[pad_amount] = ttnn.from_torch(
+                        pad_torch,
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                    )
+                tt_indices = ttnn.concat([tt_indices, self._typecast_pad_buffers[pad_amount]], dim=-1)
+            tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+            if orig_size % 32 != 0:
+                if len(tt_indices.shape) <= 1:
+                    tt_indices = ttnn.slice(tt_indices, [0], [orig_size])
+                else:
+                    starts = [0] * len(tt_indices.shape)
+                    ends = list(tt_indices.shape)
+                    ends[-1] = orig_size
+                    tt_indices = ttnn.slice(tt_indices, starts, ends)
         out = self.embedder(tt_indices)
         return out
 
