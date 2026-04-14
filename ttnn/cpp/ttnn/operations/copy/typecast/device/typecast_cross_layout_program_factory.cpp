@@ -232,15 +232,15 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
     const uint32_t rm_page_size = src_buffer->page_size();
 
     // ── Circular Buffers ─────────────────────────────────────────────────
-    // Input CB: RM pages (row-sized) in input dtype
+    // Input CB: RM data in input dtype (tilize reads from here)
     constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
-    const uint32_t input_cb_num_pages = ntiles_per_row;  // tilize needs full tile-width of RM data
+    const uint32_t input_cb_num_pages = ntiles_per_row;
     CircularBufferConfig cb_input_config =
         CircularBufferConfig(input_cb_num_pages * single_tile_size_input, {{input_cb_index, cb_data_format_input}})
             .set_page_size(input_cb_index, single_tile_size_input);
     CreateCircularBuffer(program, all_cores, cb_input_config);
 
-    // Intermediate CB: tile pages in input dtype (tilize output, typecast input)
+    // Intermediate CB: tile pages in input dtype (tilize output → typecast input)
     constexpr uint32_t intermediate_cb_index = tt::CBIndex::c_1;
     const uint32_t intermediate_cb_num_tiles = ntiles_per_row * 2;
     CircularBufferConfig cb_intermediate_config =
@@ -302,7 +302,6 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
     const auto compute_kernel_path =
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
 
-    // Total RM rows across all blocks = needed for tilize's total_input_pages
     const uint32_t total_rm_rows_per_core = nblocks_per_core * TILE_HEIGHT;
     const uint32_t total_rm_rows_per_cliff_core = nblocks_per_core_cliff * TILE_HEIGHT;
 

@@ -4,11 +4,12 @@
 
 // Cross-layout typecast compute kernel.
 //
-// Handles two modes via compile-time defines:
+// TILIZE_INPUT    (RM→TILE): two-phase with intermediate CB:
+//   Phase 1: tilize(input_cb → intermediate_cb)
+//   Phase 2: typecast(intermediate_cb → output_cb)
+//   tilize_uninit_with_dt reconfigures unpack for the new source CB between phases.
 //
-//   TILIZE_INPUT    (RM→TILE): tilize input_cb → intermediate_cb, then typecast intermediate_cb → output_cb
-//   UNTILIZE_OUTPUT (TILE→RM): fused typecast + pack_untilize_dest — typecast tiles into DEST,
-//                               then pack_untilize_dest writes DEST in RM format to output_cb
+// UNTILIZE_OUTPUT (TILE→RM): fused typecast + pack_untilize_dest (single phase)
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -35,10 +36,14 @@ void kernel_main() {
 #endif
 
 #if defined(TILIZE_INPUT)
-    // RM→TILE: tilize all blocks into intermediate_cb, then typecast to output_cb.
-    // Tilize pushes tiles to intermediate_cb per block; typecast consumes them.
-    // CB double-buffering handles the producer-consumer flow.
+    // RM→TILE two-phase:
+    // Phase 1: tilize RM data from input_cb to intermediate_cb (tile format, input dtype)
+    // Phase 2: typecast from intermediate_cb to output_cb (tile format, output dtype)
+    //
+    // Between phases: tilize_uninit_with_dt reconfigures unpack for intermediate_cb,
+    // then init_sfpu sets up SFPU for typecast.
 
+    // Phase 1: tilize
     compute_kernel_hw_startup(input_cb, intermediate_cb);
 
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<input_cb>()
@@ -54,7 +59,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
         fp32_mode>(per_core_block_cnt, total_input_pages);
 
-    // Phase 2: typecast tiles from intermediate_cb → output_cb
+    // Phase 2: typecast from intermediate_cb → output_cb
     init_sfpu(intermediate_cb, output_cb);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(output_cb, per_core_block_dim);
@@ -74,14 +79,8 @@ void kernel_main() {
     }
 
 #elif defined(UNTILIZE_OUTPUT)
-    // TILE→RM: Fused typecast + untilize using pack_untilize_dest.
-    //
-    // For each tile-row (block):
-    //   1. Typecast per_core_block_dim tiles into DEST registers 0..N-1
-    //   2. pack_untilize_dest writes all DEST data to output_cb in RM format
-    //
-    // This avoids a two-phase approach that causes hardware state conflicts.
-    // Constraint: per_core_block_dim must fit in DEST (max 8 tiles in half-sync 32-bit).
+    // TILE→RM: Fused typecast + pack_untilize_dest.
+    // Typecast tiles into DEST, then pack_untilize_dest writes DEST in RM format.
 
     init_sfpu(input_cb, output_cb);
     pack_untilize_dest_init<per_core_block_dim>(output_cb);
@@ -89,7 +88,6 @@ void kernel_main() {
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         tile_regs_acquire();
 
-        // Typecast each tile in the row into a separate DEST register
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             cb_wait_front(input_cb, 1);
             copy_tile(input_cb, 0, tile_index);
@@ -101,7 +99,6 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        // Write all DEST tiles to output CB in RM format
         cb_reserve_back(output_cb, per_core_block_dim);
         pack_untilize_dest<per_core_block_dim>(output_cb);
         cb_push_back(output_cb, per_core_block_dim);
