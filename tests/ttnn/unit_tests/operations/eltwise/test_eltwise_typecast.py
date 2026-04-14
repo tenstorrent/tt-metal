@@ -8,7 +8,6 @@ import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_llk_assert_enabled
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
