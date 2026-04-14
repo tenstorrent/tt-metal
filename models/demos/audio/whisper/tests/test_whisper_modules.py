@@ -528,7 +528,7 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
 # Single batch: distil-large-v3 + preprocess_model_parameters peaks host RAM; mel length 3000 per HF.
 @pytest.mark.parametrize("batch_size_per_device", [1])
 @pytest.mark.parametrize("sequence_length", [3000])
-# device_params (l1 + trace_region) set in tests/conftest.py for encoder capture/replay.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
     torch.manual_seed(0)
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
