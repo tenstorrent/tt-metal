@@ -248,7 +248,7 @@ class CompressedTensor:
         memory_config=None,
         assignment_memory_config=None,
         quantize_fn=ttnn_quantize_fn,
-        per_core_allocation: bool = True,
+        per_core_allocation: bool = False,
         mesh_mapper_config=None,
     ) -> CompressedTensor:
         """Convenience: run assignment then pack in one step."""
