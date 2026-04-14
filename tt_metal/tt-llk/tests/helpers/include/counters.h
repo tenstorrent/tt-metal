@@ -1186,12 +1186,12 @@ public:
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
+    __attribute__((noinline, cold)) explicit perf_counter_scoped(std::uint32_t hash) : m_zone(get_zone_id(hash))
     {
         start_perf_counters(m_zone);
     }
 
-    __attribute__((always_inline)) ~perf_counter_scoped()
+    __attribute__((noinline, cold)) ~perf_counter_scoped()
     {
         stop_perf_counters(m_zone);
     }

@@ -31,7 +31,7 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -48,8 +48,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -64,8 +63,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -97,7 +95,7 @@ const bool TILIZE = true;
 
 using namespace ckernel;
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -110,8 +108,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en = false;
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         // copy srca to dest
 #ifdef ARCH_BLACKHOLE
         // set tilize flag to true
@@ -125,8 +122,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -199,7 +195,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -212,8 +208,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNTILIZE = false;
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -227,8 +222,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
