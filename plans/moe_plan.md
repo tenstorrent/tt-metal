@@ -55,7 +55,7 @@ Models from `plans/unverified_moe_info.md`, with HuggingFace links and verificat
 
 ### Notes
 - **GLM-4.7** uses the same `glm4_moe` architecture as GLM-4.5 but with extended context (202752 vs 131072). Also has a Flash variant: `zai-org/GLM-4.7-Flash` (`glm4_moe_lite`).
-- **GLM-4.5** config downloaded to `hf_model_cards/glm-4.5/` — MoE params match GLM-4.7 exactly (same `glm4_moe` arch, same hidden/expert/routing values). Not a separate plan entry.
+- **GLM-4.5** MoE params match GLM-4.7 exactly (same `glm4_moe` arch, same hidden/expert/routing values). Not a separate plan entry.
 - **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096** (not 2048), 128 experts, 1 shared, K=**4** (not 8). The unverified list had incorrect intermediate size and K values. Mistral Small 3.2 is a 24B dense model (no MoE).
 - **Qwen n_shared_experts**: No Qwen config contains an explicit `n_shared_experts` or `num_shared_experts` field. Shared expert count is inferred: present if `shared_expert_intermediate_size > 0`, absent if field is 0 or missing. Marked "(inferred)" in the comparison table.
 
@@ -303,6 +303,7 @@ output = routed_output + shared_output
 
 #### Downloaded Files
 - `config.json` — `hf download zai-org/GLM-5 config.json`
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **6144** | ✓ |
@@ -335,6 +336,7 @@ output = routed_output + shared_output
 
 #### Downloaded Files
 - `config.json` — `hf download moonshotai/Kimi-K2.5 config.json`
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **7168** | ✓ (same as DeepSeek V3) |
@@ -370,6 +372,7 @@ output = routed_output + shared_output
 - `config.json` — `hf download inclusionAI/Ling-1T config.json`
 - `modeling_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T modeling_bailing_moe_v2.py`
 - `configuration_bailing_moe_v2.py` — `hf download inclusionAI/Ling-1T configuration_bailing_moe_v2.py`
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **8192** | ✓ |
@@ -406,6 +409,7 @@ output = routed_output + shared_output
 #### Downloaded Files
 - `config.json` — `hf download zai-org/GLM-4.7 config.json`
 - `modeling_glm4_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/glm4_moe/modeling_glm4_moe.py
+
 | Parameter | Value |
 |-----------|-------|
 | `hidden_size` | **5120** |
@@ -444,6 +448,7 @@ output = routed_output + shared_output
 #### Downloaded Files
 - `config.json` — `hf download Qwen/Qwen3-235B-A22B config.json`
 - `modeling_qwen3_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **4096** | **No** (unverified said 2048) |
@@ -475,6 +480,7 @@ output = routed_output + shared_output
 #### Downloaded Files
 - `config.json` — `hf download Qwen/Qwen3.5-397B-A17B config.json`
 - `modeling_qwen3_5_moe.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **4096** | **No** (unverified said 2048) |
@@ -504,6 +510,7 @@ output = routed_output + shared_output
 
 #### Downloaded Files
 - `config.json` — `hf download Qwen/Qwen3.5-35B-A3B config.json`
+
 | Parameter | Value | vs Qwen3.5-397B |
 |-----------|-------|-----------------|
 | `hidden_size` | **2048** | 4096 (half) |
@@ -588,6 +595,7 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 - `transformer_layers.py` — https://raw.githubusercontent.com/mistralai/mistral-inference/main/src/mistral_inference/transformer_layers.py
 - `args.py` — https://raw.githubusercontent.com/mistralai/mistral-inference/main/src/mistral_inference/args.py
 - `vllm_mistral_large_3.py` — https://raw.githubusercontent.com/vllm-project/vllm/main/vllm/model_executor/models/mistral_large_3.py
+
 | Parameter | Value |
 |-----------|-------|
 | `dim` (hidden_size) | **7168** |
@@ -624,6 +632,7 @@ This is an omni-modal model (text+vision+audio) with **two separate MoE modules*
 #### Downloaded Files
 - `config.json` — `hf download google/gemma-4-26B-A4B-it config.json`
 - `modeling_gemma4.py` — https://raw.githubusercontent.com/huggingface/transformers/main/src/transformers/models/gemma4/modeling_gemma4.py
+
 | Parameter | Value |
 |-----------|-------|
 | `hidden_size` | **2816** |
@@ -701,6 +710,7 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 - `modeling_deepseekv2.py` — `hf download deepseek-ai/DeepSeek-OCR --include '*.py'`
 - `configuration_deepseek_v2.py` — `hf download deepseek-ai/DeepSeek-OCR --include '*.py'`
 - `modeling_deepseekocr.py` — `hf download deepseek-ai/DeepSeek-OCR modeling_deepseekocr.py`
+
 | Parameter | Value | Unverified Match? |
 |-----------|-------|-------------------|
 | `hidden_size` | **1280** | **No** (unverified said 4096) |
@@ -776,7 +786,7 @@ Based on code exploration of:
 | Qwen 3.5 | **Wrong** on hidden (2048→4096), intermediate (512→1024), experts (256→512) | |
 | Qwen3 | **Wrong** on hidden (2048→4096), intermediate (768→1536) | |
 | DeepSeek OCR | **Wrong** on hidden (4096→1280), intermediate (1407→896), shared_intermediate (5632→1792) | Was likely a different model |
-| Mistral | **Wrong** on intermediate (2048→4096), K (8→4), name was wrong | |
+| Mistral | **Wrong** on hidden (6144→7168), intermediate (2048→4096), K (8→4), name was wrong | |
 | Ling-1T | **Wrong** on intermediate (1536→2048), shared experts (2→1) | |
 
 **5 out of 10 models had significant errors. Always verify from config.json.**
@@ -797,10 +807,12 @@ Based on code exploration of:
 | **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 (no field) | 8 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
 | **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 (inferred, size=0) | 8 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
 | **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 (inferred, size=768) | 6 | SiLU/SwiGLU | softmax (code) | simple top-k (code) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
-| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | softmax (V2 default) | `greedy` | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
-| **Mistral Large 3** | 7168 | 4096 | 4096 (from vLLM) | 128 | 1 | 4 | SiLU/SwiGLU (code) | softmax (code) | simple top-k (code) | 1/1 | 1.0 | No | No | 3 | 61 | No | DS V3-like (vLLM subclass) |
+| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | softmax (V2 default) | `greedy` | 1/1 | 1.0 (V2 default) | No | No | 1 | 12 | No | DS V2 |
+| **Mistral Large 3** | 7168 | 4096 | 4096 (from vLLM) | 128 | 1 | 4 | SiLU/SwiGLU (code) | softmax (code) | simple top-k (code) | 1/1 | 1.0 | No | No | 3 | 61 | No | Mistral (softmax; vLLM uses DS V3 impl) |
 | **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | group_limited_topk (code) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
 | **Gemma 4 26B** | 2816 | 704 | — (parallel dense) | 128 | 0 (parallel dense) | 8 | **GELU/SwiGLU** | softmax | simple+per_expert_scale | —/— | per-expert learned | No | No (has learned scale) | all MoE | 30 | **Yes** | Gemma4 |
+
+**Note:** Qwen3.5 models (397B, 35B) use a **sigmoid gate on shared expert output** before adding to routed output (see §2.8). This is not captured in the table above but is a unique architectural detail for generalization.
 
 ---
 
