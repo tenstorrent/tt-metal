@@ -190,7 +190,7 @@ namespace {
 using namespace tt::constants;
 
 // Calculate maximum tensors per concat based on runtime args limit
-uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
+uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -276,9 +276,9 @@ Tensor concat_impl(
     }
 
     // Handle large number of tensors by splitting into batches
-    // calculate_max_tensors_per_concat returns the maximum safe value (e.g., 47 for ETH dispatch)
+    // calculate_max_tensors_per_concat returns the maximum safe value (47 for interleaved)
     // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
-    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors, dim);
+    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
