@@ -220,12 +220,6 @@ Using tile_size=32:
 - For DeepSeek-OCR, is `greedy` routing (softmax scoring + greedy top-k) a first-class mode for the generalized op, or out of scope for v1?
 - Should Qwen3-Omni Talker (different K=6, shared width 2× routed) be in-scope for the same primitive as the "main LLM" MoE, or a second profile? K=6 requires new kernel work — neither existing TT-Metal implementation handles it.
 
-### Resolved from earlier revisions
-- ~~Qwen3.5 sigmoid gate on shared expert — open question?~~ → **Resolved**: promoted to §5.1 item 7 as a required configurable parameter (`shared_expert_gate` on/off + weight shape `[hidden_size, 1]`)
-- ~~Confirm Qwen-family scoring/routing from modeling code~~ → **Resolved**: all use softmax (Qwen3 L266, Qwen3.5 L765)
-- ~~Confirm Mistral Large 3 activation and shared expert intermediate~~ → **Resolved**: SiLU/SwiGLU (transformer_layers.py L106), shared_expert_intermediate=4096 (vLLM weight remapping), softmax routing (moe.py L27)
-- ~~Confirm DS-OCR scoring_func~~ → **Resolved**: softmax (V2 default from configuration_deepseek_v2.py L142)
-
 ---
 
 ## Appendix A: Model MoE Architectures (Detailed)
