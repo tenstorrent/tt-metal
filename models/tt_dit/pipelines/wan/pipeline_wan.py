@@ -1011,13 +1011,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self.mesh_device,
                 concat_dims,
                 ccl_manager=self.vae_ccl_manager,
+                root=None,
             )
-            video_torch = video_torch[:, :, :, :new_logical_h, :]
+            if video_torch is not None:
+                video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            if output_type == "np":
-                video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
+                if output_type == "np":
+                    video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
+                else:
+                    video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
             else:
-                video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
+                video = None
         else:
             video = latents
 
