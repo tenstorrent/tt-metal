@@ -2,6 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Content-preservation WER evaluation for RVC outputs.
+
+Example:
+    ./python_env/bin/python models/demos/rvc/scripts/eval_wer.py \
+      --source-audio ./models/demos/rvc/data/sample-speech.wav \
+      --generated-audio ./models/demos/rvc/data/output/output_ttnn.wav \
+      --device cpu
+
+This runs ASR on both files and reports:
+    WER(source_transcript, generated_transcript)
+"""
+
 from __future__ import annotations
 
 import argparse
