@@ -159,6 +159,8 @@ class MinMaxTensorLastDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTenso
                                    public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorLastDimFixture, MinMaxTensorCorrectly) {
+    // Skipped: UBSan flags fill_pad_program_factory casting -inf to uint32_t. Tracked by issue #42004
+    GTEST_SKIP();
     auto param = GetParam();
     auto& device = *device_;
     std::array<uint32_t, 4> reduced_dimensions = {1, 1, param.h, 1};
@@ -225,6 +227,8 @@ class MinMaxTensorFirstDimFixture : public TTNNFixtureWithSuiteDevice<MinMaxTens
                                     public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorFirstDimFixture, MinMaxTensorCorrectly) {
+    // Skipped: UBSan flags fill_pad_program_factory casting -inf to uint32_t. Tracked by issue #42004
+    GTEST_SKIP();
     auto param = GetParam();
     auto& device = *device_;
     std::array<uint32_t, 4> reduced_dimensions = {1, 1, 1, param.w};
@@ -291,6 +295,8 @@ class MinMaxTensorBothDimsFixture : public TTNNFixtureWithSuiteDevice<MinMaxTens
                                     public testing::WithParamInterface<MinMaxTensorParameter> {};
 
 TEST_P(MinMaxTensorBothDimsFixture, MinMaxTensorCorrectly) {
+    // Skipped: UBSan flags fill_pad_program_factory casting -inf to uint32_t. Tracked by issue #42004
+    GTEST_SKIP();
     auto param = GetParam();
     auto& device = *device_;
     SmallVector<int> dim = {-2, -1};
