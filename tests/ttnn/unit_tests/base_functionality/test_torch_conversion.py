@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@ import ttnn
 import pytest
 import numpy as np
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh, ShardTensor2dMesh
-from models.common.utility_functions import skip_for_slow_dispatch
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
@@ -853,7 +852,6 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     assert ttnn_tensor.layout == layout, f"Layout mismatch: expected {layout}, got {ttnn_tensor.layout}"
 
 
-@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -966,7 +964,6 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
     torch.testing.assert_close(torch_tensor, result.to(torch.int32))
 
 
-@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "ttnn_dtype,torch_dtype,ttnn_layout",
     [
@@ -1079,11 +1076,6 @@ def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtyp
     assert_with_pcc(torch_tensor, result, 0.999)
 
 
-@skip_for_slow_dispatch()
-@pytest.mark.xfail(
-    reason="sharded buffer write dispatch crashes on dispatch-core-row shards (write path fix not implemented)",
-    strict=True,
-)
 def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     """
     Regression test for tilize with a shard grid that extends beyond the compute
@@ -1143,7 +1135,6 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     assert list(result.shape) == list(shape)
 
 
-@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype,total_width,num_shards",
     [
