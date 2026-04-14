@@ -8,18 +8,20 @@ Provides mesh topology markers and pretrained weights checking.
 Automatically downloads weights from HuggingFace if not available locally.
 """
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 
 def pytest_configure(config):
@@ -135,13 +137,15 @@ def download_model_config_only(cache_dir: Path) -> Path:
         raise
 
 
-def download_model_weights(cache_dir: Path, layer_idx: int = 0) -> Path:
+def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
     """
     Download DeepSeek-R1-0528 model weights from HuggingFace.
 
     Args:
         cache_dir: Directory to cache downloaded weights
         layer_idx: Which layer to download weights for (default: 0)
+        num_layers: Number of layers to download weights for (default: 1).
+            When >1, downloads additional shards for layers 0..num_layers-1.
 
     Returns:
         Path to the downloaded model directory
@@ -189,16 +193,48 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0) -> Path:
 
         logger.info(f"✓ Configuration downloaded to: {index_dir}")
 
-        # Now download the first few weight shards (layer 0 is usually in first 1-3 shards)
-        logger.info("Step 2/2: Downloading weight files for first layer...")
-        logger.info("This will download ~3-5GB (first few shards containing layer 0 weights)")
+        # Systematically determine which shards are needed based on the index
+        import json
 
-        # Download first 3 shards which should contain layer 0
-        shard_patterns = [
-            "*-00001-of-*.safetensors",
-            "*-00002-of-*.safetensors",
-            "*-00003-of-*.safetensors",
-        ]
+        index_path = Path(index_dir) / "model.safetensors.index.json"
+        with open(index_path, "r") as f:
+            index_data = json.load(f)
+
+        weight_map = index_data.get("weight_map", {})
+        required_shards = set()
+
+        # Find shards for embeddings
+        for key, shard_file in weight_map.items():
+            if "embed_tokens" in key:
+                required_shards.add(shard_file)
+
+        # Find shards for the requested layers
+        for layer_id in range(layer_idx, layer_idx + num_layers):
+            for key, shard_file in weight_map.items():
+                if f"model.layers.{layer_id}." in key:
+                    required_shards.add(shard_file)
+
+        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
+        for key, shard_file in weight_map.items():
+            if "model.norm.weight" in key:
+                required_shards.add(shard_file)
+                break
+
+        # Convert shard filenames to patterns
+        shard_patterns = []
+        for shard_file in sorted(required_shards):
+            # Extract shard number from filename like "model-00001-of-000163.safetensors"
+            shard_num = shard_file.split("-")[1]
+            shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
+
+        logger.info(
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+        )
+        logger.info(
+            f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
+        )
+        estimated_size_gb = len(required_shards) * 0.28  # Approximate 280MB per shard
+        logger.info(f"Estimated download size: ~{estimated_size_gb:.1f}GB")
 
         model_dir = snapshot_download(
             repo_id=model_id,
@@ -216,12 +252,14 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0) -> Path:
         raise
 
 
-def get_or_download_model(layer_idx: int = 0) -> Path:
+def get_or_download_model(layer_idx: int = 0, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
 
     Args:
         layer_idx: Which layer weights to ensure are available
+        num_layers: Number of layers to download (default: 6).
+                    When >1, downloads additional shards including shard 160 for model.norm.
 
     Returns:
         Path to model directory with weights
@@ -260,10 +298,9 @@ def get_or_download_model(layer_idx: int = 0) -> Path:
     # Determine cache directory
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     logger.info(f"Will cache to: {cache_dir}")
-    logger.warning("⚠️  This will download ~3-5GB for the first layer weights")
-    logger.info("The full DeepSeek-R1-0528 model is large, but we only download what's needed for testing")
+    # Note: Detailed download size is logged by download_model_weights() after analyzing the index
 
-    return download_model_weights(cache_dir, layer_idx)
+    return download_model_weights(cache_dir, layer_idx, num_layers)
 
 
 @pytest.fixture(scope="session")
@@ -352,6 +389,29 @@ def config_only():
 
 
 @pytest.fixture(scope="session")
+def tokenizer():
+    """Load DeepSeek tokenizer, searching known model locations."""
+    candidates = [
+        os.getenv("DEEPSEEK_V3_HF_MODEL"),
+        "models/demos/deepseek_v3/reference",
+        "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        p = Path(candidate)
+        if p.exists() and any(p.glob("tokenizer*")):
+            logger.info(f"Loading tokenizer from: {p}")
+            return AutoTokenizer.from_pretrained(str(p), trust_remote_code=True)
+
+    # Fall back to downloading config-only (includes tokenizer files)
+    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    config_path = download_model_config_only(cache_dir)
+    logger.info(f"Loading tokenizer from downloaded config: {config_path}")
+    return AutoTokenizer.from_pretrained(str(config_path), trust_remote_code=True)
+
+
+@pytest.fixture(scope="session")
 def state_dict(model_path):
     """
     Load state dict for testing.
@@ -399,6 +459,30 @@ def _check_pretrained_available(model_path: Path = None) -> bool:
         logger.info(f"✗ Pretrained weights not found at {model_path}")
 
     return available
+
+
+@pytest.fixture(scope="session")
+def weight_cache_path(model_path):
+    """
+    Return a directory for caching TTNN weight tensors (.tensorbin files).
+
+    First run: ttnn.as_tensor() dumps converted weights here.
+    Subsequent runs: weights are loaded directly, bypassing torch conversion.
+
+    The path encodes architecture + device count to prevent cross-config clashes.
+    Returns None if pretrained weights are unavailable (random-weight tests skip caching).
+    """
+    if not _check_pretrained_available(model_path):
+        return None
+    arch = "bh" if is_blackhole() else "wh"
+    num_devices = ttnn.get_num_devices()
+    env_cache = os.getenv("TT_DS_PREFILL_TTNN_CACHE")
+    if env_cache:
+        cache_dir = Path(env_cache) / f"deepseek_v3_d_p_{arch}_{num_devices}dev"
+    else:
+        cache_dir = model_path / f"tensor_cache_{arch}_{num_devices}dev"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
 
 
 @pytest.fixture
@@ -493,3 +577,131 @@ def random_weights(config_only):
 
     logger.info(f"Generated {len(weights)} random weight tensors using config dimensions")
     return config, weights
+
+
+@pytest.fixture
+def pretrained_transformer_weights(model_path, hf_config, state_dict, request):
+    """
+    Dequantized pretrained weights for N-layer transformer in TT state_dict format.
+
+    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    sub_state_dict() + dequantize_state_dict(), matching the format produced
+    by extract_tt_state_dict() in transformer_helpers.py.
+
+    Parametrize with num_layers (default 6) via indirect fixture or marker:
+        @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
+
+    Returns:
+        Tuple of (hf_config, tt_state_dict) or skips if not available
+    """
+    if not _check_pretrained_available(model_path):
+        pytest.skip("Pretrained weights not available. Set DEEPSEEK_V3_HF_MODEL or download model.")
+    if hf_config is None:
+        pytest.skip("Failed to load HF config. Check model path.")
+    if state_dict is None:
+        pytest.skip("Failed to load state dict. Check model path and weights.")
+
+    num_layers = request.node.callspec.params.get("num_layers", 1)
+    first_k_dense = hf_config.first_k_dense_replace  # 3
+    n_routed = hf_config.n_routed_experts  # 256
+
+    logger.info(f"Loading pretrained transformer weights for {num_layers} layers from: {model_path}")
+
+    # Embed tokens
+    embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
+    embed_dequant = dequantize_state_dict(embed_sd, hf_config)
+    result = {
+        "embed_weight": embed_dequant["weight"].float(),
+    }
+
+    # Final norm
+    norm_sd = sub_state_dict(state_dict, "model.norm.")
+    norm_dequant = dequantize_state_dict(norm_sd, hf_config)
+    result["norm_weight"] = norm_dequant["weight"]
+
+    # Per-layer weights
+    result["layers"] = []
+    for i in range(num_layers):
+        logger.info(f"Loading layer {i} weights...")
+        layer_sd = sub_state_dict(state_dict, f"model.layers.{i}.")
+        layer_dequant = dequantize_state_dict(layer_sd, hf_config)
+
+        layer_dict = {
+            "attn_norm_weight": layer_dequant["input_layernorm.weight"],
+            "mla_weights": {
+                "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
+                "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
+                "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
+                "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
+                "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
+                "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
+                "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
+            },
+            "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
+        }
+
+        is_dense = i < first_k_dense
+        if is_dense:
+            layer_dict["ffn_weights"] = {
+                "gate_proj": layer_dequant["mlp.gate_proj.weight"],
+                "up_proj": layer_dequant["mlp.up_proj.weight"],
+                "down_proj": layer_dequant["mlp.down_proj.weight"],
+            }
+        else:
+            layer_dict["gate_weights"] = {
+                "weight": layer_dequant["mlp.gate.weight"],
+                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
+            }
+            layer_dict["routed_expert_weights"] = [
+                {
+                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
+                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
+                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
+                }
+                for j in range(n_routed)
+            ]
+            layer_dict["shared_expert_weights"] = {
+                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
+                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
+                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
+            }
+
+        result["layers"].append(layer_dict)
+        logger.info(f"Layer {i} loaded ({'dense' if is_dense else 'MoE'})")
+
+    logger.info(f"Loaded pretrained transformer weights for {num_layers} layers")
+    return hf_config, result
+
+
+# ---------------------------------------------------------------------------
+# InfiniteBench prompt fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def infinitebench_prompt(request):
+    """
+    Pytest fixture that provides a long prompt from InfiniteBench.
+
+    Parametrize with the subset name to select which category:
+
+        @pytest.mark.parametrize("infinitebench_prompt",
+            ["passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+            indirect=True,
+        )
+        def test_prefill(infinitebench_prompt):
+            subset, prompt_text = infinitebench_prompt
+            ...
+
+    Downloads from HuggingFace on first use, then caches locally.
+
+    Returns:
+        Tuple of (subset_name, prompt_text).
+    """
+    subset = request.param
+    cached_path = download_infinitebench_subset(subset)
+
+    with open(cached_path) as f:
+        data = json.load(f)
+
+    return data["subset"], data["prompt"]
