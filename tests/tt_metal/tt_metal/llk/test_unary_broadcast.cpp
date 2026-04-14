@@ -57,7 +57,6 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::unary_broadcast {
 
-// Per-tile broadcast mode for golden + kernel defines (kernel define strings must match ckernel::BroadcastType names).
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
 const map<BroadcastDim, std::string> broadcast_dim_to_type = {
