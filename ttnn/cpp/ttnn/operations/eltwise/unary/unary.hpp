@@ -231,6 +231,13 @@ Tensor softplus(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// softcap: cap * tanh(x / cap)
+Tensor softcap(
+    const Tensor& input_tensor,
+    float cap = 50.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 // xielu
 Tensor xielu(
     const Tensor& input_tensor,

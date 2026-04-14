@@ -166,6 +166,15 @@ Tensor softplus(
         optional_output_tensor);
 }
 
+Tensor softcap(
+    const Tensor& input_tensor,
+    float cap,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return ttnn::detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::SOFTCAP, cap}}, memory_config, optional_output_tensor);
+}
+
 Tensor xielu(
     const Tensor& input_tensor,
     float alpha_p,
