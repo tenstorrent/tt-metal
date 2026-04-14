@@ -143,3 +143,52 @@ None. Standard analysis workflow followed.
 - Three `v_if`/`v_endif` blocks: two for clamping z values to -127 (underflow prevention), one for small-|x| Taylor override
 - `_float_to_int32_positive_()` is called twice in `exp_21f` but its definition is missing from the current codebase -- this is a potential compilation issue
 - Very high register pressure due to two inline `exp_21f` calls per iteration, each with ~10 intermediate variables
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (tanhshrink)
+
+## Metadata
+- **Operation**: tanhshrink
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS (analysis complete; operation non-functional on this branch)
+- **Output file**: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
+
+## Input Interpretation
+| Field | Value | Confidence |
+|-------|-------|------------|
+| Operation name | tanhshrink | HIGH |
+| UnaryOpType | TANHSHRINK | HIGH |
+| Output location | `.claude-analysis/softcap-1/` | HIGH (explicit override) |
+
+## Execution Timeline
+
+1. **Dispatch tracing**: Read `unary_op_utils.cpp`. Found that TANHSHRINK has no case in `get_compute_kernel_path` (defaults to `eltwise_sfpu.cpp`), no case in `get_op_init_and_func_default` (would `TT_THROW`), and no case in `get_op_approx_mode` (defaults to `false`). Operation is registered in `unary_op_types.hpp` and `unary.hpp` but dispatch is broken.
+2. **Dedicated kernel discovery**: Found `tanhshrink_kernel.cpp` in the compute kernels directory. This is a self-contained compute kernel that does NOT use `SFPU_OP_CHAIN_0`. It directly calls `tanh_tile(0)` followed by `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>`.
+3. **API header read**: Confirmed `tanh_tile_init()` and `tanh_tile()` survive in `compute_kernel_api.h` with default `fast_and_approx=false`. They call `llk_math_eltwise_unary_sfpu_tanh_init/tanh` which have NO implementation.
+4. **Nuke verification**: Confirmed via `DEEP_NUKE_MANIFEST.md` that `ckernel_sfpu_tanh.h` (wh+bh+quasar) and `ckernel_sfpu_tanh_derivative.h` (wh+bh) were deleted in Phase 1 of the deep nuke. No LLK tanh header exists.
+5. **Binary subtraction analysis**: Read `eltwise_binary.h` to understand `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>`. This moves DEST (tanh(x)) to SRCB, unpacks original x from CB to SRCA, and computes SRCA - SRCB = x - tanh(x) on the FPU.
+6. **Params dispatch analysis**: Read the generic `llk_math_eltwise_unary_sfpu_params.h` for both WH and BH. Standard VectorMode::RC with 4 faces, 8 iterations per face.
+7. **Address mode analysis**: Confirmed `ADDR_MOD_7` with all-zero increments as default. SfpuType enum has no `tanh` entry.
+8. **Reference cross-check**: Read `ckernel_sfpu_sinh.h` to understand the exp_21f helper that tanh would have used for its implementation.
+9. **Analysis written**: Complete analysis file written to `.claude-analysis/softcap-1/tanhshrink_analysis.md`.
+
+## Recovery Summary
+No errors encountered. Analysis completed on first attempt. The primary challenge was that the tanh SFPU implementation is completely deleted, so the analysis documents the surviving architecture (compute kernel, API stubs, binary subtraction) and documents what was deleted.
+
+## Deviations
+- **Non-standard dispatch**: TANHSHRINK uses a dedicated compute kernel instead of the standard `eltwise_sfpu.cpp` + `SFPU_OP_CHAIN_0` pattern.
+- **Nuked SFPU**: The core tanh SFPU implementation is deleted. Analysis documents the API stubs and architectural context rather than actual SFPU instructions.
+- **Composite operation**: TANHSHRINK combines SFPU (tanh) and FPU (subtraction) operations in a single compute kernel, which is unusual for unary operations.
+
+## Artifacts
+- `.claude-analysis/softcap-1/tanhshrink_analysis.md` -- SFPU kernel analysis
+- `.claude-analysis/softcap-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_breadcrumbs.jsonl` -- Breadcrumb trail (appended)
+- `.claude-analysis/softcap-1/agent_logs/ttnn-unary-sfpu-operation-analyzer_execution_log.md` -- This file (appended)
+
+## Key Findings
+- Tanhshrink is a composite operation: `x - tanh(x)`, implemented as SFPU tanh followed by FPU binary subtraction
+- The dedicated compute kernel (`tanhshrink_kernel.cpp`) is architecturally clean but non-functional due to nuked tanh SFPU
+- The dispatch path is also broken (no TANHSHRINK cases in utility functions)
+- The `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>` pattern is valuable: it shows how to perform in-place DEST reuse with FPU subtraction, moving the SFPU result to SRCB and unpacking the original input for subtraction
+- This pattern is directly relevant to softcap's implementation, which also needs to transform a value in DEST and then combine it with the original input
