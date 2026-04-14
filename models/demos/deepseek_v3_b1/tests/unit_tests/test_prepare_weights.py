@@ -418,13 +418,16 @@ def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
 
-    attn = prepare_attention_weights(submesh, state, 0, is_moe=True)
+    attn = prepare_attention_weights(
+        submesh, state, 0, is_moe=True, sram_down_expert_indices=list(range(NUM_ROUTED_EXPERTS_FOR_TESTS))
+    )
     assert attn.gate_mm is not None
     assert attn.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert attn.gate_bias is not None
     assert attn.gate_bias.shape == (16, 16)
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
-    assert attn.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # TP4+shuffled layout: packed (8192, 14336) with tp_dim=(1,0) → per-device (4096, 3584)
+    assert attn.o_proj.tensor_shape == (4096, 3584)
 
 
 @pytest.mark.parametrize(
@@ -558,7 +561,13 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     logger.info(f"State dict prepared")
     t0 = time.perf_counter()
     logger.info(f"Preparing weights...")
-    layer = prepare_moe_layer_weights(submesh, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
+    layer = prepare_moe_layer_weights(
+        submesh,
+        state,
+        0,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        sram_down_expert_indices=list(range(NUM_ROUTED_EXPERTS_FOR_TESTS)),
+    )
     logger.info(f"Weights prepared")
     elapsed = time.perf_counter() - t0
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
@@ -566,7 +575,8 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
     assert layer.q_b_proj.tensor_shape == (LogicalModelDimensions.Q_A_DIM, 12288)
     assert layer.kv_a_proj.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.KV_A_DIM)
-    assert layer.o_proj.tensor_shape == (8192, LogicalModelDimensions.HIDDEN_SIZE)
+    # TP4+shuffled layout: packed (8192, 14336) with tp_dim=(1,0) → per-device (4096, 3584)
+    assert layer.o_proj.tensor_shape == (4096, 3584)
     assert layer.gate_mm.tensor_shape == (LogicalModelDimensions.HIDDEN_SIZE, LogicalModelDimensions.GATE_NUM_INDICES)
     assert layer.gate_bias.shape == (16, 16)
     assert layer.attn_norm.tensor_shape == (1, LogicalModelDimensions.HIDDEN_SIZE)
@@ -776,20 +786,26 @@ def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_pat
 
     state = _layer_state_dict(0, is_moe=True, seed=43)
 
-    attn = prepare_attention_weights(submesh, state, 0, is_moe=True, cache_config=cache_config)
+    sram_indices = list(range(NUM_ROUTED_EXPERTS_FOR_TESTS))
+    attn = prepare_attention_weights(
+        submesh, state, 0, is_moe=True, cache_config=cache_config, sram_down_expert_indices=sram_indices
+    )
     assert attn.gate_mm is not None
     assert attn.gate_bias is not None
 
     _deallocate_attention_weights(attn)
 
-    attn_hit = prepare_attention_weights(submesh, state, 0, is_moe=True, cache_config=cache_config)
+    attn_hit = prepare_attention_weights(
+        submesh, state, 0, is_moe=True, cache_config=cache_config, sram_down_expert_indices=sram_indices
+    )
     assert attn_hit.gate_mm is not None
     assert attn_hit.gate_bias.shape == (16, 16)
     _assert_attention_metadata_matches(attn, attn_hit)
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
-    assert len(artifact_dirs) >= 4, f"Expected 3 fusion artifacts + gate_bias, found {len(artifact_dirs)}"
+    # moe_tp4_fused + kv_b12 + gate_bias = 3
+    assert len(artifact_dirs) >= 3, f"Expected moe_tp4_fused + kv_b12 + gate_bias artifacts, found {len(artifact_dirs)}"
 
 
 @pytest.mark.parametrize(
@@ -967,12 +983,14 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     layer_idx = 3
     state = _layer_state_dict(layer_idx, is_moe=True)
 
+    sram_indices = list(range(NUM_ROUTED_EXPERTS_FOR_TESTS))
     weights = prepare_moe_layer_weights(
         submesh,
         state,
         layer_idx,
         num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
         cache_config=cache_config,
+        sram_down_expert_indices=sram_indices,
     )
     assert isinstance(weights, DeepSeekV3MoELayerWeights)
     expected_gate_bias = (16, 16)
@@ -988,6 +1006,7 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
         layer_idx,
         num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
         cache_config=cache_config,
+        sram_down_expert_indices=sram_indices,
     )
     assert weights_hit.gate_bias.shape == expected_gate_bias
     _assert_attention_metadata_matches(weights, weights_hit)
@@ -996,9 +1015,9 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
     n_r = NUM_ROUTED_EXPERTS_FOR_TESTS
-    # 3 attention fusion + gate_bias + gate_up + shared_down + n_r * 3 routed = 6 + n_r * 3
-    assert len(artifact_dirs) >= 6 + n_r * 3, (
-        f"Expected 3 attn + gate_bias + gate_up + shared_down + {n_r * 3} routed ({6 + n_r * 3}), "
+    # moe_tp4_fused + kv_b12 + gate_bias + gate_up + shared_down + n_r * 3 routed = 5 + n_r * 3
+    assert len(artifact_dirs) >= 5 + n_r * 3, (
+        f"Expected moe_tp4_fused + kv_b12 + gate_bias + gate_up + shared_down + {n_r * 3} routed ({5 + n_r * 3}), "
         f"found {len(artifact_dirs)}"
     )
 

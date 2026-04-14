@@ -358,6 +358,61 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
 O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
 
 
+def build_moe_tp4_fused_spec(
+    *,
+    n_down: int,
+    o_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+    mla_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT8_B,
+    down_proj_dtype: ttnn.DataType = ttnn.DataType.BFLOAT4_B,
+    mesh_shape: tuple[int, int] = (4, 2),
+) -> FusionGroupSpec:
+    """Build a :class:`FusionGroupSpec` for the MoE TP4+shuffled fused buffer.
+
+    Combines o_proj (TP4+shuffled), gate_mm, norms, q_a/q_b/kv_a, and ``n_down``
+    routed-expert down_proj SRAM slots into a single cached fusion group.
+    """
+    from models.demos.deepseek_v3_b1.weights.transforms.moe import down_proj_sram_slot_overlap_spec
+
+    o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+
+    o_per_device = (8192 // mesh_shape[1], 14336 // mesh_shape[0])
+    o_proj_spec = replace(
+        o_cfg.o_proj,
+        raw_tensor_shape=(8192, 14336),
+        dtype=o_proj_dtype,
+        tp_dim=(1, 0),
+        logical_tensor_shape=o_per_device,
+    )
+
+    q_a_spec = replace(q_cfg.q_a_shard_spec, dtype=mla_proj_dtype)
+    q_b_spec = replace(q_cfg.q_b_shard_spec, dtype=mla_proj_dtype)
+    kv_a_spec = replace(q_cfg.kv_a_shard_spec, dtype=mla_proj_dtype)
+
+    down_spec = down_proj_sram_slot_overlap_spec(mesh_shape, down_proj_dtype)
+    down_lanes = [[(_down_slot_name(i), down_spec)] for i in range(n_down)]
+
+    return _build_fusion_group_spec(
+        "moe_tp4_fused",
+        [
+            [("o_proj", o_proj_spec)],
+            [("gate_mm", o_cfg.gate_mm)],
+            [("attn_norm", o_cfg.attn_norm), ("q_norm", o_cfg.q_norm), ("ffn_norm", o_cfg.ffn_norm)],
+            [("kv_norm", o_cfg.kv_norm)],
+            [("q_a_proj", q_a_spec), ("q_b_proj", q_b_spec)],
+            [("kv_a_proj", kv_a_spec)],
+            *down_lanes,
+        ],
+        sharding_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        mesh_mapper_config=Shard2dMeshMapper(dims=(1, 0)),
+        transform_version=o_cfg.transform_version + q_cfg.transform_version,
+    )
+
+
+def _down_slot_name(i: int) -> str:
+    return f"sram_down_proj_{i}"
+
+
 @dataclass(frozen=True)
 class KVB12_PROJ_SingleDeviceOverlapSpec:
     """Configuration for the kv_b1 / kv_b2 weight overlap."""

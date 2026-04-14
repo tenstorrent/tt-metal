@@ -42,6 +42,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    build_moe_tp4_fused_spec,
 )
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
@@ -50,11 +51,7 @@ KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
-from models.demos.deepseek_v3_b1.weights.transforms.attention import (
-    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots,
-    preprocess_kv_b12,
-    preprocess_q_ab_kv_a,
-)
+from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import (
     _tp_factors,
     mlp_routed_dense_stacked_torch_for_cache,
@@ -748,50 +745,90 @@ def prepare_attention_weights(
         if sram_down_expert_indices is None:
             sram_down_expert_indices = list(range(DEFAULT_SRAM_DOWN_SLOT_COUNT))
 
-        q_a = state_dict[q_a_key].T.contiguous()
-        q_b = deinterleave_q_b_proj(state_dict[q_b_key])
-        kv_a = state_dict[kv_a_key].T.contiguous()
-        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
-            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-        q_pre = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+        o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+        q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+        down_keys = tuple(_key(layer_idx, f"mlp.experts.{e}.down_proj.weight") for e in sram_down_expert_indices)
 
-        o_proj_w = state_dict[o_proj_key].T.contiguous()
-        gate_mm_w = state_dict[gate_key].T.contiguous()
-        attn_norm_w = state_dict[attn_norm_key].unsqueeze(0)
-        q_norm_w = state_dict[q_norm_key].unsqueeze(0)
-        kv_norm_w = state_dict[kv_norm_key].unsqueeze(0)
-        ffn_norm_w = state_dict[ffn_norm_key].unsqueeze(0)
-        if mla_tp == 1 and o_proj_w.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
-            o_proj_w = o_proj_w[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
-
-        slots = load_sram_down_proj_slots_torch(state_dict, layer_idx, sram_down_expert_indices, moe_tp, mesh_shape)
-
-        fused_views = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a_with_sram_down_slots(
-            o_proj_w,
-            gate_mm_w,
-            attn_norm_w,
-            q_norm_w,
-            kv_norm_w,
-            ffn_norm_w,
-            q_pre["q_a_proj"],
-            q_pre["q_b_proj"],
-            q_pre["kv_a_proj"],
-            slots,
-            device,
+        fused_src = (
+            q_a_key,
+            q_b_key,
+            kv_a_key,
+            o_proj_key,
+            gate_key,
+            attn_norm_key,
+            q_norm_key,
+            kv_norm_key,
+            ffn_norm_key,
+            *down_keys,
+        )
+        fused_spec = build_moe_tp4_fused_spec(
+            n_down=len(sram_down_expert_indices),
             o_proj_dtype=o_proj_dtype,
             mla_proj_dtype=mla_proj_dtype,
             down_proj_dtype=down_proj_dtype,
-            move_to_device=move_to_device,
+            mesh_shape=mesh_shape,
         )
+
+        _local_mla_tp = mla_tp
+        _local_moe_tp = moe_tp
+        _local_mesh_shape = mesh_shape
+        _local_down_keys = down_keys
+
+        def _preprocess_moe_fused(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+            q_a = t[q_a_key].T.contiguous()
+            q_b = deinterleave_q_b_proj(t[q_b_key])
+            kv_a = t[kv_a_key].T.contiguous()
+            if _local_mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+                q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+
+            o_proj_w = t[o_proj_key].T.contiguous()
+            if _local_mla_tp == 1 and o_proj_w.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+                o_proj_w = o_proj_w[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
+            o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_w)
+
+            q_a_packed = q_cfg.shuffle_q_a(q_a)
+            q_b_tp = q_cfg.q_b_shard_spec.tp(_local_mesh_shape)
+            q_b_slices = [q_cfg.shuffle_q_b(q_cfg.get_q_b_slice(q_b, i, _local_mesh_shape)) for i in range(q_b_tp)]
+            q_b_pre = torch.cat(q_b_slices, dim=1) if q_b_tp > 1 else q_b_slices[0]
+            kv_reordered = q_cfg.shuffle_kv_a(kv_a)
+
+            result: dict[str, torch.Tensor] = {
+                "o_proj": o_packed,
+                "gate_mm": t[gate_key].T.contiguous(),
+                "attn_norm": t[attn_norm_key].unsqueeze(0),
+                "q_norm": t[q_norm_key].unsqueeze(0),
+                "kv_norm": t[kv_norm_key].unsqueeze(0),
+                "ffn_norm": t[ffn_norm_key].unsqueeze(0),
+                "q_a_proj": q_a_packed,
+                "q_b_proj": q_b_pre,
+                "kv_a_proj": kv_reordered,
+            }
+            for i, dk in enumerate(_local_down_keys):
+                down_w = t[dk].T.contiguous()
+                result[f"sram_down_proj_{i}"] = shared_down_torch_for_cache(down_w, _local_moe_tp, _local_mesh_shape)
+            return result
+
+        fused_fp = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=fused_src),
+            target=fused_spec,
+        )
+        fused_views = cache_config.cache.get_or_create(
+            fused_fp,
+            device,
+            preprocess=_preprocess_moe_fused,
+            raw_tensors=lambda: {k: state_dict[k] for k in fused_src},
+        )
+        if not isinstance(fused_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for moe_tp4_fused cache entry")
 
         _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
         target = _gate_bias_target(layer_idx)
-        fingerprint = cache_config.context.fingerprint(
+        bias_fp = cache_config.context.fingerprint(
             source=SourceTensorSelection(names=(_bias_key,)),
             target=target,
         )
         gate_bias_tt = cache_config.cache.get_or_create(
-            fingerprint,
+            bias_fp,
             device,
             preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
             raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
@@ -1434,6 +1471,7 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: str = "B",
     bspm_budget: float = 3.5,
+    sram_down_expert_indices: list[int] | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
@@ -1449,6 +1487,7 @@ def prepare_moe_layer_weights(
         is_moe=True,
         move_to_device=move_to_device,
         cache_config=cache_config,
+        sram_down_expert_indices=sram_down_expert_indices,
     )
     shared = prepare_shared_expert_weights(
         device, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
