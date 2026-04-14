@@ -9,8 +9,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.demos.wormhole.bge_m3.tt.device_kernels import (
+    bge_m3_linear_activation_memory_config,
     bge_m3_matmul_compute_kernel_config,
+    bge_m3_matmul_core_grid,
     bge_m3_sdpa_compute_kernel_config,
+    bge_m3_weight_dram_memory_config,
     max_qkv_mm_chunk_seq_len,
     max_wo_mm_chunk_seq_len,
 )
@@ -18,14 +21,17 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
 # SDPA chunk sizes must be multiples of TILE_WIDTH (32); Metal also expects power-of-two chunks in practice.
 # Cap at **256** (not 512): large K tiles increase per-kernel working set and can dominate device time or
 # stress the profiler. Prefer **256-wide Q** when it divides seq_len to halve Q-axis tiling vs 128.
-_SDPA_Q_CHUNKS = (256, 128)
-_SDPA_K_CHUNKS = (256, 128)
+# Include 64/32 so short encoder runs (e.g. S32/S64) use chunk sizes that divide the real sequence length.
+_SDPA_Q_CHUNKS = (256, 128, 64, 32)
+_SDPA_K_CHUNKS = (256, 128, 64, 32)
 
 
 def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
     """Pick largest (q_chunk, k_chunk) from candidate lists that divide ``seq_len``."""
-    if seq_len % 128 != 0:
-        raise ValueError(f"seq_len {seq_len} must be divisible by 128")
+    if seq_len % 32 != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by 32 (tile height)")
+    if seq_len > 128 and seq_len % 128 != 0:
+        raise ValueError(f"seq_len {seq_len} must be divisible by 128 when seq_len > 128")
     q_chunk = next(q for q in _SDPA_Q_CHUNKS if q <= seq_len and seq_len % q == 0)
     k_chunk = next(k for k in _SDPA_K_CHUNKS if k <= seq_len and seq_len % k == 0)
     return q_chunk, k_chunk
@@ -41,10 +47,28 @@ def _sdpa_storage_grid(mesh_device: ttnn.MeshDevice | None):
         return (8, 8)
 
 
+def _sdpa_compute_grid_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None):
+    """``compute_with_storage_grid_size`` for ``SDPAProgramConfig``.
+
+    For **runtime ``seq_len == 512``** only, cap the worker grid to **(min(8, gx), max(2, min(6, gy)))**
+    using the same ``(x, y)`` tuple convention as SDPA unit tests. **q_chunk / k_chunk** stay on the
+    default largest-divisor path. Other ``seq_len`` values use the full device grid from
+    ``_sdpa_storage_grid``.
+    """
+    base = _sdpa_storage_grid(mesh_device)
+    if seq_len != 512:
+        return base
+    if isinstance(base, tuple):
+        gx, gy = int(base[0]), int(base[1])
+    else:
+        gx, gy = int(getattr(base, "x", 8)), int(getattr(base, "y", 8))
+    return (min(8, gx), max(2, min(6, gy)))
+
+
 def _sdpa_program_config_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None) -> ttnn.SDPAProgramConfig:
     q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len)
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=_sdpa_storage_grid(mesh_device),
+        compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
         exp_approx_mode=False,
@@ -194,11 +218,12 @@ class BgeM3Attention(LightweightModule):
         batch_size, _, seq_len, _ = hidden_states.shape
 
         assert seq_len > 0, "seq_len must be positive"
+        assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height) for TILE_LAYOUT"
         if seq_len > 128:
             assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
-        assert seq_len > 0 and seq_len % 128 == 0, "seq_len must be divisible by 128"
 
         cfg = self.config
+        core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len)
 
         max_qkv = max_qkv_mm_chunk_seq_len(cfg.mesh_device)
         if seq_len > max_qkv:
@@ -218,6 +243,7 @@ class BgeM3Attention(LightweightModule):
             bias=self.bqkv,
             program_config=cfg.qkv_prg_config,
             compute_kernel_config=cfg.qkv_compute_kernel_cfg,
+            core_grid=core_grid,
         )
         if seq_len > max_qkv:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
@@ -270,10 +296,8 @@ class BgeM3Attention(LightweightModule):
             if sdpa_mask.memory_config() != score_memcfg:
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)
 
-        # Stage 4: encoder SDPA.
-        sdpa_program_config = (
-            cfg.score_prg_config if seq_len <= 128 else _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device)
-        )
+        # Stage 4: encoder SDPA (chunk sizes must divide the actual sequence length, including S<128).
+        sdpa_program_config = _sdpa_program_config_for_seq_len(seq_len, cfg.mesh_device)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -307,6 +331,7 @@ class BgeM3Attention(LightweightModule):
             bias=self.wo_bias,
             program_config=cfg.output_prg_config,
             compute_kernel_config=cfg.output_compute_kernel_cfg,
+            core_grid=core_grid,
         )
         ttnn.deallocate(context)
 
@@ -342,13 +367,15 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.output_dtype is None:
         to_set["output_dtype"] = ttnn.bfloat16
 
-    # Phase C: memory config defaults.
+    # Phase C: activation memory (L1 + core_grid path when max_seq_len is modest); weights use DRAM (Phase E).
+    max_seq = config.max_seq_len
+    act_mem = bge_m3_linear_activation_memory_config(max_seq)
     if config.qkv_memcfg is None:
-        to_set["qkv_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["qkv_memcfg"] = act_mem
     if config.score_memcfg is None:
-        to_set["score_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["score_memcfg"] = act_mem
     if config.output_memcfg is None:
-        to_set["output_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
+        to_set["output_memcfg"] = act_mem
 
     # Phase D: resolve single target device.
     param_devices = [
@@ -375,13 +402,12 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.score_prg_config is None:
         q0, k0 = _sdpa_chunks_for_seq_len(128)
         to_set["score_prg_config"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=_sdpa_storage_grid(mesh_device),
+            compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(128, mesh_device),
             q_chunk_size=q0,
             k_chunk_size=k0,
             exp_approx_mode=False,
         )
 
-    max_seq = config.max_seq_len
     if config.qkv_compute_kernel_cfg is None:
         to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
     if config.output_compute_kernel_cfg is None:
@@ -392,15 +418,14 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     # Phase E: resolve LazyWeights with resolved dtype + memory config.
     qkv_dtype = to_set.get("qkv_dtype", config.qkv_dtype)
     output_dtype = to_set.get("output_dtype", config.output_dtype)
-    qkv_memcfg = to_set.get("qkv_memcfg", config.qkv_memcfg)
-    output_memcfg = to_set.get("output_memcfg", config.output_memcfg)
+    weight_dram = bge_m3_weight_dram_memory_config()
 
     to_set["wqkv"] = resolve_lazy_weight(
         config.wqkv,
         device=mesh_device,
         dtype=qkv_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=qkv_memcfg,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
     to_set["wo_weight"] = resolve_lazy_weight(
@@ -408,7 +433,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         device=mesh_device,
         dtype=output_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=output_memcfg,
+        memory_config=weight_dram,
         mesh_mapper_config=None,
     )
     if config.bqkv is not None:
@@ -417,7 +442,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             device=mesh_device,
             dtype=qkv_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=qkv_memcfg,
+            memory_config=weight_dram,
             mesh_mapper_config=None,
         )
     if config.wo_bias is not None:
@@ -426,7 +451,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             device=mesh_device,
             dtype=output_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=output_memcfg,
+            memory_config=weight_dram,
             mesh_mapper_config=None,
         )
 
