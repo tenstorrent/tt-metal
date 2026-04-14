@@ -68,8 +68,6 @@ download_headers() {
     echo "Downloading headers for ${chip_arch}..."
     mkdir -p "$header_dir/internal"
 
-    local risc_attribs_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/internal/risc_attribs.h"
-
     local specific_url=""
     if [[ "$chip_arch" == "wormhole" ]]; then
         specific_url="https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/internal/tt-1xx/${chip_arch}/wormhole_b0_defines"
@@ -91,12 +89,6 @@ download_headers() {
             fi
         fi
     done
-
-    local download_url="${risc_attribs_url}"
-    if ! wget -q -O "${header_dir}/internal/risc_attribs.h" --waitretry=5 --retry-connrefused "$download_url" > /dev/null; then
-        echo "ERROR: Failed to download risc_attribs.h from ${download_url}" >&2
-        exit 1
-    fi
 
     touch "$stamp_file"
     echo "Headers for ${chip_arch} downloaded successfully."

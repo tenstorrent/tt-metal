@@ -371,6 +371,7 @@ class TestConfig:
             f"-I{TestConfig.HEADER_DIR}",
             f"-Ihw_specific/{TestConfig.ARCH.value}",
             f"-I../../hw/ckernels/{tt_metal_arch_value}/metal/llk_api",
+            "-I../../hw/inc",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
         ]
