@@ -672,7 +672,9 @@ struct TopKSampling {
         uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
         uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
         uint32_t ScoresScratchStage2Offset = 0,
-        uint32_t IndicesScratchStage2Offset = 0>
+        uint32_t IndicesScratchStage2Offset = 0,
+        uint32_t ScoresScratchAddr = 0,
+        uint32_t IndicesScratchAddr = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t topk_k = TopK;
@@ -726,6 +728,8 @@ struct TopKSampling {
         static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
         static constexpr uint32_t scores_scratch_stage2_offset = ScoresScratchStage2Offset;
         static constexpr uint32_t indices_scratch_stage2_offset = IndicesScratchStage2Offset;
+        static constexpr uint32_t scores_scratch_addr = ScoresScratchAddr;
+        static constexpr uint32_t indices_scratch_addr = IndicesScratchAddr;
     };
 
     template <
@@ -741,7 +745,9 @@ struct TopKSampling {
         uint32_t PBF16 = 0,
         uint32_t TopKScoresSlotBytes = 0,
         uint32_t MeshMode = 0,
-        uint32_t Stage2Receiver = 0>
+        uint32_t Stage2Receiver = 0,
+        uint32_t OutputAddr = 0,
+        uint32_t RandOutputAddr = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
@@ -756,6 +762,8 @@ struct TopKSampling {
         static constexpr uint32_t topk_scores_slot_bytes = TopKScoresSlotBytes;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
+        static constexpr uint32_t output_addr = OutputAddr;
+        static constexpr uint32_t rand_output_addr = RandOutputAddr;
     };
 
     template <
@@ -823,8 +831,6 @@ struct TopKSampling {
         uint32_t output_addr;
         uint32_t final_noc_x;
         uint32_t final_noc_y;
-        uint32_t scores_scratch_addr;
-        uint32_t indices_scratch_addr;
         uint32_t global_sem_addr;
         uint32_t global_stage2_sem_addr;
     };
@@ -832,9 +838,6 @@ struct TopKSampling {
     struct WriterArgs {
         uint32_t final_noc_x;
         uint32_t final_noc_y;
-        uint32_t scratch_addr;
-        uint32_t output_addr;
-        uint32_t rand_output_addr;
         uint32_t socket_config_addr = 0;
         // Optional persistent-mode next-iteration signal routing (BRISC path).
         uint32_t persistent_enable = 0;
@@ -1328,9 +1331,9 @@ struct TopKSampling {
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
                         write_topk_slot(
-                            args.scores_scratch_addr +
+                            CTArgs::scores_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_scores_slot_bytes,
-                            args.indices_scratch_addr +
+                            CTArgs::indices_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_indices_slot_bytes,
                             global_scores,
                             global_indices);
@@ -1360,8 +1363,8 @@ struct TopKSampling {
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
                         } else {
                             phase3_merge_mesh_stage_topk_slots(
-                                args.scores_scratch_addr,
-                                args.indices_scratch_addr,
+                                CTArgs::scores_scratch_addr,
+                                CTArgs::indices_scratch_addr,
                                 CTArgs::stage1_num_slots,
                                 global_scores,
                                 global_indices);
@@ -1376,9 +1379,9 @@ struct TopKSampling {
 
                     if constexpr (CTArgs::stage2_receiver) {
                         write_topk_slot(
-                            args.scores_scratch_addr + CTArgs::scores_scratch_stage2_offset +
+                            CTArgs::scores_scratch_addr + CTArgs::scores_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_scores_slot_bytes,
-                            args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset +
+                            CTArgs::indices_scratch_addr + CTArgs::indices_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_indices_slot_bytes,
                             global_scores,
                             global_indices);
@@ -1409,8 +1412,8 @@ struct TopKSampling {
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
                         } else {
                             phase3_merge_mesh_stage_topk_slots(
-                                args.scores_scratch_addr + CTArgs::scores_scratch_stage2_offset,
-                                args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset,
+                                CTArgs::scores_scratch_addr + CTArgs::scores_scratch_stage2_offset,
+                                CTArgs::indices_scratch_addr + CTArgs::indices_scratch_stage2_offset,
                                 CTArgs::stage2_num_slots,
                                 global_scores,
                                 global_indices);
@@ -1543,11 +1546,11 @@ struct TopKSampling {
 
                         DPRINT << "Selected index=" << selected_index << ENDL();
 
-                        auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
+                        auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
                         output_ptr[0] = selected_index;
 
-                        if (args.rand_output_addr != 0) {
-                            auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.rand_output_addr);
+                        if constexpr (CTArgs::rand_output_addr != 0) {
+                            auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
                             rand_out[0] = rand;
                         }
 

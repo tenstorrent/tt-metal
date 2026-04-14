@@ -35,6 +35,7 @@ FORCE_INLINE uint64_t get_safe_multicast_noc_addr(
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
+    uint32_t ncrisc_rt_arg_idx = 0;
     using SamplingReaderCTArgs = deepseek_b1_ops::TopKSampling::ReaderCTArgs<
         get_named_compile_time_arg_val("sampling_num_values"),
         get_named_compile_time_arg_val("sampling_topk_k"),
@@ -79,18 +80,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_mesh_stage_scores_cb"),
         get_named_compile_time_arg_val("sampling_mesh_stage_indices_cb"),
         get_named_compile_time_arg_val("sampling_scores_scratch_stage2_offset"),
-        get_named_compile_time_arg_val("sampling_indices_scratch_stage2_offset")>;
+        get_named_compile_time_arg_val("sampling_indices_scratch_stage2_offset"),
+        get_named_compile_time_arg_val("sampling_scores_scratch_addr"),
+        get_named_compile_time_arg_val("sampling_indices_scratch_addr")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
-        .scores_addr = get_common_arg_val<uint32_t>(0),
-        .indices_addr = get_common_arg_val<uint32_t>(1),
-        .output_addr = get_common_arg_val<uint32_t>(2),
-        .final_noc_x = get_common_arg_val<uint32_t>(3),
-        .final_noc_y = get_common_arg_val<uint32_t>(4),
-        .scores_scratch_addr = get_common_arg_val<uint32_t>(5),
-        .indices_scratch_addr = get_common_arg_val<uint32_t>(6),
-        .global_sem_addr = get_common_arg_val<uint32_t>(7),
-        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(8),
+        .scores_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .indices_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .output_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
+        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
     };
 
     deepseek_b1_ops::TopKSampling::
@@ -98,6 +99,7 @@ void kernel_main() {
             sampling_op;
 
 #elif defined(COMPILE_FOR_BRISC)
+    uint32_t brisc_rt_arg_idx = 0;
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
@@ -111,14 +113,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_p_bf16"),
         get_named_compile_time_arg_val("sampling_topk_scores_slot_bytes"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
-        get_named_compile_time_arg_val("sampling_stage2_receiver")>;
+        get_named_compile_time_arg_val("sampling_stage2_receiver"),
+        get_named_compile_time_arg_val("sampling_output_addr"),
+        get_named_compile_time_arg_val("sampling_rand_output_addr")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
-        .final_noc_x = get_common_arg_val<uint32_t>(0),
-        .final_noc_y = get_common_arg_val<uint32_t>(1),
-        .scratch_addr = get_common_arg_val<uint32_t>(2),
-        .output_addr = get_common_arg_val<uint32_t>(3),
-        .rand_output_addr = get_common_arg_val<uint32_t>(4),
+        .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
+        .final_noc_y = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
     };
 
     deepseek_b1_ops::TopKSampling::

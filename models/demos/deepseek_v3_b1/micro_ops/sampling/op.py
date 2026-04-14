@@ -364,6 +364,8 @@ class SamplingOp:
             ("sampling_mesh_stage_indices_cb", 0xFFFFFFFF),
             ("sampling_scores_scratch_stage2_offset", 0),
             ("sampling_indices_scratch_stage2_offset", 0),
+            ("sampling_scores_scratch_addr", 0),
+            ("sampling_indices_scratch_addr", 0),
             ("sampling_loop_mcast_start_x", loop_mcast_start_x),
             ("sampling_loop_mcast_start_y", loop_mcast_start_y),
             ("sampling_loop_mcast_end_x", loop_mcast_end_x),
@@ -414,6 +416,8 @@ class SamplingOp:
             ("sampling_topk_scores_slot_bytes", topk_scores_slot_bytes),
             ("sampling_mesh_mode", 0),
             ("sampling_stage2_receiver", 0),
+            ("sampling_output_addr", int(output_index_tensor.buffer_address())),
+            ("sampling_rand_output_addr", int(rand_output_tensor.buffer_address()) if rand_output_tensor is not None else 0),
             ("sampling_num_internal_iterations", num_internal_iterations),
         ]
 
@@ -436,15 +440,10 @@ class SamplingOp:
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
                 0,
                 0,
-                0,
-                0,
             ],
             brisc_common_runtime_args=[
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).x),
                 int(scores_tensor.device().worker_core_from_logical_core(final_core_coord).y),
-                0,
-                int(output_index_tensor.buffer_address()),
-                int(rand_output_tensor.buffer_address()) if rand_output_tensor is not None else 0,
             ],
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(
@@ -849,6 +848,8 @@ class SamplingOp:
                     ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb),
                     ("sampling_scores_scratch_stage2_offset", stage2_scores_scratch_offset),
                     ("sampling_indices_scratch_stage2_offset", stage2_indices_scratch_offset),
+                    ("sampling_scores_scratch_addr", int(scores_scratch_device.buffer_address())),
+                    ("sampling_indices_scratch_addr", int(indices_scratch_device.buffer_address())),
                     ("sampling_loop_mcast_start_x", 0),
                     ("sampling_loop_mcast_start_y", 0),
                     ("sampling_loop_mcast_end_x", 0),
@@ -899,6 +900,8 @@ class SamplingOp:
                     ("sampling_topk_scores_slot_bytes", topk_scores_slot_bytes),
                     ("sampling_mesh_mode", 1),
                     ("sampling_stage2_receiver", 1 if is_stage2_receiver else 0),
+                    ("sampling_output_addr", int(output_tensor_device.buffer_address())),
+                    ("sampling_rand_output_addr", rand_output_addr),
                     ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
 
@@ -944,17 +947,12 @@ class SamplingOp:
                         int(output_tensor_device.buffer_address()),
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).x),
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).y),
-                        int(scores_scratch_device.buffer_address()),
-                        int(indices_scratch_device.buffer_address()),
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ],
                     brisc_common_runtime_args=[
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).x),
                         int(scores_tensor_device.device().worker_core_from_logical_core(final_core_coord).y),
-                        0,
-                        int(output_tensor_device.buffer_address()),
-                        rand_output_addr,
                     ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -235,7 +236,7 @@ bool run_top32_rm_dev(
     std::vector<uint32_t> compute_compile_args = {row_elements, num_in_tiles, kOutputTiles};
     CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/top32_rm_dev_compute_v2.cpp",
         crs,
         ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_compile_args});
 
