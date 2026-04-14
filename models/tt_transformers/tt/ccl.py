@@ -163,7 +163,7 @@ def tt_all_reduce(
             input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-    # N300 and T3K: reduce_scatter
+    # N300 and T3K: reduce_scatter + all_gather (true all_reduce for replicated tensor flow)
     if 1 in list(mesh_device.shape):
         if input_tensor.is_sharded() and not sharded:
             input_tensor_sharded = input_tensor
@@ -177,7 +177,7 @@ def tt_all_reduce(
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             num_links=num_reduce_scatter_links,
-            memory_config=memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             intermediate_memory_config=rs_memory_config,
             topology=topology,
             chunks_per_sync=chunks_per_sync,
@@ -186,7 +186,27 @@ def tt_all_reduce(
             subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)
-        return reduced
+
+        # All-gather to reconstruct full tensor (completes the all_reduce)
+        gathered = ttnn.experimental.all_gather_async(
+            reduced,
+            persistent_output_buffer=None,
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=num_all_gather_links,
+            topology=topology,
+            memory_config=memory_config,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
+        )
+        reduced.deallocate(True)
+
+        # Reshape back to original shape
+        gathered = ttnn.reshape(gathered, original_shape)
+        return gathered
 
     # TG: all_reduce
     # Cast to CCL dtype
