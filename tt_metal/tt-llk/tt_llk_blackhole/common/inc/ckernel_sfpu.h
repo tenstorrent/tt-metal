@@ -52,7 +52,4 @@
 #include "sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
-#include "sfpu/ckernel_sfpu_topk.h"
 #include "sfpu/ckernel_sfpu_trigonometry.h"
-#include "sfpu/ckernel_sfpu_typecast.h"
-#include "sfpu/ckernel_sfpu_where.h"
