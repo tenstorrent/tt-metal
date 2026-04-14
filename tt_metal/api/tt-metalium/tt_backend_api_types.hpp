@@ -32,7 +32,7 @@ enum class DataFormat : uint8_t {
     Bfp4_b = 7,
     Bfp2_b = 15,
     Lf8 = 10,
-    Fp8_e4m3 = 0x1A,
+    Fp8_e4m3 = 26,
     Int8 = 14,
     Tf32 = 4,
     UInt8 = 30,
@@ -40,10 +40,10 @@ enum class DataFormat : uint8_t {
     Int16 = 13,
     Int32 = 8,
     UInt32 = 24,
-    RawUInt8 = 0xf0,
-    RawUInt16 = 0xf1,
-    RawUInt32 = 0xf2,
-    Invalid = 0xff
+    RawUInt8 = 240,
+    RawUInt16 = 241,
+    RawUInt32 = 242,
+    Invalid = 255
 };
 
 /**
