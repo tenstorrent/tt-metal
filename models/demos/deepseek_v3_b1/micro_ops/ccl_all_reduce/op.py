@@ -297,14 +297,14 @@ class AllReduceConfig:
         shard_width = metadata_sample.memory_config().shard_spec.shape[1]
         tiny_tile_w = metadata_sample.tile.tile_shape[1]
         num_pages = shard_width // tiny_tile_w
-        if num_pages % 32 != 0:
-            raise ValueError(f"Tile count must be divisible by 32 for 32x32 reinterpretation, got {num_pages}")
 
         if num_tiles_override is not None and page_size_override is not None:
             self.total_num_tiles = int(num_tiles_override)
             self.element_size = 2
             self.tile_size_bytes = int(page_size_override)
         else:
+            if num_pages % 32 != 0:
+                raise ValueError(f"Tile count must be divisible by 32 for 32x32 reinterpretation, got {num_pages}")
             self.total_num_tiles = num_pages // 32
             self.element_size = 2
             self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
