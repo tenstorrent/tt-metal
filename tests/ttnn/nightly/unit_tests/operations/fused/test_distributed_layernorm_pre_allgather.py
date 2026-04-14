@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -74,6 +74,190 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
         else:
             tt_out.append(ttnn.layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
     return tt_out
+
+
+def run_layernorm_pre_all_gather_residual_pcc(device):
+    """Stats from layer_norm_pre_all_gather with residual_input_tensor (input + residual).
+
+    Shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
+    Golden stats match torch reductions on the fused tensor input + residual.
+    """
+    torch.manual_seed(41467)
+
+    inp_shape = (1, 1, 32, 128)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
+    torch_res = torch.randn(inp_shape, dtype=torch.bfloat16)
+    combined = torch_inp + torch_res
+
+    out_torch = reference(combined.chunk(1, dim=-1), 1, False)[0]
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = torch2tt_tensor(
+        torch_inp,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    tt_res = torch2tt_tensor(
+        torch_res,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    tt_stats = ttnn.layer_norm_pre_all_gather(
+        tt_inp,
+        residual_input_tensor=tt_res,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        memory_config=dram_memcfg,
+    )
+
+    tt_output_host = tt2torch_tensor(tt_stats)
+    all_passing = True
+    n_devices = 1
+    reduction_width = inp_shape[-1] // n_devices
+
+    device_offset = 0
+    # sum(x^2) lives in column 0 of the first stats tile (same layout as run_layernorm_part_1)
+    passing, output_str = comp_allclose_and_pcc(
+        out_torch[:, :, :, 0 + device_offset],
+        tt_output_host[:, :, :, 0 + device_offset],
+        rtol=1e-01 * reduction_width,
+        atol=0,
+        pcc=0.99,
+    )
+    logger.debug(f"tt vs torch sum(x^2) residual path = {output_str}")
+    all_passing &= passing
+
+    passing, output_str = comp_equal(
+        out_torch[:, :, :, 1 + device_offset : 32 + device_offset],
+        tt_output_host[:, :, :, 1 + device_offset : 32 + device_offset],
+    )
+    logger.debug(f"tt vs torch padding 1 residual path = {output_str}")
+    all_passing &= passing
+
+    # sum(x) lives in column 0 of the second stats tile (offset 32)
+    passing, output_str = comp_allclose_and_pcc(
+        out_torch[:, :, :, 32 + device_offset],
+        tt_output_host[:, :, :, 32 + device_offset],
+        rtol=5e-01 * reduction_width,
+        atol=10,
+        pcc=0.99,
+    )
+    logger.debug(f"tt vs torch sum(x) residual path = {output_str}")
+    all_passing &= passing
+
+    passing, output_str = comp_equal(
+        out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
+        tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
+    )
+    logger.debug(f"tt vs torch padding 2 residual path = {output_str}")
+    all_passing &= passing
+
+    assert all_passing
+
+
+def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
+    """End-to-end LayerNorm (pre_all_gather -> post_all_gather) with weight only, no bias.
+
+    Regression for the former TT_FATAL that required beta whenever layernorm used gamma
+    (see layernorm_post_all_gather_device_operation). Shape (1, 1, 37, 72)
+    """
+    torch.manual_seed(42)
+
+    inp_shape = (1, 1, 37, 72)
+    hidden_size = inp_shape[-1]
+    epsilon = 1e-5
+
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    x = torch.randn(inp_shape, dtype=torch.bfloat16)
+    gamma_torch = torch.rand(1, 1, 1, hidden_size, dtype=torch.bfloat16) * 2 - 1
+
+    ref_out = torch.nn.functional.layer_norm(
+        x.float(),
+        (hidden_size,),
+        gamma_torch.reshape(hidden_size).float(),
+        bias=None,
+        eps=epsilon,
+    ).to(torch.bfloat16)
+
+    pre_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    post_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_inp = torch2tt_tensor(
+        x,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    if use_pre_all_gather:
+        tt_stats = ln_pre_allgather_op([tt_inp], 1, False, ttnn.bfloat16, pre_kernel_config)[0]
+    else:
+        stats_torch = reference(x.chunk(1, dim=-1), 1, False)[0]
+        tt_stats = torch2tt_tensor(
+            stats_torch,
+            tt_dtype=ttnn.bfloat16,
+            tt_device=device,
+            tt_layout=ttnn.TILE_LAYOUT,
+            tt_memory_config=dram_memcfg,
+        )
+
+    tt_gamma = torch2tt_tensor(
+        gamma_torch,
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    tt_out = ttnn.layer_norm_post_all_gather(
+        tt_inp,
+        tt_stats,
+        epsilon=epsilon,
+        weight=tt_gamma,
+        compute_kernel_config=post_kernel_config,
+        dtype=ttnn.bfloat16,
+        memory_config=dram_memcfg,
+    )
+
+    tt_out_host = tt2torch_tensor(tt_out)[..., :hidden_size]
+
+    passing, output_str = comp_allclose_and_pcc(
+        ref_out,
+        tt_out_host,
+        rtol=0.5,
+        atol=25,
+        pcc=0.99,
+    )
+    logger.debug(f"layernorm pre+post (gamma only) vs torch = {output_str}")
+    assert passing, output_str
 
 
 def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device):
@@ -268,3 +452,18 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
         device.num_program_cache_entries()
     )
+
+
+@pytest.mark.parametrize(
+    "use_pre_all_gather",
+    [True, False],
+    ids=["via_pre_allgather", "stats_manual"],
+)
+def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
+    """layer_norm_post_all_gather with gamma and no bias; PCC vs torch reference."""
+    run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather)
+
+
+def test_layernorm_pre_all_gather_residual_pcc(device):
+    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
+    run_layernorm_pre_all_gather_residual_pcc(device)

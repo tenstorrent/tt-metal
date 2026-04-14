@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,12 +25,16 @@ void kernel_main() {
     experimental::Noc noc;
 
     // TODO: Replace with get_thread_idx() kernel API when available
+#ifdef ARCH_QUASAR
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     uint32_t consumer_idx = static_cast<uint32_t>(__builtin_popcount(consumer_mask & ((1u << hartid) - 1u)));
+#else
+    uint32_t consumer_idx = 0;
+#endif
 
-    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
-    // ENDL();
+    // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer << ENDL();
+    // DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, entry_size);
@@ -42,9 +46,12 @@ void kernel_main() {
         } else {
             page_id = chunk_offset + tile_id * num_consumers + consumer_idx;
         }
-        DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
+        // DPRINT << "consumer tile id " << tile_id << " page id " << page_id << ENDL();
+        // DEVICE_PRINT("consumer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
-            dfb.write_out(noc, tensor_accessor, {.page_id = page_id});
+#ifdef ARCH_QUASAR
+            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
+#endif
         } else {
             dfb.wait_front(1);
             noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
@@ -53,7 +60,9 @@ void kernel_main() {
         }
     }
     dfb.finish();
-    DPRINT << "CBW" << ENDL();
-    noc.async_write_barrier();
-    DPRINT << "CBWD" << ENDL();
+    // DPRINT << "CBW" << ENDL();
+    // DEVICE_PRINT("CBW\n");
+    dfb.write_barrier(noc);
+    // DPRINT << "CBWD" << ENDL();
+    // DEVICE_PRINT("CBWD\n");
 }

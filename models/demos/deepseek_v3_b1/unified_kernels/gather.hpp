@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -8,6 +8,7 @@
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -16,13 +17,16 @@ namespace deepseek_b1_ops {
 // Gather micro-op
 //
 // Gathers data from multiple sender cores to a single receiver core.
-// Receiver runs on BRISC, Sender runs on NCRISC.
+// Default: Sender on NCRISC, Receiver on BRISC.
+// ReceiverOnNCRISC mode: Both sender and receiver on NCRISC, BRISC is no-op.
+//   Use when sender and receiver share a core (e.g. dkv_gather where
+//   kv_rmsnorm_core is also a knope sender core).
 //
 // CB States:
-//   NCRISC (Sender):
+//   Sender (NCRISC):
 //     - Waits: src_cb (src_num_pages)
 //     - Pops: src_cb (src_num_pages) if pop_src=true
-//   BRISC (Receiver):
+//   Receiver (BRISC, or NCRISC when ReceiverOnNCRISC=true):
 //     - Reserves: dst_cb (dst_num_pages)
 //     - Pushes: dst_cb (dst_num_pages)
 //   TRISC: No-op
@@ -37,11 +41,9 @@ namespace deepseek_b1_ops {
 // ============================================================================
 struct Gather {
     // ========================================================================
-    // Runtime args structs - different layout per RISC
+    // Runtime args structs
     // ========================================================================
 
-    // Receiver args (BRISC): [noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr,
-    //                         noc1_receiver_semaphore_addr, dst_cb, dst_num_pages]
     struct ReceiverArgs {
         uint32_t noc0_num_senders;
         uint32_t noc1_num_senders;
@@ -51,10 +53,6 @@ struct Gather {
         uint32_t dst_num_pages;
     };
 
-    // Sender args (NCRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_addr,
-    //                        src_cb, src_num_pages, sender_grid_start_x, sender_grid_start_y,
-    //                        sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr,
-    //                        sender_idx]
     struct SenderArgs {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
@@ -71,11 +69,17 @@ struct Gather {
         uint32_t sender_idx;  // Per-core sender index (only used if UsePerCoreSenderIdx=true)
     };
 
+    // Unified dataflow args: both BRISC and NCRISC get the full set so the
+    // sender/receiver impl can be placed on either RISC without restructuring.
+    struct DMArgs {
+        SenderArgs sender;
+        ReceiverArgs receiver;
+    };
+
     // Compute args (TRISC) - not used for gather (dataflow only)
     struct ComputeArgs {};
 
-    // Note: For gather, NCRISC=Sender, BRISC=Receiver
-    using RTArgs = unified_kernels::SelectByRISCV<SenderArgs, ReceiverArgs, ComputeArgs>;
+    using RTArgs = unified_kernels::SelectByRISCV<DMArgs, DMArgs, ComputeArgs>;
 
     // ========================================================================
     // Op - the actual operation
@@ -84,77 +88,88 @@ struct Gather {
     // IsReceiverCore: compile-time flag for receiver cores
     // pop_src: whether to pop the source CB after sending
     // UsePerCoreSenderIdx: compile-time flag for scattered vs grid-based indexing
+    // ReceiverOnNCRISC: when true, receiver logic runs on NCRISC instead of BRISC.
+    //   Use for gathers where sender and receiver share a core (e.g. dkv_gather).
+    //   NCRISC does send-then-receive; BRISC is no-op.
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src, bool UsePerCoreSenderIdx = false>
+    template <
+        bool IsSenderCore,
+        bool IsReceiverCore,
+        bool pop_src,
+        bool UsePerCoreSenderIdx = false,
+        bool ReceiverOnNCRISC = false>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
 
     private:
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+        static void sender_impl(const SenderArgs& s) {
+            ASSERT(s.data_size_bytes > 0);
+            uint32_t core_index;
+            if constexpr (UsePerCoreSenderIdx) {
+                core_index = s.sender_idx;
+            } else {
+                core_index = unified_kernels::linear_id_in_grid<true>(
+                    s.sender_grid_start_x, s.sender_grid_start_y, s.sender_grid_end_x, s.sender_grid_end_y);
+            }
+            uint32_t offset = core_index * s.data_size_bytes;
+
+            const uint64_t dst_noc_coord = get_noc_addr(s.dest_noc_x, s.dest_noc_y, 0);
+            uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(s.receiver_data_addr + offset);
+            uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)s.receiver_semaphore_addr;
+
+            cb_wait_front(s.src_cb, s.src_num_pages);
+
+            uint32_t input_data_addr = get_read_ptr(s.src_cb);
+            noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, s.data_size_bytes);
+            // BH does not support posted atomics due to a bug
+            noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+
+            if constexpr (pop_src) {
+                noc_async_posted_writes_flushed();
+                cb_pop_front(s.src_cb, s.src_num_pages);
+            }
+            noc_async_atomic_barrier();
+        }
+
+        static void receiver_impl(const ReceiverArgs& r) {
+            ASSERT(r.noc0_num_senders > 0 || r.noc1_num_senders > 0);
+            volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
+                (volatile tt_l1_ptr uint32_t*)r.noc0_receiver_semaphore_addr;
+
+            cb_reserve_back(r.dst_cb, r.dst_num_pages);
+            noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, r.noc0_num_senders);
+            noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
+
+            if (r.noc1_num_senders > 0) {
+                volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
+                    (volatile tt_l1_ptr uint32_t*)r.noc1_receiver_semaphore_addr;
+                noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, r.noc1_num_senders);
+                noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
+            }
+
+            cb_push_back(r.dst_cb, r.dst_num_pages);
+        }
+#endif
+
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NCRISC (Sender) - DataMovementProcessor.RISCV_1
+            // NCRISC: Sender always, Receiver when ReceiverOnNCRISC=true
             // ================================================================
             if constexpr (IsSenderCore) {
-                // Compute per-core offset using compile-time branching
-                // For scattered cores (UsePerCoreSenderIdx=true), use the provided sender_idx
-                // For rectangular grids (UsePerCoreSenderIdx=false), compute from grid position
-                uint32_t core_index;
-                if constexpr (UsePerCoreSenderIdx) {
-                    core_index = args.sender_idx;
-                } else {
-                    // Note: my_logical_x_/y_ are global variables set by firmware
-                    core_index = unified_kernels::linear_id_in_grid<true>(
-                        args.sender_grid_start_x,
-                        args.sender_grid_start_y,
-                        args.sender_grid_end_x,
-                        args.sender_grid_end_y);
-                }
-                uint32_t offset = core_index * args.data_size_bytes;
-
-                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
-                uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
-                uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
-
-                // Wait for source CB data to be ready
-                cb_wait_front(args.src_cb, args.src_num_pages);
-
-                // Get source address from CB
-                uint32_t input_data_addr = get_read_ptr(args.src_cb);
-                noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
-                // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_semaphore_noc_addr, 1);
-                noc_async_posted_writes_flushed();
-
-                // Pop the source CB after sending
-                if constexpr (pop_src) {
-                    cb_pop_front(args.src_cb, args.src_num_pages);
-                }
-                noc_async_atomic_barrier();
+                sender_impl(args.sender);
+            }
+            if constexpr (ReceiverOnNCRISC && IsReceiverCore) {
+                receiver_impl(args.receiver);
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // BRISC (Receiver) - DataMovementProcessor.RISCV_0
+            // BRISC: Receiver when ReceiverOnNCRISC=false, no-op otherwise
             // ================================================================
-            if constexpr (IsReceiverCore) {
-                volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
-                    (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
-
-                // Reserve space in destination CB
-                cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
-                noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
-
-                if (args.noc1_num_senders > 0) {
-                    volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
-                        (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
-                    noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
-                    noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
-                }
-
-                // Push to destination CB after data arrived
-                cb_push_back(args.dst_cb, args.dst_num_pages);
+            if constexpr (!ReceiverOnNCRISC && IsReceiverCore) {
+                receiver_impl(args.receiver);
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

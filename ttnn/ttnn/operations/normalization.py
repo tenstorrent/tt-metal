@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ import math
 from ttnn._ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
+    determine_expected_group_norm_sharded_config_and_grid_size,
     _compute_num_virtual_cols,
     _find_expected_dram_grid,
 )
@@ -211,76 +212,6 @@ def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.Core
 
 
 # group norm helper function
-def determine_expected_group_norm_sharded_config_and_grid_size(
-    *, device, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major=False
-):
-    """Derive sharded memory config and grid for group norm.
-
-    - num_channels must be divisible by num_groups and 32 (tile width).
-    - input_nhw is N*H*W in logical units; padded to core multiples.
-    - If is_height_sharded: shard along NHW only; channels per core is all C.
-      Otherwise: shard across channels and NHW (BLOCK_SHARDED).
-    - is_row_major toggles shard shape orientation.
-
-    Returns: (MemoryConfig, CoreGrid)
-    """
-    assert num_channels % num_groups == 0
-    assert num_channels % 32 == 0
-    group_size = num_channels // num_groups
-    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    device_grid_size = [compute_with_storage_grid_size.x, compute_with_storage_grid_size.y]
-    if is_row_major:
-        device_grid_size = [compute_with_storage_grid_size.y, compute_with_storage_grid_size.x]
-
-    max_num_cores = device_grid_size[0] * device_grid_size[1]
-    input_nhw_paddedto32 = math.ceil(input_nhw / 32) * 32
-    num_cores_nhw = find_closest_largest_divisor(
-        input_nhw_paddedto32 // 32, max_num_cores if is_height_sharded else device_grid_size[0]
-    )
-    if is_height_sharded:
-        num_cores_channels = 1
-    else:
-        num_cores_channels = device_grid_size[1]
-        # num_channels_tiles = num_channels // 16
-        num_channels_tiles = num_channels // 8
-        while (
-            (num_channels_tiles % num_cores_channels != 0)
-            or ((num_channels // num_cores_channels) % group_size != 0)
-            or (num_channels // num_cores_channels < 32)
-        ):
-            num_cores_channels -= 1
-            assert num_cores_channels > 0
-    input_nhw_padded_to_ncores = math.ceil(input_nhw / (num_cores_nhw * 32)) * (num_cores_nhw * 32)
-    gn_in_channels_per_core = num_channels // num_cores_channels
-    # assert gn_in_channels_per_core % 16 == 0
-    assert gn_in_channels_per_core % 8 == 0
-    gn_nhw_per_core = input_nhw_padded_to_ncores // num_cores_nhw
-    if is_height_sharded:
-        grid_size = [
-            device_grid_size[0] if num_cores_nhw >= device_grid_size[0] else num_cores_nhw,
-            math.ceil(num_cores_nhw / device_grid_size[0]),
-        ]  # for 1d systolic array, grid size is the tightest bound of num_cores_nhw as a rectangle (x,y)
-        assert (
-            num_cores_nhw <= grid_size[0] * grid_size[1]
-        ), "Error: For height sharding, num_cores_nhw must be <= grid size"
-    else:
-        grid_size = [num_cores_channels, num_cores_nhw] if is_row_major else [num_cores_nhw, num_cores_channels]
-    shard_shape = (
-        (1, 1, gn_nhw_per_core, gn_in_channels_per_core)
-        if is_row_major
-        else (1, 1, gn_in_channels_per_core, gn_nhw_per_core)
-    )
-    shard_strategy = ttnn.ShardStrategy.HEIGHT if is_height_sharded else ttnn.ShardStrategy.BLOCK
-    shard_orientation = (
-        ttnn.ShardOrientation.ROW_MAJOR if is_height_sharded or is_row_major else ttnn.ShardOrientation.COL_MAJOR
-    )
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-        shard_strategy,
-        shard_orientation,
-        use_height_and_width_as_shard_shape=True,
-    ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
 def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):

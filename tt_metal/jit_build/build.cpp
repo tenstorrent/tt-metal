@@ -1,15 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "build.hpp"
 
+#include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -211,6 +214,10 @@ void JitBuildEnv::init(
         }
     }
 
+    if (rtoptions.get_checkpoint_enabled()) {
+        this->defines_ += "-DDEBUG_CHECKPOINT_ENABLED ";
+    }
+
     if (rtoptions.get_record_noc_transfers()) {
         this->defines_ += "-DNOC_LOGGING_ENABLED ";
     }
@@ -270,7 +277,7 @@ void JitBuildEnv::init(
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
-        root_ + "tt_metal/third_party/tt_llk/common",
+        root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 
@@ -291,13 +298,18 @@ void JitBuildEnv::init(
     hasher.update(lflags_);
     hasher.update(defines_);
 
-    // Read the sfpi compiler version directly from the compiler
-    // we're using.  Compiler changes invalidate the cache.
-    if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // First line is typically about 55 chars on main
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0[333]) 15.1.0
-        // + branch name suffix on a branch
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0-checking-36930[340]) 15.1.0
+    if (get_rtoptions().get_build_map_enabled()) {
+        // Do not hash compiler version when generating compiler logs
+        // so that we may compare them between different compilers
+        // without undue difficulty.
+    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
+        // Read the sfpi compiler version directly from the compiler
+        // we're using.  Compiler changes invalidate the cache.
+
+        // First line is typically about 65 chars on a branch (and
+        // less on main):
+
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
         char buf[100];
         if (fgets(buf, sizeof(buf), pipe)) {
             hasher.update(buf, buf + std::strlen(buf));
@@ -574,10 +586,14 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
             launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
 
     sync_build_steps(events);
+
+    BuildCacheTelemetry::inst().record_compile(
+        static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -648,6 +664,10 @@ void JitBuildState::weaken(const string& out_dir) const {
     std::string pathname_in = out_dir + target_name_ + ".elf";
     jit_build::utils::FileRenamer out_file(this->weakened_firmware_name_);
 
+    // The output directory may differ from out_dir when firmware_binary_root_
+    // points to a pre-compiled directory that lacks this target's subdirectory.
+    fs::create_directories(fs::path(out_file.path()).parent_path());
+
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
@@ -683,6 +703,7 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
+    auto t0_build = std::chrono::steady_clock::now();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -707,6 +728,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         if (!link_objs.empty()) {
             return;
         }
+        uint32_t reused_objs = 0;
         for (size_t i = 0; i < num_objs; ++i) {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
@@ -717,9 +739,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
                 hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                ++reused_objs;
             }
             link_objs += temp_obj;
             link_objs += " ";
+        }
+        if (reused_objs != 0) {
+            BuildCacheTelemetry::inst().record_merge(reused_objs);
         }
     };
 
@@ -759,20 +785,35 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
     extract_zone_src_locations(out_dir);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
+    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    tok_build.record(elapsed_ms);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
+    auto t0 = std::chrono::steady_clock::now();
 
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
+    auto t0 = std::chrono::steady_clock::now();
+
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
     write_successful_jit_build_marker(primary, settings);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
+    tok.record(elapsed_ms);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
@@ -799,9 +840,14 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events) {
 }
 
 void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
-    JitBuildCache::inst().build_once(hash, build_fn);
+    if (!JitBuildCache::inst().build_once(hash, build_fn)) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
 }
 
-void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
+void jit_build_cache_clear() {
+    JitBuildCache::inst().clear();
+    jit_build::clear_file_hash_cache();
+}
 
 }  // namespace tt::tt_metal

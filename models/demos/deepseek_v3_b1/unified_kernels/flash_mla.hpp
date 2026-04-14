@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -132,6 +132,9 @@ struct FlashMLADecode {
         uint32_t is_mcast_sender;
         uint32_t mcast_start_x;
         uint32_t mcast_start_y;
+        uint32_t mcast_end_x;
+        uint32_t mcast_end_y;
+        uint32_t num_mcast_dests;
         uint32_t vc;
         uint32_t St;
         uint32_t DHt;
@@ -241,12 +244,17 @@ struct FlashMLADecode {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+            constexpr uint8_t MCAST_NOC_INDEX = 0;
+            constexpr uint8_t ATOMIC_NOC_INDEX = 1;
+            constexpr uint32_t BRISC_MCAST_LOOPS = 2;
+            noc_async_write_set_trid(0, MCAST_NOC_INDEX);
+#endif
 // ====================================================================
 // BRISC (Reader)
 // ====================================================================
 #if defined(COMPILE_FOR_BRISC)
             constexpr uint8_t READ_NOC_INDEX = 0;
-            constexpr uint8_t ATOMIC_NOC_INDEX = 1;
             constexpr auto k_tensor_args = TensorAccessorArgs<0>();
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
@@ -255,14 +263,11 @@ struct FlashMLADecode {
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
-            (void)k_num_chunks;
 
             volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             if (k_chunk_start == k_chunk_end) {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-                noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                 return;
             }
 
@@ -294,16 +299,14 @@ struct FlashMLADecode {
 
             constexpr uint32_t kv_batch = 0;
 
-            if (is_mcast_sender) {
-                const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk_start;
-                uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
-                noc_async_read_one_packet_set_state<true>(k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
-                // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
-                reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, READ_NOC_INDEX);
-            }
+            const uint64_t brisc_mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
+                args.mcast_start_x, args.mcast_start_y, args.mcast_end_x, args.mcast_end_y, 0);
+            const uint64_t brisc_mcast_sem_addr = brisc_mcast_noc_addr | args.mcast_semaphore_addr;
+            const uint32_t k_chunk_total_size = args.k_num_pages * args.k_page_size;
 
             // Only the core handling the last chunk needs to wait for the KV cache cur pos ready
             bool wait_for_kv_cache_ready = k_chunk_end == k_num_chunks;
+            uint32_t loop_iter = 0;
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -311,10 +314,56 @@ struct FlashMLADecode {
                     cb_reserve_back(args.cb_k_in, k_chunk_tiles);
                     uint32_t k_write_ptr = get_write_ptr(args.cb_k_in);
 
-                    if (is_mcast_sender) {
+                    if (is_mcast_sender && loop_iter < BRISC_MCAST_LOOPS) {
+                        DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
+                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
+
+                        if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
+                            DeviceZoneScopedN("wait-for-kv-cache-ready");
+                            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                            noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
+                        }
+
+                        {
+                            DeviceZoneScopedN("noc-read");
+                            noc_async_read(k_src_noc_addr, k_write_ptr, k_chunk_total_size, READ_NOC_INDEX);
+                            noc_async_read_barrier(READ_NOC_INDEX);
+                        }
+
+                        {
+                            DeviceZoneScopedN("noc-multicast");
+                            noc_semaphore_wait(receiver_ready_semaphore_ptr, args.num_mcast_dests);
+                            noc_semaphore_set(receiver_ready_semaphore_ptr, 0);
+
+                            uint64_t mcast_dest_addr = brisc_mcast_noc_addr | k_write_ptr;
+                            noc_async_write_multicast(
+                                k_write_ptr,
+                                mcast_dest_addr,
+                                k_chunk_total_size,
+                                args.num_mcast_dests,
+                                false,
+                                MCAST_NOC_INDEX);
+
+                            noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
+                            noc_semaphore_set_multicast(
+                                args.mcast_semaphore_addr,
+                                brisc_mcast_sem_addr,
+                                args.num_mcast_dests,
+                                false,
+                                MCAST_NOC_INDEX);
+                            noc_async_writes_flushed(MCAST_NOC_INDEX);
+                        }
+                    } else if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
                         const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
+
+                        if (loop_iter == BRISC_MCAST_LOOPS) {
+                            noc_async_read_one_packet_set_state<true>(
+                                k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
+                            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, READ_NOC_INDEX);
+                        }
 
                         constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;
                         uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
@@ -327,6 +376,7 @@ struct FlashMLADecode {
                         uint32_t pages_completed = 0;
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
                             noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                            noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                         }
 
                         noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
@@ -371,18 +421,15 @@ struct FlashMLADecode {
 
                     cb_push_back(args.cb_k_in, k_chunk_tiles);
                 }
+                loop_iter++;
             }
-            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-            noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
-
+            noc_async_write_barrier(MCAST_NOC_INDEX);
 // ====================================================================
 // NCRISC (Writer)
 // ====================================================================
 #elif defined(COMPILE_FOR_NCRISC)
-            constexpr uint8_t MCAST_NOC_INDEX = 0;
             constexpr uint8_t READ_NOC_INDEX = 1;
             constexpr uint8_t WRITE_NOC_INDEX = 1;
-            constexpr uint8_t ATOMIC_NOC_INDEX = 1;
 
             constexpr uint32_t k_page_size = CTArgs::k_page_size;
             constexpr uint32_t vDHt = CTArgs::vDHt;
@@ -400,7 +447,6 @@ struct FlashMLADecode {
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
             const bool is_output_core = args.is_output_core == 1;
-            noc_async_write_set_trid(0, WRITE_NOC_INDEX);
 
             uint32_t cur_pos = args.local_cur_pos;
 
@@ -458,8 +504,11 @@ struct FlashMLADecode {
 
             // =================================================================
             // KV Cache Multicast (page-level pipelining)
+            // Skip first BRISC_MCAST_LOOPS iterations — handled by BRISC
             // =================================================================
-            if (is_mcast_sender) {
+            const uint32_t num_k_chunks = k_chunk_end - k_chunk_start;
+            const uint32_t num_loop_iters = (num_k_chunks + args.num_cores_per_head - 1) / args.num_cores_per_head;
+            if (is_mcast_sender && num_loop_iters > BRISC_MCAST_LOOPS) {
                 volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.mcast_semaphore_addr);
 
@@ -481,7 +530,9 @@ struct FlashMLADecode {
 
                 noc_semaphore_set(mcast_semaphore_ptr, 1);
 
-                for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
+                for (uint32_t k_chunk = k_chunk_start + BRISC_MCAST_LOOPS * args.num_cores_per_head;
+                     k_chunk < k_chunk_end;
+                     k_chunk += args.num_cores_per_head) {
                     DeviceZoneScopedN("mcast-sender-multicast");
 
                     noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);

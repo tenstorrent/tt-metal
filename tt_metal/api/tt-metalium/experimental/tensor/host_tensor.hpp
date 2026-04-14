@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -186,6 +186,11 @@ public:
      * pre-condition: The HostTensor must be engaged.
      */
     const DistributedHostBuffer& buffer() const;
+
+    // TODO(#40348): This should be removed.
+    // We need to maintain invariant of this buffer.
+    // Giving out mutable reference allows user to assign into it.
+    DistributedHostBuffer& buffer();
 
     // Derivables:
 

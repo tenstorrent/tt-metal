@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, co
             m_momentum_buffer.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
         }
     }
@@ -39,7 +39,7 @@ void MuonComposite::step() {
     }
 
     for (auto& [name, buffer_ptr] : m_momentum_buffer) {
-        auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::HALF);
         const auto& tensor_ptr = m_parameters.at(name);
         if (!tensor_ptr->is_grad_initialized()) {
             continue;
@@ -59,7 +59,7 @@ void MuonComposite::step() {
         const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
 
         tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(update_direction, m_config.lr)));
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
     }
     m_steps++;
 }

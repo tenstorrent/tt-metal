@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <random>
 
 #include "bernoulli_device_operation.hpp"
 #include <tt-metalium/constants.hpp>

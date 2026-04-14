@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,9 +47,9 @@ void py_module_types(nb::module_& mod) {
     // for backward compatibility)
     nb::class_<ComputeKernelConfig>(mod, "WormholeComputeKernelConfig")
         .def(
-            nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
+            nb::init<tt::tt_metal::MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
+            nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
@@ -70,7 +70,7 @@ void py_module(nb::module_& mod) {
         nb::arg("arch"),
         nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
-        nb::arg("math_fidelity") = nb::cast(MathFidelity::LoFi),
+        nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::LoFi),
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,

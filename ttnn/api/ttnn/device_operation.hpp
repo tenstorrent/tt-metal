@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
-#include "tools/profiler/op_profiler.hpp"
+#include "tools/profiler/op_profiler_serialize.hpp"  // lightweight; heavy JSON lives in op_profiler_json.cpp
 #include <tt_stl/concepts.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start

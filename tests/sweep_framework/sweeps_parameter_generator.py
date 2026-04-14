@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,8 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 VECTOR_GROUPING_MODE = "mesh"
+GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
+GENERATED_VECTOR_FILES = set()
 
 
 def get_mesh_shape_from_vector(vector):
@@ -114,36 +116,85 @@ def _get_traced_machine_entries(vector):
     return []
 
 
+def _parse_hardware_entry(entry):
+    """Parse a single traced_machine_info entry into a hardware tuple."""
+    board_type = entry.get("board_type")
+    device_series = entry.get("device_series")
+    card_count = entry.get("card_count")
+
+    if isinstance(device_series, list):
+        device_series = device_series[0] if device_series else None
+
+    if not board_type and not device_series and card_count is None:
+        return None
+
+    if card_count is not None:
+        try:
+            card_count = int(card_count)
+        except (TypeError, ValueError):
+            card_count = 0
+
+    return (board_type or "unknown", device_series or "unknown", card_count)
+
+
 def get_hardware_from_vector(vector):
-    """Extract a hardware tuple from traced_machine_info when present."""
+    """Extract a hardware tuple from traced_machine_info when present.
+
+    Returns the first valid hardware tuple.  For all hardware tuples use
+    ``get_all_hardware_from_vector`` instead.
+    """
     for entry in _get_traced_machine_entries(vector):
-        board_type = entry.get("board_type")
-        device_series = entry.get("device_series")
-        card_count = entry.get("card_count")
-
-        if isinstance(device_series, list):
-            device_series = device_series[0] if device_series else None
-
-        if not board_type and not device_series and card_count is None:
-            continue
-
-        if card_count is not None:
-            try:
-                card_count = int(card_count)
-            except (TypeError, ValueError):
-                card_count = 0
-
-        return (board_type or "unknown", device_series or "unknown", card_count)
-
+        hw = _parse_hardware_entry(entry)
+        if hw is not None:
+            return hw
     return None
 
 
+def get_all_hardware_from_vector(vector):
+    """Return *all* distinct hardware tuples from traced_machine_info."""
+    seen = set()
+    result = []
+    for entry in _get_traced_machine_entries(vector):
+        hw = _parse_hardware_entry(entry)
+        if hw is not None and hw not in seen:
+            seen.add(hw)
+            result.append(hw)
+    return result
+
+
 def group_vectors_by_hardware(vectors):
-    """Group vectors by their traced hardware tuple."""
+    """Group vectors by their traced hardware tuple.
+
+    When a vector carries multiple hardware entries (e.g. same config_hash
+    traced on both N300-1c and N300-4c), it is placed into **each** matching
+    hardware group so that it only runs on runners whose hardware actually
+    matches the traced context.  Each copy narrows ``traced_machine_info`` to
+    the single entry that belongs to that group, preventing cross-hardware
+    contamination at runtime.
+    """
     grouped = defaultdict(list)
     for vector in vectors:
-        hardware = get_hardware_from_vector(vector)
-        grouped[hardware].append(vector)
+        hw_tuples = get_all_hardware_from_vector(vector)
+        if not hw_tuples:
+            # No hardware metadata — put in the catch-all None group
+            grouped[None].append(vector)
+            continue
+
+        if len(hw_tuples) == 1:
+            # Common fast-path: single hardware — no copy needed
+            grouped[hw_tuples[0]].append(vector)
+        else:
+            # Multiple hardware entries — split into per-hardware copies,
+            # each with only the matching traced_machine_info entry so the
+            # runtime filter cannot accidentally pass on wrong hardware.
+            entries = _get_traced_machine_entries(vector)
+            for entry in entries:
+                hw = _parse_hardware_entry(entry)
+                if hw is None:
+                    continue
+                copy = dict(vector)
+                copy["traced_machine_info"] = entry
+                grouped[hw].append(copy)
 
     return grouped
 
@@ -319,6 +370,37 @@ def _backup_corrupted_json_file(path: pathlib.Path) -> None:
         logger.warning(f"Failed to back up corrupted JSON file {path}: {e}")
 
 
+def write_generation_manifest(module_name, model_traced, suite_name, vector_files):
+    """Write vector-generation metadata consumed by matrix computation."""
+    export_dir = SWEEPS_DIR / "vectors_export"
+    manifest_path = export_dir / GENERATION_MANIFEST_FILENAME
+
+    try:
+        export_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning(f"Could not create vectors export directory for manifest: {e}")
+        return
+
+    manifest = {
+        "generated_at_utc": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "vector_grouping_mode": VECTOR_GROUPING_MODE,
+        "module_name": module_name,
+        "model_traced": model_traced,
+        "suite_name": suite_name,
+        "vector_files": sorted(vector_files),
+    }
+
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as file:
+            json.dump(manifest, file, indent=2)
+            file.write("\n")
+    except OSError as e:
+        logger.warning(f"Failed to write generation manifest {manifest_path}: {e}")
+        return
+
+    logger.info(f"Wrote generation manifest: {manifest_path}")
+
+
 def validate_exported_vectors(export_path, module_name, suite_name):
     """Validate that exported JSON file can be read back correctly.
 
@@ -408,6 +490,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         # A None group means the vector has no routing restriction, so keep the
         # base module name and let any compatible runner pick up the file.
         grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
+        GENERATED_VECTOR_FILES.add(f"{grouped_module_name}.json")
 
         # Export vectors WITHOUT modifying sweep_name.
         # Routing info is already present in traced_machine_info; sweep_name stays
@@ -656,7 +739,7 @@ if __name__ == "__main__":
         logger.info("Lead models filter enabled.")
         logger.info(
             "Set TTNN_LEAD_MODELS_ONLY={} for tests.sweep_framework.master_config_loader_v2 "
-            "to filter traced configs to lead-model sources from model_tracer/sweep_manifest.yaml",
+            "to filter traced configs to lead-model sources from model_tracer/trace_selection_registry.yaml",
             os.environ.get("TTNN_LEAD_MODELS_ONLY"),
         )
         logger.info("=" * 80)
@@ -705,4 +788,6 @@ if __name__ == "__main__":
         MasterConfigLoader.set_master_file_path(resolved)
         logger.info(f"Master trace override: {resolved}")
 
+    GENERATED_VECTOR_FILES.clear()
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)
+    write_generation_manifest(args.module_name, args.model_traced, args.suite_name, GENERATED_VECTOR_FILES)

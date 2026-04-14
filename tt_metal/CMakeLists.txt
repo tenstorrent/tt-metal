@@ -61,10 +61,10 @@ file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
 file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
-    third_party/tt_llk/common/*.h
-    third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
-    third_party/tt_llk/tt_llk_blackhole/**/*.h
-    third_party/tt_llk/tt_llk_quasar/**/*.h
+    tt-llk/common/*.h
+    tt-llk/tt_llk_wormhole_b0/**/*.h
+    tt-llk/tt_llk_blackhole/**/*.h
+    tt-llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(
@@ -91,7 +91,7 @@ endif()
 target_link_libraries(
     tt_metal
     PUBLIC
-        umd::device
+        umd::tt-umd
         enchantum::enchantum
         fmt::fmt-header-only
         TracyClient

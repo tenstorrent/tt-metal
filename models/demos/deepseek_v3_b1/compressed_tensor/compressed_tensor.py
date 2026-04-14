@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """CompressedTensor: a mixed-precision BFP tensor stored as raw packed bytes.
@@ -165,6 +165,7 @@ class CompressedTensor:
         memory_config=None,
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
+        min_shard_bytes: int = 0,
     ) -> None:
         assert (
             memory_config is not None and memory_config.is_sharded()
@@ -201,7 +202,35 @@ class CompressedTensor:
         ), f"Assignment shape {assignment.shape} doesn't match tile grid ({self.tiles_h}, {self.tiles_w})"
 
         self._assignment_flat = assignment.astype(np.int8).ravel().copy()
+        self._min_shard_bytes = min_shard_bytes
+        self._memory_config = memory_config
         self._pack_data_and_assignment(tensor, memory_config, assignment_memory_config, device)
+
+    # ==================================================================
+    # ttnn.Tensor compatibility interface (used by MoeOp / setup_dram_matmul)
+    # ==================================================================
+
+    @property
+    def dtype(self):
+        """Conservative dtype for CB setup — use bfloat8_b to safely size the largest compressed tile.
+
+        Mixed-precision CompressedTensors can contain bfp8 tiles (1088 B each), which is larger than
+        bfp4 (576 B).  Reporting bfloat8_b ensures CBs are always allocated large enough regardless
+        of the actual mix, without requiring callers to special-case the compressed path.
+        """
+        return ttnn.bfloat8_b
+
+    def get_tile(self):
+        """Return the standard 32×32 tile used by the compressed kernel."""
+        return ttnn.Tile((32, 32))
+
+    def memory_config(self):
+        """Return the original sharded MemoryConfig passed at construction."""
+        return self._memory_config
+
+    def buffer_address(self):
+        """Return the DRAM buffer address of the packed data tensor."""
+        return self.data.buffer_address()
 
     # ==================================================================
     # Public API
@@ -226,6 +255,132 @@ class CompressedTensor:
             memory_config=memory_config,
             assignment_memory_config=assignment_memory_config,
         )
+
+    @classmethod
+    def from_bspm(
+        cls,
+        tensor: torch.Tensor,
+        assignment: np.ndarray,
+        device=None,
+        memory_config=None,
+        assignment_memory_config=None,
+        tile_hw: int = DEFAULT_TILE_HW,
+        min_shard_bytes: int = 0,
+    ) -> CompressedTensor:
+        """Create CompressedTensor from a pre-computed assignment (e.g., BitSculpt BSPM).
+
+        Bypasses CompressedTensorAssigner — uses the provided assignment directly.
+        The assignment codes must use tt-metal's COMPRESSED_FORMATS ordering:
+        0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0 (use bspm_loader.py to remap from BitSculpt).
+
+        Args:
+            tensor: Original weight tensor (FP32 or BF16). Shape must be divisible
+                by tile_hw in both dimensions.
+            assignment: (tiles_h, tiles_w) int8/uint8 array with tt-metal format indices.
+                Can be obtained from:
+                - integration.ttnn.bspm_loader.load_bspm_for_expert()
+                - integration.ttnn.bspm_loader.load_bspm_for_layer()["codes"][expert_idx, proj_idx]
+            device: ttnn device.
+            memory_config: ttnn.MemoryConfig (must be sharded).
+            assignment_memory_config: Optional separate memory config for assignment tensor.
+            tile_hw: Tile dimension (default 32).
+            min_shard_bytes: Minimum packed bytes per DRAM shard. When allocating multiple
+                experts, pass the same value (the maximum shard size across all experts) to
+                guarantee uniform DRAM strides. Required for DRAMStreamingMatmul's
+                base_addr + expert_idx * stride_bytes indexing to address experts correctly.
+
+        Returns:
+            CompressedTensor with the BSPM-driven precision assignment.
+
+        Example:
+            from integration.ttnn.bspm_loader import load_bspm_for_expert
+
+            assignment = load_bspm_for_expert(
+                "results/deepseek-r1-0528/layer_30/precision_eval/precision_map_B_3.5.bspm",
+                expert_idx=0,
+                proj_idx=0,
+            )
+            ct = CompressedTensor.from_bspm(
+                weight_tensor,
+                assignment,
+                device=device,
+                memory_config=mem_cfg,
+            )
+        """
+        return cls(
+            tensor,
+            assignment,
+            device=device,
+            memory_config=memory_config,
+            assignment_memory_config=assignment_memory_config,
+            tile_hw=tile_hw,
+            min_shard_bytes=min_shard_bytes,
+        )
+
+    @classmethod
+    def from_packed_data(
+        cls,
+        data_tensor,
+        assignment_2d: np.ndarray,
+        original_memory_config,
+        device=None,
+        tile_hw: int = DEFAULT_TILE_HW,
+    ) -> CompressedTensor:
+        """Reconstruct a CompressedTensor from a cached packed data tensor + assignment.
+
+        Used when loading a previously-packed CompressedTensor from disk cache.
+        The data tensor is already on device (loaded via ttnn.load_tensor); the
+        assignment is a numpy array saved alongside it.  This avoids re-quantizing
+        the original float weights.
+
+        Args:
+            data_tensor: Packed uint8 BFP data tensor, already on device.
+            assignment_2d: (tiles_h, tiles_w) int8/uint8 array with tt-metal
+                COMPRESSED_FORMATS indices.  The shape encodes the tile grid.
+            original_memory_config: The MemoryConfig that was passed to __init__
+                or from_bspm() during packing (before shard-size correction).
+                Needed to reconstruct the shard-to-page mapping.
+            device: ttnn device (required to place the repacked assignment tensor).
+            tile_hw: Tile dimension (default 32).
+
+        Returns:
+            CompressedTensor ready for use with DRAMStreamingMatmulCompressed.
+        """
+        obj = object.__new__(cls)
+
+        tiles_h, tiles_w = int(assignment_2d.shape[0]), int(assignment_2d.shape[1])
+        K = tiles_h * tile_hw
+        N_padded = tiles_w * tile_hw
+
+        obj.shape = (K, N_padded)
+        obj.tile_hw = tile_hw
+        obj.tiles_h = tiles_h
+        obj.tiles_w = tiles_w
+
+        obj.data = data_tensor
+        obj.spec = None
+        obj.max_shard_size = data_tensor.memory_config().shard_spec.shape[1]
+
+        obj._assignment_flat = assignment_2d.astype(np.int8).ravel().copy()
+        obj._tile_mant_bits = []  # not populated; to_torch() will not work
+
+        obj._memory_config = original_memory_config
+        obj._shard_mapping = compute_shard_page_mapping((K, N_padded), original_memory_config, tile_hw)
+        obj._core_assignment = obj._build_core_assignment()
+
+        # Re-pack the assignment tensor from numpy (cheap: assignment is tiny).
+        assign_bytes, assign_mem = obj._pack_sharded_assignment(
+            (K, N_padded), original_memory_config, original_memory_config.buffer_type
+        )
+        obj.assignment = ttnn.from_torch(
+            assign_bytes,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=assign_mem,
+        )
+
+        return obj
 
     def to_torch(self) -> torch.Tensor:
         """Unpack back to float32 torch tensor."""
@@ -339,6 +494,8 @@ class CompressedTensor:
             tile_mant_bits.extend(mant_list)
 
         max_shard_bytes = _align(max(shard_raw_sizes), _get_alignment(memory_config.buffer_type))
+        if self._min_shard_bytes > max_shard_bytes:
+            max_shard_bytes = self._min_shard_bytes
         data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config)
         corrected_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -4704,7 +4704,12 @@ class MoeOp:
                 ctx.gate_output_scores_tensor,
                 ctx.gate_output_indices_tensor,
             ]
-        io_tensors += [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]
+        for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
+            backing = getattr(wt, "data", None)
+            if backing is not None:
+                io_tensors += [backing, wt.assignment]
+            else:
+                io_tensors += [wt]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
