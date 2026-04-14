@@ -407,7 +407,7 @@ def whisper_attention(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
-    decoder_prefill: bool = False,
+    decoder_prefill: bool = True,
     *,
     parameters,
 ):
@@ -665,7 +665,7 @@ def decoder_layer(
     current_decode_pos=None,
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
-    decoder_prefill: bool = False,
+    decoder_prefill: bool = True,
     *,
     parameters,
 ):
@@ -763,7 +763,7 @@ def decoder(
     cross_attn_cache=None,
     cross_attn_cache_valid=False,
     current_decode_pos=None,
-    decoder_prefill: bool = False,
+    decoder_prefill: bool = True,
     *,
     parameters,
 ):
