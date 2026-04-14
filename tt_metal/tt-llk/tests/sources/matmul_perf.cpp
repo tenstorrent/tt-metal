@@ -25,7 +25,7 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -45,8 +45,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -62,8 +61,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -109,7 +107,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_matmul.h"
 #endif
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -123,8 +121,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 #ifdef USE_MATMUL_CUSTOM_NO_MOP
@@ -152,8 +149,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -216,7 +212,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -229,8 +225,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_C_DIM * TILE_R_DIM);
         _llk_pack_init_<
             /* untilize */ false,
@@ -239,8 +234,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return;

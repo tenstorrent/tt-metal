@@ -34,7 +34,7 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 #include "llk_unpack_common.h"
 #include "llk_unpack_untilize.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -47,8 +47,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t TILE_SIZE = 2048 / 16; // size of tile in 16B words
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -63,8 +62,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile += FULL_CT_DIM)
         {
@@ -86,7 +84,7 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -98,8 +96,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
@@ -112,8 +109,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
@@ -144,7 +140,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -158,8 +154,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool UNTILIZE = false;
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        PERF_ZONE_SCOPED("INIT")
 
 #ifdef ARCH_BLACKHOLE
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -174,8 +169,7 @@ PERF_COUNTER_FLATTEN void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        PERF_ZONE_SCOPED("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
