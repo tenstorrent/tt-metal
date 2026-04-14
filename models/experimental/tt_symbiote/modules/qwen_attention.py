@@ -34,6 +34,36 @@ from models.experimental.tt_symbiote.modules.rope import (
 )
 
 
+class CallableBool:
+    """A bool-like object that is also callable, for backward compatibility.
+
+    This enables has_previous_state to work as both a property and a method:
+      - cache.has_previous_state        -> truthy/falsy (property access)
+      - cache.has_previous_state()      -> bool (method call, no args)
+      - cache.has_previous_state(idx)   -> bool (method call with layer_idx)
+    """
+
+    def __init__(self, value: bool, cache: "TTNNQwenPagedAttentionKVCache"):
+        self._value = value
+        self._cache = cache
+
+    def __bool__(self) -> bool:
+        return self._value
+
+    def __call__(self, layer_idx: int | None = None) -> bool:
+        if layer_idx is not None:
+            return self._cache.conv_states.get(layer_idx) is not None
+        return self._value
+
+    def __repr__(self) -> str:
+        return repr(self._value)
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, bool):
+            return self._value == other
+        return NotImplemented
+
+
 class TTNNQwenPagedAttentionKVCache(TTNNPagedAttentionKVCache):
     """Paged attention KV cache with layer indices mapping for Qwen3.5 hybrid attention.
 
@@ -89,18 +119,19 @@ class TTNNQwenPagedAttentionKVCache(TTNNPagedAttentionKVCache):
         self.recurrent_states = {}  # DeltaNet recurrent states per layer
 
     @property
-    def has_previous_state(self) -> bool:
+    def has_previous_state(self) -> "CallableBool":
         """Check if cache has been used previously.
 
-        This property is required for compatibility with native Qwen linear attention (DeltaNet).
-        Returns True if any linear attention layer's conv_state has been populated.
-        This mimics the PyTorch Qwen cache behavior which checks if conv_states exist.
+        Returns a CallableBool that supports both property access and method call:
+          - cache.has_previous_state        -> truthy/falsy (existing tt-symbiote code)
+          - cache.has_previous_state()      -> bool (HuggingFace model code)
+          - cache.has_previous_state(idx)   -> bool (HuggingFace linear attention)
         """
-        # Check if any conv_state has been populated during prefill
         if self.conv_states:
-            # Return True if any layer has a conv_state (meaning prefill has occurred)
-            return any(v is not None for v in self.conv_states.values())
-        return False
+            value = any(v is not None for v in self.conv_states.values())
+        else:
+            value = False
+        return CallableBool(value, self)
 
     @has_previous_state.setter
     def has_previous_state(self, value: bool):
@@ -209,6 +240,9 @@ class TTNNQwen3FullAttention(TTNNModule):
         # Q gating support - q_proj outputs 2x dimension, split into Q and gate
         # gate is applied after attention: output *= sigmoid(gate)
         self.has_q_gate = False
+
+        # Pre-allocated decode cur_pos buffer for trace safety (initialized in move_weights_to_device_impl)
+        self._decode_cur_pos = None
 
         # Q/K normalization (RMSNorm on head_dim)
         self.q_norm_weight = None  # Host tensor
@@ -356,6 +390,19 @@ class TTNNQwen3FullAttention(TTNNModule):
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
+
+        # Pre-allocate decode cur_pos buffer for trace safety (matching Gemma4 pattern).
+        # During trace replay, ttnn.from_torch() allocations get frozen, so we
+        # pre-allocate once and use ttnn.copy() to update the value each decode step.
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        self._decode_cur_pos = ttnn.from_torch(
+            torch.zeros(1, dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     @property
     def _is_distributed(self):
@@ -749,15 +796,23 @@ class TTNNQwen3FullAttention(TTNNModule):
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
-        # 1-D [batch_size] tensor for paged_update_cache & paged_sdpa_decode
-        cur_pos_tt = ttnn.from_torch(
+        # Trace-safe cur_pos: copy into pre-allocated buffer instead of
+        # allocating a new device tensor each step (matching Gemma4 pattern).
+        # During trace replay, ttnn.from_torch() allocations are frozen;
+        # ttnn.copy() into a stable address keeps the trace valid.
+        cur_pos_host = ttnn.from_torch(
             cache_position_tensor,
-            device=self.device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if self._decode_cur_pos is not None:
+            cur_pos_device = ttnn.to_device(cur_pos_host, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.copy(cur_pos_device, self._decode_cur_pos)
+            cur_pos_tt = self._decode_cur_pos
+        else:
+            # Fallback: allocate on device (non-trace path or before move_weights_to_device)
+            cur_pos_tt = ttnn.to_device(cur_pos_host, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # --- permute B H S D -> S B H D (the layout paged kernels expect) ---
         query_states_paged = ttnn.permute(query_states, (2, 0, 1, 3))
@@ -809,11 +864,7 @@ class TTNNQwen3FullAttention(TTNNModule):
 
         # --- convert back to [B, S, H*D] for the output projection ---
         attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, head_dim]
-        # Use actual tensor shape after attention processing
-        attn_shape = list(attn_output.shape)
-        attn_batch = attn_shape[0]
-        attn_seq = attn_shape[1]
-        attn_output = ttnn.reshape(attn_output, (attn_batch, attn_seq, self.num_attention_heads * self.head_dim))
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
 
         # Apply Q gating: attn_output = attn_output * sigmoid(gate)
         if gate is not None:
@@ -1467,9 +1518,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
             and hasattr(cache_params, "recurrent_states")
         )
 
-        use_precomputed_states = (
-            is_linear_attn_cache and cache_params.has_previous_state and seq_len == 1 and cache_position is not None
-        )
+        use_precomputed_states = is_linear_attn_cache and cache_params.has_previous_state and seq_len == 1
 
         # Get cache states if available (only for linear attention-compatible caches)
         # Use .get() to safely access - during first forward pass, these may not exist yet

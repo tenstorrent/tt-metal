@@ -45,22 +45,34 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
     - Linear attention layers (DeltaNet) do NOT use KV cache
     - Full attention layers (GQA) use paged KV cache
 
-    Layer pattern repeats: [linear, linear, linear, full] * 10 = 40 layers
-    So we have 10 full attention layers that need KV cache.
+    Handles three cases for layer_types config:
+    1. len(layer_types) == num_hidden_layers: full list, iterate directly
+    2. len(layer_types) < num_hidden_layers: repeating pattern
+    3. len(layer_types) > num_hidden_layers: config longer than loaded layers (e.g., 4-layer subset)
     """
-    # Count full_attention layers from layer_types config
     layer_types = getattr(
         model_config, "layer_types", ["linear_attention", "linear_attention", "linear_attention", "full_attention"]
     )
-    num_layers_in_pattern = len(layer_types)
+    num_hidden = model_config.num_hidden_layers
 
-    # Compute which model layer indices are full attention layers
-    # For pattern [linear, linear, linear, full], full attention is at index 3, 7, 11, 15, ...
     full_attn_layer_indices = []
-    for pattern_repeat in range(model_config.num_hidden_layers // num_layers_in_pattern):
-        for idx_in_pattern, layer_type in enumerate(layer_types):
-            if layer_type == "full_attention":
-                full_attn_layer_indices.append(pattern_repeat * num_layers_in_pattern + idx_in_pattern)
+    if len(layer_types) == num_hidden:
+        # Full list of layer types (one per layer)
+        for i, lt in enumerate(layer_types):
+            if lt == "full_attention":
+                full_attn_layer_indices.append(i)
+    elif len(layer_types) <= num_hidden:
+        # Pattern that repeats
+        num_layers_in_pattern = len(layer_types)
+        for pattern_repeat in range(num_hidden // num_layers_in_pattern):
+            for idx_in_pattern, layer_type in enumerate(layer_types):
+                if layer_type == "full_attention":
+                    full_attn_layer_indices.append(pattern_repeat * num_layers_in_pattern + idx_in_pattern)
+    else:
+        # layer_types is longer than num_hidden (e.g., config has 40 but we loaded 4 layers)
+        for i in range(num_hidden):
+            if layer_types[i] == "full_attention":
+                full_attn_layer_indices.append(i)
 
     num_full_attn_layers = len(full_attn_layer_indices)
 
@@ -69,14 +81,13 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
         max_num_blocks=32,
         batch_size=batch_size,
     )
-    # FIXED: Use TTNNQwenPagedAttentionKVCache which supports layer_indices mapping
     return TTNNQwenPagedAttentionKVCache(
-        num_layers=num_full_attn_layers,  # Only full attention layers need KV cache
-        num_kv_heads=model_config.num_key_value_heads,  # 2 KV heads
-        head_dim=model_config.head_dim,  # 256 for Qwen3.5
+        num_layers=num_full_attn_layers,
+        num_kv_heads=model_config.num_key_value_heads,
+        head_dim=model_config.head_dim,
         config=config,
         device=None,
-        layer_indices=full_attn_layer_indices,  # Map layer_idx -> cache_idx
+        layer_indices=full_attn_layer_indices,
     ).to_device(device)
 
 
