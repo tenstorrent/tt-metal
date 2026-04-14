@@ -21,7 +21,6 @@ from .tile_constants import (
     SRCS_SLICE_32B_ROW_DIM,
     SRCS_SLICE_ELEMENT_COUNT,
     SRCS_SLICE_ROW_DIM,
-    DataFormat,
 )
 
 
@@ -549,12 +548,16 @@ def pack_mxfp8p(
 
 
 def pack_mxfp4(
+<<<<<<< HEAD
     tensor,
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
     dest_acc: bool = False,
     exp_rnd_en: bool = False,
+=======
+    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
 ):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
@@ -583,8 +586,11 @@ def pack_mxfp4(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
+<<<<<<< HEAD
         exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
             model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
+=======
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -621,7 +627,11 @@ def pack_mxfp4(
     blocks_raw = blocks
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
+<<<<<<< HEAD
     # Scale selection aligned to ws-tensix storage.py verification model:
+=======
+    # Scale selection aligned to storage.py verification model:
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
     # shared_exp = floor(log2(amax))
     # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
     # E8M0 = shared_exp_adj + 127
@@ -657,6 +667,7 @@ def pack_mxfp4(
 
     scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
     scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+<<<<<<< HEAD
 
     if exp_rnd_en:
         # Match mx_block_exp_rnd_to_inf: increment only for non-zero, non-special exponents.
@@ -666,6 +677,8 @@ def pack_mxfp4(
             & (scales_e8m0_array != 255)
         )
         scales_e8m0_array = np.where(can_inc, scales_e8m0_array + 1, scales_e8m0_array)
+=======
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
@@ -682,6 +695,7 @@ def pack_mxfp4(
 
     # Pack FP4 elements: 2 per byte (low nibble = element 0)
     packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
+<<<<<<< HEAD
 
     # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
     return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
@@ -693,10 +707,54 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
     """Quantize scaled values to FP4 nibbles."""
     flat = scaled_blocks.astype(np.float32).ravel()
     ui32 = flat.view(np.uint32)
+=======
+
+    # FULLY SEPARATED layout: all scales first, then all packed elements
+    return scales_e8m0 + packed_bytes.tolist()
+
+
+def _round_ties_even(
+    input_mantissa: int, output_width: int, input_width: int = 23
+) -> tuple[int, int]:
+    if output_width < 0:
+        return 0, 0
+    if input_width == output_width:
+        return input_mantissa, 0
+    shift_out = input_width - output_width
+    rounded_bits = input_mantissa & ((1 << shift_out) - 1)
+    rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
+    rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
+    mantissa_lsb = (input_mantissa >> shift_out) & 0x1
+
+    if rounded_msb and rounded_lsbs != 0:
+        round_inc = 1
+    elif rounded_msb and rounded_lsbs == 0:
+        round_inc = 1 if mantissa_lsb == 0x1 else 0
+    else:
+        round_inc = 0
+
+    if output_width == 0:
+        round_inc = rounded_msb if rounded_lsbs != 0x0 else 0
+        output_width = 1
+
+    new_mantissa = (input_mantissa >> shift_out) + round_inc
+    return new_mantissa & ((1 << output_width) - 1), new_mantissa >> output_width
+
+
+def _float_to_fp4_bits_storage(value: float) -> int:
+    """Quantize to FP4 E2M1 using storage.py rules (round-to-nearest-even)."""
+    if np.isnan(value):
+        return 0x0
+    if np.isinf(value):
+        return 0x7 if value > 0 else 0xF
+
+    ui32 = np.float32(value).view(np.uint32)
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
     sign = (ui32 >> 31) & 0x1
     exp_biased = (ui32 >> 23) & 0xFF
     mant = ui32 & 0x7FFFFF
 
+<<<<<<< HEAD
     out = np.zeros_like(mant, dtype=np.uint8)
 
     is_nan = (exp_biased == 0xFF) & (mant != 0)
@@ -758,6 +816,47 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
             elem_bits |= sign.astype(np.uint8) << 3
             out[normal_mask] = elem_bits[normal_mask]
 
+=======
+    # Zero (preserve sign for -0.0)
+    if exp_biased == 0 and mant == 0:
+        return int(sign << 3)
+
+    exp_unbiased = int(exp_biased) - 127
+
+    mant_round, expo_inc = _round_ties_even(mant, 1, 23)
+    mant_round = int(mant_round)
+    expo_inc = int(expo_inc)
+    elem_exp_unbiased = exp_unbiased + expo_inc
+
+    # Subnormal handling (elem_exp_min_unbiased = 0, elem_exp_bias = 1)
+    if elem_exp_unbiased < 0:
+        elem_exp_unbiased = exp_unbiased
+        mant_with_hb = mant | (1 << 23)
+        shift = abs(elem_exp_unbiased)
+        mant_exp_adjusted = mant_with_hb >> shift
+        mant_round, expo_inc = _round_ties_even(mant_exp_adjusted, 1, 23)
+        mant_round = int(mant_round)
+        expo_inc = int(expo_inc)
+        elem_exp_unbiased = -1 + expo_inc
+
+    # Saturate if exponent/mantissa overflow
+    if elem_exp_unbiased > 2 or (elem_exp_unbiased == 2 and mant_round > 1):
+        return 0x7 if sign == 0 else 0xF
+
+    elem_exp_biased = elem_exp_unbiased + 1
+    elem_bits = (elem_exp_biased << 1) | (mant_round & 0x1)
+    if sign:
+        elem_bits |= 0x8
+    return int(elem_bits)
+
+
+def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
+    """Quantize scaled values to FP4 nibbles using storage.py conversion rules."""
+    flat = scaled_blocks.astype(np.float32).ravel()
+    out = np.empty_like(flat, dtype=np.uint8)
+    for i, v in enumerate(flat):
+        out[i] = _float_to_fp4_bits_storage(float(v)) & 0xF
+>>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
     return out
 
 
