@@ -20,9 +20,9 @@ To add a new experimental module:
 
 The `moe` module in this directory can be imported as:
 ```python
-from ttnn.experimental.moe.utils import cluster_distance
+from ttnn.experimental.moe_compute_utils import cluster_distance
 # or
-import ttnn.experimental.moe
+import ttnn.experimental.moe_compute_utils
 ```
 
 This approach avoids conflicts with the `experimental_loader` while allowing us to extend the experimental namespace.

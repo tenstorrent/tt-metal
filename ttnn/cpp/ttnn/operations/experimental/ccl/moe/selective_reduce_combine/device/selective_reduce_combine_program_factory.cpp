@@ -301,7 +301,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
-    constexpr auto data_cb_id = tt::CBIndex::c_15;
+    // start at this cb index so we don't clash with compute when fused
+    constexpr auto data_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
                                               .set_page_size(data_cb_id, buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
@@ -309,7 +310,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // dense_token_maps_tensor page buffer
     // tensor pages are padded for alignment
     const uint32_t dense_token_maps_stride_elm = dense_token_maps_tensor.logical_shape()[-1] / total_tokens;
-    constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_1;
+    constexpr auto dense_token_maps_cb_id = tt::CBIndex::c_4;
     const uint32_t aligned_dense_token_maps_buffer_size_bytes =
         tt::align(experts_per_device * aligned_dense_token_maps_page_size_bytes, l1_alignment);
     const auto dense_token_maps_data_format = datatype_to_dataformat_converter(dense_token_maps_tensor.dtype());
@@ -322,11 +323,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_counts_data_format = datatype_to_dataformat_converter(dense_token_counts_tensor.dtype());
     // offset into token maps, number of tokens, offset into activations
     const auto token_offset_count_bytes_per_expert = 3 * tt::datum_size(token_counts_data_format);
-    const auto dram_alignment = hal::get_dram_alignment();
-    constexpr auto token_counts_cb_id = tt::CBIndex::c_2;
-    const auto token_counts_element_size = dense_token_counts_tensor.element_size();
+    constexpr auto token_counts_cb_id = tt::CBIndex::c_5;
+    const auto token_counts_tensor_page_size_bytes = dense_token_counts_tensor.tensor_spec().compute_page_size_bytes();
     const uint32_t aligned_token_counts_buffer_size = tt::align(
-        (token_counts_element_size + token_offset_count_bytes_per_expert) * experts_per_device, dram_alignment);
+        token_counts_tensor_page_size_bytes + token_offset_count_bytes_per_expert * experts_per_device, l1_alignment);
     CircularBufferConfig cb_token_counts_config =
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
@@ -337,7 +337,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
-    constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
+    constexpr auto token_activations_cb_id = tt::CBIndex::c_6;
     CircularBufferConfig cb_token_activations_config =
         CircularBufferConfig(
             aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
@@ -345,7 +345,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     // client interface
     constexpr auto num_headers = 3;  // data unicast headers and atomic inc multicast headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_7;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -385,7 +385,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"aligned_token_activations_page_size_bytes", aligned_token_activations_page_size_bytes},
         {"activations_stride_elm", activations_stride_elm},
         {"dense_token_maps_page_size_bytes", aligned_dense_token_maps_page_size_bytes},
-        {"token_counts_page_size_bytes", aligned_token_counts_buffer_size},
+        {"token_counts_page_size_bytes", token_counts_tensor_page_size_bytes},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
