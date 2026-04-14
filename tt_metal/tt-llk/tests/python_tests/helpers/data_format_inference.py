@@ -487,7 +487,13 @@ def data_formats(
         if input_format.is_mx_format():
             unpack_dst = DataFormat.Float16_b
             math_format = DataFormat.Float16_b
-            pack_src_format = DataFormat.Float16_b
+            # When dest_acc is enabled (FP32 destination), pack_src should be Float32 to match hardware behavior
+            # This affects ReLU threshold encoding - FP32 dest requires threshold in different position
+            pack_src_format = (
+                DataFormat.Float32
+                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                else DataFormat.Float16_b
+            )
         elif input_format == DataFormat.Fp8_e4m3:
             unpack_dst = DataFormat.Fp8_e4m3
             math_format = DataFormat.Float16
