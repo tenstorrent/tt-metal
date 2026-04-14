@@ -31,6 +31,9 @@ DO_RANDOMIZE = False
 VECTOR_GROUPING_MODE = "mesh"
 GENERATION_MANIFEST_FILENAME = "generation_manifest.json"
 GENERATED_VECTOR_FILES = set()
+# Track mesh shapes discovered per hardware group during vector export.
+# Populated by export_suite_vectors_json(), consumed by write_generation_manifest().
+MESH_SHAPES_BY_HARDWARE_GROUP: dict[str, set[str]] = defaultdict(set)
 
 
 def get_mesh_shape_from_vector(vector):
@@ -388,6 +391,10 @@ def write_generation_manifest(module_name, model_traced, suite_name, vector_file
         "model_traced": model_traced,
         "suite_name": suite_name,
         "vector_files": sorted(vector_files),
+        "mesh_shapes_by_hardware_group": {
+            hw_label: sorted(mesh_shapes)
+            for hw_label, mesh_shapes in sorted(MESH_SHAPES_BY_HARDWARE_GROUP.items())
+        },
     }
 
     try:
@@ -491,6 +498,14 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         # base module name and let any compatible runner pick up the file.
         grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
         GENERATED_VECTOR_FILES.add(f"{grouped_module_name}.json")
+
+        # Track mesh shapes per hardware group for downstream matrix splitting.
+        if VECTOR_GROUPING_MODE == "hw" and group_key is not None:
+            hw_label = f"{group_key[0]}_{group_key[1]}_{group_key[2]}c"
+            for vector in grouped_subset:
+                mesh_shape = get_mesh_shape_from_vector(vector)
+                if mesh_shape is not None:
+                    MESH_SHAPES_BY_HARDWARE_GROUP[hw_label].add(f"{mesh_shape[0]}x{mesh_shape[1]}")
 
         # Export vectors WITHOUT modifying sweep_name.
         # Routing info is already present in traced_machine_info; sweep_name stays
@@ -789,5 +804,6 @@ if __name__ == "__main__":
         logger.info(f"Master trace override: {resolved}")
 
     GENERATED_VECTOR_FILES.clear()
+    MESH_SHAPES_BY_HARDWARE_GROUP.clear()
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)
     write_generation_manifest(args.module_name, args.model_traced, args.suite_name, GENERATED_VECTOR_FILES)

@@ -580,8 +580,11 @@ class VectorExportSource(VectorSource):
                                     machine_mismatch_count += 1
                                     continue
 
-                            # Apply mesh filtering when manifest grouping mode says ownership is by mesh.
-                            if filter_policy["enforce_mesh_capability"] and (
+                            # Apply mesh filtering when manifest grouping mode says ownership is by mesh,
+                            # OR when MESH_DEVICE_SHAPE is explicitly set (e.g. hw-grouped validation
+                            # jobs that need to filter vectors to the matching mesh topology).
+                            mesh_env_override = bool(os.environ.get("MESH_DEVICE_SHAPE", "").strip())
+                            if (filter_policy["enforce_mesh_capability"] or mesh_env_override) and (
                                 allowed_mesh_shapes or strict_ci_mesh_ownership
                             ):
                                 # If mesh shape is missing in JSON, do not filter out.
