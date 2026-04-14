@@ -826,7 +826,7 @@ constexpr std::uint32_t DstTileSizeLog2[3] = {
 };
 
 /**
- * @brief Calculates the maximum number of destination tiles that can fit in the destination register.
+ * @brief Calculates the maximum number of tiles that can fit in the math's destination region.
  *
  * @tparam SYNC_MODE   Destination synchronization mode (SyncHalf or SyncFull)
  * @tparam ACCUM_MODE Accumulation mode: true for 32-bit (FP32), false for 16-bit
@@ -847,6 +847,29 @@ constexpr std::uint32_t get_dest_max_tiles()
                                                                                 : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
     return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
+ * @brief Returns the maximum number of tiles that fit in the packer's dest region
+ *        based on the currently configured W-stride (read from the hardware config register).
+ *
+ * Unlike get_dest_max_tiles<..., DstTileShape>, this does not assume a fixed tile shape.
+ * It reads the actual W-stride that the packer is configured with, so it works correctly
+ * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
+ *
+ * The dest physical size in stride-address-units is constant regardless of ACCUM_MODE
+ * because FP32 halves the row count but doubles the datum size, which cancels out
+ * against the doubled x_stride already baked into the configured W-stride.
+ */
+template <DstSync SYNC_MODE, bool ACCUM_MODE>
+inline std::uint32_t get_pack_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_PHYSICAL_SIZE = (SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE : DEST_REGISTER_FULL_SIZE) * FACE_C_DIM * 2;
+
+    const std::uint32_t w_stride =
+        (cfg_read(PCK0_ADDR_CTRL_ZW_REG_0_Wstride_ADDR32) & PCK0_ADDR_CTRL_ZW_REG_0_Wstride_MASK) >> PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT;
+
+    return DEST_PHYSICAL_SIZE >> __builtin_ctz(w_stride);
 }
 
 /**
