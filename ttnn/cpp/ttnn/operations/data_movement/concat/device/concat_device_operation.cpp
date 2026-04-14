@@ -246,23 +246,11 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
         return std::max(2u, safe_max);
     }
 
-    // Interleaved concat - use a safe limit that works across all dispatch core types.
-    //
-    // Previous code used a cluster-type heuristic to guess the dispatch core type
-    // (N300/T3K/N300_2x2 → ETH dispatch → limit 47, else → WORKER dispatch → limit 49).
-    // This was fragile: N150 (Wormhole B0 single-chip, WORKER dispatch) was not in the
-    // heuristic and hung at N=48 (GitHub issue #42105).
-    //
-    // Theoretical limit from formula: 5 + 6N <= 256 => N <= 41.8 => N_max = 41
-    // Empirical testing shows N=47 is the safe limit for ETH dispatch, and the WORKER
-    // limit of 49 was found to be unreliable on N150. Use 47 as a universal safe limit.
+    // Universal safe limit for interleaved concat across all dispatch core types.
+    // See GitHub issue #42105 for details on why per-dispatch-type limits were unreliable.
     constexpr uint32_t max_tensors = 47;
 
-    log_debug(
-        tt::LogOp,
-        "ttnn.concat: Interleaved concat - max_tensors = {} (dim = {})",
-        max_tensors,
-        dim);
+    log_debug(tt::LogOp, "ttnn.concat: Interleaved concat - max_tensors = {}", max_tensors);
 
     return max_tensors;
 }
