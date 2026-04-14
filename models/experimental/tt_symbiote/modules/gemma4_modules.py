@@ -13,7 +13,7 @@ import math
 
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.gemma4_attention import TTNNGemma4Attention
@@ -41,23 +41,15 @@ class TTNNGemma4ScaledEmbedding(TTNNModule):
         """
         new_layer = cls()
         new_layer._fallback_torch_layer = embedding
-        new_layer.embedder = TTNNEmbedding.from_torch(embedding)
         new_layer.embed_scale = float(getattr(embedding, "embed_scale", math.sqrt(embedding.embedding_dim)))
+        new_layer.embedder = TTNNEmbedding.from_torch(embedding, scale_factor=new_layer.embed_scale)
         return new_layer
 
     def forward(self, tt_indices):
         # Ensure indices are UINT32 for the TTNN embedding op.
         # The framework may pass torch.Tensor or TTNN Tensor (INT32).
         # TTNN typecast requires last dim % 32 == 0, so we convert via host if needed.
-        if isinstance(tt_indices, torch.Tensor):
-            tt_indices = ttnn.from_torch(
-                tt_indices.to(torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            )
-            tt_indices = ttnn.to_device(tt_indices, self.device)
-        elif isinstance(tt_indices, ttnn.Tensor) and tt_indices.dtype != ttnn.uint32:
+        if isinstance(tt_indices, ttnn.Tensor) and tt_indices.dtype != ttnn.uint32:
             # Roundtrip through host to cast INT32 -> UINT32 without padding constraints
             torch_indices = ttnn.to_torch(tt_indices, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
             # Take first device shard (all shards are identical for replicated input)
@@ -71,7 +63,6 @@ class TTNNGemma4ScaledEmbedding(TTNNModule):
             )
             tt_indices = ttnn.to_device(tt_indices, self.device)
         out = self.embedder(tt_indices)
-        out = ttnn.multiply(out, self.embed_scale)
         return out
 
 
@@ -118,31 +109,6 @@ class TTNNGemma4DecoderLayer(TTNNModule):
             new_layer.layer_scalar = float(scalar.item() if hasattr(scalar, "item") else scalar)
 
         return new_layer
-
-    def pre_trace_execute(self, func_args, func_kwargs):
-        """Copy cache_position to a module-owned persistent buffer before trace replay.
-
-        Avoids TTNN trace allocator buffer aliasing: the trace kwarg buffer for
-        cache_position can be overwritten by another layer's trace intermediates.
-        Copying to _decode_cur_pos here (outside the trace) ensures the value
-        survives any intermediate overwrites during trace replay.
-        """
-        cache_position = func_kwargs.get("cache_position")
-        if cache_position is None:
-            return
-        attn = self.self_attn
-        if not hasattr(attn, "_decode_cur_pos") or attn._decode_cur_pos is None:
-            return
-        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-        cp = cache_position
-        if isinstance(cp, TorchTTNNTensor):
-            cp = cp.ttnn_tensor
-        # Only copy during decode (shape [1]). Prefill (shape [N]) doesn't need
-        # this fix — buffer aliasing only affects decode trace replays.
-        if cp.shape != attn._decode_cur_pos.shape:
-            return
-        ttnn.copy(cp, attn._decode_cur_pos)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
         """Update KV cache sequence counters after trace replay.
@@ -222,3 +188,38 @@ class TTNNGemma4DecoderLayer(TTNNModule):
 
         # HF Gemma4TextDecoderLayer returns a plain tensor (not a tuple).
         return hs
+
+
+class TTNNGemma4LayerStack(TTNNLayerStack):
+    """Gemma4-specific layer stack with per-layer mask/input selection."""
+
+    def __init__(self, layers, layer_types):
+        super().__init__(layers)
+        self.layer_types = list(layer_types)
+
+    def forward(self, hidden_states, **kwargs):
+        causal_mask_mapping = kwargs.pop("attention_mask", {})
+        position_embeddings_mapping = kwargs.pop("position_embeddings", {})
+        per_layer_inputs = kwargs.pop("per_layer_inputs", None)
+
+        for i, (layer, layer_type) in enumerate(zip(self.layers, self.layer_types)):
+            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
+            hidden_states = layer.forward(
+                hidden_states,
+                per_layer_input=per_layer_input,
+                position_embeddings=position_embeddings_mapping.get(layer_type),
+                attention_mask=causal_mask_mapping.get(layer_type),
+                **kwargs,
+            )
+        return hidden_states
+
+    def post_trace_execute(self, func_args, func_kwargs, result):
+        past_key_values = func_kwargs.get("past_key_values")
+        if past_key_values is None or not hasattr(past_key_values, "update_seq_length"):
+            return
+        hidden_states = func_args[0]
+        seq_len = hidden_states.shape[-2]
+        for layer in self.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "layer_idx"):
+                layer_idx = layer.self_attn.layer_idx
+                past_key_values.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)

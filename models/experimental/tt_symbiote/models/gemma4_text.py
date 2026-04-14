@@ -19,6 +19,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.modules.gemma4_modules import TTNNGemma4LayerStack
 
 
 class TTNNGemma4TextModel(TTNNModule):
@@ -46,6 +47,13 @@ class TTNNGemma4TextModel(TTNNModule):
             if isinstance(layer, TTNNModule):
                 layer._bypass_tensor_wrapping = True
         model.norm._bypass_tensor_wrapping = True
+
+        ttnn_layers = [layer for layer in model.layers if isinstance(layer, TTNNModule)]
+        num_layers = model.config.num_hidden_layers
+        layer_types = list(model.config.layer_types[:num_layers])
+        new_model.layer_stack = TTNNGemma4LayerStack(ttnn_layers[:num_layers], layer_types)
+        new_model.layer_stack._bypass_tensor_wrapping = True
+
         return new_model
 
     def get_input_embeddings(self):
@@ -53,6 +61,11 @@ class TTNNGemma4TextModel(TTNNModule):
 
     def set_input_embeddings(self, value):
         self.model.embed_tokens = value
+
+    def to_device(self, device):
+        super().to_device(device)
+        self.layer_stack.to_device(device)
+        return self
 
     def __getattr__(self, name):
         """Delegate attribute access to the wrapped HF model for HF compatibility.
@@ -207,24 +220,15 @@ class TTNNGemma4TextModel(TTNNModule):
         # TTNNGemma4DecoderLayer always passes position_embeddings=None to attention anyway.
         position_embeddings = {layer_type: None for layer_type in self.unique_layer_types}
 
-        # Iterate decoder layers directly — no slicing avoids ModuleList
-        # reconstruction (HF's [:N] creates a new ModuleList that rejects TTNNModule).
-        num_layers = self.config.num_hidden_layers
-        for i, decoder_layer in enumerate(self.layers):
-            if i >= num_layers:
-                break
-
-            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
-
-            hidden_states = decoder_layer(
-                hidden_states,
-                per_layer_input,
-                position_embeddings=position_embeddings[self.config.layer_types[i]],
-                attention_mask=causal_mask_mapping[self.config.layer_types[i]],
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                **kwargs,
-            )
+        hidden_states = ttnn_object.layer_stack(
+            hidden_states,
+            attention_mask=causal_mask_mapping,
+            position_embeddings=position_embeddings,
+            per_layer_inputs=per_layer_inputs,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            **kwargs,
+        )
 
         hidden_states = self.norm(hidden_states)
 

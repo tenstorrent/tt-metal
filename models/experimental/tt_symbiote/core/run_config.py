@@ -434,9 +434,18 @@ def fast_unwrap_to_device(device):
 
 
 def post_process_ttnn_module_output(self, result):
+    post_process_time_begin = time.time()
     result = tree_map(wrap_to_torch_ttnn_tensor, result)
     if self.device_state is not None:
         result = self.set_output_tensors_config(result)
+    post_process_time_end = time.time()
+    DispatchManager.record_timing(
+        "TTNN",
+        self.module_name,
+        self.__class__.__name__ + "_post_process",
+        {},
+        post_process_time_end - post_process_time_begin,
+    )
     return result
 
 
@@ -1010,19 +1019,23 @@ class TracedRun(LightweightRun):
                 continue
 
             if isinstance(arg, ttnn.Tensor):
-                ttnn.copy(arg, trace_input)
+                if arg is not trace_input:
+                    ttnn.copy(arg, trace_input)
                 trace_idx += 1
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
-                ttnn.copy(arg.ttnn_tensor, trace_input)
+                if arg.ttnn_tensor is not trace_input:
+                    ttnn.copy(arg.ttnn_tensor, trace_input)
                 trace_idx += 1
 
     @staticmethod
     def _copy_one_to_trace_buffer(new_val, trace_buf) -> None:
         """Copy a single value into its pre-allocated trace buffer."""
         if isinstance(new_val, ttnn.Tensor):
-            ttnn.copy(new_val, trace_buf)
+            if new_val is not trace_buf:
+                ttnn.copy(new_val, trace_buf)
         elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
-            ttnn.copy(new_val.ttnn_tensor, trace_buf)
+            if new_val.ttnn_tensor is not trace_buf:
+                ttnn.copy(new_val.ttnn_tensor, trace_buf)
 
     @staticmethod
     def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
@@ -1219,14 +1232,41 @@ class TracedRun(LightweightRun):
             # === RUN 3+: REPLAY ===
             entry = TracedRun._trace_cache[cache_key]
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            pre_trace_begin = time.time()
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
+            pre_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_pre_trace_copy",
+                {},
+                pre_trace_end - pre_trace_begin,
+            )
+            pre_trace_begin = time.time()
             if type(self).pre_trace_execute is not TracedRun._base_pre_trace_execute:
                 self.pre_trace_execute(func_args, func_kwargs)
+            pre_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_pre_trace_execute",
+                {},
+                pre_trace_end - pre_trace_begin,
+            )
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
+            post_trace_begin = time.time()
             if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:
                 self.post_trace_execute(func_args, func_kwargs, result)
+            post_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_post_trace_execute",
+                {},
+                post_trace_end - post_trace_begin,
+            )
         elif cache_key in TracedRun._warmup_keys:
             # === RUN 2: CAPTURE (system already warmed up for this key) ===
             _TRACE_RUNNING = True

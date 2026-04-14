@@ -25,9 +25,10 @@ class TTNNEmbedding(TTNNModule):
     """
 
     @classmethod
-    def from_torch(cls, embedding: nn.Embedding):
+    def from_torch(cls, embedding: nn.Embedding, scale_factor=None):
         new_layer = cls()
         new_layer._fallback_torch_layer = embedding
+        new_layer._scale_factor = scale_factor
         return new_layer
 
     def preprocess_weights_impl(self):
@@ -60,6 +61,8 @@ class TTNNEmbedding(TTNNModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if self._scale_factor is not None:
+            out = ttnn.multiply(out, self._scale_factor)
         return out
 
 
