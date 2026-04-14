@@ -176,7 +176,7 @@ ttnn::Tensor all_reduce_async(
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
         input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
-    auto initial_shape = input_tensor.logical_shape();
+    const auto& initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
         composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
@@ -303,7 +303,7 @@ ttnn::Tensor all_reduce_async(
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(input_tensor, num_devices);
-    auto initial_shape = input_tensor.logical_shape();
+    const auto& initial_shape = input_tensor.logical_shape();
 
     // Convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates.
     // Otherwise work directly with input_tensor.
