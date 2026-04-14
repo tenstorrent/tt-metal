@@ -109,7 +109,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_rand_cb"),
         get_named_compile_time_arg_val("sampling_winner_cb"),
         get_named_compile_time_arg_val("sampling_p_bf16"),
-        get_named_compile_time_arg_val("sampling_topk_scores_stride"),
+        get_named_compile_time_arg_val("sampling_topk_scores_slot_bytes"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage2_receiver")>;
 

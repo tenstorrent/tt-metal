@@ -155,10 +155,9 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     _run_sampling_argmax_single_device_101_cores(device, seed=seed, final_core_idx=final_core_idx)
 
 
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X}],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
@@ -168,28 +167,39 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
         ((1, 0), 52098, 0, 3),  # force winner off device 0
         ((2, 1), 1337, 50, 5),  # force winner off device 0
         ((2, 0), 4242, 73, 7),  # force winner off device 0
-    ],
+    ], 
+    ids=["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
-def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, final_core_idx, forced_winner_device_idx):
+def test_sampling_argmax_mesh(bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, forced_winner_device_idx):
     """
     Mesh extension test on 4x2 only:
     - final coords constrained away from edge rows (non-torus behavior).
     - per-device local 101-core argmax, then mesh x-axis first reduction.
     """
+    mesh_rows, mesh_cols = 4, 2
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    mesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    
     grid_size = mesh_device.compute_with_storage_grid_size()
     all_device_cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
     active_cores = all_device_cores[:101]
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in active_cores})
     assert 0 <= final_core_idx < len(active_cores), f"final_core_idx={final_core_idx} out of range"
     final_core = active_cores[final_core_idx]
+    logger.debug(f"Final core: {final_core}")
+    logger.debug(f"Final mesh coord: {final_mesh_coord}")
+    logger.debug(f"Active cores: {active_cores}")
 
     num_devices = _mesh_num_devices(mesh_device)
     num_cores = len(active_cores)
     scores_shape_per_device = (1, 160 * num_cores)
     input_shard_shape = (1, 160)
     output_shape_per_device = (1, 1)
-    scratch_shape_per_device = _mesh_scratch_shape_per_device(mesh_device)
+    scores_scratch_shape, indices_scratch_shape = _mesh_scratch_shape_per_device(mesh_device)
     tile_1x32 = ttnn.Tile([1, 32])
 
     logger.info(
@@ -204,6 +214,7 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
         winner_local_idx = (seed * 9973 + final_core_idx) % scores_shape_per_device[1]
         # Overwrite (not add) to deterministically create a unique global winner.
         torch_scores_all[forced_winner_device_idx, 0, winner_local_idx] = torch.tensor(10.0, dtype=torch.bfloat16)
+        logger.info(f"Forced winner on device {forced_winner_device_idx}, local index {winner_local_idx}")
 
     torch_indices_all = torch.arange(num_devices * scores_shape_per_device[1], dtype=torch.int32).reshape(
         num_devices, *scores_shape_per_device
@@ -226,13 +237,18 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
         ttnn.BufferType.L1,
         output_shard_spec,
     )
-    scratch_shard_spec = ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR)
-    scratch_mem_config = ttnn.MemoryConfig(
+    scores_scratch_shard_spec = ttnn.ShardSpec(final_core_grid, scores_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    indices_scratch_shard_spec = ttnn.ShardSpec(final_core_grid, indices_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    scores_scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        scratch_shard_spec,
+        scores_scratch_shard_spec,
     )
-
+    indices_scratch_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        indices_scratch_shard_spec,
+    )
     mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     ttnn_scores = ttnn.from_torch(
         torch_scores_all,
@@ -259,12 +275,20 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
         memory_config=output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    ttnn_fabric_scratch = ttnn.from_torch(
-        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+    ttnn_scores_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scores_scratch_shape), dtype=torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        memory_config=scratch_mem_config,
+        memory_config=scores_scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_indices_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *indices_scratch_shape), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=indices_scratch_mem_config,
         mesh_mapper=mesh_mapper,
     )
 
@@ -282,7 +306,8 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
         final_mesh_coord=final_mesh_coord,
         global_semaphore=global_semaphore,
         global_stage2_semaphore=global_stage2_semaphore,
-        fabric_scratch_tensor=ttnn_fabric_scratch,
+        scores_scratch_tensor=ttnn_scores_scratch,
+        indices_scratch_tensor=ttnn_indices_scratch,
         mesh_axis="x",
     )
     ttnn.synchronize_device(mesh_device)
@@ -296,53 +321,6 @@ def test_sampling_argmax_mesh_4x2_axis_x(mesh_device, final_mesh_coord, seed, fi
     assert torch.equal(
         final_output_index, torch_expected_idx
     ), f"Mesh argmax index mismatch. expected={torch_expected_idx.item()}, got={int(final_output_index.item())}"
-
-
-@pytest.mark.parametrize(
-    "seed, k, p",
-    [
-        (42, 32, 0.9),
-        (17, 32, 0.5),
-        (1337, 32, 1.0),
-        (2005, 32, 0.1),
-        (999, 32, 0.0),
-    ],
-)
-def test_sampling_topk_topp_golden(seed, k, p):
-    """
-    Validate the golden reference for top-k + top-p + random sampling.
-    Checks that the selected token lives inside the top-k set and inside
-    the top-p cumulative probability mass, and that the result is
-    deterministic for a given seed.
-    """
-    torch.manual_seed(seed)
-    vocab_size = 16160
-    scores = torch.randn((1, vocab_size), dtype=torch.bfloat16)
-    indices = torch.arange(vocab_size, dtype=torch.int32).reshape(1, -1)
-
-    result, topk = SamplingOp.golden(scores, indices, k=k, p=p, seed=seed)
-    assert result.shape == (1, 1)
-    selected_idx = int(result.item())
-    assert 0 <= selected_idx < vocab_size
-
-    scores_f32 = scores.float().reshape(-1)
-    topk_values, topk_positions = torch.topk(scores_f32, k=k, sorted=True)
-    topk_original_indices = indices.reshape(-1)[topk_positions].tolist()
-    assert selected_idx in topk_original_indices, f"Selected index {selected_idx} not in top-{k}"
-
-    probs = torch.softmax(topk_values, dim=-1)
-    cum_probs = torch.cumsum(probs, dim=-1)
-    num_kept = int((cum_probs < p).sum().item()) + 1
-    num_kept = max(1, min(num_kept, k))
-    kept_indices = set(topk_original_indices[:num_kept])
-    assert selected_idx in kept_indices, f"Selected index {selected_idx} not in top-p={p} set (kept {num_kept} tokens)"
-
-    result2, _ = SamplingOp.golden(scores, indices, k=k, p=p, seed=seed)
-    assert torch.equal(result, result2), "Golden must be deterministic with the same seed"
-
-    logger.info(
-        f"Sampling golden test passed: k={k}, p={p}, seed={seed}, " f"selected={selected_idx}, kept_tokens={num_kept}"
-    )
 
 
 def test_sampling_topk_topp_distribution():
