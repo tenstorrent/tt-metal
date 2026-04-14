@@ -101,7 +101,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
 
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected
-            (e.g., MathFidelity::HiFi2, fp32 accumulation enabled).
+            (e.g., tt::tt_metal::MathFidelity::HiFi2, fp32 accumulation enabled).
 
         Returns
         -------

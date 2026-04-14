@@ -235,7 +235,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    std::uint32_t tile_index = i % MAX_TILES_DEST;
+                    const std::uint32_t tile_index = i % MAX_TILES_DEST;
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
@@ -255,7 +255,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t i = 0; i < num_tiles; ++i)
                 {
-                    std::uint32_t tile_index = i % MAX_TILES_DEST;
+                    const std::uint32_t tile_index = i % MAX_TILES_DEST;
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");

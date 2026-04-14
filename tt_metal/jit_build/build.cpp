@@ -277,7 +277,7 @@ void JitBuildEnv::init(
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
-        root_ + "tt_metal/third_party/tt_llk/common",
+        root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 
@@ -298,13 +298,18 @@ void JitBuildEnv::init(
     hasher.update(lflags_);
     hasher.update(defines_);
 
-    // Read the sfpi compiler version directly from the compiler
-    // we're using.  Compiler changes invalidate the cache.
-    if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // First line is typically about 55 chars on main
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0[333]) 15.1.0
-        // + branch name suffix on a branch
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0-checking-36930[340]) 15.1.0
+    if (get_rtoptions().get_build_map_enabled()) {
+        // Do not hash compiler version when generating compiler logs
+        // so that we may compare them between different compilers
+        // without undue difficulty.
+    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
+        // Read the sfpi compiler version directly from the compiler
+        // we're using.  Compiler changes invalidate the cache.
+
+        // First line is typically about 65 chars on a branch (and
+        // less on main):
+
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
         char buf[100];
         if (fgets(buf, sizeof(buf), pipe)) {
             hasher.update(buf, buf + std::strlen(buf));
@@ -840,6 +845,9 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     }
 }
 
-void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
+void jit_build_cache_clear() {
+    JitBuildCache::inst().clear();
+    jit_build::clear_file_hash_cache();
+}
 
 }  // namespace tt::tt_metal
