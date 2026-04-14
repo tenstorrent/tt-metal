@@ -66,54 +66,54 @@ Each test case uses bfloat16 as L1 data format and flit size as page size. Each 
 
 | Test Name                    | ID  | Grid     | K | Description                                             |
 |------------------------------|-----|----------|---|---------------------------------------------------------|
-| Test1DMatmulIdeal            | 520 | 2x2      | 1 | Default 2x2 grid.                                      |
-| Test1DMatmulSingleCore       | 521 | 1x1      | 1 | Sender multicasts to itself, reads full in1 from DRAM.  |
-| Test1DMatmulSingleRow        | 522 | 1x3      | 1 | One sender multicasts in0 to 3 receivers.               |
-| Test1DMatmulSingleColumn     | 523 | 3x1      | 1 | 3 independent senders each multicast to self.           |
-| Test1DMatmulNonSquare2x3     | 529 | 2x3      | 1 | Non-square grid (R=3, C=2).                             |
-| Test1DMatmulNonSquare3x2     | 530 | 3x2      | 1 | Non-square grid (R=2, C=3).                             |
-| Test1DMatmulLargeGrid4x4     | 532 | 4x4      | 1 | Large square grid.                                      |
-| Test1DMatmulLargeGrid6x6     | 541 | 6x6      | 2 | 36 cores, 6-way multicast per row.                      |
-| Test1DMatmulWideMulticast8Col| 534 | 1x8      | 1 | Maximum multicast fan-out (8 receivers).                 |
-| Test1DMatmulTall8RowDeepK    | 535 | 8x1      | 4 | 8 independent senders, deep accumulation.               |
+| Test1DMatmulIdeal            | 650 | 2x2      | 1 | Default 2x2 grid.                                      |
+| Test1DMatmulSingleCore       | 651 | 1x1      | 1 | Sender multicasts to itself, reads full in1 from DRAM.  |
+| Test1DMatmulSingleRow        | 652 | 1x3      | 1 | One sender multicasts in0 to 3 receivers.               |
+| Test1DMatmulSingleColumn     | 653 | 3x1      | 1 | 3 independent senders each multicast to self.           |
+| Test1DMatmulNonSquare2x3     | 654 | 2x3      | 1 | Non-square grid (R=3, C=2).                             |
+| Test1DMatmulNonSquare3x2     | 655 | 3x2      | 1 | Non-square grid (R=2, C=3).                             |
+| Test1DMatmulLargeGrid4x4     | 656 | 4x4      | 1 | Large square grid.                                      |
+| Test1DMatmulLargeGrid6x6     | 657 | 6x6      | 2 | 36 cores, 6-way multicast per row.                      |
+| Test1DMatmulWideMulticast8Col| 658 | 1x8      | 1 | Maximum multicast fan-out (8 receivers).                 |
+| Test1DMatmulTall8RowDeepK    | 659 | 8x1      | 4 | 8 independent senders, deep accumulation.               |
 
 ### Non-Origin Start Tests
 
 | Test Name                          | ID  | Grid     | Start    | K | Description                                    |
 |------------------------------------|-----|----------|----------|---|------------------------------------------------|
-| Test1DMatmulNonOriginStart         | 531 | 2x2      | (2,2)    | 1 | Grid starting at logical core (2,2).           |
-| Test1DMatmulNonOriginLargeNonSquare| 537 | 5x3      | (2,3)    | 2 | Offset + large non-square grid.                |
+| Test1DMatmulNonOriginStart         | 660 | 2x2      | (2,2)    | 1 | Grid starting at logical core (2,2).           |
+| Test1DMatmulNonOriginLargeNonSquare| 661 | 5x3      | (2,3)    | 2 | Offset + large non-square grid.                |
 
 ### K Dimension Tests
 
 | Test Name                     | ID  | Grid     | K | Description                                    |
 |-------------------------------|-----|----------|---|------------------------------------------------|
-| Test1DMatmulLargerK           | 524 | 2x2      | 2 | K=2 on default 2x2 grid.                      |
-| Test1DMatmulMultipleKSubblocks| 533 | 3x2      | 3 | K=3 with non-square grid.                      |
+| Test1DMatmulLargerK           | 662 | 2x2      | 2 | K=2 on default 2x2 grid.                      |
+| Test1DMatmulMultipleKSubblocks| 663 | 3x2      | 3 | K=3 with non-square grid.                      |
 
 ### Subblock Dimension Tests
 
 | Test Name                      | ID  | Grid | Subblocks (r,c,k) | Description                            |
 |--------------------------------|-----|------|--------------------|----------------------------------------|
-| Test1DMatmulLargerSubblockR    | 525 | 2x2  | 2,1,1              | subblock_r=2.                          |
-| Test1DMatmulLargerSubblockC    | 526 | 2x2  | 1,2,1              | subblock_c=2.                          |
-| Test1DMatmulLargerSubblockK    | 527 | 2x2  | 1,1,2              | subblock_k=2.                          |
-| Test1DMatmulAllSubblocksLarger | 528 | 2x2  | 2,2,2              | All subblocks=2, K=2.                  |
-| Test1DMatmulMaxSubblockDims    | 539 | 2x2  | 4,4,4              | All subblocks=4, K=2.                  |
-| Test1DMatmulAsymmetricSubblocks| 538 | 2x6  | 3,2,2              | Mixed large subblock dims, K=3.        |
+| Test1DMatmulLargerSubblockR    | 664 | 2x2  | 2,1,1              | subblock_r=2.                          |
+| Test1DMatmulLargerSubblockC    | 665 | 2x2  | 1,2,1              | subblock_c=2.                          |
+| Test1DMatmulLargerSubblockK    | 666 | 2x2  | 1,1,2              | subblock_k=2.                          |
+| Test1DMatmulAllSubblocksLarger | 667 | 2x2  | 2,2,2              | All subblocks=2, K=2.                  |
+| Test1DMatmulMaxSubblockDims    | 668 | 2x2  | 4,4,4              | All subblocks=4, K=2.                  |
+| Test1DMatmulAsymmetricSubblocks| 669 | 2x6  | 3,2,2              | Mixed large subblock dims, K=3.        |
 
 ### Stress Tests
 
 | Test Name                             | ID  | Grid | K | Subblocks (r,c,k) | Description                              |
 |---------------------------------------|-----|------|---|--------------------|------------------------------------------|
-| Test1DMatmulLargeGridDeepKLargeSubblocks | 536 | 4x4  | 4 | 2,2,2              | All dimensions large simultaneously.     |
-| Test1DMatmulWideMulticastLargePayload | 542 | 1x6  | 3 | 3,2,2              | Big multicast payload + big DRAM reads.  |
+| Test1DMatmulLargeGridDeepKLargeSubblocks | 670 | 4x4  | 4 | 2,2,2              | All dimensions large simultaneously.     |
+| Test1DMatmulWideMulticastLargePayload | 671 | 1x6  | 3 | 3,2,2              | Big multicast payload + big DRAM reads.  |
 
 ### DRAM Bank Tests
 
 | Test Name            | ID  | Grid | Description                                    |
 |----------------------|-----|------|------------------------------------------------|
-| Test1DMatmulDramBank1| 540 | 2x2  | Reads in1 from DRAM bank 1 instead of bank 0. |
+| Test1DMatmulDramBank1| 672 | 2x2  | Reads in1 from DRAM bank 1 instead of bank 0. |
 
 ## Helper Functions
 

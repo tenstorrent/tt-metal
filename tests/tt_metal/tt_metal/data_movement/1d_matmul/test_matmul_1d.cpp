@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,6 +48,21 @@ struct one_d_Matmul_Config {
 /// @return true if test passes
 bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, const one_d_Matmul_Config& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
+
+    // Check that the requested grid fits within the device's compute grid.
+    auto compute_grid = device->compute_with_storage_grid_size();
+    if (test_config.end_logical_core.x >= compute_grid.x || test_config.end_logical_core.y >= compute_grid.y) {
+        log_info(
+            tt::LogTest,
+            "Skipping test {}: requested grid end ({},{}) exceeds compute grid ({}x{})",
+            test_config.test_id,
+            test_config.end_logical_core.x,
+            test_config.end_logical_core.y,
+            compute_grid.x,
+            compute_grid.y);
+        return true;
+    }
+
     Program program = CreateProgram();
 
     // Validate grid dimensions match config
@@ -165,16 +180,19 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     // ---- barrier synchronization semaphores ----
     // One barrier per RISC processor so RISCV_0 and RISCV_1 synchronize independently.
+    // Each barrier uses two semaphores: one for arrival counting, one for done broadcast.
     uint32_t risc0_barrier_sem_id = CreateSemaphore(program, matmul_cores, 0);
+    uint32_t risc0_barrier_done_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t risc1_barrier_sem_id = CreateSemaphore(program, matmul_cores, 0);
+    uint32_t risc1_barrier_done_sem_id = CreateSemaphore(program, matmul_cores, 0);
 
-    // Coordinator = first matmul core; all cores increment its semaphore and poll it.
+    // Coordinator = first matmul core; all cores increment its semaphore, coordinator multicasts done.
     CoreCoord barrier_coordinator_phys = device->worker_core_from_logical_core(matmul_cores_list[0]);
     uint32_t num_cores = matmul_cores_list.size();
 
-    // Local scratch addresses for barrier polling (placed after in1 output region)
-    uint32_t risc0_local_barrier_addr = in1_output_addr + in1_per_core_read_size_bytes;
-    uint32_t risc1_local_barrier_addr = risc0_local_barrier_addr + sizeof(uint32_t);
+    // Local scratch addresses for barrier (placed after in1 output region, 16-byte aligned)
+    uint32_t risc0_local_barrier_addr = (in1_output_addr + in1_per_core_read_size_bytes + 15) & ~15U;
+    uint32_t risc1_local_barrier_addr = risc0_local_barrier_addr + 16;
 
     vector<uint32_t> risc0_compile_args = {
         test_config.test_id,                      // 0  Test ID
@@ -189,8 +207,12 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     };
 
     vector<uint32_t> risc1_compile_args = {
-        test_config.test_id,      // Test ID
-        test_config.dram_bank_id  // DRAM bank that all cores will read from
+        test_config.test_id,                      // 0  Test ID
+        test_config.dram_bank_id,                 // 1  DRAM bank that all cores will read from
+        (uint32_t)matmul_physical_start_coord.x,  // 2  Physical start x (for barrier mcast)
+        (uint32_t)matmul_physical_start_coord.y,  // 3  Physical start y
+        (uint32_t)matmul_physical_end_coord.x,    // 4  Physical end x
+        (uint32_t)matmul_physical_end_coord.y,    // 5  Physical end y
     };
 
     // Kernels
@@ -218,22 +240,24 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
             l1_base_address,                       // 0  Sender: source addr of in0 data in L1
             pages_per_core_size_bytes,             // 1  Sender: number of bytes to multicast
             in0_mcast_output_addr,                 // 2  All cores: L1 dest addr for multicast data
-            risc0_barrier_sem_id,                  // 3  Barrier semaphore ID
+            risc0_barrier_sem_id,                  // 3  Barrier arrival semaphore ID
             (uint32_t)barrier_coordinator_phys.x,  // 4  Barrier coordinator physical X
             (uint32_t)barrier_coordinator_phys.y,  // 5  Barrier coordinator physical Y
             num_cores,                             // 6  Total number of cores in barrier
-            risc0_local_barrier_addr               // 7  Local L1 scratch addr for barrier polling
+            risc0_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
+            risc0_barrier_done_sem_id,             // 8  Barrier done semaphore ID
         };
         uint32_t col_idx = matmul_cores_list[i].x - test_config.start_logical_core.x;
         vector<uint32_t> risc1_core_runtime_args = {
             in1_per_core_read_addr[col_idx],       // 0  Each core reads from addr based on its column
             in1_per_core_read_size_bytes,          // 1  Each core reads the same amount of data
             in1_output_addr,                       // 2  Each core writes to the same address in L1
-            risc1_barrier_sem_id,                  // 3  Barrier semaphore ID
+            risc1_barrier_sem_id,                  // 3  Barrier arrival semaphore ID
             (uint32_t)barrier_coordinator_phys.x,  // 4  Barrier coordinator physical X
             (uint32_t)barrier_coordinator_phys.y,  // 5  Barrier coordinator physical Y
             num_cores,                             // 6  Total number of cores in barrier
-            risc1_local_barrier_addr               // 7  Local L1 scratch addr for barrier polling
+            risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
+            risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
         };
         tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, matmul_cores_list[i], risc0_core_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, matmul_cores_list[i], risc1_core_runtime_args);

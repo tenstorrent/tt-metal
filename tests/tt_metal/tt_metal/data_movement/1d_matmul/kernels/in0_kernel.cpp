@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,7 @@ void kernel_main() {
     uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
     uint32_t num_cores = get_arg_val<uint32_t>(6);
     uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);
-
-    barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);
+    uint32_t barrier_done_sem_id = get_arg_val<uint32_t>(8);
 
     uint32_t sender_sem_addr = get_semaphore(sender_sem_id);
     uint32_t sender_valid_sem_addr = get_semaphore(sender_valid_sem_id);
@@ -44,6 +43,18 @@ void kernel_main() {
         get_noc_multicast_addr(physical_start_x, my_y[0], physical_end_x, my_y[0], receiver_sem_addr);
 
     uint64_t sender_sem_noc_addr = get_noc_addr(physical_start_x, my_y[0], sender_sem_addr);
+
+    barrier_sync(
+        barrier_sem_id,
+        barrier_done_sem_id,
+        barrier_coord_x,
+        barrier_coord_y,
+        num_cores,
+        local_barrier_addr,
+        physical_start_x,
+        physical_start_y,
+        physical_end_x,
+        physical_end_y);
 
     if (is_sender) {
         noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
@@ -67,4 +78,5 @@ void kernel_main() {
 
     noc_semaphore_wait(receiver_sem_ptr, 1);
     noc_semaphore_set(receiver_sem_ptr, 0);
+    DeviceTimestampedData("Test id", test_id);
 }
