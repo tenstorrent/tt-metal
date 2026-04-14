@@ -15,7 +15,6 @@
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
-
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -136,6 +135,9 @@ public:
     distributed::SystemMesh& get_system_mesh();
 
     const distributed::multihost::DistributedContext& global_distributed_context();
+    // TODO: Misleading name — this returns the sub-context communicator (post MPI_Comm_split),
+    // NOT the full MPI_COMM_WORLD. Rename or remove in favor of get_distributed_context_ptr()
+    // and DistributedContext::get_world_context().
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 

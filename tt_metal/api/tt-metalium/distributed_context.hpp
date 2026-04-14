@@ -5,9 +5,10 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <vector>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
-#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <complex>
@@ -106,6 +107,7 @@ using Tag = ttsl::StrongType<int, struct TagTag>;
 using Color = ttsl::StrongType<int, struct ColorTag>;
 using Key = ttsl::StrongType<int, struct KeyTag>;
 using Size = ttsl::StrongType<int, struct SizeTag>;
+using SubcontextId = ttsl::StrongType<int, struct SubcontextIdTag>;
 using DistributedContextId = ttsl::StrongType<int, struct DistributedContextIdTag>;
 
 class DistributedException : public std::exception {
@@ -151,19 +153,33 @@ public:
     constexpr static const int SPLIT_COLOR_UNDEFINED = -1;
 
     static void create(int argc, char** argv);
+    /// Returns the sub-context communicator (after an optional MPI_Comm_split via TT_RUN_SUBCONTEXT_ID).
     static const ContextPtr& get_current_world();
+    /// Returns the unsplit world communicator (MPI_COMM_WORLD). rank() and size() on this handle
+    /// are global launcher ranks. Identical to get_current_world() when MPI is disabled or no split occurred.
+    static ContextPtr get_world_context();
     static void set_current_world(const ContextPtr& ctx);
 
-    // Returns true if the distributed context has already been initialized
     static bool is_initialized();
 
-    // Returns a unique ID for this distributed context instance
     DistributedContextId id() const;
 
     //--- Topology ------------------------------------------------------------
     [[nodiscard]] virtual Rank rank() const = 0;
     [[nodiscard]] virtual Size size() const = 0;
     [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
+
+    //--- Sub-context layout (populated from TT_RUN_SUBCONTEXT_* env at create) ---
+    /// This process's sub-context id, or nullopt for a normal single-context job.
+    [[nodiscard]] virtual std::optional<SubcontextId> subcontext_id() const { return std::nullopt; }
+    /// Number of sub-contexts in the merged job (1 when not split).
+    [[nodiscard]] virtual int subcontext_count() const { return 1; }
+    /// Number of MPI ranks in the given sub-context (valid for 0 .. subcontext_count()-1).
+    [[nodiscard]] virtual Size subcontext_size(SubcontextId subcontext_id) const;
+    /// All sub-context sizes in ascending sub-context id order.
+    [[nodiscard]] virtual tt::stl::Span<const int> subcontext_sizes() const;
+    /// Translate a (subcontext_id, local_rank) pair to the corresponding world Rank.
+    [[nodiscard]] virtual Rank local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const;
 
     //--- Synchronization ----------------------------------------------------
     virtual void barrier() const = 0;
