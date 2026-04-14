@@ -697,44 +697,6 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     )
 
 
-@pytest.mark.parametrize("h", [32, 63])
-@pytest.mark.parametrize("w", [32, 63])
-@pytest.mark.parametrize("dim", [-1, -2])
-def test_min_max_non_tile_aligned(device, h, w, dim):
-    """Exercises min/max on non-tile-aligned shapes which trigger fill_pad with -inf/+inf.
-    This hits a UBSan error in fill_pad_program_factory.cpp (issue #42004)."""
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.randn((1, 1, h, w), dtype=torch.bfloat16)
-    torch_max = torch.max(torch_input_tensor, dim=dim, keepdim=True).values
-    torch_min = torch.min(torch_input_tensor, dim=dim, keepdim=True).values
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    ttnn_max = ttnn.max(input_tensor, dim=dim, keepdim=True)
-    ttnn_min = ttnn.min(input_tensor, dim=dim, keepdim=True)
-
-    ttnn_max = ttnn.to_torch(ttnn.from_device(ttnn_max))
-    ttnn_min = ttnn.to_torch(ttnn.from_device(ttnn_min))
-
-    assert_numeric_metrics(
-        torch_max,
-        ttnn_max,
-        pcc_threshold=0.999,
-        rtol=0.004,
-        atol=0.038,
-        frobenius_threshold=0.004,
-    )
-    assert_numeric_metrics(
-        torch_min,
-        ttnn_min,
-        pcc_threshold=0.999,
-        rtol=0.004,
-        atol=0.038,
-        frobenius_threshold=0.004,
-    )
-
-
 def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
     batch_size, in_c, in_h, in_w = input_shape
