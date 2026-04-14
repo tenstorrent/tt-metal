@@ -1422,6 +1422,7 @@ struct TopKSampling {
                     constexpr uint32_t K = CTArgs::topk_k;
                     constexpr uint32_t FACE_ELEMS = 256;
                     constexpr uint16_t BF16_ONE = 0x3F80;
+                    constexpr uint32_t ELEMS_PER_FACE_ROW = 16;
 
                     DPRINT << "Top-" << K << " scores (before softmax):" << ENDL();
                     auto global_scores_addr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
@@ -1446,17 +1447,23 @@ struct TopKSampling {
                     cb_reserve_back(CTArgs::softmax_in_cb, 1);
                     auto tile_u32 =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
+                    constexpr uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
                     for (uint32_t i = 0; i < 512; ++i) {
-                        tile_u32[i] = 0;
+                        tile_u32[i] = NEG_INF_BF16_PAIR;
                     }
-                    auto tile_u16 =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
-                    for (uint32_t i = 0; i < 16 && i < K; ++i) {
-                        tile_u16[i] = global_scores_addr[i];
+                    // auto tile_u16 =
+                    //     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(CTArgs::softmax_in_cb));
+                    // for (uint32_t i = 0; i < 16 && i < K; ++i) {
+                    //     tile_u16[i] = global_scores_addr[i];
+                    // }
+                    // for (uint32_t i = 0; i < 16 && (i + 16) < K; ++i) {
+                    //     tile_u16[FACE_ELEMS + i] = global_scores_addr[16 + i];
+                    // }
+                    noc_async_read(get_noc_addr(global_scores), get_write_ptr(CTArgs::softmax_in_cb), std::min(K, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                    if (K > ELEMS_PER_FACE_ROW) {
+                        noc_async_read(get_noc_addr(global_scores + ELEMS_PER_FACE_ROW*sizeof(uint16_t)), get_write_ptr(CTArgs::softmax_in_cb) + FACE_ELEMS*sizeof(uint16_t), std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
                     }
-                    for (uint32_t i = 0; i < 16 && (i + 16) < K; ++i) {
-                        tile_u16[FACE_ELEMS + i] = global_scores_addr[16 + i];
-                    }
+                    noc_async_read_barrier();
                     cb_push_back(CTArgs::softmax_in_cb, 1);
                 }
             } else if constexpr (IsActiveCore && !IsFinalCore) {
