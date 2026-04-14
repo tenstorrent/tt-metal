@@ -115,13 +115,29 @@ class ModelArgs(TTModelArgs):
                 )
 
     @lru_cache(maxsize=None)
-    def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False) or (
-            getattr(self.optimizations, "__name__", None) == "accuracy"
-        )
-        if not force_fixed_k_chunk:
-            return super().get_attn_sdpa_decode_program_config(prefetcher)
+    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+        """Smaller minimal_matmul tiles on WH B0 to avoid L1 circular-buffer clashes during long prefill."""
+        if mode == Mode.PREFILL and seq_len > 128 and is_wormhole_b0():
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+        return super().get_attn_qkv_program_config(mode, seq_len, prefetcher)
 
+    @lru_cache(maxsize=None)
+    def get_attn_sdpa_decode_program_config(self, prefetcher=None):
+        """Gemma3-only decode SDPA config.
+
+        ``k_chunk_size=0`` uses ``get_dynamic_Sk_chunk_t()``, which jumps 4→8 tiles at cur_pos 127→128
+        and misaligns paged KV (HF cliff at pos 128). **256** tokens is the default fixed chunk: it fits
+        **N150** L1. Do not assume a larger chunk “fixes” quality—it can **L1-clash** on Wormhole and only
+        **shifts** mismatch to a later position; the real fix is **ttnn** ``paged_scaled_dot_product_attention_decode``.
+
+        Optional: ``GEMMA3_SDPA_DECODE_K_CHUNK`` (power of 2, multiple of 32). Try ``512`` only on setups
+        with enough L1; expect possible ``program.cpp`` circular-buffer errors.
+        """
         fixed_k_chunk_tokens = _gemma3_sdpa_decode_k_chunk_tokens()
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
