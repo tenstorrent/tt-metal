@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_shift_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
@@ -23,7 +23,7 @@ inline void llk_math_eltwise_binary_sfpu_left_shift(
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_left_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
@@ -39,7 +39,7 @@ inline void llk_math_eltwise_binary_sfpu_right_shift(
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_right_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
@@ -55,7 +55,7 @@ inline void llk_math_eltwise_binary_sfpu_logical_right_shift(
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::_calculate_logical_right_shift_<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
