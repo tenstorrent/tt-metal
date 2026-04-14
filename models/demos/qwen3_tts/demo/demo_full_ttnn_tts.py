@@ -31,10 +31,9 @@ Usage:
 
 import argparse
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -433,18 +432,6 @@ def create_icl_embedding_ttnn(
     return inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, code_pred_embeds
 
 
-def talker_hidden_last_token_to_torch(talker_hidden_tt: ttnn.Tensor) -> torch.Tensor:
-    """D2H only the last timestep for CodePredictor past_hidden (avoids full-sequence read after prefill)."""
-    seq = int(talker_hidden_tt.shape[2])
-    hdim = int(talker_hidden_tt.shape[3])
-    if seq > 1:
-        row = ttnn.slice(talker_hidden_tt, [0, 0, seq - 1, 0], [1, 1, seq, hdim])
-        out = ttnn.to_torch(row, dtype=torch.bfloat16)
-        ttnn.deallocate(row)
-        return out
-    return ttnn.to_torch(talker_hidden_tt, dtype=torch.bfloat16)
-
-
 def sample_token(
     logits: torch.Tensor,
     temperature: float = 0.9,
@@ -456,108 +443,33 @@ def sample_token(
     """Sample next token from logits with optional repetition penalty.
 
     Args:
-        logits: Logits tensor [vocab_size] (float32 or bfloat16)
+        logits: Logits tensor [vocab_size]
         temperature: Sampling temperature (ignored if greedy=True)
         top_k: Top-k filtering (ignored if greedy=True)
         greedy: Use argmax instead of sampling
         repetition_penalty: Penalty for previously generated tokens (>1.0 discourages repetition)
         generated_tokens: List of previously generated token IDs for repetition penalty
     """
-    logits = logits.reshape(-1)
     if greedy:
-        return int(logits.argmax().item())
+        return logits.argmax().item()
 
-    n = logits.numel()
-
-    # Fast path (default demo: top_k>0): softmax only over the top-k logits after temp scaling.
-    # Same distribution as masking non-top-k to -inf then full-vocab softmax + multinomial.
-    if top_k > 0:
-        k = min(top_k, n)
-        if repetition_penalty != 1.0 and generated_tokens:
-            x = logits.float() if logits.dtype != torch.float32 else logits.clone()
-            for token_id in set(generated_tokens):
-                if 0 <= token_id < n:
-                    if x[token_id] > 0:
-                        x[token_id] = x[token_id] / repetition_penalty
-                    else:
-                        x[token_id] = x[token_id] * repetition_penalty
-            x = x / temperature
-        else:
-            x = logits / temperature
-        top_vals, top_idx = torch.topk(x, k)
-        probs = F.softmax(top_vals.float(), dim=-1)
-        pick = int(torch.multinomial(probs, num_samples=1).item())
-        return int(top_idx[pick].item())
-
-    if logits.dtype != torch.float32:
-        logits = logits.float()
+    # Apply repetition penalty to previously generated tokens
     if repetition_penalty != 1.0 and generated_tokens:
         for token_id in set(generated_tokens):
-            if 0 <= token_id < n:
+            if 0 <= token_id < logits.size(-1):
                 if logits[token_id] > 0:
                     logits[token_id] = logits[token_id] / repetition_penalty
                 else:
                     logits[token_id] = logits[token_id] * repetition_penalty
+
     logits = logits / temperature
+    if top_k > 0:
+        top_k = min(top_k, logits.size(-1))
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits[indices_to_remove] = float("-inf")
     probs = F.softmax(logits, dim=-1)
-    return int(torch.multinomial(probs, num_samples=1).item())
-
-
-def sample_from_tt_vocab_logits(
-    logits_tt: ttnn.Tensor,
-    *,
-    temperature: float,
-    top_k: int,
-    greedy: bool,
-    repetition_penalty: float = 1.0,
-    generated_tokens: Optional[List[int]] = None,
-    prof_acc: Optional[Dict[str, float]] = None,
-) -> int:
-    """Argmax or sample from on-device logits [..., seq, vocab].
-
-    **Greedy** with a single sequence position uses ``untilize`` + on-device ``argmax``
-    and only D2H's the token id (see ``generator.sample_tokens_on_device``).
-
-    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
-    :func:`sample_token` on the host. On-device ``topk`` for sampling was slower than
-    one bf16 logits read + CPU work on Wormhole for this demo.
-
-    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (untilize/argmax/D2H
-    id or full logits ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
-    """
-    sh = tuple(logits_tt.shape)
-    seq_len = int(sh[-2]) if len(sh) >= 2 else 1
-    _pc = time.perf_counter
-
-    if greedy and seq_len == 1:
-        t0 = _pc() if prof_acc is not None else 0.0
-        u = ttnn.untilize(logits_tt, use_multicore=True)
-        tid = ttnn.argmax(u, dim=-1, keepdim=False, use_multicore=True)
-        ttnn.deallocate(u)
-        out = int(ttnn.to_torch(tid).squeeze().item())
-        ttnn.deallocate(tid)
-        if prof_acc is not None:
-            prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (_pc() - t0)
-        return out
-
-    t0 = _pc() if prof_acc is not None else 0.0
-    th = ttnn.to_torch(logits_tt, dtype=torch.bfloat16)
-    if th.ndim >= 3 and th.shape[-2] > 1:
-        th = th[:, :, -1, :]
-    th1d = th.reshape(-1)
-    t1 = _pc() if prof_acc is not None else 0.0
-    out = sample_token(
-        th1d,
-        temperature,
-        top_k,
-        greedy,
-        repetition_penalty,
-        generated_tokens,
-    )
-    if prof_acc is not None:
-        prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
-        prof_acc["cpu_sample"] = prof_acc.get("cpu_sample", 0.0) + (_pc() - t1)
-    return out
+    next_token = torch.multinomial(probs, num_samples=1)
+    return next_token.item()
 
 
 SUPPORTED_PREFILL_LENS = [32, 64, 96, 128, 192, 256, 384, 512, 1024]
@@ -601,7 +513,6 @@ def generate_codes_ttnn(
     use_kv_cache: bool = True,
     use_trace: bool = True,
     use_2cq: bool = False,
-    profile_decode: bool = False,
 ) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
     """
     Generate codec tokens autoregressively using TTNN Talker and CodePredictor.
@@ -612,7 +523,7 @@ def generate_codes_ttnn(
     2. Warmup: compile ALL TTNN kernels with exact shapes (dummy data)
     3. Allocate persistent KV caches
     4. Run Talker prefill NON-TRACED (fills KV cache, gets first token)
-    5. Capture decode traces: Talker decode, CP prefill, CP decode x(num_code_groups-2)
+    5. Capture decode traces: Talker decode, CP prefill, CP decode x13
     6. Generation loop: execute traces only (measured inference)
 
     Args:
@@ -627,8 +538,6 @@ def generate_codes_ttnn(
         use_trace: Whether to use trace (default True)
         use_2cq: If True, issue H2D copies on CQ1 and overlap with trace on CQ0 (requires
             device opened with num_command_queues=2; see tech_reports/AdvancedPerformanceOptimizationsForModels).
-        profile_decode: If True, accumulate per-section host/device wall times inside the
-            generation loop and print an average breakdown (Phase A instrumentation).
 
     Returns:
         (codes, compile_timings): codes are [seq_len, 16] or None. compile_timings holds
@@ -644,8 +553,6 @@ def generate_codes_ttnn(
         use_2cq = False
     if use_2cq:
         print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
-    if profile_decode:
-        print("  --profile-decode: per-section timings (perf_counter, wall time incl. sync)")
 
     # Get transformation matrices
     talker_trans_mat = get_transformation_mat(model.talker_config.head_dim, device)
@@ -908,20 +815,18 @@ def generate_codes_ttnn(
     # Track generated code 0 tokens for repetition penalty
     generated_code0_tokens = []
 
-    # One-timestep D2H only (not full padded length) — faster than to_torch(entire prefill logits).
-    _pv = int(prefill_logits_out.shape[-1])
-    _pi = int(real_seq_len) - 1
-    _pref_row = ttnn.slice(prefill_logits_out, [0, 0, _pi, 0], [1, 1, _pi + 1, _pv])
-    token_0 = sample_from_tt_vocab_logits(
-        _pref_row,
-        temperature=config.temperature,
-        top_k=config.top_k,
-        greedy=config.greedy,
-        repetition_penalty=config.repetition_penalty,
-        generated_tokens=generated_code0_tokens,
+    codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+    codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+    token_0 = sample_token(
+        codec_logits_torch,
+        config.temperature,
+        config.top_k,
+        config.greedy,
+        config.repetition_penalty,
+        generated_code0_tokens,
     )
-    ttnn.deallocate(_pref_row)
     generated_code0_tokens.append(token_0)
+    ttnn.synchronize_device(device)
     t_prefill_end = time.time()
 
     print(f"  Talker prefill done (non-traced): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}")
@@ -938,7 +843,6 @@ def generate_codes_ttnn(
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
             "use_2cq": use_2cq,
-            "profile_decode": None,
         }
 
     talker_pos = real_seq_len
@@ -1053,6 +957,40 @@ def generate_codes_ttnn(
     # during capture and TT_FATAL: "Writes are not supported during trace capture".
     t_trace_start = time.time()
 
+    # --- 5a: Talker decode trace ---
+    print("  Untraced warmup: Talker decode + codec_head (same tensors as trace)...")
+    _wu_th, _ = model.talker.forward_from_hidden(
+        trace_embed_tt,
+        trace_cos_tt,
+        trace_sin_tt,
+        talker_trans_mat,
+        kv_caches=talker_kv_caches,
+        cur_pos_tensor=trace_cur_pos_tt,
+        decode_attn_mask=trace_mask_tt,
+        mode="decode",
+    )
+    _ = model.talker.get_codec_logits(_wu_th)
+    ttnn.synchronize_device(device)
+
+    print("  Capturing Talker decode trace (includes codec_head)...")
+    talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        trace_hidden_out, _ = model.talker.forward_from_hidden(
+            trace_embed_tt,
+            trace_cos_tt,
+            trace_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            cur_pos_tensor=trace_cur_pos_tt,
+            decode_attn_mask=trace_mask_tt,
+            mode="decode",
+        )
+        trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
+    finally:
+        ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+    print("  Talker decode trace captured.")
+
     # --- 5b: CP prefill trace ---
     print("  Untraced warmup: CP prefill (same tensors as trace)...")
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
@@ -1092,7 +1030,7 @@ def generate_codes_ttnn(
     ttnn.synchronize_device(device)
     print("  CP prefill trace captured.")
 
-    # --- 5c: CP decode traces (one per lm_head for codes 2..num_code_groups-1) ---
+    # --- 5c: CP decode traces x13 ---
     cp_decode_trace_ids = []
     cp_decode_logits_tts = []
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
@@ -1134,41 +1072,6 @@ def generate_codes_ttnn(
         cp_decode_trace_ids.append(_trace_id)
         cp_decode_logits_tts.append(_logits_tt)
     print(f"  Captured {len(cp_decode_trace_ids)} CP decode traces.")
-
-    # --- 5d: Talker decode trace (after CP captures; avoids Metal warning about alloc under active Talker trace) ---
-    print("  Untraced warmup: Talker decode + codec_head (same tensors as trace)...")
-    _wu_th, _ = model.talker.forward_from_hidden(
-        trace_embed_tt,
-        trace_cos_tt,
-        trace_sin_tt,
-        talker_trans_mat,
-        kv_caches=talker_kv_caches,
-        cur_pos_tensor=trace_cur_pos_tt,
-        decode_attn_mask=trace_mask_tt,
-        mode="decode",
-    )
-    _ = model.talker.get_codec_logits(_wu_th)
-    ttnn.synchronize_device(device)
-
-    print("  Capturing Talker decode trace (includes codec_head)...")
-    talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    try:
-        trace_hidden_out, _ = model.talker.forward_from_hidden(
-            trace_embed_tt,
-            trace_cos_tt,
-            trace_sin_tt,
-            talker_trans_mat,
-            kv_caches=talker_kv_caches,
-            cur_pos_tensor=trace_cur_pos_tt,
-            decode_attn_mask=trace_mask_tt,
-            mode="decode",
-        )
-        trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
-    finally:
-        ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
-    ttnn.synchronize_device(device)
-    print("  Talker decode trace captured.")
-
     t_trace_end = time.time()
     print("  All traces captured. Starting measured inference...")
     print(f"  Device CQ mode: {'2 (H2D on CQ1, traces on CQ0)' if use_2cq else '1 (H2D and traces share CQ0)'}")
@@ -1194,12 +1097,6 @@ def generate_codes_ttnn(
     cp_sin_cpu = torch.empty(1, 1, 1, cp_head_dim, dtype=torch.bfloat16)
     acc_code_embed = torch.zeros(1, 1, talker_h, dtype=torch.float32)
 
-    prof_sums = defaultdict(float)
-    num_profile_frames = 0
-    _pc = time.perf_counter
-
-    _infer = torch.inference_mode()
-    _infer.__enter__()
     try:
         # --- Generation loop ---
         for step in range(config.max_new_tokens):
@@ -1210,15 +1107,10 @@ def generate_codes_ttnn(
             t_step_start = time.time()
 
             # === CodePredictor: Generate codes 1-15 ===
-            if profile_decode:
-                _t_prof = _pc()
-            past_hidden_torch = talker_hidden_last_token_to_torch(talker_hidden_tt)
+            past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
             token_id_buf[0, 0] = token_0
-            code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1).to(torch.bfloat16)
+            code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1)
             cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
-            if profile_decode:
-                prof_sums["cp_past_d2h_and_input_cpu"] += _pc() - _t_prof
-                _t_prof = _pc()
 
             code_row = [token_0]
 
@@ -1229,12 +1121,9 @@ def generate_codes_ttnn(
             for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
                 ttnn.copy_host_to_device_tensor(k_zero, k_cache, cq_id=h2d_cq)
                 ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
-            if profile_decode:
-                prof_sums["cp_kv_reset_and_prefill_const_h2d"] += _pc() - _t_prof
-                _t_prof = _pc()
 
             # CP prefill trace
-            cp_prefill_embed_cpu.copy_(cp_input)
+            cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
             pfembed_host = ttnn.from_torch(cp_prefill_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             ttnn.copy_host_to_device_tensor(pfembed_host, cp_trace_prefill_embed_tt, cq_id=h2d_cq)
             if use_2cq:
@@ -1245,35 +1134,20 @@ def generate_codes_ttnn(
                 trace_cq0_idle = ttnn.record_event(device, 0)
             else:
                 ttnn.synchronize_device(device)
-            if profile_decode:
-                prof_sums["cp_prefill_embed_h2d_trace_sync"] += _pc() - _t_prof
-                _t_prof = _pc()
 
             _pf_vocab = cp_prefill_logits_tt.shape[3]
             last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
-            if profile_decode:
-                prof_sums["cp_prefill_logits_slice_ms"] += _pc() - _t_prof
-            _acc_pf = {"device_logits": 0.0, "cpu_sample": 0.0} if profile_decode else None
-            token = sample_from_tt_vocab_logits(
-                last_prefill_logits,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                prof_acc=_acc_pf,
-            )
+            logits_torch = ttnn.to_torch(last_prefill_logits).squeeze().float()
             ttnn.deallocate(last_prefill_logits)
-            if profile_decode:
-                prof_sums["cp_prefill_logits_to_torch_ms"] += _acc_pf["device_logits"]
-                prof_sums["cp_prefill_cpu_sample_ms"] += _acc_pf["cpu_sample"]
+            token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
             code_row.append(token)
 
             cp_pos = 2
             cp_decode_mask_host.fill_(float("-inf"))
             cp_decode_mask_host[0, :, 0, 0:2] = 0.0
 
-            # CP decode traces (len = num_code_groups - 2)
+            # CP decode traces x13
             for _trace_i, code_idx in enumerate(range(2, config.num_code_groups)):
-                t_sub = _pc() if profile_decode else 0.0
                 prev_embed_idx = code_idx - 2
                 token_id_buf[0, 0] = token
                 if prev_embed_idx < len(code_pred_embeds) and code_pred_embeds[prev_embed_idx] is not None:
@@ -1291,9 +1165,6 @@ def generate_codes_ttnn(
                 c_h = ttnn.from_torch(cp_cos_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
                 s_h = ttnn.from_torch(cp_sin_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
                 m_h = ttnn.from_torch(cp_decode_mask_host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-                if profile_decode:
-                    prof_sums["cp_decode_host_prep_13x"] += _pc() - t_sub
-                    t_sub = _pc()
                 if use_2cq:
                     ttnn.wait_for_event(1, trace_cq0_idle)
                 ttnn.copy_host_to_device_tensor(e_h, cp_trace_decode_embed_tt, cq_id=h2d_cq)
@@ -1308,20 +1179,9 @@ def generate_codes_ttnn(
                     trace_cq0_idle = ttnn.record_event(device, 0)
                 else:
                     ttnn.synchronize_device(device)
-                if profile_decode:
-                    prof_sums["cp_decode_h2d_trace_sync_13x"] += _pc() - t_sub
 
-                _acc_cp = {"device_logits": 0.0, "cpu_sample": 0.0} if profile_decode else None
-                token = sample_from_tt_vocab_logits(
-                    cp_decode_logits_tts[_trace_i],
-                    temperature=config.temperature,
-                    top_k=config.top_k,
-                    greedy=config.greedy,
-                    prof_acc=_acc_cp,
-                )
-                if profile_decode:
-                    prof_sums["cp_decode_logits_to_torch_13x"] += _acc_cp["device_logits"]
-                    prof_sums["cp_decode_cpu_sample_13x"] += _acc_cp["cpu_sample"]
+                logits_torch = ttnn.to_torch(cp_decode_logits_tts[_trace_i]).squeeze().float()
+                token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
                 code_row.append(token)
                 cp_pos += 1
 
@@ -1331,8 +1191,6 @@ def generate_codes_ttnn(
             t_cp_end = time.time()
 
             # === Build next Talker input embedding ===
-            if profile_decode:
-                _t_prof = _pc()
             acc_code_embed.zero_()
             for i, tok in enumerate(code_row):
                 token_id_buf[0, 0] = tok
@@ -1353,9 +1211,6 @@ def generate_codes_ttnn(
                 next_embed = next_embed + tts_pad_embed
 
             next_embed = next_embed.unsqueeze(1)
-            if profile_decode:
-                prof_sums["talker_embed_prep_cpu"] += _pc() - _t_prof
-                _t_prof = _pc()
 
             # === Talker decode trace ===
             talker_decode_mask_host[0, :, 0, talker_pos] = 0.0
@@ -1390,25 +1245,18 @@ def generate_codes_ttnn(
             t_talker_end = time.time()
             talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
-            if profile_decode:
-                prof_sums["talker_h2d_trace_sync"] += _pc() - _t_prof
 
-            # Trace output: device topk/argmax when seq_len==1 and no repetition penalty.
-            _acc_tk = {"device_logits": 0.0, "cpu_sample": 0.0} if profile_decode else None
-            token_0 = sample_from_tt_vocab_logits(
-                trace_codec_logits_out,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                repetition_penalty=config.repetition_penalty,
-                generated_tokens=generated_code0_tokens,
-                prof_acc=_acc_tk,
+            # Get next code 0 from trace output
+            codec_logits_torch = ttnn.to_torch(trace_codec_logits_out)[:, :, -1, :].squeeze().float()
+            token_0 = sample_token(
+                codec_logits_torch,
+                config.temperature,
+                config.top_k,
+                config.greedy,
+                config.repetition_penalty,
+                generated_code0_tokens,
             )
             generated_code0_tokens.append(token_0)
-            if profile_decode:
-                prof_sums["talker_codec_logits_to_torch"] += _acc_tk["device_logits"]
-                prof_sums["talker_codec_cpu_sample"] += _acc_tk["cpu_sample"]
-                num_profile_frames += 1
 
             if token_0 == config.codec_eos_id:
                 print(f"  EOS at step {step + 1}")
@@ -1426,7 +1274,6 @@ def generate_codes_ttnn(
                 print(f"  Generated {step + 1} frames...")
 
     finally:
-        _infer.__exit__(None, None, None)
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, talker_decode_trace_id)
         ttnn.release_trace(device, cp_prefill_trace_id)
@@ -1463,7 +1310,6 @@ def generate_codes_ttnn(
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
             "use_2cq": use_2cq,
-            "profile_decode": None,
         }
 
     codes = torch.tensor(all_codes, dtype=torch.long)
@@ -1489,97 +1335,6 @@ def generate_codes_ttnn(
 
     avg_decode_ms = sum(decode_step_times) / len(decode_step_times) if decode_step_times else 0.0
 
-    profile_decode_ms = None
-    if profile_decode and num_profile_frames > 0:
-        n_pf = num_profile_frames
-        _sub = float(max(1, config.num_code_groups - 2))  # CP decode traces per frame (codes 2..N-1)
-        profile_decode_ms = {
-            "num_frames": float(n_pf),
-            "cp_past_d2h_and_input_cpu_ms": prof_sums["cp_past_d2h_and_input_cpu"] / n_pf * 1000,
-            "cp_kv_reset_and_prefill_const_h2d_ms": prof_sums["cp_kv_reset_and_prefill_const_h2d"] / n_pf * 1000,
-            "cp_prefill_embed_h2d_trace_sync_ms": prof_sums["cp_prefill_embed_h2d_trace_sync"] / n_pf * 1000,
-            "cp_prefill_logits_slice_ms": prof_sums["cp_prefill_logits_slice_ms"] / n_pf * 1000,
-            "cp_prefill_logits_to_torch_ms": prof_sums["cp_prefill_logits_to_torch_ms"] / n_pf * 1000,
-            "cp_prefill_cpu_sample_ms": prof_sums["cp_prefill_cpu_sample_ms"] / n_pf * 1000,
-            "cp_decode_host_prep_ms": prof_sums["cp_decode_host_prep_13x"] / n_pf * 1000,
-            "cp_decode_host_prep_per_sub_ms": prof_sums["cp_decode_host_prep_13x"] / n_pf / _sub * 1000,
-            "cp_decode_h2d_trace_sync_ms": prof_sums["cp_decode_h2d_trace_sync_13x"] / n_pf * 1000,
-            "cp_decode_h2d_trace_sync_per_sub_ms": prof_sums["cp_decode_h2d_trace_sync_13x"] / n_pf / _sub * 1000,
-            "cp_decode_logits_to_torch_ms": prof_sums["cp_decode_logits_to_torch_13x"] / n_pf * 1000,
-            "cp_decode_logits_to_torch_per_sub_ms": prof_sums["cp_decode_logits_to_torch_13x"] / n_pf / _sub * 1000,
-            "cp_decode_cpu_sample_ms": prof_sums["cp_decode_cpu_sample_13x"] / n_pf * 1000,
-            "cp_decode_cpu_sample_per_sub_ms": prof_sums["cp_decode_cpu_sample_13x"] / n_pf / _sub * 1000,
-            "talker_embed_prep_cpu_ms": prof_sums["talker_embed_prep_cpu"] / n_pf * 1000,
-            "talker_h2d_trace_sync_ms": prof_sums["talker_h2d_trace_sync"] / n_pf * 1000,
-            "talker_codec_logits_to_torch_ms": prof_sums["talker_codec_logits_to_torch"] / n_pf * 1000,
-            "talker_codec_cpu_sample_ms": prof_sums["talker_codec_cpu_sample"] / n_pf * 1000,
-        }
-        cp_total = (
-            prof_sums["cp_past_d2h_and_input_cpu"]
-            + prof_sums["cp_kv_reset_and_prefill_const_h2d"]
-            + prof_sums["cp_prefill_embed_h2d_trace_sync"]
-            + prof_sums["cp_prefill_logits_slice_ms"]
-            + prof_sums["cp_prefill_logits_to_torch_ms"]
-            + prof_sums["cp_prefill_cpu_sample_ms"]
-            + prof_sums["cp_decode_host_prep_13x"]
-            + prof_sums["cp_decode_h2d_trace_sync_13x"]
-            + prof_sums["cp_decode_logits_to_torch_13x"]
-            + prof_sums["cp_decode_cpu_sample_13x"]
-        )
-        talk_total = (
-            prof_sums["talker_embed_prep_cpu"]
-            + prof_sums["talker_h2d_trace_sync"]
-            + prof_sums["talker_codec_logits_to_torch"]
-            + prof_sums["talker_codec_cpu_sample"]
-        )
-        profile_decode_ms["profile_cp_subtotal_ms"] = cp_total / n_pf * 1000
-        profile_decode_ms["profile_talker_subtotal_ms"] = talk_total / n_pf * 1000
-        profile_decode_ms["profile_sum_ms"] = (cp_total + talk_total) / n_pf * 1000
-
-        print(f"\n  --- Decode profile (avg ms/frame, n={n_pf}) ---")
-        print(
-            "  Timestamps: time.perf_counter wall time; with --use-2cq, H2D can overlap device work (sums can exceed end-to-end step)."
-        )
-        print(f"  {'CP past D2H + prefill input (CPU)':<46} {profile_decode_ms['cp_past_d2h_and_input_cpu_ms']:>8.2f}")
-        print(
-            f"  {'CP KV zero + prefill cos/sin/mask H2D':<46} {profile_decode_ms['cp_kv_reset_and_prefill_const_h2d_ms']:>8.2f}"
-        )
-        print(
-            f"  {'CP prefill: embed H2D + trace + sync':<46} {profile_decode_ms['cp_prefill_embed_h2d_trace_sync_ms']:>8.2f}"
-        )
-        print(f"  {'CP prefill: logits slice (host)':<46} {profile_decode_ms['cp_prefill_logits_slice_ms']:>8.2f}")
-        print(f"  {'CP prefill: logits to_torch (D2H)':<46} {profile_decode_ms['cp_prefill_logits_to_torch_ms']:>8.2f}")
-        print(f"  {'CP prefill: CPU sample_token':<46} {profile_decode_ms['cp_prefill_cpu_sample_ms']:>8.2f}")
-        _cp_sub = int(_sub)
-        print(
-            f"  {f'CP decode x{_cp_sub}: host prep (embed, from_torch)':<46} {profile_decode_ms['cp_decode_host_prep_ms']:>8.2f}  (per sub {profile_decode_ms['cp_decode_host_prep_per_sub_ms']:.2f})"
-        )
-        print(
-            f"  {f'CP decode x{_cp_sub}: H2D + trace + sync':<46} {profile_decode_ms['cp_decode_h2d_trace_sync_ms']:>8.2f}  (per sub {profile_decode_ms['cp_decode_h2d_trace_sync_per_sub_ms']:.2f})"
-        )
-        print(
-            f"  {f'CP decode x{_cp_sub}: logits to_torch (D2H)':<46} {profile_decode_ms['cp_decode_logits_to_torch_ms']:>8.2f}  (per sub {profile_decode_ms['cp_decode_logits_to_torch_per_sub_ms']:.2f})"
-        )
-        print(
-            f"  {f'CP decode x{_cp_sub}: CPU sample_token':<46} {profile_decode_ms['cp_decode_cpu_sample_ms']:>8.2f}  (per sub {profile_decode_ms['cp_decode_cpu_sample_per_sub_ms']:.2f})"
-        )
-        print(f"  {'Talker: sum codec embeds + text (CPU)':<46} {profile_decode_ms['talker_embed_prep_cpu_ms']:>8.2f}")
-        print(f"  {'Talker: H2D + decode trace + sync':<46} {profile_decode_ms['talker_h2d_trace_sync_ms']:>8.2f}")
-        print(
-            f"  {'Talker: codec logits to_torch (D2H)':<46} {profile_decode_ms['talker_codec_logits_to_torch_ms']:>8.2f}"
-        )
-        print(f"  {'Talker: codec CPU sample_token':<46} {profile_decode_ms['talker_codec_cpu_sample_ms']:>8.2f}")
-        print(f"  {'─' * 54}")
-        print(
-            f"  {'Profile subtotal CP (sum of buckets above)':<46} {profile_decode_ms['profile_cp_subtotal_ms']:>8.2f}"
-        )
-        print(
-            f"  {'Profile subtotal Talker (sum of buckets)':<46} {profile_decode_ms['profile_talker_subtotal_ms']:>8.2f}"
-        )
-        print(f"  {'Profile sum CP+Talker':<46} {profile_decode_ms['profile_sum_ms']:>8.2f}")
-        print(f"  {'Avg full decode step (for comparison)':<46} {avg_decode_ms:>8.2f}")
-        print(f"  ----------------------------------------")
-
     print(f"\n  --- Performance (Qwen3-TTS on N150, all traced) ---")
     print(f"  Prefill  ({real_seq_len} real / {padded_seq_len} padded tokens): {prefill_ms:.1f} ms")
     print(f"  TTFT     (prefill + 1 decode):  {ttft_ms:.1f} ms")
@@ -1601,7 +1356,6 @@ def generate_codes_ttnn(
         "steady_frames_per_sec": tokens_per_sec,
         "num_generated_frames": len(all_codes),
         "use_2cq": use_2cq,
-        "profile_decode": profile_decode_ms,
     }
     return codes, compile_timings
 
@@ -2207,26 +1961,24 @@ def run_inference(
         )
         prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
         ttnn.synchronize_device(device)
-
-        generated_code0_tokens = []
-        _pv = int(prefill_logits_out.shape[-1])
-        _pi = int(real_seq_len) - 1
-        _pref_row = ttnn.slice(prefill_logits_out, [0, 0, _pi, 0], [1, 1, _pi + 1, _pv])
-        token_0 = sample_from_tt_vocab_logits(
-            _pref_row,
-            temperature=config.temperature,
-            top_k=config.top_k,
-            greedy=config.greedy,
-            repetition_penalty=config.repetition_penalty,
-            generated_tokens=generated_code0_tokens,
-        )
-        ttnn.deallocate(_pref_row)
-        generated_code0_tokens.append(token_0)
         t_prefill_end = time.time()
         timings["prefill"] = t_prefill_end - t_prefill_start
 
         ttnn.deallocate(prefill_cos_tt)
         ttnn.deallocate(prefill_sin_tt)
+
+        generated_code0_tokens = []
+        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
 
         if token_0 == config.codec_eos_id:
             return None, timings, "EOS at prefill"
@@ -2339,9 +2091,9 @@ def run_inference(
             t_step_start = time.time()
 
             # --- CodePredictor: generate codes 1-15 ---
-            past_hidden_torch = talker_hidden_last_token_to_torch(talker_hidden_tt)
+            past_hidden_torch = ttnn.to_torch(talker_hidden_tt)[:, :, -1:, :].float()
             token_id_buf[0, 0] = token_0
-            code0_embed = F.embedding(token_id_buf, ctx.codec_embed_torch).unsqueeze(1).to(torch.bfloat16)
+            code0_embed = F.embedding(token_id_buf, ctx.codec_embed_torch).unsqueeze(1)
             cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
             code_row = [token_0]
 
@@ -2354,7 +2106,7 @@ def run_inference(
                 ttnn.copy_host_to_device_tensor(v_zero, v_cache, cq_id=h2d_cq)
 
             # CP prefill trace
-            cp_prefill_embed_cpu.copy_(cp_input)
+            cp_prefill_embed_cpu.copy_(cp_input.bfloat16())
             pfembed_host = ttnn.from_torch(cp_prefill_embed_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             ttnn.copy_host_to_device_tensor(pfembed_host, ctx.cp_trace_prefill_embed_tt, cq_id=h2d_cq)
             if use_2cq:
@@ -2368,13 +2120,9 @@ def run_inference(
 
             _pf_vocab = ctx.cp_prefill_logits_tt.shape[3]
             last_prefill_logits = ttnn.slice(ctx.cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
-            token = sample_from_tt_vocab_logits(
-                last_prefill_logits,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-            )
+            logits_torch = ttnn.to_torch(last_prefill_logits).squeeze().float()
             ttnn.deallocate(last_prefill_logits)
+            token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
             code_row.append(token)
 
             cp_pos = 2
@@ -2415,12 +2163,8 @@ def run_inference(
                 else:
                     ttnn.synchronize_device(device)
 
-                token = sample_from_tt_vocab_logits(
-                    ctx.cp_decode_logits_tts[_trace_i],
-                    temperature=config.temperature,
-                    top_k=config.top_k,
-                    greedy=config.greedy,
-                )
+                logits_torch = ttnn.to_torch(ctx.cp_decode_logits_tts[_trace_i]).squeeze().float()
+                token = sample_token(logits_torch, config.temperature, config.top_k, config.greedy)
                 code_row.append(token)
                 cp_pos += 1
 
@@ -2483,13 +2227,15 @@ def run_inference(
             talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
-            token_0 = sample_from_tt_vocab_logits(
-                trace_codec_logits_out,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                repetition_penalty=config.repetition_penalty,
-                generated_tokens=generated_code0_tokens,
+            # Get next code 0 from trace output
+            codec_logits_torch = ttnn.to_torch(trace_codec_logits_out)[:, :, -1, :].squeeze().float()
+            token_0 = sample_token(
+                codec_logits_torch,
+                config.temperature,
+                config.top_k,
+                config.greedy,
+                config.repetition_penalty,
+                generated_code0_tokens,
             )
             generated_code0_tokens.append(token_0)
 
@@ -2595,7 +2341,6 @@ def run_full_ttnn_tts(
     load_cpu_inputs: str = None,
     auto_trim_bleed: bool = False,
     target_word: str = None,
-    profile_decode: bool = False,
 ):
     """Run full TTNN TTS pipeline."""
     demo_start = time.time()
@@ -2611,8 +2356,6 @@ def run_full_ttnn_tts(
         print(f"RNG seed: {seed} (torch.manual_seed before codec generation)")
     else:
         print("RNG seed: default — sampling is non-deterministic; use --seed for repeatable benchmarks")
-    if profile_decode:
-        print("Decode profiling: enabled (--profile-decode); see breakdown after generation")
     print()
 
     timings = {}
@@ -2736,7 +2479,6 @@ def run_full_ttnn_tts(
             use_kv_cache=use_kv_cache,
             use_trace=use_trace,
             use_2cq=use_2cq,
-            profile_decode=profile_decode,
         )
         timings["generation"] = time.time() - gen_start
         timings["warmup"] = compile_timings["warmup"]
@@ -2744,7 +2486,6 @@ def run_full_ttnn_tts(
         timings["avg_decode_ms"] = compile_timings.get("avg_decode_ms", 0.0)
         timings["steady_avg_decode_ms"] = compile_timings.get("steady_avg_decode_ms", 0.0)
         timings["steady_frames_per_sec"] = compile_timings.get("steady_frames_per_sec", 0.0)
-        timings["profile_decode"] = compile_timings.get("profile_decode")
 
         if codes is None:
             print("ERROR: Failed to generate codes")
@@ -2841,9 +2582,6 @@ def run_full_ttnn_tts(
             "  Note: Total generation ms scales with EOS frame count when sampling; compare steady ms/sec across runs."
         )
 
-        if timings.get("profile_decode"):
-            print("  Decode profile: per-section averages printed earlier (during generation).")
-
         print(f"  (TTFT and decode throughput breakdown printed above during generation)")
 
         total_time = time.time() - demo_start
@@ -2934,11 +2672,6 @@ def main():
         default=None,
         help="Expected first word of target text for bleed detection (auto-extracted if not set)",
     )
-    parser.add_argument(
-        "--profile-decode",
-        action="store_true",
-        help="Print per-section decode timing (CP vs Talker, H2D/D2H vs trace); Phase A instrumentation",
-    )
     args = parser.parse_args()
 
     # Use default Jim reference if not specified
@@ -2963,7 +2696,6 @@ def main():
         load_cpu_inputs=args.load_cpu_inputs,
         auto_trim_bleed=args.auto_trim_bleed,
         target_word=args.target_word,
-        profile_decode=args.profile_decode,
     )
 
 
