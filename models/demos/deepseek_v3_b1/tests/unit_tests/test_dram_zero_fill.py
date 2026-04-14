@@ -16,6 +16,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
@@ -59,6 +60,9 @@ def _build_reference_kv_tensor(submesh, num_users, max_seq_len):
 @pytest.mark.requires_grid_size((12, 10))
 def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> None:
     """Zero-fill a KV-cache-shaped DRAM tensor and verify all zeros."""
+    if is_slow_dispatch() and (num_users > 1 or max_seq_len > 1024 * 32):
+        pytest.skip("Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode")
+
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
         pytest.skip("Test requires 8 devices (4x2 mesh)")
 
