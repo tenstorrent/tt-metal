@@ -50,6 +50,8 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        sender_mesh=None,
+        receiver_mesh=None,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -114,7 +116,15 @@ class HostInterface:
         )
 
         self.downstream_socket_pair = None
+        self.downstream_mesh_socket = None
         self.upstream_socket_pair = None
+        self.sender_mesh = sender_mesh
+        self.receiver_mesh = receiver_mesh
+        self.inter_mesh_downstream = (
+            sender_mesh is not None
+            and receiver_mesh is not None
+            and sender_mesh.get_mesh_id() != receiver_mesh.get_mesh_id()
+        )
 
         if loopback_mode:
             self.intermed_cb_index = 0
@@ -126,13 +136,22 @@ class HostInterface:
                     self.h2d_mesh_core_coord,
                     self.h2d_downstream_core,
                 )
-                downstream_socket_config = ttnn.SocketConfig(
-                    [downstream_socket_connection],
-                    socket_memory_config,
-                )
-                self.downstream_socket_pair = ttnn.create_socket_pair(
-                    self.mesh_device, self.mesh_device, downstream_socket_config
-                )
+                if self.inter_mesh_downstream:
+                    downstream_socket_config = ttnn.SocketConfig(
+                        connections=[downstream_socket_connection],
+                        memory_config=socket_memory_config,
+                        sender_mesh_id=sender_mesh.get_mesh_id(),
+                        receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                    )
+                    self.downstream_mesh_socket = ttnn.MeshSocket(self.mesh_device, downstream_socket_config)
+                else:
+                    downstream_socket_config = ttnn.SocketConfig(
+                        [downstream_socket_connection],
+                        socket_memory_config,
+                    )
+                    self.downstream_socket_pair = ttnn.create_socket_pair(
+                        self.mesh_device, self.mesh_device, downstream_socket_config
+                    )
 
             if self.d2h_socket and self.d2h_upstream_core is not None:
                 upstream_socket_connection = ttnn.SocketConnection(
@@ -167,9 +186,16 @@ class HostInterface:
         self.num_fwd_links = 2
         self.num_bwd_links = 1
 
+    def _get_downstream_sender_socket(self):
+        if self.inter_mesh_downstream:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[0]
+        return None
+
     def _create_h2d_kernel(self):
         use_fabric = (not self.loopback_mode) and (
-            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
+            self.inter_mesh_downstream or self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
         )
 
         fabric_max_payload_size = 0
@@ -185,18 +211,15 @@ class HostInterface:
             num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
             partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
 
-        # H2D Receiver Core will forward data to downstream core via fabric if:
-        # 1. Not in loopback mode (i.e. real workload)
-        # 2. Downstream core is not on the same device as the H2D receiver core
+        downstream_sender_socket = self._get_downstream_sender_socket()
+
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
             self.h2d_page_size,
             self.h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL,
             self.loopback_mode,
-            self.intermed_cb_index
-            if self.loopback_mode
-            else self.downstream_socket_pair[0].get_config_buffer_address(),
+            self.intermed_cb_index if self.loopback_mode else downstream_sender_socket.get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
             fabric_max_payload_size,
             num_whole_fabric_packets_per_link,
@@ -322,7 +345,17 @@ class HostInterface:
         if self.d2h_mesh_core_coord is not None:
             d2h_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_mesh_core_coord.device_coord)
         if self.h2d_downstream_core is not None:
-            my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_downstream_core.device_coord)
+            if self.inter_mesh_downstream:
+                downstream_recv_device_coord = self.downstream_mesh_socket.get_connection_config()[
+                    0
+                ].receiver_core.device_coord
+                my_downstream_fabric_node_id = self.downstream_mesh_socket.get_fabric_node_id(
+                    ttnn.SocketEndpoint.RECEIVER, downstream_recv_device_coord
+                )
+            else:
+                my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(
+                    self.h2d_downstream_core.device_coord
+                )
         if self.d2h_upstream_core is not None:
             my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
 
@@ -448,8 +481,18 @@ class HostInterface:
     def get_downstream_socket(self):
         if self.downstream_socket_pair is not None:
             return self.downstream_socket_pair[1]
+        elif self.downstream_mesh_socket is not None:
+            raise ValueError("Downstream receiver socket not available for inter-mesh configuration")
         else:
             raise ValueError("Downstream socket not available")
+
+    def get_downstream_sender_socket(self):
+        if self.downstream_mesh_socket is not None:
+            return self.downstream_mesh_socket
+        elif self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[0]
+        else:
+            raise ValueError("Downstream sender socket not available")
 
     def get_upstream_socket(self):
         if self.upstream_socket_pair is not None:
