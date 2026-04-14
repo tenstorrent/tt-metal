@@ -1272,6 +1272,8 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
+                auto recv_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
 
                 const uint32_t global_scores = get_write_ptr(CTArgs::winner_cb_id);
@@ -1328,8 +1330,8 @@ struct TopKSampling {
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_scores_stride,
                             args.indices_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_indices_stride,
-                            global_scores,
-                            global_indices);
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores),
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices));
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
 
@@ -1376,8 +1378,8 @@ struct TopKSampling {
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_scores_stride,
                             args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_indices_stride,
-                            global_scores,
-                            global_indices);
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores),
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices));
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);

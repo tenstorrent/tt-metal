@@ -176,6 +176,9 @@ void kernel_main() {
     constexpr uint32_t num_internal_iterations = get_named_compile_time_arg_val("sampling_num_internal_iterations");
     for (uint32_t i = 0; i < num_internal_iterations; ++i) {
         sampling_op(args);
+        if (num_internal_iterations == 1) {
+            break;
+        }
 #if defined(COMPILE_FOR_NCRISC)
         // Single-device loop barrier: final core releases non-final cores for next iteration.
         // This prevents receiver semaphore increments from later iterations racing ahead.
@@ -203,17 +206,6 @@ void kernel_main() {
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
             }
-        }
-#endif
-
-#if defined(COMPILE_FOR_TRISC)
-        if constexpr (SamplingComputeCTArgs::topk_k == 32) {
-            deepseek_compute_kernel_hw_startup<true>(
-                SamplingComputeCTArgs::topk_in_scores_cb,
-                SamplingComputeCTArgs::topk_in_scores_cb,
-                SamplingComputeCTArgs::topk_out_scores_cb);
-        } else {
-            deepseek_compute_kernel_hw_startup<true>(SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_in_cb, SamplingComputeCTArgs::softmax_out_cb);
         }
 #endif
     }
