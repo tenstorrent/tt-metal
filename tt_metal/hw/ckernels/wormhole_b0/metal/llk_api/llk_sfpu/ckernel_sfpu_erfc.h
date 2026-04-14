@@ -28,7 +28,7 @@ constexpr uint32_t ERFC_NUM_DEGREE = 4;
 constexpr uint32_t ERFC_DEN_DEGREE = 5;
 constexpr uint32_t ERFC_NUM_SEGMENTS = 2;
 constexpr uint32_t ERFC_LUT_SIZE = 25;
-constexpr std::array<float, 25> ERFC_LUT = {{// Breakpoints
+constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
                                              0.0000000000e+00f,
                                              2.5000000000e+00f,
                                              5.0000000000e+00f,
