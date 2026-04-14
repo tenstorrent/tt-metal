@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
 
 namespace tt::tt_metal {
@@ -26,17 +27,16 @@ std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> RemoteCompileCoo
 RemoteCompileCoordinator::RemoteCompileCoordinator(
     std::vector<std::string> endpoints,
     TransportFactory transport_factory,
-    FirmwareFactory firmware_factory,
+    ChipId device_build_id,
     uint64_t build_key) :
     endpoints_(std::move(endpoints)),
     transport_factory_(std::move(transport_factory)),
-    firmware_factory_(std::move(firmware_factory)),
+    device_build_id_(device_build_id),
     build_key_(build_key),
     sessions_(endpoints_.size()),
     pending_by_endpoint_(endpoints_.size()) {
     TT_FATAL(!endpoints_.empty(), "RemoteCompileCoordinator requires at least one endpoint");
     TT_FATAL(transport_factory_ != nullptr, "RemoteCompileCoordinator requires a non-null transport factory");
-    TT_FATAL(firmware_factory_ != nullptr, "RemoteCompileCoordinator requires a non-null firmware factory");
 }
 
 RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
@@ -148,7 +148,24 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
     std::lock_guard lock(s_fw_gate_mutex_);
     auto it = s_fw_cache_.find(build_key_);
     if (it == s_fw_cache_.end()) {
-        it = s_fw_cache_.emplace(build_key_, firmware_factory_(build_key_)).first;
+        const auto& dev_env = BuildEnvManager::get_instance().get_device_build_env(device_build_id_);
+        const auto& fw_root = dev_env.build_env.get_firmware_binary_root();
+
+        jit_server::UploadFirmwareRequest req;
+        req.build_key = build_key_;
+        for (const auto& fw_state : dev_env.firmware_build_states) {
+            const std::string fw_path = fw_root + fw_state.get_target_full_path();
+            if (!fs::exists(fw_path)) {
+                continue;
+            }
+            jit_server::FirmwareArtifact artifact;
+            artifact.target_name = fw_state.get_target_name();
+            artifact.file_name = fs::path(fw_state.get_target_full_path()).filename().string();
+            artifact.is_kernel_object = false;
+            artifact.data = jit_build::utils::read_file_bytes(fw_path);
+            req.artifacts.push_back(std::move(artifact));
+        }
+        it = s_fw_cache_.emplace(build_key_, std::move(req)).first;
     }
     return it->second;
 }

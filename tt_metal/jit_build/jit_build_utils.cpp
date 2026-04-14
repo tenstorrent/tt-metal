@@ -123,6 +123,45 @@ bool exec_command(const std::vector<std::string>& args, const std::string& worki
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot read file: " + path);
+    }
+    std::streampos pos = file.tellg();
+    if (pos == std::streampos(-1)) {
+        throw std::runtime_error("Cannot determine size of file: " + path);
+    }
+    auto byte_count = static_cast<std::streamsize>(pos);
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> data(static_cast<std::size_t>(byte_count));
+    file.read(reinterpret_cast<char*>(data.data()), byte_count);
+    if (file.gcount() != byte_count || (!file && !file.eof())) {
+        throw std::runtime_error(
+            fmt::format("Failed to read file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount()));
+    }
+    return data;
+}
+
+std::vector<tt::tt_metal::jit_server::GeneratedFile> read_directory_files(
+    const std::string& dir, std::span<const std::string> extensions) {
+    namespace fs = std::filesystem;
+    std::vector<tt::tt_metal::jit_server::GeneratedFile> files;
+    if (!fs::is_directory(dir)) {
+        return files;
+    }
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        if (std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
+            continue;
+        }
+        files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});
+    }
+    return files;
+}
+
 void create_file(const std::string& file_path_str) {
     namespace fs = std::filesystem;
 

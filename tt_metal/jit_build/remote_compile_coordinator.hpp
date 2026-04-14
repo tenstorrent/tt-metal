@@ -16,6 +16,7 @@
 
 #include "impl/jit_server/types.hpp"
 #include "jit_build/remote_compile_transport.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -47,14 +48,10 @@ class RemoteCompileCoordinator {
 public:
     using TransportFactory = std::function<std::unique_ptr<RemoteCompileTransport>(const std::string& endpoint)>;
 
-    // Called at most once per build_key for the lifetime of the process.
-    // Responsible for collecting firmware artifacts from the local build environment.
-    using FirmwareFactory = std::function<jit_server::UploadFirmwareRequest(uint64_t build_key)>;
-
     RemoteCompileCoordinator(
         std::vector<std::string> endpoints,
         TransportFactory transport_factory,
-        FirmwareFactory firmware_factory,
+        ChipId device_build_id,
         uint64_t build_key);
     ~RemoteCompileCoordinator();
 
@@ -79,10 +76,12 @@ private:
     // -- Configuration (immutable after construction) --
     std::vector<std::string> endpoints_;
     TransportFactory transport_factory_;
-    FirmwareFactory firmware_factory_;
+    ChipId device_build_id_;
     uint64_t build_key_;
 
     // -- Per-batch state (between submit/finish) --
+    // submit() is called sequentially from the program compile loop;
+    // finish() runs after all submits complete.  No mutex needed.
     struct PendingKernel {
         KernelCompileDescriptor descriptor;
         std::shared_ptr<std::promise<void>> dedup_promise;
@@ -102,7 +101,7 @@ private:
 
     static std::mutex s_fw_gate_mutex_;
     static std::unordered_map<std::string, std::shared_future<void>> s_fw_gate_;
-    // Firmware request cache: built at most once per build_key via firmware_factory_.
+    // Firmware request cache: built at most once per build_key.
     static std::unordered_map<uint64_t, jit_server::UploadFirmwareRequest> s_fw_cache_;
 };
 

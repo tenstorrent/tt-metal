@@ -256,26 +256,6 @@ void link_one(
     }
 }
 
-std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot read ELF file: " + path);
-    }
-    std::streampos pos = file.tellg();
-    if (pos == std::streampos(-1)) {
-        throw std::runtime_error("Cannot determine size of ELF file: " + path);
-    }
-    auto byte_count = static_cast<std::streamsize>(pos);
-    file.seekg(0, std::ios::beg);
-    std::vector<std::uint8_t> data(static_cast<size_t>(byte_count));
-    file.read(reinterpret_cast<char*>(data.data()), byte_count);
-    if (file.gcount() != byte_count || (!file && !file.eof())) {
-        throw std::runtime_error(fmt::format(
-            "Failed to read ELF file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount()));
-    }
-    return data;
-}
-
 void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
@@ -351,7 +331,7 @@ void build_target(
     std::string elf_path = out_dir + target.target_name + ".elf";
     tt::tt_metal::jit_server::ElfBlob blob;
     blob.name = target.target_name;
-    blob.data = read_file_bytes(elf_path);
+    blob.data = tt::jit_build::utils::read_file_bytes(elf_path);
     response.elf_blobs.push_back(std::move(blob));
 }
 
