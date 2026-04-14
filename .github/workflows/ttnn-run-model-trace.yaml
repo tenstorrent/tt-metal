@@ -61,6 +61,16 @@ jobs:
       platform: ${{ steps.derive.outputs.platform }}
       test_file: ${{ steps.validate.outputs.test_file }}
     steps:
+      - name: Verify tenstorrent org membership
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if ! gh api "orgs/tenstorrent/members/${ACTOR}" --silent 2>/dev/null; then
+            echo "::error::Only tenstorrent organization members can run this workflow"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
