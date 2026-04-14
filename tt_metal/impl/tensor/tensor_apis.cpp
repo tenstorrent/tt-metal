@@ -2,9 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cstring>
+#include <functional>
+#include <unordered_set>
+
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/tensor_utils.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/concepts.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
 
