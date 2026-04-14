@@ -108,6 +108,16 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape());
     }
 
+    // BFP types (bfloat8_b, bfloat4_b) are tile-only — reject if output would be RM.
+    const auto target_layout = args.output_layout.value_or(input_tensor.layout());
+    if (target_layout == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            args.output_dtype != DataType::BFLOAT8_B && args.output_dtype != DataType::BFLOAT4_B,
+            "Typecast output dtype {} requires TILE layout but output layout is ROW_MAJOR. "
+            "BFP formats cannot be in ROW_MAJOR layout.",
+            args.output_dtype);
+    }
+
     if (cross_layout) {
         TT_FATAL(
             !preallocated_output_tensor.has_value(),
