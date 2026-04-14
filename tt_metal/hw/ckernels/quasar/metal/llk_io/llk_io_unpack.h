@@ -39,7 +39,7 @@ inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tile
     const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
 
     local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +=
-        local_dfb_interface.stride_size_tiles;
+        num_tiles * local_dfb_interface.stride_size_tiles;
     local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr += num_words;
     if (local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_ptr >=
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].limit) {
