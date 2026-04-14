@@ -42,7 +42,9 @@ def fixed_seed() -> None:
 
 @pytest.fixture(scope="session")
 def device() -> Generator[ttnn.Device, None, None]:
-    dev = ttnn.open_device(device_id=0)
+    # l1_small_size=32768 is required by ttnn.conv2d (TTNN BasicBlock tests).
+    # Setting it session-wide is harmless for tests that don't use conv2d.
+    dev = ttnn.open_device(device_id=0, l1_small_size=32768)
     yield dev
     ttnn.close_device(dev)
 
