@@ -704,25 +704,22 @@ Based on code exploration of:
 
 ## 5. Cross-Model MoE Parameter Comparison (ALL VERIFIED)
 
-| Parameter | DeepSeek V3 | GPT-OSS 120B | GLM-4.7 | GLM-5 | Kimi K2.5 | Qwen3.5 397B | Qwen3.5 35B | Qwen3 235B | Qwen3-Omni Thinker | Qwen3-Omni Talker | DS-OCR | Mistral Large 3 | Ling 1T | Gemma 4 26B |
-|-----------|------------|-------------|---------|-------|-----------|-------------|------------|-----------|-------------------|------------------|--------|-----------------|---------|------------|
-| **hidden_size** | 7168 | 2880 | 5120 | 6144 | 7168 | 4096 | 2048 | 4096 | 2048 | 1024 | 1280 | 7168 | 8192 | 2816 |
-| **moe_intermediate** | 2048 | 2880 | 1536 | 2048 | 2048 | 1024 | 512 | 1536 | 768 | 384 | 896 | 4096 | 2048 | 704 |
-| **shared_expert_interm** | 2048 | — | 1536 | 2048 | 2048 | 1024 | 512 | — | — | 768 | 1792 | ? | 2048 | — (parallel dense) |
-| **n_routed_experts** | 256 | 128 | 160 | 256 | 384 | 512 | 256 | 128 | 128 | 128 | 64 | 128 | 256 | 128 |
-| **n_shared_experts** | 1 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 1 | 2 | 1 | 1 | 0 (parallel dense) |
-| **K (top-k)** | 8 | 4 | 8 | 8 | 8 | 10 | 8 | 8 | 8 | 6 | 6 | 4 | 8 | 8 |
-| **activation** | SiLU/SwiGLU | custom GELU-gated | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU/SwiGLU | SiLU? | SiLU/SwiGLU | **GELU/SwiGLU** |
-| **scoring_func** | sigmoid | softmax | (unspec.) | sigmoid | sigmoid | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (greedy) | (unspec.) | sigmoid | softmax |
-| **topk_method** | noaux_tc | simple | (unspec.) | noaux_tc | noaux_tc | (unspec.) | (unspec.) | (unspec.) | (unspec.) | (unspec.) | greedy | (unspec.) | (bias-enabled) | simple+per_expert_scale |
-| **n_group/topk_group** | 8/4 | —/— | 1/1 | 1/1 | 1/1 | —/— | —/— | —/— | —/— | —/— | 1/1 | 1/1 | 8/4 | —/— |
-| **scaling_factor** | 2.5 | 1.0 | 2.5 | 2.5 | 2.827 | — | — | — | — | — | — | 1.0 | 2.5 | per-expert learned |
-| **expert_bias** | No | Yes | No | No | No | No | No | No | No | No | No | No | No | No |
-| **router_bias** | correction | Yes | No | correction | correction | No | No | No | No | No | No | No | correction | No (has learned scale) |
-| **first_k_dense** | 3 | all MoE | 3 | 3 | 1 | all MoE | all MoE | all MoE | all MoE | all MoE | 1 | 3 | 4 | all MoE |
-| **num_layers** | 61 | 36 | 92 | 78 | 61 | 60 | 40 | 94 | 48 | 20 | 12 | 61 | 80 | 30 |
-| **parallel dense** | No | No | No | No | No | No | No | No | No | No | No | No | No | **Yes** |
-| **base_arch** | DS V3 | GPT-OSS | GLM4-MoE | DS V3-like | DS V3 | Qwen3.5 | Qwen3.5 | Qwen3 | Qwen3-Omni | Qwen3-Omni | DS V2 | Mistral | DS V3-like | Gemma4 |
+| **Model** | **hidden_size** | **moe_intermediate** | **shared_expert_interm** | **n_routed_experts** | **n_shared_experts** | **K (top-k)** | **activation** | **scoring_func** | **topk_method** | **n_group/topk_group** | **scaling_factor** | **expert_bias** | **router_bias** | **first_k_dense** | **num_layers** | **parallel dense** | **base_arch** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **DeepSeek V3** | 7168 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | sigmoid | noaux_tc | 8/4 | 2.5 | No | correction | 3 | 61 | No | DS V3 |
+| **GPT-OSS 120B** | 2880 | 2880 | — | 128 | 0 | 4 | custom GELU-gated | softmax | simple | —/— | 1.0 | Yes | Yes | all MoE | 36 | No | GPT-OSS |
+| **GLM-4.7** | 5120 | 1536 | 1536 | 160 | 1 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | 1/1 | 2.5 | No | No | 3 | 92 | No | GLM4-MoE |
+| **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | sigmoid | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
+| **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | sigmoid | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3 |
+| **Qwen3.5 397B** | 4096 | 1024 | 1024 | 512 | 1 | 10 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 60 | No | Qwen3.5 |
+| **Qwen3.5 35B** | 2048 | 512 | 512 | 256 | 1 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 40 | No | Qwen3.5 |
+| **Qwen3 235B** | 4096 | 1536 | — | 128 | 0 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 94 | No | Qwen3 |
+| **Qwen3-Omni Thinker** | 2048 | 768 | — | 128 | 0 | 8 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 48 | No | Qwen3-Omni |
+| **Qwen3-Omni Talker** | 1024 | 384 | 768 | 128 | 1 | 6 | SiLU/SwiGLU | (unspec.) | (unspec.) | —/— | — | No | No | all MoE | 20 | No | Qwen3-Omni |
+| **DS-OCR** | 1280 | 896 | 1792 | 64 | 2 | 6 | SiLU/SwiGLU | (greedy) | greedy | 1/1 | — | No | No | 1 | 12 | No | DS V2 |
+| **Mistral Large 3** | 7168 | 4096 | ? | 128 | 1 | 4 | SiLU? | (unspec.) | (unspec.) | 1/1 | 1.0 | No | No | 3 | 61 | No | Mistral |
+| **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | sigmoid | (bias-enabled) | 8/4 | 2.5 | No | correction | 4 | 80 | No | DS V3-like |
+| **Gemma 4 26B** | 2816 | 704 | — (parallel dense) | 128 | 0 (parallel dense) | 8 | **GELU/SwiGLU** | softmax | simple+per_expert_scale | —/— | per-expert learned | No | No (has learned scale) | all MoE | 30 | **Yes** | Gemma4 |
 
 ---
 
