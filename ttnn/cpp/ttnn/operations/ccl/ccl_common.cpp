@@ -1701,12 +1701,18 @@ void validate_fabric_2d_dynamic_config() {
     auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
     TT_FATAL(
         physical_mesh_shapes.size() == 1,
-        "Fabric 2D dynamic CCLs expected a single Physical Mesh to be instantiated, but got {} meshes",
+        "Fabric 2D CCLs expected a single Physical Mesh to be instantiated, but got {} meshes",
         physical_mesh_shapes.size());
     const auto& physical_mesh_shape = physical_mesh_shapes.begin()->second;
     TT_FATAL(
-        physical_mesh_shape.dims() == 2,
-        "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
+        physical_mesh_shape.dims() == 2, "Fabric 2D CCLs are not supported for mesh shape with more than 2 dimensions");
+    TT_FATAL(
+        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1 ||
+            (physical_mesh_shape[0] == 2 && physical_mesh_shape[1] == 2),
+        "Fabric 2D CCLs are only supported for 1D physical meshes (1xN or Nx1) OR 2x2 ring that is equivalent to 1D, "
+        "but physical mesh shape is configured as {}x{}",
+        physical_mesh_shape[0],
+        physical_mesh_shape[1]);
 }
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
