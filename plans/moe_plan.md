@@ -129,7 +129,8 @@ Based on the verified configs, the models cluster into clear families:
 - **Qwen3 (235B)**: Simple config, no grouping, no shared experts.
 - **Qwen3.5 (397B)**: 512 experts, K=10, softmax routing.
 - **Qwen3.5 (35B)**: Smaller Qwen3.5, 256 experts, K=8, same MoE arch.
-- **Qwen3-Omni (30B)**: Omni-modal, 128 experts, K=8, same Qwen3 family routing.
+- **Qwen3-Omni Thinker (30B)**: 128 experts, K=8, no shared experts, same Qwen3 family routing.
+- **Qwen3-Omni Talker (30B)**: 128 experts, K=6, 1 shared expert (768 intermediate), same routing.
 
 ### Family 3: Custom architectures
 - **GPT-OSS**: Unique activation (GELU-gated with clamping), has bias everywhere, fused interleaved gate_up, softmax routing.
