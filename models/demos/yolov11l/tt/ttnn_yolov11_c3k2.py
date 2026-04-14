@@ -10,7 +10,7 @@ from models.demos.yolov11l.tt.ttnn_yolov11_c3k import TtnnC3K
 
 
 class TtnnC3k2:
-    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False):
+    def __init__(self, device, parameter, conv_pt, is_bk_enabled=False, reshard=False, cv1_slice_count=2):
         self.is_bk_enabled = is_bk_enabled
         self.reshard = reshard
         self.parameter = parameter
@@ -23,7 +23,7 @@ class TtnnC3k2:
                 conv_pt.cv1,
                 reshard=False,
                 deallocate_activation=True,
-                slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+                slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
             )
             # cv2: DRAM activations + auto slice (like conv2) — L1 sharded concat + HEIGHT_SHARDED cv2 peaked L1 (tilize/matmul OOM).
             self.cv2 = TtnnConv(
@@ -36,7 +36,8 @@ class TtnnC3k2:
             )
             self.inner = [TtnnBottleneck(device, parameter[i], conv_pt.m[i]) for i in range(n_inner)]
         else:
-            cv1_slice_count = 16 if reshard else 8
+            # cv1_slice_count = 2 if reshard else 2
+            # cv1_slice_count
             # Conv2d here requires sharded layout; WIDTH_SHARDED is typically less L1-heavy
             # than forcing HEIGHT_SHARDED for these high-resolution PAN/FPN stages.
             cv1_shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED if reshard else None
