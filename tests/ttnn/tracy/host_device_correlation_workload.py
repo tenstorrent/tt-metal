@@ -68,7 +68,21 @@ def main():
         )
     finally:
         # Give the receiver thread time to deliver remaining records
-        time.sleep(1.0)
+        time.sleep(5.0)
+
+        with lock:
+            pre_close_count = len(records)
+        print(f"Records before close: {pre_close_count}", flush=True)
+
+        # Close the device BEFORE unregistering the callback.  During close,
+        # dispatch_s processes TERMINATE and signals the last profiler buffer.
+        # The callback must still be active to capture that final record.
+        ttnn.close_mesh_device(mesh_device)
+
+        with lock:
+            post_close_count = len(records)
+        print(f"Records after close: {post_close_count} (delta={post_close_count - pre_close_count})", flush=True)
+
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
 
         with lock:
@@ -78,8 +92,6 @@ def main():
             json.dump(snapshot, f, indent=2)
 
         print(f"Saved {len(snapshot)} device records to {records_path}")
-
-        ttnn.close_mesh_device(mesh_device)
 
 
 if __name__ == "__main__":

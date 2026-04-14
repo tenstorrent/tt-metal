@@ -866,41 +866,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
-    // Signal NCRISC profiler kernels to terminate BEFORE stopping the receiver
-    // thread or destroying the D2HSocket.
-    for (auto& dev_state : realtime_profiler_devices_) {
-        if (dev_state.ring_buffer && dev_state.device) {
-            uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
-            constexpr uint32_t kTerminateOffsetBytes = 2 * sizeof(uint32_t);
-            std::vector<uint32_t> terminate_flag = {1};
-            try {
-                tt::tt_metal::detail::WriteToDeviceL1(
-                    dev_state.device,
-                    dev_state.realtime_profiler_core,
-                    ring_buffer_addr + kTerminateOffsetBytes,
-                    terminate_flag,
-                    CoreType::WORKER);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "[Real-time profiler] Failed to write terminate flag for device {}: {}",
-                    dev_state.chip_id,
-                    e.what());
-            }
-        }
-    }
-    if (!realtime_profiler_devices_.empty()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
 
-    if (realtime_profiler_thread_.joinable()) {
-        realtime_profiler_stop_.store(true);
-        realtime_profiler_thread_.join();
-    }
-
-    realtime_profiler_tracy_handler_.reset();
-    realtime_profiler_devices_.clear();
-
+    // Shut down the CQ FIRST so dispatch_s processes TERMINATE and signals
+    // the profiler core with the final buffer.  The profiler infrastructure
+    // (push kernel, receiver thread, callback) must still be alive at this
+    // point to deliver the last record to the host.
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
@@ -949,6 +919,47 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
+    }
+
+    // CQ shutdown is complete — dispatch_s has signaled the last profiler
+    // buffer and sent TERMINATE to the profiler core.  The profiler core
+    // set ring_buffer->terminate, so the push kernel will drain the ring
+    // buffer and exit.  Write the terminate flag again as a safety net,
+    // then give the push kernel time to deliver the final PCIe page.
+    for (auto& dev_state : realtime_profiler_devices_) {
+        if (dev_state.ring_buffer && dev_state.device) {
+            uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
+            constexpr uint32_t kTerminateOffsetBytes = 2 * sizeof(uint32_t);
+            std::vector<uint32_t> terminate_flag = {1};
+            try {
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    dev_state.device,
+                    dev_state.realtime_profiler_core,
+                    ring_buffer_addr + kTerminateOffsetBytes,
+                    terminate_flag,
+                    CoreType::WORKER);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to write terminate flag for device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
+    }
+    if (!realtime_profiler_devices_.empty()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (realtime_profiler_thread_.joinable()) {
+        realtime_profiler_stop_.store(true);
+        realtime_profiler_thread_.join();
+    }
+
+    realtime_profiler_tracy_handler_.reset();
+    realtime_profiler_devices_.clear();
+
+    if (is_initialized()) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();

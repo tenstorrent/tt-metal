@@ -1296,7 +1296,9 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id);
+            while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
+                invalidate_l1_cache();
+            }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
