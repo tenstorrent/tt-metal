@@ -126,7 +126,9 @@ private:
     // Set to true by finish_and_reset_in_use() after quiesce; cleared when new work is enqueued.
     // Allows EventSynchronize() to return immediately for stale tensor-destructor events that
     // predate the quiesce, without the UINT32_MAX sentinel bleeding into the next workload cycle.
-    std::vector<std::atomic<bool>> cq_to_quiesced;
+    // std::atomic<bool> is non-copyable/non-movable so we use a heap array instead of std::vector.
+    std::unique_ptr<std::atomic<bool>[]> cq_to_quiesced;
+    uint8_t num_cqs = 0;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<umd::Writer> prefetch_q_writers;
