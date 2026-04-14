@@ -58,42 +58,42 @@ ttnn::Tensor routed_expert_ffn_default(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output) {
     auto gate_result = ttnn::matmul(
-        x,
-        gate_proj,
+        /*input_tensor_a=*/x,
+        /*input_tensor_b=*/gate_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         /*program_config=*/std::nullopt,
         /*activation=*/std::string("silu"),
-        compute_kernel_config);
+        /*compute_kernel_config=*/compute_kernel_config);
 
     auto up_result = ttnn::matmul(
-        x,
-        up_proj,
+        /*input_tensor_a=*/x,
+        /*input_tensor_b=*/up_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
-        compute_kernel_config);
+        /*compute_kernel_config=*/compute_kernel_config);
 
-    auto activated = ttnn::multiply(gate_result, up_result);
+    auto activated = ttnn::multiply(/*lhs=*/gate_result, /*rhs=*/up_result);
 
     return ttnn::matmul(
-        activated,
-        down_proj,
+        /*input_tensor_a=*/activated,
+        /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         /*program_config=*/std::nullopt,
         /*activation=*/std::nullopt,
-        compute_kernel_config,
+        /*compute_kernel_config=*/compute_kernel_config,
         /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
-        output);
+        /*optional_output_tensor=*/std::move(output));
 }
 
 ttnn::Tensor routed_expert_ffn_optim(
@@ -171,38 +171,41 @@ ttnn::Tensor routed_expert_ffn_optim(
     //   -> gate_result: (M, N_gate)  [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
     // + SiLU applied as separate post-op
     auto gate_result = ttnn::matmul(
-        x_l1,
-        gate_proj,
+        /*input_tensor_a=*/x_l1,
+        /*input_tensor_b=*/gate_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        effective_gate_config,
+        /*program_config=*/effective_gate_config,
         /*activation=*/std::string("silu"),
-        compute_kernel_config);
+        /*compute_kernel_config=*/compute_kernel_config);
 
     // up matmul:
     //   x_l1:     (M, K_gate)   [M_tiles x K_gate_tiles] bfloat8_b DRAM
     //   up_proj:   (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] bfloat4_b DRAM
     //   -> up_result: (M, N_gate)  [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
     auto up_result = ttnn::matmul(
-        x_l1,
-        up_proj,
+        /*input_tensor_a=*/x_l1,
+        /*input_tensor_b=*/up_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/gate_up_mem,
         /*dtype=*/std::nullopt,
-        effective_up_config,
+        /*program_config=*/effective_up_config,
         /*activation=*/std::nullopt,
-        compute_kernel_config);
+        /*compute_kernel_config=*/compute_kernel_config);
 
     // multiply:
     //   gate_result: (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
     //   up_result:   (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
     //   -> activated: (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b L1 interleaved
     // Write multiply output directly to L1 interleaved, eliminating the separate reshard op
-    auto activated =
-        ttnn::multiply(gate_result, up_result, /*output_dtype=*/std::nullopt, /*memory_config=*/ttnn::L1_MEMORY_CONFIG);
+    auto activated = ttnn::multiply(
+        /*lhs=*/gate_result,
+        /*rhs=*/up_result,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/ttnn::L1_MEMORY_CONFIG);
 
     // Free block-sharded intermediates before down matmul to reclaim L1
     gate_result.deallocate();
@@ -242,18 +245,18 @@ ttnn::Tensor routed_expert_ffn_optim(
     //   down_proj:         (K_down, N_down) [K_down_tiles x N_down_tiles] bfloat4_b DRAM
     //   -> output:         (M, N_down)   [M_tiles x N_down_tiles] bfloat8_b DRAM
     return ttnn::matmul(
-        activated_reshard,
-        down_proj,
+        /*input_tensor_a=*/activated_reshard,
+        /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
-        effective_down_config,
+        /*program_config=*/effective_down_config,
         /*activation=*/std::nullopt,
-        compute_kernel_config,
+        /*compute_kernel_config=*/compute_kernel_config,
         /*core_grid=*/std::nullopt,
         /*output_tile=*/std::nullopt,
-        output);
+        /*optional_output_tensor=*/std::move(output));
 }
 
 ttnn::Tensor routed_expert_ffn(
@@ -269,19 +272,25 @@ ttnn::Tensor routed_expert_ffn(
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
 
     if (M_tiles > 64) {
-        return routed_expert_ffn_default(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+        return routed_expert_ffn_default(
+            /*x=*/x,
+            /*gate_proj=*/gate_proj,
+            /*up_proj=*/up_proj,
+            /*down_proj=*/down_proj,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*output=*/std::move(output));
     }
 
     return routed_expert_ffn_optim(
-        x,
-        gate_proj,
-        up_proj,
-        down_proj,
-        gate_program_config,
-        up_program_config,
-        down_program_config,
-        compute_kernel_config,
-        std::move(output));
+        /*x=*/x,
+        /*gate_proj=*/gate_proj,
+        /*up_proj=*/up_proj,
+        /*down_proj=*/down_proj,
+        /*gate_program_config=*/gate_program_config,
+        /*up_program_config=*/up_program_config,
+        /*down_program_config=*/down_program_config,
+        /*compute_kernel_config=*/compute_kernel_config,
+        /*output=*/std::move(output));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
