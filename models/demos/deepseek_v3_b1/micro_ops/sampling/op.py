@@ -1058,9 +1058,9 @@ class SamplingOp:
                     ("sampling_topk_out_indices_cb", topk_out_indices_cb),
                     ("sampling_mesh_stage_scores_cb", mesh_stage_scores_cb),
                     ("sampling_mesh_stage_indices_cb", mesh_stage_indices_cb),
-                    ("sampling_stage1_row_elements", stage1_num_slots * k),
+                    ("sampling_stage1_row_elements", stage1_num_slots * topk_min_alignment),
                     ("sampling_stage1_num_input_tiles", stage1_mesh_tiles),
-                    ("sampling_stage2_row_elements", stage2_num_slots * k),
+                    ("sampling_stage2_row_elements", stage2_num_slots * topk_min_alignment),
                     ("sampling_stage2_num_input_tiles", stage2_mesh_tiles),
                     ("sampling_num_internal_iterations", num_internal_iterations),
                 ]
