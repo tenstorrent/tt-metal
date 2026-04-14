@@ -16,6 +16,7 @@ inline void RISC_POST_STATUS(uint32_t status) {
     ptr[0] = status;
 }
 
+#if !defined(ARCH_QUASAR)
 static volatile uint32_t* const fabric_postcode_ptr =
     reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_POSTCODES_BASE);
 
@@ -25,6 +26,7 @@ static volatile uint32_t* const fabric_scratch_ptr =
     reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE);
 
 #define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
+#endif
 
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
@@ -136,6 +138,7 @@ void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
 
+#if !defined(ARCH_QUASAR)
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t end_time = start_time;
@@ -147,6 +150,7 @@ void check_and_context_switch() {
     }
     // proceed
 }
+#endif
 
 FORCE_INLINE
 void notify_dispatch_core_done(uint64_t dispatch_addr) {
