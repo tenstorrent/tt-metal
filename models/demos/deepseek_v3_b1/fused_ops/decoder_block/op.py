@@ -138,6 +138,7 @@ class DecoderBlock:
         krope_sin_tensor,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
+        dkv_input_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_ids_tensor,
         sdpa_scale,
@@ -217,6 +218,7 @@ class DecoderBlock:
             krope_sin_tensor,
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
+            dkv_input_rmsnorm_gamma_tensor,
             kv_cache_tensor,
             position_ids_tensor,
             sdpa_scale,
@@ -314,6 +316,7 @@ class DecoderBlock:
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
+            dkv_input_rmsnorm_gamma_tensor.fused_tensor,
             attention_block_output_tensor,
         ]
         io_tensors += moe.io_tensors

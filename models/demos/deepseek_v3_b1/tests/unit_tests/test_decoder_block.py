@@ -274,6 +274,14 @@ def create_decoder_block_tensors(
         else:
             layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
 
+    # DKV input RMSNorm gamma (attn_norm replicated on DKV matmul cores)
+    if preloaded_weights is None:
+        _attn_norm_raw = state_dict[f"model.layers.{layer_idx}.input_layernorm.weight"].unsqueeze(0)
+        dkv_input_rmsnorm_gamma_overlapped = bdw.get_tt_dkv_input_rmsnorm_gamma(_attn_norm_raw)
+    else:
+        # TODO: add to weight dataclasses for preloaded path
+        dkv_input_rmsnorm_gamma_overlapped = None
+
     # ── FFN final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(submesh, gate_proj_noc)
@@ -789,6 +797,7 @@ def create_decoder_block_tensors(
         "matmul3_weights_overlapped": layer.kv_b1_proj,
         "dkv_matmul_weights_overlapped": layer.kv_a_proj,
         "dkv_rmsnorm_gamma_overlapped": layer.kv_norm,
+        "dkv_input_rmsnorm_gamma_overlapped": dkv_input_rmsnorm_gamma_overlapped,
         "kv_b2_overlapped": layer.kv_b2_proj,
         "o_proj_overlapped": layer.o_proj,
         "ffn_norm_overlapped": layer.ffn_norm,
@@ -1029,6 +1038,7 @@ def test_decoder(
             d["ttnn_krope_sin"],
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
+            d["dkv_input_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache_attn_ref"],
             d["ttnn_position_ids"],
             d["scale"],
@@ -1081,6 +1091,7 @@ def test_decoder(
         d["ttnn_krope_sin"],
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
+        d["dkv_input_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
         d["ttnn_position_ids"],
         d["scale"],
@@ -1484,6 +1495,7 @@ def test_decoder_mlp(
         d["ttnn_krope_sin"],
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
+        d["dkv_input_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
         d["ttnn_position_ids"],
         d["scale"],
