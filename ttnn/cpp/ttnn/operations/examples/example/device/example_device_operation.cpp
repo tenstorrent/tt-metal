@@ -9,7 +9,7 @@
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     if (operation_attributes.attribute) {
         return MultiCore{};
     }
