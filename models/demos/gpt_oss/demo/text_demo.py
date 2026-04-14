@@ -137,7 +137,7 @@ def prepare_gpt_oss_generator_args(
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
             use_deepseek_prefill=use_throughput,
-            prefill_seq_len=128,
+            prefill_seq_len=128 * int(os.environ.get("GPT_OSS_USERS_PER_ROW", 1)),
             num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
@@ -695,7 +695,9 @@ def test_gpt_oss_demo(
             # This gives ~4x speedup over sequential per-user prefill
             num_rows = mesh_device.shape[0]
             users_per_row_prefill = global_batch_size // num_rows
-            users_per_row_per_iter = 1  # Users each mesh row processes per prefill iteration
+            users_per_row_per_iter = int(
+                os.environ.get("GPT_OSS_USERS_PER_ROW", 1)
+            )  # Users each mesh row processes per prefill iteration
             # Increasing above 1 requires model changes:
             #   - attention/prefill.py: relax batch_size!=1 check, loop paged_fill_cache
             #   - model.py:process_output_prefill_batched: extract multiple logits per row
