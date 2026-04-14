@@ -747,10 +747,16 @@ class Attention(LightweightModule):
             ttnn.deallocate(v_dram)
 
             # Quantize + pre-rescale: centroid_value × norm (tiny, 1 token).
-            k_rescaled, _ = turbo_quant_cache.quantize(k_for_tq)
-            v_rescaled, _ = turbo_quant_cache.quantize(v_for_tq, skip_rotation=rotation_absorbed)
+            k_centroids, k_norms = turbo_quant_cache.quantize(k_for_tq)
+            v_centroids, v_norms = turbo_quant_cache.quantize(v_for_tq, skip_rotation=rotation_absorbed)
             ttnn.deallocate(k_for_tq)
             ttnn.deallocate(v_for_tq)
+            k_rescaled = ttnn.mul(k_centroids, k_norms)
+            v_rescaled = ttnn.mul(v_centroids, v_norms)
+            ttnn.deallocate(k_centroids)
+            ttnn.deallocate(v_centroids)
+            ttnn.deallocate(k_norms)
+            ttnn.deallocate(v_norms)
 
             # Permute back to [1, batch, heads, dim] and re-shard for paged_update_cache.
             k_heads_1BKD = ttnn.permute(k_rescaled, (2, 0, 1, 3))

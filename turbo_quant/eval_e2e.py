@@ -39,6 +39,7 @@ def build_parser():
     p.add_argument("--instruct", action="store_true", default=True, help="Use instruct prompt formatting")
     p.add_argument("--num-layers", type=int, default=None, help="Limit to N layers (default: all 32)")
     p.add_argument("--no-turbo-quant", action="store_true", help="Baseline: skip TurboQuant, use standard BFP8 cache")
+    p.add_argument("--bfp4-cache", action="store_true", help="Use BFP4 paged cache (0.5 bytes/elem) instead of BF16")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
     return p
 
@@ -120,12 +121,14 @@ def main():
     # allocated but bypassed when tq_cache is active.
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
-    # TQ uses BF16 paged cache (2× BFP8 per element).
-    # Per device: ~768 BF16 blocks fit (24K tokens) vs ~1024 BFP8 (32K).
-    # With N devices, KV heads are sharded → more blocks fit per device.
-    # Llama-3.1-8B: 8 KV heads. With 8 devices: 1 head/device → 8× more blocks.
+    # Cache dtype and block budget depend on mode:
+    # BFP4: 0.5 bytes/elem → 4× more blocks than BFP8 baseline
+    # BF16: 2 bytes/elem → ~75% of BFP8 capacity
+    # BFP8: 1 byte/elem (baseline)
     if args.no_turbo_quant:
-        tq_max_blocks = 1024 * num_devices  # BFP8 baseline: scale with devices
+        tq_max_blocks = 1024 * num_devices  # BFP8 baseline
+    elif args.bfp4_cache:
+        tq_max_blocks = 1024 * num_devices  # BFP4: same block count as baseline, 2× less total memory
     else:
         tq_max_blocks = 768 * num_devices  # BF16 TQ: ~75% of baseline capacity
     paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=tq_max_blocks)
@@ -153,11 +156,12 @@ def main():
     if args.no_turbo_quant:
         print("  (--no-turbo-quant: using standard BFP8 paged_update_cache path)")
     else:
-        # Replace BFP8 layer_past with BF16 for TQ pre-rescaled values.
-        # BFP8 destroys centroid×norm precision; BF16 preserves it exactly.
-        # Memory: 2× per element vs BFP8, but paged allocation = O(filled).
-        # Free ALL BFP8 caches first to make room for BF16 caches.
-        print("  Replacing BFP8 layer_past with BF16 paged cache...")
+        # Replace BFP8 layer_past with TQ-compatible paged cache.
+        # BFP4: 0.5 bytes/elem (2× smaller than baseline) — pre-rescaled centroid×norm
+        # BF16: 2 bytes/elem (2× larger than baseline) — pre-rescaled centroid×norm
+        cache_dtype = ttnn.bfloat4_b if args.bfp4_cache else ttnn.bfloat16
+        cache_label = "BFP4" if args.bfp4_cache else "BF16"
+        print(f"  Replacing BFP8 layer_past with {cache_label} paged cache...")
         lp_shape = None
         for layer in tt_model.layers:
             attn = layer.attention
@@ -167,12 +171,12 @@ def main():
                     ttnn.deallocate(t)
                 attn.layer_past = None
 
-        # Now allocate BF16 caches (BFP8 DRAM is freed).
+        # Allocate new caches (BFP8 DRAM is freed).
         for layer in tt_model.layers:
             layer.attention.layer_past = [
                 ttnn.from_torch(
                     torch.zeros(lp_shape, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
+                    dtype=cache_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -294,7 +298,12 @@ def main():
     gen_times = times[len(encoded) :]
     if gen_times:
         avg_ms = sum(gen_times) / len(gen_times) * 1000
-        mode_label = "baseline BFP8" if args.no_turbo_quant else f"{args.bits}-bit TurboQuant"
+        if args.no_turbo_quant:
+            mode_label = "baseline BFP8"
+        elif args.bfp4_cache:
+            mode_label = f"{args.bits}-bit TurboQuant BFP4 paged"
+        else:
+            mode_label = f"{args.bits}-bit TurboQuant BF16 paged"
         if use_trace:
             mode_label += " (traced)"
         print(f"\n=== Performance ({mode_label}) ===")
