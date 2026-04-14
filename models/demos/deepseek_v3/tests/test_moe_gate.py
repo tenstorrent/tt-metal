@@ -199,7 +199,6 @@ def test_forward_pass(
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
     logger.info(f"TopK experts indices accuracy: {accuracy}")
-    breakpoint()
     assert (
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
@@ -210,3 +209,11 @@ def test_forward_pass(
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+"""
+PCC: 0.9992458745462984
+TopK experts indices accuracy: 0.93359375
+
+TopK experts weights PCC: 0.9991677782697118
+TopK experts indices accuracy: 0.882080078125
+"""
