@@ -16,11 +16,9 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 
-    const decltype(TensorAccessor(output_args, output_addr)) s(
-        output_args,
-        output_addr,
-        output_cb_page_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since it is
-                               // coming from runtime arguments, which may be overwritten.
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto s = TensorAccessor(output_args, output_addr, output_cb_page_size);
 
     for (uint32_t i = start_id; i < start_id + num_units_per_core; i++) {
         cb_wait_front(output_cb_id, onetile);

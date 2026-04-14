@@ -39,12 +39,9 @@ void kernel_main() {
     if constexpr (is_non_aligned) {
         misalignment = (src_addr % src_buffer_alignment);
     }
-    const decltype(TensorAccessor(
-        src_args, src_addr - misalignment)) s0(  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
-                                                 // since it is coming from runtime arguments, which may be overwritten.
-        src_args,
-        src_addr - misalignment,
-        padded_stick_size);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto s0 = TensorAccessor(src_args, src_addr - misalignment, padded_stick_size);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size

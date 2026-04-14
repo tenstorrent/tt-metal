@@ -47,13 +47,9 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
-    const decltype(TensorAccessor(
-        dst_buffer_args,
-        receiver_base_address)) dst_buffer(  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
-                                             // since it is coming from runtime arguments, which may be overwritten.
-        dst_buffer_args,
-        receiver_base_address,
-        payload_size_bytes);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
     // working memory to hold coalesced packet
     cb_reserve_back(packet_cb_id, 1);

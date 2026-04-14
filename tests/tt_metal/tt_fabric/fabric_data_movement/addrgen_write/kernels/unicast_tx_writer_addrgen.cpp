@@ -109,8 +109,9 @@ void kernel_main() {
     // page slots when src alignment > dst alignment (e.g. DRAM src → L1 dst with non-power-of-2
     // page sizes). The proper fix is to decouple the CB stride from the destination page size in
     // the scatter API.
-    const decltype(TensorAccessor(ta_args, dst_base)) scatter_acc(
-        ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto scatter_acc = TensorAccessor(ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;

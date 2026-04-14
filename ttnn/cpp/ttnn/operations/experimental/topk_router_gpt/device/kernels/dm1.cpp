@@ -308,20 +308,10 @@ void kernel_main() {
     // Complete the CB reserve/push lifecycle
     cb_push_back(cb_dispatch, 1);
 
-    const decltype(TensorAccessor(
-        indices_rm_accessor_args,
-        indices_rm_addr)) idx_ag(  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since it is
-                                   // coming from runtime arguments, which may be overwritten.
-        indices_rm_accessor_args,
-        indices_rm_addr,
-        aligned_page_size);
-    const decltype(TensorAccessor(
-        weights_rm_accessor_args,
-        weights_rm_addr)) wgt_ag(  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since it is
-                                   // coming from runtime arguments, which may be overwritten.
-        weights_rm_accessor_args,
-        weights_rm_addr,
-        aligned_page_size);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto idx_ag = TensorAccessor(indices_rm_accessor_args, indices_rm_addr, aligned_page_size);
+    const auto wgt_ag = TensorAccessor(weights_rm_accessor_args, weights_rm_addr, aligned_page_size);
     for (uint32_t p = 0; p < 32; p++) {
         noc_async_write_page(p, idx_ag, idx_base + p * data_size);
         noc_async_write_page(p, wgt_ag, wgt_base + p * data_size);

@@ -25,9 +25,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    const decltype(TensorAccessor(src_args, src_addr)) s0(
-        src_args, src_addr, padded_stick_size);  // Need to pass in page size as 3rd TensorAccessor argument explicitly,
-                                                 // since it is coming from runtime arguments, which may be overwritten.
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
     constexpr uint32_t cb_id_in0 = 0;
 

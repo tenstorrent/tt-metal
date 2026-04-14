@@ -16,9 +16,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
-    const decltype(TensorAccessor(dst_args, dst_addr)) s(
-        dst_args, dst_addr, page_bytes);  // Need to pass in page size as 3rd TensorAccessor argument explicitly, since
-                                          // it is coming from runtime arguments, which may be overwritten.
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

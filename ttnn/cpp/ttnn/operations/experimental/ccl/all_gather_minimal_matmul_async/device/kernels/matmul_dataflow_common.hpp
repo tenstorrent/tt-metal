@@ -15,8 +15,9 @@ auto make_tensor_accessor_tuple_impl(
     uint32_t address_rt_arg_index_start,
     uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(decltype(TensorAccessor(
-        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes)))(
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    return std::make_tuple(TensorAccessor(
         std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
 }
 
@@ -26,8 +27,9 @@ auto make_tensor_accessor_tuple_impl_common(
     uint32_t common_arg_index_start,
     uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(decltype(TensorAccessor(
-        std::get<Indexes>(args_tuple), get_common_arg_val<uint32_t>(common_arg_index_start + Indexes)))(
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    return std::make_tuple(TensorAccessor(
         std::get<Indexes>(args_tuple), get_common_arg_val<uint32_t>(common_arg_index_start + Indexes), page_size)...);
 }
 }  // namespace detail
