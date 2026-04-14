@@ -17,13 +17,18 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import tree_map
-from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 
 # Prefill can build a full ``[batch, seq, vocab]`` logits tensor (~GB bf16). One ``ttnn.linear`` output buffer
 # (and internal layout / transpose temps) can exceed Wormhole DRAM — especially when DRAM is fragmented.
 # Chunk along flattened batch×seq and stitch on host (see :meth:`TTNNQwenOmniThinkerLmHead.forward`).
 # Large prefills: optional chunking when estimated logits/hidden bytes exceed thresholds (see ``forward``).
-
+_LM_HEAD_MAX_OUTPUT_BYTES = int(os.environ.get("TT_SYMBIOTE_LM_HEAD_MAX_OUTPUT_BYTES", str(32 * 1024 * 1024)))
+_LM_HEAD_MAX_INPUT_BYTES = int(os.environ.get("TT_SYMBIOTE_LM_HEAD_MAX_INPUT_BYTES", str(48 * 1024 * 1024)))
+_LM_HEAD_CHUNK_TOKENS = max(1, int(os.environ.get("TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS", "16")))
+_LM_HEAD_MAX_CHUNK_OUTPUT_BYTES = int(
+    os.environ.get("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_OUTPUT_BYTES", str(64 * 1024 * 1024))
+)
+_LM_HEAD_MAX_CHUNK_INPUT_BYTES = int(os.environ.get("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_INPUT_BYTES", str(32 * 1024 * 1024)))
 # Per-chunk caps (fixed defaults; row count is also bounded in :meth:`TTNNQwenOmniThinkerLmHead._effective_lm_head_chunk_rows`).
 
 
@@ -38,66 +43,16 @@ def _lm_head_logits_dtensor_config(mesh_device):
     )
 
 
-def _thinker_lm_head_chunk_seq() -> int:
-    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
-
-    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
-    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
-    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
-    to talker ``codec_head`` / code_predictor heads).
-    """
-    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
-    try:
-        v = int(raw)
-    except ValueError:
-        v = 8
-    return max(1, v)
-
-
-def _thinker_lm_head_chunk_seq() -> int:
-    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
-
-    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
-    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
-    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
-    to talker ``codec_head`` / code_predictor heads).
-    """
-    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
-    try:
-        v = int(raw)
-    except ValueError:
-        v = 8
-    return max(1, v)
-
-
-def _thinker_lm_head_chunk_seq() -> int:
-    """Max sequence positions per ``ttnn.linear`` in the LM head (after 4D reshape, dim 2 is seq).
-
-    Logits chunk size is ``chunk × vocab × 2`` (bf16).  Under heavy fragmentation, even ~20 MiB
-    (e.g. 64 tokens) can fail.  Default **8** minimizes per-chunk device buffers; stitched on host
-    (see forward).  Raise via ``TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ`` when DRAM allows (also applies
-    to talker ``codec_head`` / code_predictor heads).
-    """
-    raw = os.environ.get("TT_SYMBIOTE_THINKER_LM_HEAD_CHUNK_SEQ", "8")
-    try:
-        v = int(raw)
-    except ValueError:
-        v = 8
-    return max(1, v)
-
-
 class TTNNQwenOmniThinkerLmHead(TTNNModule):
     """
     Final logits projection for the thinker.
 
     Final RMSNorm output may be **width-sharded** on a multi-device mesh; this layer
     all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
-    then runs ``ttnn.linear`` with replicated weights, reads each logits chunk to host, and **concatenates
-    on CPU** into the final ``[batch, seq, vocab]`` tensor.
-
-    When estimated activations stay below ``TT_SYMBIOTE_LM_HEAD_MAX_{INPUT,OUTPUT}_BYTES``, a single
-    ``ttnn.linear`` on flattened ``batch×seq`` is used; otherwise rows are split using
-    ``TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS`` and per-chunk byte caps (``TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_*``).
+    then runs ``ttnn.linear`` with replicated weights. When estimated bf16 activations exceed
+    ``TT_SYMBIOTE_LM_HEAD_MAX_{INPUT,OUTPUT}_BYTES``, logits are computed in row chunks (bounded by
+    ``TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS`` and ``TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_*``), read to host, and
+    concatenated on CPU.
 
     Full prefill logits do not fit device DRAM (~1.7 GiB+); re-uploading them with ``from_torch`` OOMs,
     so the merged result stays **host ``torch``** (wrapped as :class:`TorchTTNNTensor` by symbiote).
@@ -169,6 +124,66 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
 
+    def _forward_linear_4d(self, x, input_tensor_shape):
+        """``ttnn.linear`` with the same 4D padding/reshape as the original LM head."""
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        x_ = ttnn.reshape(x, input_shape)
+        tt_output = ttnn.linear(x_, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(tt_output, list(input_tensor_shape[:-1]) + [int(self.out_features)])
+
+    def _linear_chunk_to_torch(self, tt_logits_2d: ttnn.Tensor) -> torch.Tensor:
+        """(N, V) logits on mesh → one bf16 CPU tensor (replica trim, vocab trim)."""
+        n = int(tt_logits_2d.shape[0])
+        v = int(self.out_features)
+        if self.device is None or self.device.get_num_devices() <= 1:
+            pt = ttnn.to_torch(tt_logits_2d)
+        else:
+            pt = ttnn.to_torch(tt_logits_2d, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+        if pt.shape[-1] > v:
+            pt = pt[..., :v]
+        return pt.to(torch.bfloat16).contiguous()
+
+    def _effective_lm_head_chunk_rows(self, h_dim: int, n_flat: int) -> int:
+        """Bound rows per chunk so input/output activations stay under per-chunk DRAM caps."""
+        chunk = min(int(_LM_HEAD_CHUNK_TOKENS), max(1, n_flat))
+        max_out = max(1, _LM_HEAD_MAX_CHUNK_OUTPUT_BYTES // max(1, int(self.out_features) * 2))
+        max_in = max(1, _LM_HEAD_MAX_CHUNK_INPUT_BYTES // max(1, int(h_dim) * 2))
+        return max(1, min(chunk, max_out, max_in))
+
+    def _forward_chunked_host_logits(self, x, input_tensor_shape, n_flat: int) -> TorchTTNNTensor:
+        """Chunked ``ttnn.linear`` + host stitch to avoid a single multi-GB device logits allocation."""
+        assert n_flat >= 1
+        h_dim = int(input_tensor_shape[-1])
+        x2d = ttnn.reshape(x, (n_flat, h_dim))
+        chunk = self._effective_lm_head_chunk_rows(h_dim, n_flat)
+        parts = []
+        for s in range(0, n_flat, chunk):
+            e = min(s + chunk, n_flat)
+            x_chunk = ttnn.slice(x2d, (s, 0), (e, h_dim))
+            tt_chunk_out = self._forward_linear_4d(x_chunk, [e - s, h_dim])
+            tt_2d = ttnn.reshape(tt_chunk_out, (e - s, int(self.out_features)))
+            parts.append(self._linear_chunk_to_torch(tt_2d))
+            try:
+                ttnn.deallocate(tt_2d)
+            except Exception:
+                pass
+            try:
+                ttnn.deallocate(x_chunk)
+            except Exception:
+                pass
+        try:
+            ttnn.deallocate(x)
+        except Exception:
+            pass
+        merged = torch.cat(parts, dim=0)
+        rest = list(input_tensor_shape[:-1])
+        merged = merged.view(*rest, int(self.out_features))
+        return TorchTTNNTensor(merged)
+
     def set_output_tensors_config_impl(self, output_tensors):
         cfg = _lm_head_logits_dtensor_config(self.device)
         if cfg is None:
@@ -186,38 +201,15 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(x.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(1, 1)
-        x = ttnn.reshape(x, input_shape)
-        b, _, s_total, h_dim = (int(input_shape[0]), int(input_shape[1]), int(input_shape[2]), int(input_shape[3]))
-        chunk_seq = _thinker_lm_head_chunk_seq()
-        mesh_dev = self.device
-
-        # Chunk along sequence, run ``linear`` on device, **read each logits chunk to host** and free
-        # it before the next chunk.  Device-side ``ttnn.concat`` to stitch logits reintroduces large
-        # contiguous DRAM allocations that still fail under severe fragmentation (~512 KiB holes).
-        out_torch_parts = []
-        for s0 in range(0, s_total, chunk_seq):
-            s1 = min(s0 + chunk_seq, s_total)
-            x_chunk = ttnn.slice(x, (0, 0, s0, 0), (b, 1, s1, h_dim))
-            y_chunk = ttnn.linear(x_chunk, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            out_torch_parts.append(_ttnn_mesh_to_torch_one_replica(y_chunk, mesh_dev))
-            try:
-                ttnn.deallocate(y_chunk)
-            except Exception:
-                pass
-
-        try:
-            ttnn.deallocate(x)
-        except Exception:
-            pass
-
-        merged_torch = torch.cat(out_torch_parts, dim=2)
-        merged_torch = merged_torch.reshape(input_tensor_shape[:-1] + [self.out_features]).contiguous()
-        # Do not ``ttnn.from_torch(merged_torch)``: full-sequence logits exceed available DRAM
-        # (multi‑GiB).  Symbiote wraps the host tensor as ``TorchTTNNTensor`` in ``post_process``.
-        return merged_torch
+        n_flat = 1
+        for d in input_tensor_shape[:-1]:
+            n_flat *= int(d)
+        h_dim = int(input_tensor_shape[-1])
+        est_out_bytes = n_flat * int(self.out_features) * 2
+        est_in_bytes = n_flat * h_dim * 2
+        if (est_out_bytes > _LM_HEAD_MAX_OUTPUT_BYTES or est_in_bytes > _LM_HEAD_MAX_INPUT_BYTES) and n_flat > 1:
+            return self._forward_chunked_host_logits(x, input_tensor_shape, n_flat)
+        return self._forward_linear_4d(x, input_tensor_shape)
 
 
 def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:
