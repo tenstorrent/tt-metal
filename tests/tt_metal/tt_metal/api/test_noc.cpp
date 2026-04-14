@@ -206,7 +206,15 @@ namespace tt::tt_metal {
 TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
     const uint32_t stream_id = 0;
-    const uint32_t stream_reg = 4;
+    // Register index 7 maps to STREAM_BUF_SIZE_REG_INDEX on Wormhole and
+    // STREAM_REMOTE_DEST_REG_INDEX on Blackhole. Both are plain read/write
+    // with no side effects and are not used by firmware. Avoid indices that
+    // firmware's init_sync_registers() touches on stream 0:
+    // STREAM_REMOTE_DEST_BUF_START_REG_INDEX (WH=3, BH=8),
+    // STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (WH=4, BH=10), and
+    // STREAM_REMOTE_DEST_WR_PTR_REG_INDEX (WH=5, BH=11, zeroed as a side
+    // effect of writing BUF_START).
+    const uint32_t stream_reg = 7;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
