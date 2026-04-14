@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
+
 TIMEOUT = 300
 
 loader = MasterConfigLoader()
@@ -47,12 +48,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -76,13 +77,28 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Restore output memory_config for the op if present in traced kwargs
+    traced_memory_config = kwargs.get("memory_config")
+    if traced_memory_config is not None and traced_memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    elif output_memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = output_memory_config
+
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    # Use approximate mode for golden if fast_and_approximate_mode is set in traced config
+    fast_mode = op_kwargs.get("fast_and_approximate_mode", False)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a)
+    approx = "tanh" if fast_mode else "none"
+    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a, approximate=approx)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -97,30 +113,33 @@ def run(
                 input_a_tensor_placement,
             )
         else:
-            # Fall back to DRAM if shard spec exceeds device cores
-            safe_mc = input_a_memory_config
-            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
-                try:
-                    grid = device.compute_with_storage_grid_size()
-                    num_cores = grid.x * grid.y
-                    shard_spec = input_a_memory_config.shard_spec
-                    if shard_spec is not None:
-                        shard_shape = shard_spec.shape
-                        total_rows = 1
-                        for d in torch_input_tensor_a.shape[:-1]:
-                            total_rows *= d
-                        num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
-                        if num_shards > num_cores:
-                            safe_mc = ttnn.DRAM_MEMORY_CONFIG
-                except Exception:
-                    safe_mc = ttnn.DRAM_MEMORY_CONFIG
+            # Create on DRAM first, then move to traced memory config.
+            # Traced shard specs may reference core grids from a different device.
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=safe_mc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                # Pre-validate shard spec core coords against device grid (TT_FATAL cannot be caught)
+                shard_fits_device = True
+                try:
+                    shard_spec = input_a_memory_config.shard_spec
+                    if shard_spec is not None:
+                        grid = device.compute_with_storage_grid_size()
+                        for cr in shard_spec.grid:
+                            if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                                shard_fits_device = False
+                                break
+                except Exception:
+                    shard_fits_device = False
+                if shard_fits_device:
+                    try:
+                        input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                    except Exception:
+                        pass  # Stay on DRAM if shard spec is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
@@ -128,6 +147,10 @@ def run(
     output_tensor = ttnn.gelu(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output_tensor.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 

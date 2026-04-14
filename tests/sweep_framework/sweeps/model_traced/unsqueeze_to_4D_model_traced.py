@@ -48,12 +48,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
+            device = ttnn.open_device(device_id=0, l1_small_size=79104)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0)
+        device = ttnn.open_device(device_id=0, l1_small_size=79104)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -83,6 +83,10 @@ def run(
         output_memory_config = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    # Ensure shape is at least 2D for TILE_LAYOUT compatibility
+    if len(shape) == 1 and input_a_layout == ttnn.TILE_LAYOUT:
+        shape = (1, shape[0])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

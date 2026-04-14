@@ -21,6 +21,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     get_chunk_size,
 )
 
+
 TIMEOUT = 300
 
 
@@ -38,12 +39,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -111,10 +112,14 @@ def run(
     else:
         # Convert list to tuple if needed
         shape_q = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
-        # Default K shape for sample - use larger sequence length for KV cache
-        b, nh, sq, d = shape_q
-        # For decode, K and V have accumulated cache, use 2048 as default cache size
-        shape_k = (b, nh, 2048, d)
+        # Use traced K/V shapes from kwargs if available (V2 format stores them separately)
+        traced_b_shape = kwargs.get("input_b_shape")
+        if traced_b_shape is not None:
+            shape_k = tuple(traced_b_shape) if isinstance(traced_b_shape, (list, tuple)) else traced_b_shape
+        else:
+            # Default K shape for sample - use larger sequence length for KV cache
+            b, nh, sq, d = shape_q
+            shape_k = (b, nh, 2048, d)
 
     # Extract dimensions following unit test pattern
     # Q shape: [1, b, nh_q, d]
@@ -233,13 +238,13 @@ def run(
     program_config = None
     pc_dict = kwargs.get("program_config")
     if isinstance(pc_dict, dict):
-        # Check grid size before constructing program config
+        # Check grid dimensions AND total core count before constructing program config
         cg = pc_dict.get("compute_with_storage_grid_size", {})
         if isinstance(cg, dict):
-            pc_cores = int(cg.get("x", 8)) * int(cg.get("y", 8))
+            pc_x, pc_y = int(cg.get("x", 8)), int(cg.get("y", 8))
         else:
-            pc_cores = 0
-        if pc_cores <= device_cores:
+            pc_x, pc_y = 0, 0
+        if pc_x <= device_grid.x and pc_y <= device_grid.y and pc_x * pc_y <= device_cores:
             from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
 
             program_config = dict_to_program_config(pc_dict)
@@ -250,7 +255,7 @@ def run(
         else:
             grid = (8, 8)
 
-        if grid[0] * grid[1] <= device_cores:
+        if grid[0] <= device_grid.x and grid[1] <= device_grid.y and grid[0] * grid[1] <= device_cores:
             program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=int(program_config_q_chunk_size),
@@ -288,15 +293,15 @@ def run(
             else False,
         )
 
-    # Build operation arguments
-    op_kwargs = {
-        "is_causal": is_causal_flag,
-        "memory_config": output_mem_cfg,
-        "cur_pos_tensor": cur_pos_tensor,
-    }
+    # Start with all parsed V2 kwargs, then override with explicitly built params
+    op_kwargs = dict(parsed_op_kwargs)
 
-    # Add optional parameters if extracted from traced config
+    op_kwargs["is_causal"] = is_causal_flag
+    op_kwargs["cur_pos_tensor"] = cur_pos_tensor
     op_kwargs["scale"] = compute_scale
+
+    if output_mem_cfg is not None:
+        op_kwargs["memory_config"] = output_mem_cfg
 
     if sliding_window_size is not None:
         op_kwargs["sliding_window_size"] = int(sliding_window_size)
