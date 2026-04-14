@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -196,10 +197,6 @@ class SamplingGenerator:
             self.reset_sampling_params(formatted_params)
 
         if reset_batch:
-            # Sync seed RNG state with post-condense slot layout.
-            seed = getattr(formatted_params, "seed", None)
-            if seed is not None:
-                self.seed_manager.sync_seeds(seed)
             self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
 
@@ -574,40 +571,30 @@ class SeedManager:
         else:
             self._seed_mapper = None
 
-    def sync_seeds(self, current_seeds):
-        """Reindex RNG state to match the current seed layout.
+    def apply_slot_remap(self, remap):
+        """Reindex RNG state after batch condense.
 
-        After ``InputBatch.condense()`` moves requests between batch slots,
-        the host-side RNG objects must follow.  This method compares the
-        incoming *current_seeds* list (post-condense positions) with the
-        internal ``self.seeds`` and moves RNG objects accordingly.
-
-        Safe to call on every decode step — it is a no-op when nothing moved.
+        ``remap`` is a 1-D int tensor of length ``max_batch_size`` where
+        ``remap[i] = j`` means slot *i* now holds the request that was
+        previously at slot *j*.  Identity entries (``remap[i] == i``) are
+        no-ops.  Only non-identity entries trigger a move.
         """
         if not self._seed_active:
             return
-
-        # Map seed value → old slot (only for non-None seeds).
-        old_seed_to_slot: dict[int, int] = {}
-        for slot, seed in enumerate(self.seeds):
-            if seed is not None:
-                old_seed_to_slot.setdefault(seed, slot)
-
-        moves: list[tuple[int, int]] = []
-        for new_slot, new_seed in enumerate(current_seeds):
-            if new_seed is None or new_seed == self.seeds[new_slot]:
-                continue
-            old_slot = old_seed_to_slot.get(new_seed)
-            if old_slot is not None and old_slot != new_slot:
-                moves.append((old_slot, new_slot))
-
+        moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
         if not moves:
             return
+        # Snapshot the state we're about to overwrite.
+        old_seeds = list(self.seeds)
+        old_rngs = list(self.rngs)
         for old_slot, new_slot in moves:
-            self.seeds[new_slot] = self.seeds[old_slot]
-            self.rngs[new_slot] = self.rngs[old_slot]
-            self.seeds[old_slot] = None
-            self.rngs[old_slot] = random.Random(secrets.randbits(64))
+            self.seeds[new_slot] = old_seeds[old_slot]
+            # copy.copy preserves internal RNG state but creates an
+            # independent object so the old slot's reference (still in
+            # self.rngs[old_slot]) does not alias the new one. Without
+            # this, get_new_values() would advance the shared object
+            # twice per decode step (once for each slot).
+            self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
         self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):
