@@ -55,8 +55,18 @@ void kernel_main() {
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
+    // Run:
+    // TT_METAL_LLK_ASSERTS=1 pytest
+    // "tests/ttnn/nightly/unit_tests/operations/pool/test_maxpool2d.py::test_max_pool2d_output_formats_and_layouts[in_dtype=DataType.BFLOAT16-kernel_size=(3,
+    // 3)-input_shape=[1, 64, 112,
+    // 112]-shard_startegy=TensorMemoryLayout.HEIGHT_SHARDED-output_layout=Layout.ROW_MAJOR-out_dtype=DataType.BFLOAT16-use_reshaped_tensor=False-device_params={'l1_small_size':
+    // 24576}]"
+    //
+    // Set invalid num_faces_in_input_tile to trigger LLK_ASSERT
+    //
+    constexpr uint32_t num_faces_in_input_tile = 3;
+    // constexpr uint32_t num_faces_in_input_tile =
+    // (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
