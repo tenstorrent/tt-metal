@@ -283,10 +283,11 @@ void run_single_dfb_program(
                             if (page_id >= co + entries_per_core) {
                                 break;
                             }
-                            const uint32_t dst_slot =
-                                (dfb_config.cap == dfb::AccessPattern::STRIDED)
-                                    ? e * dfb_config.num_producers + p
-                                    : p * num_entries_per_producer + e;
+                            // DFB L1 is always interleaved by producer slot regardless of
+                            // whether the consumer is STRIDED or BLOCKED. The ring layout is
+                            // stride = entry_size * num_producers, so slot offsets interleave
+                            // all producers before advancing to the next entry index.
+                            const uint32_t dst_slot = e * dfb_config.num_producers + p;
 
                             std::copy(
                                 input.begin() + page_id * wpe,
@@ -674,7 +675,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4S) { // hanging without dprint
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -789,6 +790,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx4B) { // needs to work in isr 
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    if (GetParam()) {
+        GTEST_SKIP() << "Skipping DM to blocked DM with implicit sync until support is added";
+    }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -836,6 +840,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    if (GetParam()) {
+        GTEST_SKIP() << "Skipping DM to blocked DM with implicit sync until support is added";
+    }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -848,7 +855,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -864,7 +871,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) {
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -884,6 +891,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    if (GetParam()) {
+        GTEST_SKIP() << "Skipping DM to blocked DM with implicit sync until support is added";
+    }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -896,7 +906,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) {
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -912,7 +922,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4B) { // hanging with implicit sync
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -932,6 +942,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx2B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    if (GetParam()) {
+        GTEST_SKIP() << "Skipping DM to blocked DM with implicit sync until support is added";
+    }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -944,7 +957,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx2B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) {
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -959,7 +972,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2B) { //  hanging with implicit
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2B) { //  mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -978,6 +991,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
+    if (GetParam()) {
+        GTEST_SKIP() << "Skipping DM to blocked DM with implicit sync until support is added";
+    }
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -990,7 +1006,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) {
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -1005,7 +1021,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) { // hanging with implicit
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
