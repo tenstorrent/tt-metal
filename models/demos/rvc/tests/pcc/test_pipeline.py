@@ -49,7 +49,6 @@ def test_pipeline_real_file_usage(device) -> None:
         f0_up_key=0,
         f0_method="pm",
         index_rate=0.75,
-        resample_sr=0,
         rms_mix_rate=0.25,
         protect=0.33,
     )

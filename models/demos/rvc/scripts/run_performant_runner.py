@@ -30,7 +30,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--f0-up-key", type=int, default=0, help="Pitch shift in semitones.")
     parser.add_argument("--f0-method", default="pm", choices=["pm"], help="F0 method.")
     parser.add_argument("--index-rate", type=float, default=0.75, help="Index rate.")
-    parser.add_argument("--resample-sr", type=int, default=0, help="Target sample rate.")
     parser.add_argument("--rms-mix-rate", type=float, default=0.25, help="RMS mix rate.")
     parser.add_argument("--protect", type=float, default=0.33, help="Protect rate.")
     parser.add_argument("--device-id", type=int, default=0, help="TT device id.")
@@ -51,7 +50,6 @@ def main() -> None:
             f0_up_key=args.f0_up_key,
             f0_method=args.f0_method,
             index_rate=args.index_rate,
-            resample_sr=args.resample_sr,
             rms_mix_rate=args.rms_mix_rate,
             protect=args.protect,
         )

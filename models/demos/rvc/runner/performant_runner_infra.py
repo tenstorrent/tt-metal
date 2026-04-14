@@ -25,7 +25,6 @@ class RVCInferenceConfig:
     f0_up_key: int = 0
     f0_method: str = "pm"
     index_rate: float = 0.75
-    resample_sr: int = 0
     rms_mix_rate: float = 0.25
     protect: float = 0.33
 
@@ -47,7 +46,6 @@ def load_ttnn_pipeline(device, model_config: RVCModelConfig, inference_config: R
         f0_up_key=inference_config.f0_up_key,
         f0_method=inference_config.f0_method,
         index_rate=inference_config.index_rate,
-        resample_sr=inference_config.resample_sr,
         rms_mix_rate=inference_config.rms_mix_rate,
         protect=inference_config.protect,
     )
@@ -81,7 +79,8 @@ class RVCTestInfra:
         num_secs = self.inference_config.num_secs if num_secs is None else num_secs
         num_samples = max(int(num_secs * 16000), 1)
         generator = torch.Generator().manual_seed(0)
-        return torch.randn(num_samples, generator=generator, dtype=torch.float32)
+        batch_size = 1
+        return torch.randn(batch_size, num_samples, generator=generator, dtype=torch.float32)
 
     @staticmethod
     def _to_numpy(audio) -> np.ndarray:
