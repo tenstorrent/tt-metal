@@ -29,22 +29,6 @@ LLK_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 
-# Classify a single file path against LLK-specific patterns.
-# Called both for direct in-tree files and for files inside the submodule.
-classify_llk_file() {
-    local FILE="$1"
-    case "$FILE" in
-        tt_llk_wormhole_b0/**|tt_llk_blackhole/**|common/**)
-            LLK_ENGINE_CHANGED=true ;;
-        tt_llk_quasar/**)
-            LLK_QUASAR_CHANGED=true ;;
-        tests/**/perf/**|tests/**/*perf*)
-            LLK_PERF_CHANGED=true
-            LLK_TESTS_CHANGED=true ;;
-        tests/**)
-            LLK_TESTS_CHANGED=true ;;
-    esac
-}
 
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -67,22 +51,21 @@ while IFS= read -r FILE; do
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        # LLK-specific patterns for direct in-tree paths — must come before the generic
-        # tt_metal/** catch-all.
-        # TODO(llk-in-tree): Once LLK is fully in-tree (no longer a submodule), these direct
-        # path patterns will be the primary detection path and the submodule inspection block
-        # below can be removed entirely.
-        tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/**|tt_metal/third_party/tt_llk/tt_llk_blackhole/**|tt_metal/third_party/tt_llk/common/**)
+        # LLK-specific patterns — must come before the generic tt_metal/** catch-all.
+        tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
+            LLK_CI_CHANGED=true
+            ;;
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/tt-llk/common/**)
             LLK_ENGINE_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tt_llk_quasar/**)
+        tt_metal/tt-llk/tt_llk_quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tests/**/perf/**|tt_metal/third_party/tt_llk/tests/**/*perf*)
+        tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
-        tt_metal/third_party/tt_llk/tests/**)
+        tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
         .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh)
@@ -138,37 +121,9 @@ while IFS= read -r FILE; do
     esac
 done <<< "$CHANGED_FILES"
 
-# FIXME: Can we do this better?
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
-    if [[ "$submodule_path" == "tt_metal/third_party/tt_llk" ]]; then
-        # LLK submodule is handled with fine-grained detection below; skip the generic blast.
-        # TODO(llk-in-tree): Remove this block once LLK is fully in-tree.
-        if echo "$CHANGED_FILES" | grep -q "^${submodule_path}$"; then
-            # The submodule pointer moved. Inspect the submodule to determine which parts changed.
-            OLD_LLK_SHA=$(git diff "${MERGE_BASE}..HEAD" -- "${submodule_path}" \
-                | grep '^-Subproject commit' | awk '{print $3}' || true)
-            NEW_LLK_SHA=$(git diff "${MERGE_BASE}..HEAD" -- "${submodule_path}" \
-                | grep '^+Subproject commit' | awk '{print $3}' || true)
-
-            if [[ -n "$OLD_LLK_SHA" && -n "$NEW_LLK_SHA" ]]; then
-                git submodule update --init "${submodule_path}"
-                LLK_INNER_FILES=$(git -C "${submodule_path}" diff --name-only "${OLD_LLK_SHA}..${NEW_LLK_SHA}" 2>/dev/null || true)
-                while IFS= read -r INNER_FILE; do
-                    classify_llk_file "$INNER_FILE"
-                done <<< "$LLK_INNER_FILES"
-            else
-                # Couldn't determine old/new SHA — conservative fallback: treat all LLK components as changed.
-                LLK_ENGINE_CHANGED=true
-                LLK_QUASAR_CHANGED=true
-                LLK_TESTS_CHANGED=true
-                LLK_PERF_CHANGED=true
-                LLK_CI_CHANGED=true
-            fi
-        fi
-        continue
-    fi
     if echo "$CHANGED_FILES" | grep -q "^$submodule_path"; then
         SUBMODULE_CHANGED=true
         break

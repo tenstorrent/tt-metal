@@ -11,6 +11,6 @@ operations:
       - type: "Fpu"
         operation: "Datacopy"
         unpacker: "UnpackerTilizeA"
+        math_fidelity: "HiFi2"
     packer: "Packer"
-    math_fidelity: "HiFi2"
     block_size: [64, 128]

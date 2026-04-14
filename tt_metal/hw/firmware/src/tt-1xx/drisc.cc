@@ -11,6 +11,8 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 uint8_t noc_index;
 
@@ -25,8 +27,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -60,6 +62,8 @@ int main() {
         noc_local_state_init(n);
     }
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
+
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;
 
@@ -82,6 +86,7 @@ int main() {
         WAYPOINT("R");
         reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
