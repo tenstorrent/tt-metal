@@ -7,13 +7,14 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 // Adaptive per-segment degree — reduces Horner steps for low-degree segments
 #define HAS_SEGMENT_DEGREES
 #ifdef INP_FLOAT32
 constexpr uint32_t SEGMENT_DEGREES[] = {11, 11};
 #else
-constexpr uint32_t SEGMENT_DEGREES[] = {6, 8, 6, 4, 4, 5, 4, 4, 4, 13, 10, 1, 1, 1, 1, 1};
+constexpr uint32_t SEGMENT_DEGREES[] = {8, 8, 6, 4};
 #endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
@@ -22,120 +23,104 @@ constexpr uint32_t SEGMENT_DEGREES[] = {6, 8, 6, 4, 4, 5, 4, 4, 4, 13, 10, 1, 1,
 namespace ckernel::sfpu {
 
 // ======================================================================
-// LUT-based softplus via piecewise polynomial P(x)
+// LUT-based softplus via abs(x) symmetry + residual function
 //
-// BF16: n13/d0, 16 segment(s), range [-10.0, 10.0]
-// FP32: n11/d11, 2 segment(s), range [-10.0, 10.0]
+// Uses the identity: softplus(-x) = softplus(x) - x
+// Equivalently, defining f(a) = ln(1 + exp(-a)) for a >= 0:
+//   softplus(t) = t + f(t)   for t >= 0
+//   softplus(t) = f(-t)      for t < 0
+//
+// The LUT approximates f(a) on [0, LUT_HI], halving the segment count.
+//
+// BF16: polynomial, 4 segment(s), range [0, 10.0], max degree 8
+// FP32: rational n11/d11, 2 segment(s), range [-10.0, 10.0]
 // ======================================================================
 
 #ifdef INP_FLOAT32
+// FP32 path: rational n11/d11 on [-10, 10] (original PR LUT, uses full-range eval)
 constexpr uint32_t SOFTPLUS_NUM_DEGREE = 11;
 constexpr uint32_t SOFTPLUS_DEN_DEGREE = 11;
 constexpr uint32_t SOFTPLUS_NUM_SEGMENTS = 2;
 constexpr uint32_t SOFTPLUS_LUT_SIZE = 51;
-constexpr std::array<float, 51> SOFTPLUS_LUT = {{
-    -1.0000000000e+01f, 0.0000000000e+00f, 1.0000000000e+01f, 6.9314718246e-01f, -1.5993961543e+00f,
-    -2.5127007067e-01f, -1.3265351206e-01f, -2.9783745878e-02f, -1.5730193118e-03f, 2.8420342278e-04f,
-    5.4250589073e-05f, 4.2192577894e-06f, 1.8079879105e-07f, 4.2213262608e-09f, 4.2415547203e-11f,
-    1.0000000000e+00f, -3.0287885070e+00f, 1.6419652700e+00f, -8.2960790396e-01f, 2.6686237752e-01f,
-    -6.7941252142e-02f, 1.3101734454e-02f, -1.8655313179e-03f, 1.8875836395e-04f, -2.0982502519e-05f,
-    7.1359330178e-07f, -9.3163990300e-08f, 6.9314718246e-01f, 7.5465214074e+01f, 9.6088657975e+01f,
-    6.4373108774e+01f, 2.9242373943e+01f, 9.6345350314e+00f, 2.3334935121e+00f, 4.0709061723e-01f,
-    4.8712256554e-02f, 3.5111696889e-03f, 3.2350137371e-04f, -1.5047511503e-06f, 1.0000000000e+00f,
-    1.0815194273e+02f, 6.0431155443e+01f, 2.9775133565e+01f, 9.8190872483e+00f, 2.2600082848e+00f,
-    4.1877857578e-01f, 4.7625164822e-02f, 3.5753458696e-03f, 3.2110606327e-04f, -1.4526502952e-06f,
-    -5.0736897138e-10f
-}};
-
-#else
-
-constexpr uint32_t SOFTPLUS_NUM_DEGREE = 13;
-constexpr uint32_t SOFTPLUS_NUM_SEGMENTS = 16;
-constexpr uint32_t SOFTPLUS_LUT_SIZE = 241;
-constexpr std::array<float, 241> SOFTPLUS_LUT = {{
-    -1.0000000000e+01f, -8.7500000000e+00f, -7.5000000000e+00f, -6.2500000000e+00f, -5.0000000000e+00f,
-    -3.7500000000e+00f, -2.5000000000e+00f, -1.2500000000e+00f, 0.0000000000e+00f, 1.2500000000e+00f,
-    2.5000000000e+00f, 3.7500000000e+00f, 5.0000000000e+00f, 6.2500000000e+00f, 7.5000000000e+00f,
-    8.7500000000e+00f, 1.0000000000e+01f, 1.7649218440e-01f, 9.5800295472e-02f, 2.2039255127e-02f,
-    2.7434641961e-03f, 1.9447084924e-04f, 7.4293789112e-06f, 1.1932442590e-07f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 3.9390826225e-01f, 2.5706312060e-01f, 7.2139210999e-02f, 1.1017540470e-02f,
-    9.3595794169e-04f, 3.5895613109e-05f, -4.6226378458e-07f, -9.0308205358e-08f, -2.3044908204e-09f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    4.6434894204e-01f, 3.1373199821e-01f, 9.1282509267e-02f, 1.4559669420e-02f, 1.3364048209e-03f,
-    6.6669548687e-05f, 1.4077247670e-06f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 3.3204543591e-01f,
-    1.8345081806e-01f, 3.9265297353e-02f, 3.8352902047e-03f, 1.4352405560e-04f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 5.2525627613e-01f, 3.3879470825e-01f,
-    8.6251497269e-02f, 1.0171335191e-02f, 4.6489975648e-04f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 7.2663867474e-01f, 5.7744455338e-01f, 1.9959858060e-01f,
-    3.7157945335e-02f, 3.6879391409e-03f, 1.5458205598e-04f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 7.0450460911e-01f, 5.3437054157e-01f, 1.6654086113e-01f, 2.4749085307e-02f,
-    1.4370477293e-03f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    6.9315648079e-01f, 5.0029718876e-01f, 1.2660220265e-01f, 2.9999683611e-03f, -3.2014031895e-03f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 6.9315087795e-01f,
-    4.9983757734e-01f, 1.2607991695e-01f, -2.3440979421e-03f, -3.4604137763e-03f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 5.4599702358e-01f, -5.6938135624e-01f,
-    1.0713380814e+01f, -3.5481082916e+01f, 6.7748771667e+01f, -8.5105834961e+01f, 7.4882110596e+01f,
-    -4.7530754089e+01f, 2.1976533890e+01f, -7.3546338081e+00f, 1.7385978699e+00f, -2.7570360899e-01f,
-    2.6341857389e-02f, -1.1470546015e-03f, 5.1820014954e+01f, -1.6916210938e+02f, 2.5274353027e+02f,
-    -2.2225436401e+02f, 1.2795374298e+02f, -5.0375518799e+01f, 1.3734865189e+01f, -2.5608499050e+00f,
-    3.1249505281e-01f, -2.2537615150e-02f, 7.2954921052e-04f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 7.2814732790e-02f, 9.8648989201e-01f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    2.5860860944e-02f, 9.9610507488e-01f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 8.8063925505e-03f,
-    9.9888408184e-01f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 2.9200529680e-03f, 9.9968063831e-01f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 9.4928487670e-04f, 9.9990868568e-01f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
-    0.0000000000e+00f
-}};
-
-#endif
-
-// LUT range boundaries
 constexpr float SOFTPLUS_LUT_LO = -10.0f;
 constexpr float SOFTPLUS_LUT_HI = 10.0f;
+constexpr std::array<float, 51> SOFTPLUS_LUT = {
+    {-1.0000000000e+01f, 0.0000000000e+00f,  1.0000000000e+01f,  6.9314718246e-01f,  -1.5993961543e+00f,
+     -2.5127007067e-01f, -1.3265351206e-01f, -2.9783745878e-02f, -1.5730193118e-03f, 2.8420342278e-04f,
+     5.4250589073e-05f,  4.2192577894e-06f,  1.8079879105e-07f,  4.2213262608e-09f,  4.2415547203e-11f,
+     1.0000000000e+00f,  -3.0287885070e+00f, 1.6419652700e+00f,  -8.2960790396e-01f, 2.6686237752e-01f,
+     -6.7941252142e-02f, 1.3101734454e-02f,  -1.8655313179e-03f, 1.8875836395e-04f,  -2.0982502519e-05f,
+     7.1359330178e-07f,  -9.3163990300e-08f, 6.9314718246e-01f,  7.5465214074e+01f,  9.6088657975e+01f,
+     6.4373108774e+01f,  2.9242373943e+01f,  9.6345350314e+00f,  2.3334935121e+00f,  4.0709061723e-01f,
+     4.8712256554e-02f,  3.5111696889e-03f,  3.2350137371e-04f,  -1.5047511503e-06f, 1.0000000000e+00f,
+     1.0815194273e+02f,  6.0431155443e+01f,  2.9775133565e+01f,  9.8190872483e+00f,  2.2600082848e+00f,
+     4.1877857578e-01f,  4.7625164822e-02f,  3.5753458696e-03f,  3.2110606327e-04f,  -1.4526502952e-06f,
+     -5.0736897138e-10f}};
 
-// Boundary clamping for arbitrary beta:
-//   x < LUT_LO  → softplus(x) ≈ exp(x) ≈ 0
-//   x > LUT_HI  → softplus(x) ≈ x
-//   otherwise    → LUT evaluation
+#else
+// BF16 path: polynomial approximation of f(a) = ln(1 + exp(-a)) on [0, 12]
+// 4 segments, max degree 8, 41 LUT entries (vs 241 for the full-range 16-segment version)
+// Range [0, 12] ensures f(a) covers all bf16-representable residuals (exp(-12) ≈ 6e-6)
+constexpr uint32_t SOFTPLUS_NUM_DEGREE = 8;
+constexpr uint32_t SOFTPLUS_NUM_SEGMENTS = 4;
+constexpr uint32_t SOFTPLUS_LUT_SIZE = 41;
+constexpr float SOFTPLUS_LUT_HI = 12.0f;
+constexpr std::array<float, 41> SOFTPLUS_LUT = {
+    {0.0000000000e+00f,  3.0000000000e+00f,  6.0000000000e+00f,  9.0000000000e+00f,  1.2000000000e+01f,
+     6.9314652681e-01f,  -4.9998274446e-01f, 1.2489502877e-01f,  2.4864752777e-04f,  -5.4577449337e-03f,
+     4.2756633775e-05f,  4.7246625763e-04f,  -1.1166145123e-04f, 8.5480596681e-06f,  6.4356017113e-01f,
+     -4.1999831796e-01f, 6.9007471204e-02f,  2.4819521233e-02f,  -1.4719141647e-02f, 3.3421402331e-03f,
+     -4.1296074050e-04f, 2.7464138839e-05f,  -7.7396288134e-07f, 3.3762899041e-01f,  -2.0769727230e-01f,
+     5.4375723004e-02f,  -7.7192140743e-03f, 6.2426319346e-04f,  -2.7179625249e-05f, 4.9635303867e-07f,
+     0.0000000000e+00f,  0.0000000000e+00f,  2.2023772821e-02f,  -7.4348580092e-03f, 9.4883231213e-04f,
+     -5.4178526625e-05f, 1.1665415514e-06f,  0.0000000000e+00f,  0.0000000000e+00f,  0.0000000000e+00f,
+     0.0000000000e+00f}};
+
+#endif
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
-    sfpi::vFloat x = beta * val;
-    v_if(x < threshold) {
+    sfpi::vFloat t = beta * val;
+
+    v_if(t < threshold) {
 #ifdef INP_FLOAT32
+        // FP32: rational eval on full range [-10, 10], with boundary clamps
         sfpi::vFloat result =
             piecewise_rational_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_DEN_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(
-                SOFTPLUS_LUT, x);
-#else
-        sfpi::vFloat result =
-            piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, x);
-#endif
-        // Upper clamp: softplus(x) ≈ x for x >> 0
-        v_if(x > SOFTPLUS_LUT_HI) { result = x; }
+                SOFTPLUS_LUT, t);
+        v_if(t > SOFTPLUS_LUT_HI) { result = t; }
+        v_endif;
+        v_if(t < SOFTPLUS_LUT_LO) { result = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = beta_reciprocal * result;
+#else
+        // BF16: symmetry approach — evaluate f(a) = ln(1+exp(-a)) on [0, LUT_HI]
+        // then reconstruct: softplus(t) = t + f(|t|) if t >= 0, f(|t|) if t < 0
+
+        // Compute a = |t| via conditional negate (SFPI has no abs instruction)
+        sfpi::vFloat a = t;
+        v_if(t < 0.0f) { a = -t; }
+        v_endif;
+
+        // Evaluate residual f(a) from LUT
+        sfpi::vFloat residual =
+            piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, a);
+
+        // Tail: f(a) ≈ exp(-a) for a > LUT_HI
+        v_if(a > SOFTPLUS_LUT_HI) { residual = _sfpu_exp_21f_bf16_<false>(-a); }
+        v_endif;
+
+        // Reconstruct softplus(t):
+        //   t >= 0: softplus(t) = t + f(t)
+        //   t < 0:  softplus(t) = f(-t) = f(a) = residual
+        sfpi::vFloat sp = residual;
+        v_if(t >= 0.0f) { sp = t + residual; }
+        v_endif;
+
+        sfpi::dst_reg[0] = beta_reciprocal * sp;
+#endif
     }
-    v_endif;
-    // Lower clamp: softplus(x) ≈ 0 for x << 0
-    v_if(x < SOFTPLUS_LUT_LO) { sfpi::dst_reg[0] = 0.0f; }
     v_endif;
 }
 
