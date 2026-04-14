@@ -225,9 +225,10 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
-inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_uint16(
+    const uint32_t dst_index_in0, const uint32_t dst_index_in1, const uint32_t dst_index_out) {
     static_assert(RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt, "Supported operation types: lt, gt");
-    constexpr uint dst_tile_size = 64;
+    constexpr uint32_t dst_tile_size = 64;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         if constexpr (RELATIONAL_OP == SfpuType::lt) {
@@ -247,7 +248,7 @@ inline void calculate_binary_comp_uint16(const uint dst_index_in0, const uint ds
         TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
         // Store the result in the destination register
         TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 }  //  namespace ckernel::sfpu

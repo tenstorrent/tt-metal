@@ -819,7 +819,6 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
-    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint16)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
