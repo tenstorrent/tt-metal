@@ -82,7 +82,11 @@ jobs:
               ".github/workflows/metal-run-microbenchmarks.yaml",
               ".github/workflows/sanity-tests-debug.yaml",
               ".github/workflows/merge-gate.yaml",
-              ".github/workflows/pr-gate.yaml"
+              ".github/workflows/pr-gate.yaml",
+              ".github/workflows/runtime-sanity-tests.yaml",
+              ".github/workflows/runtime-unit-tests.yaml",
+              ".github/workflows/runtime-integration-tests.yaml",
+              ".github/workflows/runtime-perf-tests.yaml"
             ]
       - name: Upload workflow data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

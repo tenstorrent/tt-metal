@@ -1,13 +1,8 @@
-name: "(Runtime) Unit Tests"
+name: "(Runtime) Integration Tests"
 
 on:
   workflow_dispatch:
     inputs:
-      wormhole:
-        description: "Run on Wormhole"
-        required: false
-        type: boolean
-        default: true
       blackhole:
         description: "Run on Blackhole"
         required: false
@@ -47,11 +42,12 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  runtime-unit-tests:
+  runtime-integration-tests:
     needs: build-artifact
-    uses: ./.github/workflows/runtime-unit-tests-impl.yaml
+    uses: ./.github/workflows/runtime-integration-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -59,10 +55,24 @@ jobs:
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox,wh_galaxy'
+            && 'bh_quietbox'
+            || (inputs.blackhole && 'bh_quietbox' || '')
+        }}
+
+  runtime-fd-python-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/runtime-fd-python-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_n150_civ2,bh_p150b_civ2'
             || format('{0}{1}',
-              inputs.wormhole && 'wh_n150_civ2,wh_n300_civ2,wh_galaxy' || '',
-              inputs.blackhole && format('{0}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox',
-                inputs.wormhole && ',' || '') || ''
+              'wh_n150_civ2',
+              inputs.blackhole && ',bh_p150b_civ2' || ''
             )
         }}

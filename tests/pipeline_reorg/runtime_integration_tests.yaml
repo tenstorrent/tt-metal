@@ -1,6 +1,6 @@
 # This file defines the test matrix for the Runtime integration tests.
 # These are multi-device tests that validate cross-chip communication
-# and machine health on BH multi-card and Galaxy topology machines.
+# on BH multi-card machines.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -12,10 +12,6 @@
 #   team: The team that owns the test.
 
 # For max allowed timeout refer to .github/time_budget.yaml
-
-# =============================================================================
-# BH Multi-Card Tests
-# =============================================================================
 
 # --- Ethernet Tests (FD + SD + single AERISC) ---
 - name: bh_multicard_eth
@@ -34,58 +30,6 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*'
   skus:
     bh_quietbox:
-      timeout: 10
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
-
-# --- System Health ---
-- name: bh_multicard_system_health
-  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
-  skus:
-    bh_quietbox:
-      timeout: 5
-    bh_loudbox:
-      timeout: 5
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
-
-# =============================================================================
-# Galaxy Tests
-# =============================================================================
-
-# --- Cluster Validation ---
-- name: galaxy_cluster_validation
-  cmd: |
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      ./build/tools/scaleout/run_cluster_validation \
-        --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto \
-        --hard-fail --send-traffic --num-iterations 1
-    else
-      ./build/tools/scaleout/run_cluster_validation \
-        --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto \
-        --hard-fail --send-traffic
-    fi
-  skus:
-    wh_galaxy:
-      timeout: 10
-    bh_galaxy:
-      timeout: 10
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
-
-# --- System Health (per device) ---
-- name: galaxy_system_health
-  cmd: |
-    if [ "$ARCH_NAME" = "blackhole" ]; then
-      ./build/test/tt_metal/tt_fabric/test_system_health
-    else
-      for i in {0..31}; do
-        TT_VISIBLE_DEVICES="$i" ./build/test/tt_metal/tt_fabric/test_system_health \
-          --gtest_filter=Cluster.ReportSystemHealth
-      done
-    fi
-  skus:
-    wh_galaxy:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

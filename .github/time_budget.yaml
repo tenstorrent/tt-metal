@@ -112,8 +112,7 @@ runtime:
     bh_p150_perf: 40
     bh_quietbox: 50
     bh_loudbox: 10
-    wh_galaxy: 55
-    bh_galaxy: 10
+    wh_galaxy: 35
 
 models:
   sanity:

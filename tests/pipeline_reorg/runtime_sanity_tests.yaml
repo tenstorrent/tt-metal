@@ -47,3 +47,14 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# --- BH Multi-Card: System Health ---
+- name: bh_multicard_system_health
+  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_quietbox:
+      timeout: 5
+    bh_loudbox:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

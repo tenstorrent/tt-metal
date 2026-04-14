@@ -1,4 +1,4 @@
-name: "(Runtime) Unit Tests"
+name: "(Runtime) Performance Tests"
 
 on:
   workflow_dispatch:
@@ -49,9 +49,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  runtime-unit-tests:
+  runtime-perf-tests:
     needs: build-artifact
-    uses: ./.github/workflows/runtime-unit-tests-impl.yaml
+    uses: ./.github/workflows/runtime-perf-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -59,10 +59,10 @@ jobs:
       enabled-skus: >-
         ${{
           github.event_name == 'schedule'
-            && 'wh_n150_civ2,wh_n300_civ2,bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox,wh_galaxy'
+            && 'wh_n300_civ2,bh_p150_perf'
             || format('{0}{1}',
-              inputs.wormhole && 'wh_n150_civ2,wh_n300_civ2,wh_galaxy' || '',
-              inputs.blackhole && format('{0}bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_quietbox',
+              inputs.wormhole && 'wh_n300_civ2' || '',
+              inputs.blackhole && format('{0}bh_p150_perf',
                 inputs.wormhole && ',' || '') || ''
             )
         }}
