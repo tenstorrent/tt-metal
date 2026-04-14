@@ -10,10 +10,6 @@ import pandas as pd
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats, is_format_combination_outlier
-from helpers.device import (
-    collect_pipeline_results,
-    write_pipeline_operands_to_l1,
-)
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.logger import logger
 from helpers.perf import PerfReport
@@ -21,6 +17,7 @@ from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
 from ttexalens.tt_exalens_lib import read_words_from_device
 
+from .fused_operand import OperandRegistry
 from .fused_operation import FusedOperation
 
 
@@ -39,6 +36,11 @@ class GlobalConfig:
 class FuserConfig:
     pipeline: List[FusedOperation]
     global_config: GlobalConfig
+
+    @property
+    def registry(self) -> OperandRegistry:
+        """Get the OperandRegistry from the first operation in the pipeline."""
+        return self.pipeline[0].operand_mapping.operand_registry
 
     def __post_init__(self):
         if self.global_config.architecture is None:
@@ -132,7 +134,7 @@ class FuserConfig:
             test_config = self.create_test_config(cpp_path, profiler_enabled=True)
             test_config.generate_variant_hash()
 
-            write_pipeline_operands_to_l1(self.pipeline, TestConfig.TENSIX_LOCATION)
+            self.registry.allocate_l1_addresses()
 
             if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
                 self.generate_and_build_test(cpp_path, test_config)
@@ -190,7 +192,7 @@ class FuserConfig:
         test_config = self.create_test_config(cpp_path, profiler_enabled=False)
         test_config.generate_variant_hash()
 
-        write_pipeline_operands_to_l1(self.pipeline, TestConfig.TENSIX_LOCATION)
+        self.registry.allocate_l1_addresses()
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             self.generate_and_build_test(cpp_path, test_config)
@@ -198,8 +200,10 @@ class FuserConfig:
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
+        self.registry.write_inputs_to_l1(TestConfig.TENSIX_LOCATION)
+
         test_config.run_elf_files()
         test_config.wait_for_tensix_operations_finished()
-        collect_pipeline_results(self.pipeline, TestConfig.TENSIX_LOCATION)
+        self.registry.read_outputs_from_l1(TestConfig.TENSIX_LOCATION)
         golden = FusedGolden()
         assert golden.check_pipeline(self)

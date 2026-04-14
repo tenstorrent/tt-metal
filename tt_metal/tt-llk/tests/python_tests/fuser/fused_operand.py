@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from helpers.llk_params import DataFormat, format_dict
 from helpers.stimuli_generator import generate_random_face
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tile_shape import TileShape, construct_tile_shape
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize_block
+from helpers.unpack import unpack_res_tiles
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
 @dataclass
@@ -146,6 +148,70 @@ class Operand:
 
     def __str__(self) -> str:
         return f"{self.name}, {self.dimensions}, {self.data_format}, L1 Addr: {hex(self.l1_address)}"
+
+    def calculate_l1_size(self) -> int:
+        """Calculate the size in L1 memory for this operand."""
+        tile_elements = self.tile_shape.total_tile_size()
+        return self.data_format.num_bytes_per_tile(tile_elements) * self.tile_count
+
+    def pack_for_l1(self) -> List[Tuple[int, List]]:
+        """Pack operand data for writing to L1 memory.
+
+        Returns:
+            List of (address, packed_data) tuples, one per tile.
+        """
+        from helpers.pack import (
+            pack_bfp8_b,
+            pack_bfp16,
+            pack_fp8_e4m3,
+            pack_fp16,
+            pack_fp32,
+            pack_int8,
+            pack_int16,
+            pack_int32,
+            pack_uint8,
+            pack_uint16,
+            pack_uint32,
+        )
+
+        packers = {
+            DataFormat.Float16: pack_fp16,
+            DataFormat.Float16_b: pack_bfp16,
+            DataFormat.Float32: pack_fp32,
+            DataFormat.Bfp8_b: pack_bfp8_b,
+            DataFormat.Int32: pack_int32,
+            DataFormat.UInt32: pack_uint32,
+            DataFormat.Int16: pack_int16,
+            DataFormat.UInt16: pack_uint16,
+            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+            DataFormat.Int8: pack_int8,
+            DataFormat.UInt8: pack_uint8,
+        }
+
+        pack_function = packers.get(self.data_format)
+        if not pack_function:
+            raise ValueError(f"Unsupported data format: {self.data_format.name}")
+
+        tile_elements = self.tile_shape.total_tile_size()
+        tile_size = self.data_format.num_bytes_per_tile(tile_elements)
+        buffer = self.data.flatten()
+        packed_tiles = []
+
+        for i in range(self.tile_count):
+            start_idx = tile_elements * i
+            tile_data = buffer[start_idx : start_idx + tile_elements]
+
+            if self.data_format == DataFormat.Bfp8_b:
+                packed = pack_function(
+                    tile_data, num_faces=self.tile_shape.total_num_faces()
+                )
+            else:
+                packed = pack_function(tile_data)
+
+            addr = self.l1_address + i * tile_size
+            packed_tiles.append((addr, packed))
+
+        return packed_tiles
 
 
 class OperandMapping:
@@ -315,3 +381,78 @@ class OperandRegistry:
         mapping.create_output_operand(self, output_format, output_dims)
 
         return mapping
+
+    DEFAULT_L1_START_ADDRESS = 0x21000
+
+    def allocate_l1_addresses(
+        self, start_address: int = DEFAULT_L1_START_ADDRESS
+    ) -> None:
+        """
+        Allocate L1 addresses for all operands.
+
+        Addresses are allocated sequentially:
+        1. All input operands
+        2. All output operands
+        """
+
+        current_address = start_address
+
+        for operand in self.get_all_inputs():
+            if operand.l1_address is None:
+                operand.l1_address = current_address
+                current_address += operand.calculate_l1_size()
+
+        for operand in self.get_all_outputs():
+            if operand.l1_address is None:
+                operand.l1_address = current_address
+                current_address += operand.calculate_l1_size()
+
+    def write_inputs_to_l1(self, location: str = "0,0") -> None:
+        """Write all input operands to L1 memory."""
+
+        for operand in self.get_all_inputs():
+            for addr, packed_data in operand.pack_for_l1():
+                write_to_device(location, addr, packed_data)
+
+    def read_outputs_from_l1(self, location: str = "0,0") -> None:
+        """Read output operands from L1 memory."""
+
+        for output in self.get_all_outputs():
+            if output.l1_address is None:
+                raise ValueError(
+                    f"Output operand '{output.name}' does not have an L1 address."
+                )
+
+            output_dimensions = output.dimensions
+            output_format = output.data_format
+            tile_cnt = output.tile_count
+            tile_elements = output.tile_shape.total_tile_size()
+
+            read_bytes_cnt = output_format.num_bytes_per_tile(tile_elements) * tile_cnt
+            read_data = read_from_device(
+                location, output.l1_address, num_bytes=read_bytes_cnt
+            )
+
+            res_from_l1 = unpack_res_tiles(
+                read_data,
+                output_format,
+                tile_count=tile_cnt,
+                sfpu=False,
+                num_faces=output.tile_shape.total_num_faces(),
+                face_r_dim=output.tile_shape.face_r_dim,
+            )
+
+            torch_format = format_dict[output_format]
+            tilized_tensor = torch.tensor(res_from_l1, dtype=torch_format)
+
+            if output_format != DataFormat.Bfp8_b and output_dimensions is not None:
+                raw_tensor = untilize_block(
+                    tilized_tensor,
+                    stimuli_format=output_format,
+                    dimensions=output_dimensions,
+                )
+            else:
+                raw_tensor = tilized_tensor
+
+            output._data = tilized_tensor
+            output._raw_data = raw_tensor
