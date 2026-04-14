@@ -66,24 +66,13 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
         return TypecastCrossLayoutProgramFactory{};
     }
 
-    if (tensor_args.input.is_sharded()) {
-        if (can_use_sharded_optimized_factory(args, tensor_args)) {
-            log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
-            return TypecastShardedProgramFactory{};
-        }
-        log_debug(tt::LogOp, "Using TypecastProgramFactory");
-        return TypecastProgramFactory{};
-    }
-    if (args.sub_core_grids.has_value()) {
-        log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
-        return TypecastSubgridProgramFactory{};
+    // Optimized sharded path (tile-size matching, L1 backed CBs)
+    if (tensor_args.input.is_sharded() && can_use_sharded_optimized_factory(args, tensor_args)) {
+        log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
+        return TypecastShardedProgramFactory{};
     }
 
-    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
-        return TypecastRowMajorChunkedProgramFactory{};
-    }
-
+    // Default: handles TILE, ROW_MAJOR, interleaved, sharded, sub_core_grids
     log_debug(tt::LogOp, "Using TypecastProgramFactory");
     return TypecastProgramFactory{};
 }
