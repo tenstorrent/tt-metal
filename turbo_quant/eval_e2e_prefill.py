@@ -42,6 +42,7 @@ def build_parser():
     p.add_argument("--instruct", action="store_true", default=True)
     p.add_argument("--num-layers", type=int, default=None, help="Limit to N layers (debug)")
     p.add_argument("--seed", type=int, default=42, help="TurboQuant rotation seed")
+    p.add_argument("--bfp4-cache", action="store_true", help="Use BFP4 paged cache (0.5 bytes/elem)")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
     return p
 
@@ -53,16 +54,14 @@ def migrate_prefill_kv_to_turbo_quant(
     mesh_device,
     seed: int = 42,
     rotation_absorbed: bool = False,
+    cache_dtype=None,
 ):
     """Migrate prefill KV from layer_past into TurboQuant pre-rescaled format.
 
     After prefill, each layer's layer_past holds BFP8 KV values. This function:
       1. Reads each layer_past slab → CPU float32.
       2. Applies TurboQuant rotation + quantization → centroid × norm values.
-      3. Writes pre-rescaled values back into layer_past (BF16 for paged SDPA).
-
-    This matches the decode-time flow where attention.py quantizes each new token
-    and scatters pre-rescaled centroid×norm values into layer_past.
+      3. Writes pre-rescaled values back into layer_past.
 
     Args:
         tt_model: Loaded Transformer with layer_past filled by prefill.
@@ -70,9 +69,11 @@ def migrate_prefill_kv_to_turbo_quant(
         bits: Quantisation bit-width.
         mesh_device: TTNN mesh device.
         seed: Rotation matrix seed (must match TQ setup).
-        rotation_absorbed: If True, V from prefill is already in rotated space
-                          (W_v has Π absorbed). K still needs explicit rotation.
+        rotation_absorbed: If True, V from prefill is already in rotated space.
+        cache_dtype: Target ttnn dtype for layer_past (default: bfloat16).
     """
+    if cache_dtype is None:
+        cache_dtype = ttnn.bfloat16
     head_dim = tt_model.layers[0].attention.head_dim
     cpu_quantizer = TurboQuantMSE(
         head_dim=head_dim,
@@ -81,9 +82,11 @@ def migrate_prefill_kv_to_turbo_quant(
         device="cpu",
         dtype=torch.float32,
     )
-    rotation_cpu = cpu_quantizer.rotation
 
-    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ pre-rescaled format ...")
+    dtype_label = {ttnn.bfloat16: "BF16", ttnn.bfloat4_b: "BFP4", ttnn.bfloat8_b: "BFP8"}.get(
+        cache_dtype, str(cache_dtype)
+    )
+    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ {dtype_label} pre-rescaled ...")
     for layer in tt_model.layers:
         # Read BFP8 KV → CPU float32.
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
@@ -116,22 +119,21 @@ def migrate_prefill_kv_to_turbo_quant(
         k_full[:, :, :prompt_len, :] = k_rescaled
         v_full[:, :, :prompt_len, :] = v_rescaled
 
-        # Write pre-rescaled values back into layer_past as BF16.
-        # BF16 preserves the small centroid×norm values without BFP8 shared-exponent loss.
-        # The SDPA decode kernel handles BF16 KV seamlessly.
-        orig_dtype = ttnn.bfloat16  # Force BF16 for pre-rescaled values
+        # Write pre-rescaled values back into layer_past.
+        # BFP4: 0.5 bytes/elem, hardware converts BF16→BFP4 on write.
+        # BF16: 2 bytes/elem, preserves full precision.
         ttnn.deallocate(layer.attention.layer_past[0])
         ttnn.deallocate(layer.attention.layer_past[1])
         layer.attention.layer_past[0] = ttnn.from_torch(
             k_full,
-            dtype=orig_dtype,
+            dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         layer.attention.layer_past[1] = ttnn.from_torch(
             v_full,
-            dtype=orig_dtype,
+            dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -261,6 +263,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Migrate prefill KV to TurboQuant pre-rescaled format                #
     # ------------------------------------------------------------------ #
+    cache_dtype = ttnn.bfloat4_b if args.bfp4_cache else ttnn.bfloat16
     migrate_prefill_kv_to_turbo_quant(
         tt_model,
         prompt_len=prompt_len,
@@ -268,6 +271,7 @@ def main():
         mesh_device=mesh_device,
         seed=args.seed,
         rotation_absorbed=True,
+        cache_dtype=cache_dtype,
     )
 
     # ------------------------------------------------------------------ #
@@ -374,7 +378,8 @@ def main():
 
     if times:
         avg_ms = sum(times) / len(times) * 1000
-        mode_label = f"{args.bits}-bit TurboQuant" + (" (traced)" if use_trace else "")
+        cache_label = "BFP4 paged" if args.bfp4_cache else "BF16"
+        mode_label = f"{args.bits}-bit TurboQuant {cache_label}" + (" (traced)" if use_trace else "")
         print(f"\n=== Performance ({mode_label}) ===")
         print(f"  Prompt tokens : {prompt_len}")
         print(f"  Generated     : {len(all_new_tokens)}")
