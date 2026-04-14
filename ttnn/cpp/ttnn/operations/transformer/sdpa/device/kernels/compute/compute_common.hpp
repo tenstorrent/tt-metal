@@ -1709,6 +1709,15 @@ void sdpa_inner_loop(
             k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
+            uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+            // Reduce K loop for light Q in causal balanced zigzag (ring_iter 0 only).
+            // is_causal is only true for ring_iter 0 (caller sets causality = ring_iter == 0).
+            // Gate on no joint KV: iter_k_chunk_end <= num_local_k_chunks.
+            const uint32_t half_sequence = q_num_chunks / 2;
+            if (is_causal && use_zigzag_balancing && ring_iter == 0 && q_chunk < half_sequence) {
+                const uint32_t light_kv_bound = (half_sequence * Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                k_chunk_end = light_kv_bound;
+            }
         }
 
         uint32_t processed_k_chunks = 0;
