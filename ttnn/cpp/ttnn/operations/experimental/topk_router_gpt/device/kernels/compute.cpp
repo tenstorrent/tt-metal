@@ -95,7 +95,7 @@ void kernel_main() {
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
 
-        matmul_accumulate<BLOCK>(cfg, 0, 0, 0, block, 1, 1, 0);
+        detail::matmul_accumulate<BLOCK>(cfg, 0, 0, 0, block, 1, 1, 0);
 
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);

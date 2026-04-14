@@ -262,12 +262,12 @@ void kernel_main() {
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                             tile_regs_acquire();
                             if (enable_reload) {
-                                matmul_reload_partials<BLOCK>(cfg, out_subblock_num_tiles);
+                                detail::matmul_reload_partials<BLOCK>(cfg, out_subblock_num_tiles);
                             }
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
-                            matmul_accumulate<BLOCK>(
+                            detail::matmul_accumulate<BLOCK>(
                                 cfg,
                                 in0_index_subblock_offset,
                                 in1_index_subblock_offset,

@@ -64,7 +64,7 @@ void kernel_main() {
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
-                    matmul_accumulate_subblock<TILE>(
+                    detail::matmul_accumulate_subblock<TILE>(
                         mm_cfg,
                         in0_index_subblock_offset,
                         in1_index_subblock_offset,

@@ -91,46 +91,28 @@ ALWI void matmul_init_short_with_both_dt(const MatmulConfig& cfg, uint32_t old_i
 }
 
 // =============================================================================
-// Layer 1: Single matmul operation
+// detail:: building blocks — see warning in .hpp
 // =============================================================================
 
 template <MatmulMode mode>
-ALWI void matmul_single(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx) {
-    detail::matmul_single<mode>(cfg, in0_idx, in1_idx, dst_idx);
-}
-
-// =============================================================================
-// Layer 2: Accumulation loops
-// =============================================================================
-
-template <MatmulMode mode>
-ALWI void matmul_accumulate(
+ALWI void detail::matmul_accumulate(
     const MatmulConfig& cfg,
-    uint32_t in0_start,
-    uint32_t in1_start,
-    uint32_t dst_start,
-    uint32_t count,
-    uint32_t in0_stride,
-    uint32_t in1_stride,
-    uint32_t dst_stride) {
+    uint32_t in0_start, uint32_t in1_start, uint32_t dst_start,
+    uint32_t count, uint32_t in0_stride, uint32_t in1_stride, uint32_t dst_stride) {
     for (uint32_t k = 0; k < count; ++k) {
         detail::matmul_single<mode>(cfg, in0_start + k * in0_stride, in1_start + k * in1_stride, dst_start + k * dst_stride);
     }
 }
 
 template <MatmulMode mode>
-ALWI void matmul_accumulate_subblock(
+ALWI void detail::matmul_accumulate_subblock(
     const MatmulConfig& cfg,
-    uint32_t in0_subblock_offset,
-    uint32_t in1_subblock_offset,
-    uint32_t out_h,
-    uint32_t out_w,
-    uint32_t inner_dim,
-    uint32_t in1_stride) {
+    uint32_t in0_subblock_offset, uint32_t in1_subblock_offset,
+    uint32_t out_h, uint32_t out_w, uint32_t inner_dim, uint32_t in1_stride) {
     uint32_t dst_index = 0;
     for (uint32_t h = 0; h < out_h; ++h) {
         for (uint32_t w = 0; w < out_w; ++w) {
-            matmul_accumulate<mode>(
+            detail::matmul_accumulate<mode>(
                 cfg, in0_subblock_offset + h * inner_dim, in1_subblock_offset + w, dst_index, inner_dim, 1, in1_stride, 0);
             ++dst_index;
         }
@@ -139,36 +121,21 @@ ALWI void matmul_accumulate_subblock(
 
 #ifdef ARCH_BLACKHOLE
 template <MatmulMode mode>
-ALWI void matmul_accumulate_no_mop(
+ALWI void detail::matmul_accumulate_no_mop(
     const MatmulConfig& cfg,
-    uint32_t in0_start,
-    uint32_t in1_start,
-    uint32_t dst_start,
-    uint32_t count,
-    uint32_t in0_stride,
-    uint32_t in1_stride,
-    uint32_t dst_stride) {
+    uint32_t in0_start, uint32_t in1_start, uint32_t dst_start,
+    uint32_t count, uint32_t in0_stride, uint32_t in1_stride, uint32_t dst_stride) {
     static_assert(mode == MatmulMode::BLOCK, "matmul_accumulate_no_mop is only supported in BLOCK mode");
     for (uint32_t k = 0; k < count; ++k) {
         ckernel::matmul_block_no_mop(
-            cfg.in0_cb_id,
-            cfg.in1_cb_id,
-            in0_start + k * in0_stride,
-            in1_start + k * in1_stride,
-            dst_start + k * dst_stride,
-            cfg.transpose,
-            cfg.ct_dim,
-            cfg.rt_dim,
-            cfg.kt_dim);
+            cfg.in0_cb_id, cfg.in1_cb_id,
+            in0_start + k * in0_stride, in1_start + k * in1_stride, dst_start + k * dst_stride,
+            cfg.transpose, cfg.ct_dim, cfg.rt_dim, cfg.kt_dim);
     }
 }
 #endif
 
-// =============================================================================
-// Layer 3: DEST + Pack management
-// =============================================================================
-
-ALWI void matmul_pack_to_cb(uint32_t dest_cb_id, uint32_t num_tiles) {
+ALWI void detail::matmul_pack_to_cb(uint32_t dest_cb_id, uint32_t num_tiles) {
     tile_regs_commit();
     cb_reserve_back(dest_cb_id, num_tiles);
     tile_regs_wait();
@@ -179,17 +146,16 @@ ALWI void matmul_pack_to_cb(uint32_t dest_cb_id, uint32_t num_tiles) {
     cb_push_back(dest_cb_id, num_tiles);
 }
 
-ALWI void matmul_pack_to_partials(const MatmulConfig& cfg, uint32_t num_tiles) {
-    matmul_pack_to_cb(cfg.partials_cb_id, num_tiles);
+ALWI void detail::matmul_pack_to_partials(const MatmulConfig& cfg, uint32_t num_tiles) {
+    detail::matmul_pack_to_cb(cfg.partials_cb_id, num_tiles);
 }
 
 template <MatmulMode mode>
-ALWI void matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles) {
+ALWI void detail::matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles) {
     copy_tile_to_dst_init_short_with_dt(cfg.in1_cb_id, cfg.partials_cb_id);
     cb_wait_front(cfg.partials_cb_id, num_tiles);
     copy_block_matmul_partials(cfg.partials_cb_id, 0, 0, num_tiles);
     cb_pop_front(cfg.partials_cb_id, num_tiles);
-    // Reconfigure back to matmul mode
     matmul_init_short_with_dt<mode>(cfg, cfg.partials_cb_id);
 }
 
@@ -210,11 +176,11 @@ ALWI void matmul_accumulate_and_pack(
     PostComputeFn post_compute) {
     tile_regs_acquire();
     if (reload) {
-        matmul_reload_partials<mode>(cfg, num_tiles);
+        detail::matmul_reload_partials<mode>(cfg, num_tiles);
     }
-    matmul_accumulate<mode>(cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
+    detail::matmul_accumulate<mode>(cfg, in0_index_start, in1_index_start, 0, inner_dim, 1, in1_stride, 0);
     post_compute(num_tiles);
-    matmul_pack_to_cb(dest_cb_id, num_tiles);
+    detail::matmul_pack_to_cb(dest_cb_id, num_tiles);
 }
 
 template <MatmulMode mode>
@@ -258,13 +224,13 @@ ALWI void matmul_compute_inner_block(
         for (uint32_t in1_sub = 0; in1_sub < in1_num_subblocks; in1_sub++) {
             tile_regs_acquire();
             if (enable_reload) {
-                matmul_reload_partials<mode>(cfg, out_subblock_num_tiles);
+                detail::matmul_reload_partials<mode>(cfg, out_subblock_num_tiles);
             }
-            matmul_accumulate<mode>(cfg, in0_index_subblock_offset, in1_index_subblock_offset, 0, cfg.kt_dim, 1, in1_block_w, 0);
+            detail::matmul_accumulate<mode>(cfg, in0_index_subblock_offset, in1_index_subblock_offset, 0, cfg.kt_dim, 1, in1_block_w, 0);
             if (last_out) {
-                matmul_pack_to_cb(cfg.out_cb_id, out_subblock_num_tiles);
+                detail::matmul_pack_to_cb(cfg.out_cb_id, out_subblock_num_tiles);
             } else {
-                matmul_pack_to_partials(cfg, out_subblock_num_tiles);
+                detail::matmul_pack_to_partials(cfg, out_subblock_num_tiles);
             }
             in1_index_subblock_offset += cfg.ct_dim;
         }
@@ -280,7 +246,7 @@ ALWI void matmul_compute_inner_block(
 // =============================================================================
 
 template <MatmulMode mode>
-ALWI void matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx) {
+ALWI void detail::matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx) {
     for (uint32_t w = 0; w < count; ++w) {
         cb_wait_front(cfg.in0_cb_id, 1);
         detail::matmul_single<mode>(cfg, 0, 0, dst_idx);
@@ -289,7 +255,7 @@ ALWI void matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_
 }
 
 template <MatmulMode mode>
-ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx) {
+ALWI void detail::matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx) {
     for (uint32_t w = 0; w < count; ++w) {
         cb_wait_front(cfg.in0_cb_id, 1);
 #if defined FP32_DEST_ACC_EN
@@ -304,7 +270,7 @@ ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uin
 template <MatmulMode mode>
 ALWI void matmul_reduce_w_and_pack(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx, uint32_t out_cb) {
     tile_regs_acquire();
-    matmul_reduce_w<mode>(cfg, count, dst_idx);
+    detail::matmul_reduce_w<mode>(cfg, count, dst_idx);
     tile_regs_commit();
     cb_reserve_back(out_cb, 1);
     tile_regs_wait();
@@ -413,9 +379,9 @@ ALWI void matmul_and_pack_absolute(
 
     tile_regs_acquire();
 #ifdef ARCH_BLACKHOLE
-    matmul_accumulate_no_mop<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
+    detail::matmul_accumulate_no_mop<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
 #else
-    matmul_accumulate<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
+    detail::matmul_accumulate<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
 #endif
     tile_regs_commit();
 
@@ -475,7 +441,7 @@ ALWI void matmul_blocks_absolute(
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
-            matmul_accumulate<mode>(cfg, in0_index_offset, in1_index_offset, 0, cfg.kt_dim, 1, N, 0);
+            detail::matmul_accumulate<mode>(cfg, in0_index_offset, in1_index_offset, 0, cfg.kt_dim, 1, N, 0);
 
             post_compute(out_subblock_num_tiles);
 

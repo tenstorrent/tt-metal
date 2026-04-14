@@ -176,7 +176,7 @@ void kernel_main() {
                             matmul_init_short_with_dt<TILE>(mm_cfg, matmul_partials_cb);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
-                        matmul_accumulate_subblock<TILE>(
+                        detail::matmul_accumulate_subblock<TILE>(
                             mm_cfg,
                             in0_index_subblock_offset,
                             in1_index_subblock_offset,

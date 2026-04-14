@@ -276,7 +276,7 @@ void kernel_main() {
 
 #ifndef SKIP_COMPUTE
                     // Compute output sub-block
-                    matmul_accumulate<BLOCK>(
+                    detail::matmul_accumulate<BLOCK>(
                         cfg,
                         in0_index_subblock_offset,
                         in1_index_subblock_offset,

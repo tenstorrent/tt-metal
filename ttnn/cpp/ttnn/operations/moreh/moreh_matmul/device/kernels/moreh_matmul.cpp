@@ -284,7 +284,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #endif
             auto mm_cfg = MatmulConfig::tile(mm_src0, mm_src1, cb_out0);
             matmul_init_short<TILE>(mm_cfg);
-            matmul_single<TILE>(mm_cfg, 0, 0, 0);
+            detail::matmul_single<TILE>(mm_cfg, 0, 0, 0);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);

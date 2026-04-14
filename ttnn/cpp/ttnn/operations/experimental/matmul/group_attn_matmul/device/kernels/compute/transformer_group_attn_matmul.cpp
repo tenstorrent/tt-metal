@@ -84,7 +84,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
 
-                            matmul_accumulate_subblock<TILE>(
+                            detail::matmul_accumulate_subblock<TILE>(
                                 cfg,
                                 in0_index_subblock_offset,
                                 in1_index_subblock_offset,

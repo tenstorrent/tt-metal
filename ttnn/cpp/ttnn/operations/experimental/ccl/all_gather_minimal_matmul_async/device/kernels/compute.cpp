@@ -285,7 +285,7 @@ void matmul_blocks(
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
 
-            matmul_accumulate<BLOCK>(
+            detail::matmul_accumulate<BLOCK>(
                 cfg, in0_index_offset, in1_index_offset, 0, K_block_tiles, 1, full_N_block_tiles, 0);
             tile_regs_commit();
 

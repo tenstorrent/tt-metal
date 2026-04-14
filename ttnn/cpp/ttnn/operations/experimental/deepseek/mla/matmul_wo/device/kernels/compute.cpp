@@ -78,7 +78,7 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            matmul_accumulate<BLOCK>(cfg, in0_index, 0, 0, w_tiles_per_block / 7, 1, 7, 0);
+            detail::matmul_accumulate<BLOCK>(cfg, in0_index, 0, 0, w_tiles_per_block / 7, 1, 7, 0);
             in0_index += w_tiles_per_block / 7;
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }

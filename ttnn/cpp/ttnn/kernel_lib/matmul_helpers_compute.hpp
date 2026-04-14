@@ -291,39 +291,28 @@ template <MatmulMode mode>
 ALWI void matmul_init_short_with_both_dt(const MatmulConfig& cfg, uint32_t old_in0_cb_id, uint32_t old_in1_cb_id);
 
 // =============================================================================
-// Layer 1: Single matmul operation
+// detail:: — Internal building blocks (not for direct use in kernels)
 // =============================================================================
+//
+// These functions do NOT manage DST (tile_regs_acquire/commit/wait/release).
+// They are building blocks used internally by the DST-managed helpers below.
+//
+// Kernel code should use the DST-managed helpers (matmul_accumulate_and_pack,
+// matmul_single_and_pack, matmul_and_pack_absolute, matmul_blocks_absolute,
+// matmul_compute_one_tile, matmul_compute_inner_block, matmul, etc.) which
+// encapsulate the full DST lifecycle and prevent acquire/commit/release bugs.
+//
+// If you are writing kernel code and find yourself calling detail:: functions
+// with manual tile_regs_acquire/release, consider whether a DST-managed helper
+// can handle your pattern instead. If not, use detail:: with extreme care.
 
-/**
- * @brief Execute a single matmul operation (one tile or one block)
- *
- * In TILE mode: calls matmul_tiles(in0_cb, in1_cb, in0_idx, in1_idx, dst_idx)
- * In BLOCK mode: calls matmul_block(in0_cb, in1_cb, in0_idx, in1_idx, dst_idx,
- *                                    transpose, ct_dim, rt_dim, kt_dim)
- *
- * DEST must be in acquired state. Does NOT manage CB wait/pop.
- */
+namespace detail {
+
+/// Single matmul LLK dispatch. DEST must be acquired. No DST/CB management.
 template <MatmulMode mode>
 ALWI void matmul_single(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx);
 
-// =============================================================================
-// Layer 2: Accumulation loops
-// =============================================================================
-
-/**
- * @brief Strided accumulation loop
- *
- * Iterates `count` times, advancing each index by its stride:
- *   for k in [0, count):
- *     matmul_single(cfg, in0_start + k*in0_stride, in1_start + k*in1_stride, dst_start + k*dst_stride)
- *
- * Common patterns:
- *   Inner-dim reduction:  matmul_accumulate(cfg, a, b, 0, K, 1, stride, 0)
- *   Broadcast-in0:        matmul_accumulate(cfg, 0, b, 0, N, 0, 1, 1)
- *   Broadcast-in1:        matmul_accumulate(cfg, 0, 0, 0, N, 1, 0, 1)
- *
- * DEST must be in acquired state. Does NOT manage CB wait/pop.
- */
+/// Strided accumulation loop. DEST must be acquired. No DST/CB management.
 template <MatmulMode mode>
 ALWI void matmul_accumulate(
     const MatmulConfig& cfg,
@@ -335,17 +324,7 @@ ALWI void matmul_accumulate(
     uint32_t in1_stride,
     uint32_t dst_stride);
 
-/**
- * @brief Tile-mode subblock accumulate
- *
- * Computes an (out_h x out_w) subblock of output tiles. Each output tile
- * at (h, w) accumulates over inner_dim with standard tile indexing:
- *   in0 = in0_offset + h * inner_dim + k
- *   in1 = in1_offset + k * in1_stride + w
- *   dst = sequential (0, 1, 2, ...)
- *
- * DEST must be in acquired state.
- */
+/// Tile-mode subblock accumulate. DEST must be acquired. No DST/CB management.
 template <MatmulMode mode>
 ALWI void matmul_accumulate_subblock(
     const MatmulConfig& cfg,
@@ -357,12 +336,7 @@ ALWI void matmul_accumulate_subblock(
     uint32_t in1_stride);
 
 #ifdef ARCH_BLACKHOLE
-/**
- * @brief Blackhole no-MOP accumulation (block mode only)
- *
- * Uses matmul_block_no_mop for better performance on Blackhole SDPA.
- * Same interface as matmul_accumulate but calls the no-MOP LLK variant.
- */
+/// BH no-MOP accumulation (block mode only). DEST must be acquired.
 template <MatmulMode mode>
 ALWI void matmul_accumulate_no_mop(
     const MatmulConfig& cfg,
@@ -375,38 +349,25 @@ ALWI void matmul_accumulate_no_mop(
     uint32_t dst_stride);
 #endif
 
-// =============================================================================
-// Layer 3: DEST + Pack management
-// =============================================================================
-
-/**
- * @brief Commit DEST, reserve output CB, wait, pack tiles, release, push
- *
- * Standard end-of-subblock sequence:
- *   tile_regs_commit() → cb_reserve_back → tile_regs_wait() →
- *   pack_tile(0..n-1) → tile_regs_release() → cb_push_back
- *
- * Caller must have called tile_regs_acquire() before accumulation.
- * This function handles commit through release — do NOT call
- * tile_regs_commit/wait/release manually when using this.
- */
+/// Commit + reserve + wait + pack + release + push. DEST must be acquired.
 ALWI void matmul_pack_to_cb(uint32_t dest_cb_id, uint32_t num_tiles);
 
-/**
- * @brief Pack to the partials CB (shorthand using cfg.partials_cb_id)
- */
+/// Pack to partials CB. DEST must be acquired.
 ALWI void matmul_pack_to_partials(const MatmulConfig& cfg, uint32_t num_tiles);
 
-/**
- * @brief Reload partial accumulations from partials CB into DEST
- *
- * Performs: copy_tile_to_dst_init_short_with_dt → wait → copy_block → pop → reinit matmul
- *
- * Must be called after tile_regs_acquire() and before accumulation.
- * Automatically reconfigures back to matmul mode after the copy.
- */
+/// Reload partials into DEST. Must be called after acquire, before accumulation.
 template <MatmulMode mode>
 ALWI void matmul_reload_partials(const MatmulConfig& cfg, uint32_t num_tiles);
+
+/// Reduce-W accumulation loop. DEST must be acquired.
+template <MatmulMode mode>
+ALWI void matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
+
+/// Reduce-W with per-tile init. DEST must be acquired.
+template <MatmulMode mode>
+ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
+
+}  // namespace detail
 
 // =============================================================================
 // Layer 4: Compound patterns
@@ -478,28 +439,8 @@ ALWI void matmul_compute_inner_block(
     bool last_out);
 
 // =============================================================================
-// Layer 5: Specialized patterns
+// Layer 5: Specialized patterns (DST-managed)
 // =============================================================================
-
-/**
- * @brief Reduce-W via matmul: per-tile CB wait/pop on in0 with accumulation
- *
- * For each of `count` iterations: cb_wait_front(in0,1) → matmul(0,0,dst_idx) → cb_pop_front(in0,1)
- *
- * Used by reduce_w.cpp when REDUCE_ROW_SUM_VIA_MM is defined.
- * DEST must be in acquired state.
- */
-template <MatmulMode mode>
-ALWI void matmul_reduce_w(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
-
-/**
- * @brief Reduce-W with per-tile init (for data format reconfig between iterations)
- *
- * Same as matmul_reduce_w but calls matmul_init_short per tile.
- * Includes FP32_DEST_ACC_EN reconfig. Used by moreh_mean_w, moreh_sum_w.
- */
-template <MatmulMode mode>
-ALWI void matmul_reduce_w_with_init(const MatmulConfig& cfg, uint32_t count, uint32_t dst_idx);
 
 /**
  * @brief Reduce-W via matmul with full DST lifecycle and output CB management.

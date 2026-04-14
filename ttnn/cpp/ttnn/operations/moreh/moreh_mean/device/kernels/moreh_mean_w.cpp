@@ -51,7 +51,7 @@ void kernel_main() {
 
                 {
                     auto mm_cfg = MatmulConfig::tile(cb_input, cb_scaler, cb_out);
-                    matmul_reduce_w_with_init<TILE>(mm_cfg, Wt - 1, reduce_dst_idx);
+                    detail::matmul_reduce_w_with_init<TILE>(mm_cfg, Wt - 1, reduce_dst_idx);
                 }
                 tile_regs_commit();
 
@@ -100,7 +100,7 @@ void kernel_main() {
 #endif
             auto mm_cfg2 = MatmulConfig::tile(cb_input, cb_scaler, cb_out);
             matmul_init_short<TILE>(mm_cfg2);
-            matmul_single<TILE>(mm_cfg2, 0, 0, reduce_dst_idx);
+            detail::matmul_single<TILE>(mm_cfg2, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

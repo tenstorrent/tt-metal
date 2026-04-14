@@ -134,6 +134,17 @@ The reciprocal operation is now a `RecipPostCompute` functor.
 - Moved functor types (`NoPostCompute`, `NoPostPack`) before Layer 0 so all layers can reference them.
 - Fixed forward-declaration ordering issue caught by JIT compilation.
 
+### 8. Building blocks moved to `detail::` namespace (round 3)
+
+Moved the following functions into `compute_kernel_lib::detail::`:
+- `matmul_single`, `matmul_accumulate`, `matmul_accumulate_subblock`, `matmul_accumulate_no_mop`
+- `matmul_pack_to_cb`, `matmul_pack_to_partials`, `matmul_reload_partials`
+- `matmul_reduce_w`, `matmul_reduce_w_with_init`
+
+These are internal building blocks that do NOT manage DST (`tile_regs_acquire/commit/wait/release`). They exist for composition inside the DST-managed helpers. Kernel code should use the public DST-managed helpers (`matmul_accumulate_and_pack`, `matmul_single_and_pack`, `matmul_and_pack_absolute`, `matmul_blocks_absolute`, `matmul_compute_one_tile`, `matmul_compute_inner_block`, `matmul_reduce_w_and_pack`, `matmul_reduce_subblock_inplace`, `matmul`).
+
+Updated 15 kernel files to use `detail::` prefix. Existing kernels that still use `detail::` functions with manual `tile_regs_acquire/release` are flagged for future migration to DST-managed helpers.
+
 ---
 
 ## What Was Kept
