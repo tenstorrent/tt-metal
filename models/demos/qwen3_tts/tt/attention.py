@@ -424,8 +424,8 @@ class Attention(LightweightModule):
                     # Trace-compatible path: paged_update_cache uses a device tensor for position.
                     # Reshape K/V from [batch, kv_heads, 1, dim] → [1, batch, kv_heads, dim]
                     # for paged_update_cache's expected input format.
-                    k_paged = ttnn.transpose(k, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                    v_paged = ttnn.transpose(v, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    k_paged = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    v_paged = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
                     # Move to HEIGHT_SHARDED L1 (required by paged_update_cache kernel)
                     k_paged_hs = ttnn.to_memory_config(k_paged, self.paged_input_mem_config)
                     v_paged_hs = ttnn.to_memory_config(v_paged, self.paged_input_mem_config)

@@ -51,11 +51,32 @@ class Talker(LightweightModule):
         self.vocab_size = config.audio_vocab_size
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
 
         def get_cache_name(name):
             if weight_cache_path is None:
                 return None
             return weight_cache_path / f"talker_{name}".replace(".", "_")
+
+        def _linear_weight_torch_to_matmul_4d(w_torch: torch.Tensor) -> torch.Tensor:
+            """[out, in] checkpoint linear weight -> [1, 1, in, out] host torch for ttnn.linear (transpose on device, DRAM)."""
+            out_f, in_f = int(w_torch.shape[0]), int(w_torch.shape[1])
+            w_tt = ttnn.from_torch(
+                w_torch,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
+            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=_dram)
+            ttnn.deallocate(w_tt)
+            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=_dram)
+            host = ttnn.to_torch(w_4d).contiguous()
+            ttnn.deallocate(w_4d)
+            ttnn.deallocate(w_tx)
+            return host
 
         # Codec embedding (for audio codec tokens)
         codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
@@ -63,10 +84,10 @@ class Talker(LightweightModule):
             codec_embedding_weight.unsqueeze(0).unsqueeze(0),
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             cache_file_name=get_cache_name("codec_embedding"),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=_mesh_mapper,
         )
 
         # Text embedding (for text tokens - used in real TTS)
@@ -76,10 +97,10 @@ class Talker(LightweightModule):
                 text_embedding_weight.unsqueeze(0).unsqueeze(0),
                 device=device,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_cache_name("text_embedding"),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                mesh_mapper=_mesh_mapper,
             )
             self.text_vocab_size = text_embedding_weight.shape[0]
         else:
@@ -120,9 +141,7 @@ class Talker(LightweightModule):
         # This is used during autoregressive generation
         codec_head_key = "talker.codec_head.weight"
         if codec_head_key in state_dict:
-            codec_head_weight = state_dict[codec_head_key]
-            # Shape: [3072, 2048] -> transpose to [2048, 3072] for matmul
-            codec_head_weight = torch.transpose(codec_head_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+            codec_head_weight = _linear_weight_torch_to_matmul_4d(state_dict[codec_head_key])
             self.codec_head = ttnn.as_tensor(
                 codec_head_weight,
                 device=device,
@@ -130,7 +149,7 @@ class Talker(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_cache_name("codec_head"),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                mesh_mapper=_mesh_mapper,
             )
             self.codec_head_vocab_size = state_dict[codec_head_key].shape[0]  # 3072
         else:
@@ -141,9 +160,7 @@ class Talker(LightweightModule):
         # Architecture: linear_fc1 -> SiLU -> linear_fc2
         text_proj_fc1_key = "talker.text_projection.linear_fc1.weight"
         if text_proj_fc1_key in state_dict:
-            # FC1: [2048, 2048] -> transpose for matmul
-            fc1_weight = state_dict[text_proj_fc1_key]
-            fc1_weight = torch.transpose(fc1_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+            fc1_weight = _linear_weight_torch_to_matmul_4d(state_dict[text_proj_fc1_key])
             self.text_proj_fc1 = ttnn.as_tensor(
                 fc1_weight,
                 device=device,
@@ -151,7 +168,7 @@ class Talker(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_cache_name("text_proj_fc1"),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                mesh_mapper=_mesh_mapper,
             )
             # FC1 bias
             fc1_bias_key = "talker.text_projection.linear_fc1.bias"
@@ -164,14 +181,12 @@ class Talker(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cache_file_name=get_cache_name("text_proj_fc1_bias"),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                    mesh_mapper=_mesh_mapper,
                 )
             else:
                 self.text_proj_fc1_bias = None
 
-            # FC2: [2048, 2048] -> transpose for matmul
-            fc2_weight = state_dict["talker.text_projection.linear_fc2.weight"]
-            fc2_weight = torch.transpose(fc2_weight, -2, -1).unsqueeze(0).unsqueeze(0)
+            fc2_weight = _linear_weight_torch_to_matmul_4d(state_dict["talker.text_projection.linear_fc2.weight"])
             self.text_proj_fc2 = ttnn.as_tensor(
                 fc2_weight,
                 device=device,
@@ -179,7 +194,7 @@ class Talker(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=get_cache_name("text_proj_fc2"),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                mesh_mapper=_mesh_mapper,
             )
             # FC2 bias
             fc2_bias_key = "talker.text_projection.linear_fc2.bias"
@@ -192,7 +207,7 @@ class Talker(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     cache_file_name=get_cache_name("text_proj_fc2_bias"),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                    mesh_mapper=_mesh_mapper,
                 )
             else:
                 self.text_proj_fc2_bias = None
@@ -252,7 +267,7 @@ class Talker(LightweightModule):
             input_ids,
             embedding_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         return self._forward_layers(
@@ -396,7 +411,7 @@ class Talker(LightweightModule):
             hidden_states,
             self.codec_head,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return logits
 
@@ -458,7 +473,7 @@ class Talker(LightweightModule):
             text_ids,
             self.text_embedding,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def get_codec_embedding(self, codec_ids: ttnn.Tensor) -> ttnn.Tensor:
@@ -475,5 +490,5 @@ class Talker(LightweightModule):
             codec_ids,
             self.codec_embedding,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )

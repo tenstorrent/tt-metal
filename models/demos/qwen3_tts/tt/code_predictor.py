@@ -19,8 +19,6 @@ The architecture matches the official qwen_tts implementation.
 
 from typing import List, Optional, Tuple
 
-import torch
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
@@ -64,11 +62,27 @@ class CodePredictor(LightweightModule):
         self.vocab_size = config.vocab_size
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
 
-        def get_cache_name(name):
-            if weight_cache_path is None:
-                return None
-            return weight_cache_path / f"code_predictor_{name}".replace(".", "_")
+        def _linear_weight_to_matmul_4d_ttnn(w_2d) -> ttnn.Tensor:
+            """Checkpoint linear weight [out, in] -> device [1, 1, in, out] TILE for ttnn.linear (transpose on DRAM, no host round-trip)."""
+            out_f, in_f = int(w_2d.shape[0]), int(w_2d.shape[1])
+            w_tt = ttnn.from_torch(
+                w_2d,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=_dram,
+                mesh_mapper=_mesh_mapper,
+            )
+            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=_dram)
+            ttnn.deallocate(w_tt)
+            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=_dram)
+            out_w = ttnn.clone(w_4d, memory_config=_dram, dtype=ttnn.bfloat16)
+            ttnn.deallocate(w_4d)
+            ttnn.deallocate(w_tx)
+            return out_w
 
         # Input projection (if Talker and CodePredictor have different hidden sizes)
         # The projection is called "small_to_mtp_projection" in HuggingFace model
@@ -77,60 +91,46 @@ class CodePredictor(LightweightModule):
             # Project from talker hidden size to code predictor hidden size
             proj_key = "talker.code_predictor.small_to_mtp_projection.weight"
             if proj_key in state_dict:
-                proj_weight = state_dict[proj_key]
-                # Shape: [1024, 2048] -> transpose to [2048, 1024] for matmul
-                proj_weight = torch.transpose(proj_weight, -2, -1).unsqueeze(0).unsqueeze(0)
-                self.input_proj = ttnn.as_tensor(
-                    proj_weight,
-                    device=device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_file_name=get_cache_name("input_proj"),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-                )
+                self.input_proj = _linear_weight_to_matmul_4d_ttnn(state_dict[proj_key])
                 # Also load bias if present
                 bias_key = "talker.code_predictor.small_to_mtp_projection.bias"
                 if bias_key in state_dict:
-                    bias = state_dict[bias_key].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                    self.input_proj_bias = ttnn.as_tensor(
-                        bias,
+                    b = state_dict[bias_key]
+                    bias_tt = ttnn.from_torch(
+                        b,
                         device=device,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        cache_file_name=get_cache_name("input_proj_bias"),
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                        memory_config=_dram,
+                        mesh_mapper=_mesh_mapper,
                     )
+                    h = int(bias_tt.shape[0])
+                    self.input_proj_bias = ttnn.reshape(bias_tt, [1, 1, 1, h], memory_config=_dram)
                 else:
                     self.input_proj_bias = None
             else:
                 # If no projection weight, assume sizes match or use identity
                 self.needs_projection = False
 
-        # Codec embeddings (15 embedding tables, one per code group 1-15)
-        # Stored as both PyTorch tensors (for CPU fallback) and TTNN tensors (for on-device lookup)
-        self.codec_embeddings = []  # PyTorch tensors
-        self.codec_embeddings_tt = []  # TTNN tensors for on-device embedding
+        # Codec embeddings (15 tables, one per code group 1-15); device tensors only
+        self.codec_embeddings_tt: List[Optional[ttnn.Tensor]] = []
         for i in range(self.num_code_groups - 1):  # 15 embeddings for codes 1-15
             embed_key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
             if embed_key in state_dict:
-                embed_weight = state_dict[embed_key].float()  # [vocab_size, talker_hidden_size]
-                self.codec_embeddings.append(embed_weight)
-                # TTNN version for on-device embedding lookup
-                embed_tt = ttnn.as_tensor(
-                    embed_weight.unsqueeze(0).unsqueeze(0),
+                w = state_dict[embed_key]
+                vocab_size, emb_dim = int(w.shape[0]), int(w.shape[1])
+                embed_tt = ttnn.from_torch(
+                    w,
                     device=device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_file_name=get_cache_name(f"codec_embedding_{i}") if weight_cache_path else None,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+                    memory_config=_dram,
+                    mesh_mapper=_mesh_mapper,
                 )
-                self.codec_embeddings_tt.append(embed_tt)
+                embed_4d = ttnn.reshape(embed_tt, [1, 1, vocab_size, emb_dim], memory_config=_dram)
+                self.codec_embeddings_tt.append(embed_4d)
             else:
                 print(f"  WARNING: Missing CodePredictor embedding {embed_key}")
-                self.codec_embeddings.append(None)
                 self.codec_embeddings_tt.append(None)
 
         # Decoder layers
@@ -158,18 +158,7 @@ class CodePredictor(LightweightModule):
         for g in range(self.num_code_groups - 1):  # 15 LM heads
             lm_head_key = f"talker.code_predictor.lm_head.{g}.weight"
             if lm_head_key in state_dict:
-                lm_head_weight = state_dict[lm_head_key]
-                lm_head_weight = torch.transpose(lm_head_weight, -2, -1).unsqueeze(0).unsqueeze(0)
-                lm_head = ttnn.as_tensor(
-                    lm_head_weight,
-                    device=device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cache_file_name=get_cache_name(f"lm_head_{g}"),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
-                )
-                self.lm_heads.append(lm_head)
+                self.lm_heads.append(_linear_weight_to_matmul_4d_ttnn(state_dict[lm_head_key]))
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -178,32 +167,16 @@ class CodePredictor(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def get_codec_embedding(self, code_idx: int, token_ids: torch.Tensor) -> torch.Tensor:
+    def get_codec_embedding(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Get embedding for a specific codebook (CPU version).
+        Look up codec embeddings for one codebook on device.
 
         Args:
             code_idx: Codebook index (0-14 for codes 1-15)
-            token_ids: Token IDs to embed [batch, seq_len]
+            token_ids_tt: Token IDs (TTNN)
 
         Returns:
-            Embeddings [batch, seq_len, talker_hidden_size]
-        """
-        if code_idx < len(self.codec_embeddings) and self.codec_embeddings[code_idx] is not None:
-            return torch.nn.functional.embedding(token_ids, self.codec_embeddings[code_idx])
-        else:
-            raise ValueError(f"Missing codec embedding for index {code_idx}")
-
-    def get_codec_embedding_tt(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Get embedding for a specific codebook (on-device version).
-
-        Args:
-            code_idx: Codebook index (0-14 for codes 1-15)
-            token_ids_tt: TTNN token IDs tensor
-
-        Returns:
-            TTNN embeddings tensor [batch, 1, seq_len, hidden_size]
+            Embeddings [batch, 1, seq_len, hidden_size] (tile layout)
         """
         if code_idx < len(self.codec_embeddings_tt) and self.codec_embeddings_tt[code_idx] is not None:
             return ttnn.embedding(
@@ -212,8 +185,7 @@ class CodePredictor(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        else:
-            raise ValueError(f"Missing TTNN codec embedding for index {code_idx}")
+        raise ValueError(f"Missing TTNN codec embedding for index {code_idx}")
 
     def forward_single_step(
         self,
