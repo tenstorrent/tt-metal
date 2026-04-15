@@ -243,39 +243,44 @@ class TestFastDeviceToHost:
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
 
     def test_uint8_accuracy(self, mesh_device, num_links, device_params, topology):
-        """Compare on-device uint8 conversion against host float32 path."""
+        """Compare on-device uint8 conversion against host float32 path.
+
+        Runs twice with different input tensors to verify program cache reuse
+        (override_runtime_arguments must correctly update buffer addresses).
+        """
         import torch
-
-        # VAE output is in [0, 1] after add(1)*0.5 + clamp
-        gen = torch.Generator().manual_seed(42)
-        ref = torch.rand(B, C, T, H, W, generator=gen, dtype=torch.bfloat16)
-        tt_tensor = _shard_to_device(ref, mesh_device)
-
-        # --- Host reference path: bf16 → float32 → ×255 → uint8 ---
-        host_uint8 = (ref.float() * 255).round().clamp(0, 255).to(torch.uint8)
-
-        # --- Device path: bf16 → ×255 → clamp → typecast(uint8) → D2H ---
-        tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
-        tt_scaled = ttnn.multiply(tt_tile, 255.0)
-        tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
-        tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
-        tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
-        # tt_uint8 = ttnn.to_layout(tt_uint8, ttnn.ROW_MAJOR_LAYOUT)
 
         concat_dims = _make_concat_dims()
         ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-        device_uint8 = fast_device_to_host(tt_uint8, mesh_device, concat_dims, ccl_manager=ccl_manager)
 
-        diff = (device_uint8.int() - host_uint8.int()).abs()
-        max_err = diff.max().item()
-        mean_err = diff.float().mean().item()
-        pct_exact = (diff == 0).float().mean().item() * 100
+        for iteration, seed in enumerate([42, 123]):
+            gen = torch.Generator().manual_seed(seed)
+            ref = torch.rand(B, C, T, H, W, generator=gen, dtype=torch.bfloat16)
+            tt_tensor = _shard_to_device(ref, mesh_device)
 
-        print(f"\n--- uint8 accuracy (device vs host float32 path) ---")
-        print(f"  Max error:     {max_err}")
-        print(f"  Mean error:    {mean_err:.4f}")
-        print(f"  Exact match:   {pct_exact:.1f}%")
-        assert max_err <= 1, f"Max uint8 error {max_err} > 1"
+            # --- Host reference path: bf16 → float32 → ×255 → uint8 ---
+            host_uint8 = (ref.float() * 255).clamp(0, 255).to(torch.uint8)
+
+            # --- Device path: bf16 → ×255 → clamp → typecast(uint8) → D2H ---
+            tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+            tt_scaled = ttnn.multiply(tt_tile, 255.0)
+            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
+            tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
+
+            device_uint8 = fast_device_to_host(tt_uint8, mesh_device, concat_dims, ccl_manager=ccl_manager)
+
+            diff = (device_uint8.int() - host_uint8.int()).abs()
+            max_err = diff.max().item()
+            mean_err = diff.float().mean().item()
+            pct_exact = (diff == 0).float().mean().item() * 100
+
+            label = "fresh" if iteration == 0 else "cached"
+            print(f"\n--- uint8 accuracy, iter {iteration} ({label}) ---")
+            print(f"  Max error:     {max_err}")
+            print(f"  Mean error:    {mean_err:.4f}")
+            print(f"  Exact match:   {pct_exact:.1f}%")
+            assert max_err <= 1, f"Max uint8 error {max_err} > 1 on iter {iteration} ({label})"
 
     def test_uint8_performance(self, mesh_device, num_links, device_params, topology):
         """Measure on-device uint8 conversion + D2H + permute."""
@@ -292,8 +297,8 @@ class TestFastDeviceToHost:
             tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
             tt_scaled = ttnn.multiply(tt_tile, 255.0)
             tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
             tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
-            tt_uint8 = ttnn.to_layout(tt_uint8, ttnn.ROW_MAJOR_LAYOUT)
             return fast_device_to_host(
                 tt_uint8,
                 mesh_device,
