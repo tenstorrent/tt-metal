@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
+#include <optional>
 #include <unordered_set>
 
 #include "device/patchable_generic_op_device_operation.hpp"
@@ -79,9 +80,17 @@ std::vector<Tensor> allocate_outputs(
     return outputs;
 }
 
+/// Reference to one element of a Python list — used to read constant
+/// (non-volatile) input tensors from live ``op.input_tensors`` at dispatch time
+/// without caching the Tensor in C++ (which would pin L1).
+struct PyListRef {
+    nb::object py_list;
+    Py_ssize_t idx;
+};
+
 /// Persistent dispatch state — caches all marshalling work at construction.
-/// ``set_input()`` writes tensors into pre-sized slots; ``dispatch()`` allocates
-/// ephemeral outputs, patches the descriptor in-place, and dispatches.
+/// ``set_input()`` writes volatile tensors into pre-sized slots; constant
+/// inputs are read from live Python lists at dispatch time (zero C++ pinning).
 class FusionDispatchState {
     // Cached at construction (never changes)
     std::vector<TensorSpec> output_specs_;
@@ -91,21 +100,15 @@ class FusionDispatchState {
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
 
     // Pre-built MeshProgramDescriptor — patched IN PLACE each dispatch.
-    // Safe because patch_stale_descriptor writes addresses unconditionally
-    // and custom_program_hash is pre-set at cache-write time.
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_desc_;
 
-    // Deduped input tensor slots — written by set_input(), read by dispatch().
-    std::vector<Tensor> inputs_;
+    // Per dedup index: volatile input slot (written by set_input, cleared
+    // after dispatch) and a Python-list reference for reading constants.
+    std::vector<std::optional<Tensor>> inputs_;
+    std::vector<PyListRef> py_refs_;  // where to read non-dirty slots from Python
+    size_t n_inputs_;
 
-    // Tracks which slots set_input() wrote since the last dispatch.
-    // Dirty slots are cleared after dispatch to release L1 buffers.
-    // Non-dirty slots (weights set at construction) stay alive.
-    std::vector<bool> dirty_;
-
-    // Set by set_input(), cleared by dispatch().  Tells run() whether update()
-    // was called since the last dispatch — if not, fall back to _container_run
-    // which reads op.input_tensors (supports direct assignment patterns).
+    // Set by set_input(), cleared by dispatch().
     bool ready_ = false;
 
 public:
@@ -117,18 +120,21 @@ public:
         const tt::tt_metal::ProgramDescriptor& program_descriptor,
         const AddressSlots& address_slots) :
         shared_output_map_(shared_output_map), result_reorder_(result_reorder), address_slots_(address_slots) {
-        // 1. Dedup inputs from ops' input_tensors (by Python object identity).
+        // 1. Dedup inputs and record where each lives in the Python lists.
         std::unordered_set<PyObject*> seen;
+        std::vector<Tensor> init_tensors;  // temporary — only for mesh_device extraction
         for (auto op_list_handle : ops_input_tensors) {
             auto op_list = nb::cast<nb::list>(op_list_handle);
-            for (auto tensor_handle : op_list) {
-                PyObject* py_ptr = tensor_handle.ptr();
+            for (Py_ssize_t j = 0; j < static_cast<Py_ssize_t>(nb::len(op_list)); ++j) {
+                PyObject* py_ptr = op_list[j].ptr();
                 if (seen.insert(py_ptr).second) {
-                    inputs_.push_back(nb::cast<Tensor>(tensor_handle));
+                    init_tensors.push_back(nb::cast<Tensor>(op_list[j]));
+                    py_refs_.push_back({nb::borrow(op_list_handle), j});
                 }
             }
         }
-        TT_FATAL(!inputs_.empty(), "ops_input_tensors must contain at least one tensor");
+        TT_FATAL(!init_tensors.empty(), "ops_input_tensors must contain at least one tensor");
+        n_inputs_ = init_tensors.size();
 
         // 2. Convert output specs.
         output_specs_.reserve(output_specs_py.size());
@@ -136,50 +142,53 @@ public:
             output_specs_.push_back(nb::cast<TensorSpec>(item));
         }
 
-        // 3. Extract mesh device.
-        auto* device = inputs_.front().device();
+        // 3. Extract mesh device from first tensor.
+        auto* device = init_tensors.front().device();
         mesh_device_ = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
         TT_FATAL(mesh_device_ != nullptr, "Tensor must be on a MeshDevice");
 
-        // 4. Build MeshProgramDescriptor ONCE (copies ProgramDescriptor here, never again).
+        // 4. Build MeshProgramDescriptor ONCE.
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
 
-        // 5. All clean — nothing written by set_input yet.
-        dirty_.resize(inputs_.size(), false);
+        // 5. All slots start empty (nullopt).  Volatile slots are populated by
+        //    set_input(); constant slots are read from Python via py_refs_.
+        inputs_.resize(n_inputs_, std::nullopt);
     }
 
     void set_input(size_t dedup_idx, const Tensor& t) {
         inputs_[dedup_idx] = t;
-        dirty_[dedup_idx] = true;
         ready_ = true;
     }
 
     bool ready() const { return ready_; }
 
     std::vector<Tensor> dispatch() {
-        // 1. Allocate ephemeral outputs from cached specs.
+        // 1. Allocate ephemeral outputs.
         auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
 
-        // 2. Build io_tensors.
+        // 2. Build io_tensors: populated slots from C++ inputs_, empty slots from Python.
         std::vector<Tensor> io_tensors;
-        io_tensors.reserve(inputs_.size() + outputs.size());
-        io_tensors.insert(io_tensors.end(), inputs_.begin(), inputs_.end());
+        io_tensors.reserve(n_inputs_ + outputs.size());
+        for (size_t i = 0; i < n_inputs_; ++i) {
+            if (inputs_[i].has_value()) {
+                io_tensors.push_back(*inputs_[i]);
+            } else {
+                auto& ref = py_refs_[i];
+                io_tensors.push_back(nb::cast<Tensor>(ref.py_list[ref.idx]));
+            }
+        }
         io_tensors.insert(io_tensors.end(), outputs.begin(), outputs.end());
 
-        // 3. Patch descriptor in place (skips null-buffer entries).
+        // 3. Patch descriptor in place.
         auto& desc = mesh_desc_.mesh_programs.back().second;
         patch_stale_descriptor(desc, io_tensors, address_slots_);
 
         // 4. Dispatch.
         (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
 
-        // 5. Release dirty input slots to free L1 between iterations.
-        //    Non-dirty slots (weights) stay alive — the caller holds those anyway.
-        for (size_t i = 0; i < dirty_.size(); ++i) {
-            if (dirty_[i]) {
-                inputs_[i] = Tensor{};
-                dirty_[i] = false;
-            }
+        // 5. Release all populated input slots — no tensors pinned between dispatches.
+        for (auto& slot : inputs_) {
+            slot.reset();
         }
         ready_ = false;
 
