@@ -32,13 +32,14 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
 
 class MeshDevice1x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice1x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
-    void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
+    // Use Config::fabric_config to scope fabric init/teardown to the active devices only,
+    // rather than calling SetFabricConfig() globally in the constructor.  The base class
+    // SetUp() calls SetFabricConfig() right before MeshDevice::create() and TearDown()
+    // calls SetFabricConfig(DISABLED) after mesh close — preventing fabric firmware on
+    // un-owned devices from being left in a dirty state across test iterations.
+    MeshDevice1x4Fixture() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{1, 4}, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
 };
 
 class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
