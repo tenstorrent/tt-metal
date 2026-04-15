@@ -10,11 +10,6 @@
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
-// Globals
-std::uint32_t unp_cfg_context          = 0;
-std::uint32_t pack_sync_tile_dst_ptr   = 0;
-std::uint32_t math_sync_tile_dst_index = 0;
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_math_common.h"
@@ -36,7 +31,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(formats.unpack_A_dst);
     }
     else
     {
@@ -121,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Unpack-to-dest: operand broadcast is done in UNPACK; MATH keeps ALU/srcB/dest format wiring only
     // (see unpack_tilize_quasar_test.cpp). Functional MOVB2D / MOP runs only when unpacking to srcB.
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
     if constexpr (!unpack_to_dest)
     {

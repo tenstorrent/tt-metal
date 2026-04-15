@@ -13,13 +13,31 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 /**
+ * @brief Determines whether the source register format and Float32 destination register format are a supported combination
+ *
+ * @param src_reg_fmt: The source register format
+ */
+inline bool _is_src_fmt_fp32_dest_compatible_(const DataFormat src_reg_fmt)
+{
+    return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 || src_reg_fmt == DataFormat::Tf32 ||
+           src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B || src_reg_fmt == DataFormat::Int32;
+}
+
+/**
+ * @brief Determines whether the source register format and Int32 destination register format are a supported combination
+ *
+ * @param src_reg_fmt: The source register format
+ */
+inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
+{
+    return src_reg_fmt == DataFormat::Int8 || src_reg_fmt == DataFormat::UInt8 || src_reg_fmt == DataFormat::Int8_2x || src_reg_fmt == DataFormat::UInt8_2x;
+}
+
+/**
  * @brief Sets up ALU formats for math destination register
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
  * from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32
+ * @tparam EN_32BIT_DEST: Set to true to use 32-bit math dest in Float32 or Int32 format
  * otherwise default behaviour is Float16/Float16_b depending on input
  * format exponent width
  * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
@@ -27,16 +45,18 @@ using namespace ckernel::math;
  * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat srcB_format)
 {
     // Turn on automatic Tensix-TRISC synchronization
     // RT: This is turned on by default by HW, this should be removed
     set_ttsync_enables<TRACK_ALL>(TRISC_ID);
 
-    static_assert(!(EN_FP32_MATH_FORMAT && EN_INT32_MATH_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
+    const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(srcA_format) && _is_src_fmt_fp32_dest_compatible_(srcB_format);
+    const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format);
+    static_assert(!(EN_FP32_DEST_FORMAT && EN_INT32_DEST_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
-    // Set implied math dest format mode
+    // Set implied math format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
     cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
@@ -65,9 +85,9 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
         alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB = SRCB_FORMAT_MASKED;
     }
 
-    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST && EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST && EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_32BIT_DEST && EN_INT32_DEST_FORMAT;
 
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
@@ -79,18 +99,20 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * @brief Sets up ALU formats for math destination register, specifically for upk to dest
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
  * from SrcA reg format
- * @tparam EN_FP32_MATH_FORMAT: Set to true to use math dest in Float32
+ * @tparam EN_32BIT_DEST: Set to true to use 32-bit math dest in Float32 or Int32 format
  * otherwise default behaviour is Float16/Float16_b depending on input
  * format exponent width
- * @tparam EN_INT32_MATH_FORMAT: Set to true to use math dest in Int32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
+ * @param unpack_dst_format: The unpacker output format, used to determine whether destination register format is Float32 or Int32
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_MATH_FORMAT, bool EN_INT32_MATH_FORMAT>
-inline void _llk_math_upk_to_dest_hw_configure_()
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+inline void _llk_math_upk_to_dest_hw_configure_(DataFormat unpack_dst_format)
 {
+    const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(unpack_dst_format);
+    const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(unpack_dst_format);
+
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
+    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
     alu_config_u alu_config;
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
@@ -99,9 +121,9 @@ inline void _llk_math_upk_to_dest_hw_configure_()
     }
 
     // Program DEST fmt
-    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST && EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST && EN_FP32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_32BIT_DEST && EN_INT32_DEST_FORMAT;
 
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
