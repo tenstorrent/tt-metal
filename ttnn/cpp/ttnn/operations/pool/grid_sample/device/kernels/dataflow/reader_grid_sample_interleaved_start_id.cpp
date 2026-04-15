@@ -45,6 +45,16 @@ void kernel_main() {
 
     const uint32_t end_id = start_page_id + num_pages;
 
+    /*
+    In the case of grid sampling, we need to account for the fact that the grid coordinates may fall outside the bounds
+    of the input image. Since the padding mode is zero, we would simply set the weights for the appropriate sticks to
+    zero in the for loop, and simply do not read from DRAM. In that case the stick we send to reduction would be the
+    last pixel that we read for the appropriate location (SW, SE, NW, NE), but since weights are 0 this is not a
+    problem.
+
+    However, if there was no previous read for the appropriate stick, the memory in that location is invalid, and could
+    include NaN and Inf values. For that reason we zero out the input_cb at the start.
+    */
     experimental::CB input_cb(input_cb_index);
     experimental::CB scalar_cb(scalar_cb_index);
     zero_out_tiles<input_cb_index>(noc, input_cb);

@@ -47,7 +47,7 @@ ALWI void clear_out_tiles(experimental::Noc noc, experimental::CB cb, experiment
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
 
     experimental::UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_cb.get_read_ptr());
+    const auto src = experimental::local_addr(clear_cb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
         noc.async_read(self_ep, cb, tile_size, src, {.offset_bytes = i * tile_size});
@@ -61,7 +61,7 @@ ALWI void clear_out_tiles(
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     experimental::UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_value_cb.get_read_ptr());
+    const auto src = experimental::local_addr(clear_value_cb.get_read_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         noc.async_read(self_ep, dst_cb, tile_size, src, {.offset_bytes = i * tile_size});
@@ -133,9 +133,8 @@ ALWI void fill_scalar(
     scalar_cb.push_back(1);
 }
 
-template <uint32_t cb_id>
 ALWI void zero_out_page(experimental::Noc noc, experimental::CB cb) {
-    const uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
+    const uint32_t page_size = get_local_cb_interface(cb.get_cb_id()).fifo_page_size;
     const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
     const uint32_t remainder_bytes = page_size % MEM_ZEROS_SIZE;
     constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
@@ -150,7 +149,7 @@ ALWI void zero_out_page(experimental::Noc noc, experimental::CB cb) {
             self_ep,
             cb,
             remainder_bytes,
-            experimental::local_addr(MEM_ZEROS_BASE),
+            experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()),
             {.offset_bytes = num_zeros_reads * packet_size});
     }
 }

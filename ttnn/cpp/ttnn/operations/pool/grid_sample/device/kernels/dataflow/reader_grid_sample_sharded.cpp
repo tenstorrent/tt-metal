@@ -26,7 +26,7 @@ ALWI void push_noop_sticks(experimental::Noc noc, experimental::CB input_cb, exp
     input_cb.push_back(1);
 
     scalar_cb.reserve_back(1);
-    zero_out_page<scalar_cb_index>(noc, scalar_cb);
+    zero_out_page(noc, scalar_cb);
     noc.async_read_barrier();
     scalar_cb.push_back(1);
 }

@@ -40,7 +40,7 @@ void kernel_main() {
 
     uint32_t fill_stick_addr = fill_cb.get_write_ptr();
     if constexpr (fill_is_zero) {
-        zero_out_page<fill_cb_id>(noc, fill_cb);
+        zero_out_page(noc, fill_cb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;

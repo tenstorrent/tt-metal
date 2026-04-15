@@ -50,6 +50,8 @@ FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
 }
 
 // Simple form: local L1 src addr -> local L1 dst addr
+// max_page_size=1 selects the single-packet branch (any value <= NOC_MAX_BURST_SIZE works);
+// size_bytes=0 is unused in that branch — the actual transfer size was set by set_read_state.
 FORCE_INLINE void read_with_state(Noc noc, uint32_t dst_addr, uint32_t src_addr) {
     UnicastEndpoint ep;
     noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(

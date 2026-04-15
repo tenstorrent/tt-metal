@@ -279,7 +279,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // junk/padding data
         if constexpr (zero_pages && reader_id == 0) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page<in_cb_id>(noc, in_cb);
+                zero_out_page(noc, in_cb);
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {

@@ -198,7 +198,7 @@ void kernel_main() {
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
     uint32_t fill_stick_addr = fill_cb.get_write_ptr();
-    zero_out_page<fill_cb_index>(noc, fill_cb);
+    zero_out_page(noc, fill_cb);
 
     // For split reader: track grid point index starting from reader_id
     uint32_t in_grid_row_idx = 0;

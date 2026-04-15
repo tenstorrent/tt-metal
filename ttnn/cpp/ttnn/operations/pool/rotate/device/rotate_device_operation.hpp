@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <tuple>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::rotate {
