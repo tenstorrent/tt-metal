@@ -2491,10 +2491,12 @@ class Molmo2Generator:
         bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=hf_attention_mask).to(torch.bfloat16)
         is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
         mm = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        # Use bfloat4_b for large masks to save DRAM (4x smaller than bfloat16)
+        mask_dtype = ttnn.bfloat4_b if seq_len > 8192 else ttnn.bfloat16
         return ttnn.from_torch(
             bias,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=mask_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mm,
@@ -2863,6 +2865,8 @@ class Molmo2Generator:
                     logger.warning(
                         "Long sequence with multimodal attention mask: using full prefill (chunked path has no mask support)"
                     )
+                # For long sequences, pass last_token_idx to avoid 9.5GB LM head logits
+                lti = original_seq_len - 1 if seq_len > 8192 else None
                 logits, _ = self.model.text_model.forward(
                     hidden_states=hidden_states_ttnn,
                     start_pos=0,
@@ -2870,6 +2874,7 @@ class Molmo2Generator:
                     kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
                     page_table=effective_page_table,
                     user_id=user_id,
+                    last_token_idx=lti,
                 )
                 if prefill_attn_mask_ttnn is not None:
                     ttnn.deallocate(prefill_attn_mask_ttnn)
