@@ -640,7 +640,9 @@ def test_ttnn_dispatch_combine_overflow(
     )
 
     logger.info("[overflow test] Running combine with overflow data...")
-    tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+
+    tt_dispatched_buffer_tiled = ttnn.to_layout(tt_dispatched_buffer, layout=ttnn.TILE_LAYOUT)
+    tt_output = tt_combine_module(tt_dispatched_buffer_tiled, tt_metadata, tt_expert_token_counts)
     ttnn.synchronize_device(mesh_device)
     logger.info("[overflow test] Combine completed (did not hang)")
 

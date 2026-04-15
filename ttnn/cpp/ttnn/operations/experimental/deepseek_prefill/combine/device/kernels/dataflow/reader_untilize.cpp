@@ -75,7 +75,7 @@ void kernel_main() {
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<15>();
 
     constexpr uint32_t tiles_per_token = hidden_size / 32;
-    constexpr uint32_t expert_stride_tile = (max_dispatched_tokens_per_expert / 32) * (hidden_size / 32);
+    constexpr uint32_t expert_stride_tile = ((max_dispatched_tokens_per_expert + 31) / 32) * (hidden_size / 32);
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
     // Byte offset past counter data where the sender appended receive_buf_addr
     constexpr uint32_t counter_data_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
