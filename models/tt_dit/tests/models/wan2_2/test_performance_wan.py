@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import statistics
-import subprocess
 
 import numpy as np
 import pytest
@@ -16,71 +15,11 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
 DEVICE_PARAMS = {"trace_region_size": 120000000}
-
-
-def export_to_video_simple(frames, output_video_path, fps=16, crf=25):
-    """Encode frames to video via ffmpeg subprocess.
-
-    Accepts either float32 [0,1] or uint8 [0,255] frames with shape (T, H, W, 3).
-    """
-    from imageio_ffmpeg import get_ffmpeg_exe
-
-    frames = np.asarray(frames)
-    if frames.ndim != 4 or frames.shape[-1] != 3:
-        raise ValueError(f"Expected frames with shape (T, H, W, 3), got {frames.shape}")
-
-    t, h, w, c = frames.shape
-
-    cmd = [
-        get_ffmpeg_exe(),
-        "-y",
-        "-f",
-        "rawvideo",
-        "-vcodec",
-        "rawvideo",
-        "-s",
-        f"{w}x{h}",
-        "-pix_fmt",
-        "rgb24",
-        "-r",
-        f"{fps:.2f}",
-        "-i",
-        "-",
-        "-an",
-        "-vcodec",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-crf",
-        str(crf),
-        "-v",
-        "warning",
-        output_video_path,
-    ]
-
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    try:
-        for frame in frames:
-            if frame.dtype != np.uint8:
-                frame = (frame * 255).clip(0, 255).astype(np.uint8)
-            p.stdin.write(frame.tobytes())
-        p.stdin.close()
-        stderr = p.stderr.read().decode("utf-8", errors="ignore")
-        rc = p.wait()
-    except Exception:
-        p.kill()
-        p.wait()
-        raise
-
-    if rc != 0:
-        raise RuntimeError(f"ffmpeg failed with return code {rc}:\n{stderr}")
-
-    return output_video_path
 
 
 def t2v_metrics(mesh_device, height):
@@ -352,7 +291,7 @@ def test_pipeline_performance(
     if not is_ci_env:
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_path = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
-            export_to_video_simple(frames, output_path, fps=16)
+            export_to_video(frames, output_path, fps=16)
             print(f"✓ Saved video to: {output_path}")
         else:
             print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
