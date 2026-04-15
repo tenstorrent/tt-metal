@@ -88,7 +88,7 @@ void kernel_main() {
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
 
     // Set up TensorAccessor for input data - use row size as page size
-    const auto s0 = TensorAccessor(src_args, src_addr, input_bytes_per_row);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Create experimental CircularBuffer for Device 2.0 API
     experimental::CircularBuffer cb_out(cb_id_out);

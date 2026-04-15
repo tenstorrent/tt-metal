@@ -24,7 +24,7 @@ void kernel_main() {
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
-    const auto s1 = TensorAccessor(dst_args, dst_addr, tile_size);
+    const auto s1 = TensorAccessor(dst_args, dst_addr);
     experimental::CircularBuffer cb_out0(cb_id_out0);
     experimental::CircularBuffer cb_out1(cb_id_out1);
 

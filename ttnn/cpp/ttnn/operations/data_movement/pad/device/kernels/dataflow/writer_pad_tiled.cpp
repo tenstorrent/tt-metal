@@ -36,7 +36,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
-    const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, output_addr);
     experimental::CircularBuffer cb_input(input_cb_id);
     experimental::CircularBuffer cb_pad_val(pad_val_cb_id);
 

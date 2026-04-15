@@ -20,7 +20,6 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
     // Create experimental objects for Device 2.0 API
     experimental::CircularBuffer cb_out(cb_id_out);
@@ -33,7 +32,7 @@ void kernel_main() {
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr, page_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;

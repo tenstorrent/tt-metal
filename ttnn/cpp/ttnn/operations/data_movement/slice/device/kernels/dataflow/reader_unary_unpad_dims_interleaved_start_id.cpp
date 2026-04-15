@@ -22,10 +22,8 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-
     // In and out are assumed to be same dataformat
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Create experimental objects for Device 2.0 API
     experimental::CircularBuffer cb_in0(cb_id_in0);

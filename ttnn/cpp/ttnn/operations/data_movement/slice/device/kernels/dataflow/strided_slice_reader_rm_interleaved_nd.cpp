@@ -7,7 +7,6 @@
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t dims = get_compile_time_arg_val(1);
     constexpr uint32_t element_size = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
@@ -33,7 +32,7 @@ void kernel_main() {
     }
     prod[dims - 1] = 1;  // Not used, but set to 1 for completeness
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;

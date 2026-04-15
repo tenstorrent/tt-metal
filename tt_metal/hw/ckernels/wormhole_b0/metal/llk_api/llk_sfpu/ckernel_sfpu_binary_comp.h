@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <type_traits>
 
 #include "ckernel_addrmod.h"
 #include "sfpi.h"
@@ -106,11 +108,102 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
-// Float32 binary comparison
-// TODO: Add support for ne, gt, lt, ge, le operations
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+// IEEE-754 float32 NaN: exponent all 1s and nonzero mantissa => |bits| > 0x7F800000.
+sfpi_inline auto is_nan(sfpi::vInt abs_bits) { return abs_bits > 0x7F800000; }
+// IEEE-754 float32 infinity: exponent all 1s, mantissa zero => |bits| == 0x7F800000.
+sfpi_inline auto is_inf(sfpi::vInt abs_bits) { return abs_bits == 0x7F800000; }
+
+template <SfpuType Op>
+inline constexpr bool is_fp32_equal_compare_v = Op == SfpuType::eq || Op == SfpuType::ne;
+
+template <SfpuType Op>
+inline constexpr bool is_fp32_ordered_compare_v =
+    Op == SfpuType::lt || Op == SfpuType::gt || Op == SfpuType::le || Op == SfpuType::ge;
+
+template <SfpuType Op>
+inline constexpr bool is_fp32_compare_v = is_fp32_equal_compare_v<Op> || is_fp32_ordered_compare_v<Op>;
+
+template <SfpuType RELATIONAL_OP, std::enable_if_t<is_fp32_equal_compare_v<RELATIONAL_OP>, int> = 0>
+sfpi_inline sfpi::vFloat binary_comp_fp32_equal_mask(sfpi::vFloat in0, sfpi::vFloat in1) {
+    constexpr bool is_eq = (RELATIONAL_OP == SfpuType::eq);
+    const sfpi::vFloat positive = is_eq ? sfpi::vConst1 : sfpi::vConst0;
+    const sfpi::vFloat negative = is_eq ? sfpi::vConst0 : sfpi::vConst1;
+
+    sfpi::vFloat mask = negative;
+    sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
+    sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+    sfpi::vInt in0_abs = in0_bits & 0x7FFFFFFF;
+    sfpi::vInt in1_abs = in1_bits & 0x7FFFFFFF;
+
+    // Equality (±0 / identical +inf/-inf bit patterns) then strip NaN lanes. For ne, NaN strip must
+    // follow so unordered NaN lanes stay "not equal" (1) and are not confused with same-infinity eq.
+    v_if(
+        (in0 == in1) ||                                 // Handle equal values
+        (in0_abs == 0 && in1_abs == 0) ||               // Handle ±0.0
+        ((in0_bits == in1_bits) && is_inf(in0_abs))) {  // Handle +inf/-inf bit patterns
+        mask = positive;
+    }
+    v_endif;
+    v_if(is_nan(in0_abs) || is_nan(in1_abs)) { mask = negative; }
+    v_endif;
+    return mask;
+}
+
+template <SfpuType RELATIONAL_OP, std::enable_if_t<is_fp32_ordered_compare_v<RELATIONAL_OP>, int> = 0>
+sfpi_inline sfpi::vFloat binary_comp_fp32_ordered_mask(sfpi::vFloat in0, sfpi::vFloat in1) {
+    sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
+    sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+    sfpi::vInt in0_abs = in0_bits & 0x7FFFFFFF;
+    sfpi::vInt in1_abs = in1_bits & 0x7FFFFFFF;
+    sfpi::vFloat result = sfpi::vConst0;
+
+    // +inf/+inf and -inf/-inf: IEEE tie rules.
+
+    if constexpr (RELATIONAL_OP == SfpuType::lt) {
+        v_if(in0 < in1) { result = sfpi::vConst1; }
+        v_endif;
+        v_if((in0_bits == in1_bits) && is_inf(in0_abs)) { result = sfpi::vConst0; }
+        v_endif;
+    } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
+        v_if(in0 > in1) { result = sfpi::vConst1; }
+        v_endif;
+        v_if((in0_bits == in1_bits) && is_inf(in0_abs)) { result = sfpi::vConst0; }
+        v_endif;
+    } else if constexpr (RELATIONAL_OP == SfpuType::le) {
+        v_if(in0 <= in1) { result = sfpi::vConst1; }
+        v_endif;
+        v_if((in0_bits == in1_bits) && is_inf(in0_abs)) { result = sfpi::vConst1; }
+        v_endif;
+    } else {
+        v_if(in0 >= in1) { result = sfpi::vConst1; }
+        v_endif;
+        v_if((in0_bits == in1_bits) && is_inf(in0_abs)) { result = 1.0f; }
+        v_endif;
+    }
+
+    // ±0.0 vs ±0.0: IEEE ties; HW may order signed zeros differently.
+    if constexpr (RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt) {
+        v_if((in0_abs == 0) && (in1_abs == 0)) { result = sfpi::vConst0; }
+        v_endif;
+    } else {
+        v_if((in0_abs == 0) && (in1_abs == 0)) { result = sfpi::vConst1; }
+        v_endif;
+    }
+
+    v_if(is_nan(in0_abs) || is_nan(in1_abs)) { result = sfpi::vConst0; }
+    v_endif;
+    return result;
+}
+
+// Float32 binary comparisons.
+// - lt/gt/le/ge: binary_comp_fp32_ordered_mask.
+// - eq/ne: binary_comp_fp32_equal_mask.
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS,
+    SfpuType RELATIONAL_OP,
+    std::enable_if_t<is_fp32_compare_v<RELATIONAL_OP>, int> = 0>
 inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
     constexpr uint dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
@@ -118,17 +211,12 @@ inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = 0.0f;
+        sfpi::vFloat result = sfpi::vConst0;
 
-        if constexpr (RELATIONAL_OP == SfpuType::eq) {
-            sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
-            sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
-
-            // Standard float comparison (handles normal values and NaN correctly)
-            v_if(in0 == in1) { result = 1.0f; }
-            // Special handling for infinity
-            v_elseif((in0_bits == in1_bits) && ((in0_bits & 0x7FFFFFFF) == 0x7F800000)) { result = 1.0f; }
-            v_endif;
+        if constexpr (is_fp32_equal_compare_v<RELATIONAL_OP>) {
+            result = binary_comp_fp32_equal_mask<RELATIONAL_OP>(in0, in1);
+        } else {
+            result = binary_comp_fp32_ordered_mask<RELATIONAL_OP>(in0, in1);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

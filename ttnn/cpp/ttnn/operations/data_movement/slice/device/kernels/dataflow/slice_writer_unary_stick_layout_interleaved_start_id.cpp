@@ -18,6 +18,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, stick_size);
 
     // Create experimental CircularBuffer for Device 2.0 API

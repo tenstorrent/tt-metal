@@ -30,9 +30,7 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Create experimental objects for Device 2.0 API
     experimental::CircularBuffer cb_in0(cb_id_in0);
@@ -40,8 +38,8 @@ void kernel_main() {
     experimental::Noc noc;
 
     // Create TensorAccessors for start and end tensors
-    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr, tile_size);
-    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr, tile_size);
+    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr);
+    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr);
 
     // Read start and end indices from tensors using TensorAccessor
     uint32_t start_indices[num_dims];

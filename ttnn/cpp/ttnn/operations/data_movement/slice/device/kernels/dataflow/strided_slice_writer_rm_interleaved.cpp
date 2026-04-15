@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     constexpr uint32_t cb_id_out0 = 24;
 
