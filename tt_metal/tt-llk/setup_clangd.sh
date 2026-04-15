@@ -115,7 +115,6 @@ validate_sfpi_installation() {
 # Function to generate compile flags
 generate_compile_flags() {
     echo "Generating compile_flags.txt for $CHIP_ARCH architecture..."
-    # -mno-tt-fix-whbhebreak: LLK_ASSERT uses ebreak; match Hal tensix cflags (no 8 NOPs after ebreak).
 
     cat > "$ROOT_DIR/compile_flags.txt" <<EOF
 -DENV_LLK_INFRA
@@ -132,7 +131,6 @@ generate_compile_flags() {
 -DLLK_TRISC_PACK
 
 -DENABLE_LLK_ASSERT
--mno-tt-fix-whbhebreak
 
 -isystem
 $ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv-tt-elf/15.1.0/include/
