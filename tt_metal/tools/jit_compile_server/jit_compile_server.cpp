@@ -203,7 +203,7 @@ void compile_one(
     args.push_back(target.srcs[src_index]);
     args.push_back("-MF");
     args.push_back(temp_d_path);
-    append_tokenized(args, target.defines);
+    args.insert(args.end(), target.defines.begin(), target.defines.end());
 
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());

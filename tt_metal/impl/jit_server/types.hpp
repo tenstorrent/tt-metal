@@ -20,7 +20,7 @@ struct TargetRecipe {
 
     // Compile recipe.
     std::string cflags;
-    std::string defines;
+    std::vector<std::string> defines;
     std::string includes;
     std::string compiler_opt_level;
     std::vector<std::string> srcs;

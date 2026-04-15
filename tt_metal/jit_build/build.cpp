@@ -7,7 +7,6 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -801,33 +800,27 @@ jit_server::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSetti
     }
 
     // Build defines: start with build-state base, then enrich with kernel-specific defines.
-    std::string defines = defines_;
+    std::vector<std::string> defines = tt::jit_build::utils::tokenize_flags(defines_);
     if (settings && process_defines_at_compile_) {
         settings->process_defines([&defines](const std::string& define, const std::string& value) {
-            defines += "-D" + define + "=" + value + " ";
+            defines.push_back(fmt::format("-D{}={}", define, value));
         });
     }
     if (settings) {
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
-                defines += "-DKERNEL_COMPILE_TIME_ARGS=";
-                for (std::size_t i = 0; i < values.size(); ++i) {
-                    if (i > 0) {
-                        defines += ",";
-                    }
-                    defines += std::to_string(values[i]);
-                }
-                defines += " ";
+                defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
             }
         });
         settings->process_named_compile_time_args(
             [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
                 if (!named_args.empty()) {
-                    defines += "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
+                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
+                    auto it = std::back_inserter(compile_time_arg_map);
                     for (const auto& [name, value] : named_args) {
-                        defines += "{\"" + name + "\"," + std::to_string(value) + "},";
+                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
                     }
-                    defines += "\" ";
+                    defines.push_back(std::move(compile_time_arg_map));
                 }
             });
     }
