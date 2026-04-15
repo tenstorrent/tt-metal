@@ -443,6 +443,11 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
     cached = getattr(container, "_cached_run", None)
     if cached is not None:
         entry, ops_inputs = cached
+        # Wire dispatch state lazily on the second call to the same container.
+        # Only wires once; subsequent update()+run() cycles hit the
+        # _dispatch_state fast path in run() and never reach here.
+        if container._dispatch_state is None and any(op.input_tensors for op in container._cached_ops):
+            _wire_dispatch_state(container, entry, container._cached_ops)
         outputs = ttnn._ttnn.operations.experimental.patchable_generic_op(
             ops_inputs,
             entry.output_specs,
@@ -535,8 +540,53 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     if entry is not None and entry.output_specs is not None:
         container._cached_run = (entry, [op.input_tensors for op in ops])
-
     return ret
+
+
+def _release_stale_op_outputs(ops):
+    """Release materialization output tensors that pin L1 for nothing.
+
+    Called from the ``_dispatch_state`` fast path after the first successful
+    dispatch.  Safe because: (a) ``dispatch()`` allocates fresh ephemeral
+    outputs, (b) ``output_specs`` is already cached, and (c) the cold path
+    (``FusedOp.launch()``) has already completed.  No-op after first call.
+    """
+    for op in ops:
+        if op.output_tensors:
+            op.output_tensors = []
+
+
+def _wire_dispatch_state(container, entry, ops):
+    """Create :class:`FusionDispatchState` and wire each op's ``_fusion_input_setter``.
+
+    After this, ``container.run()`` bypasses ``_container_run`` entirely —
+    ``state.dispatch()`` handles everything in C++ with zero per-call marshalling.
+    Each op's ``update()`` writes directly to C++ input slots via ``set_input()``.
+    """
+    ops_inputs = [op.input_tensors for op in ops]
+    state = ttnn._ttnn.operations.experimental.FusionDispatchState(
+        ops_inputs,
+        entry.output_specs,
+        entry.shared_output_map,
+        entry.result_reorder,
+        entry.cached_descriptor,
+        entry.address_slots,
+    )
+
+    # Compute dedup mapping: for each op, which positional args map to which dedup slot.
+    seen = {}
+    dedup_idx = 0
+    for op in ops:
+        mappings = []
+        for arg_pos, t in enumerate(op.input_tensors):
+            tid = id(t)
+            if tid not in seen:
+                seen[tid] = dedup_idx
+                dedup_idx += 1
+            mappings.append((seen[tid], arg_pos))
+        op._fusion_input_setter = (state, mappings)
+
+    container._dispatch_state = state
 
 
 # =============================================================================
@@ -774,14 +824,18 @@ class Sequential:
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results(all_items)
         self._cached_run = None
+        self._dispatch_state = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
         """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
+        for op in self._cached_ops:
+            op._fusion_input_setter = None
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
         self._cached_run = None
+        self._dispatch_state = None
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
@@ -847,6 +901,16 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
+        state = self._dispatch_state
+        if state is not None and state.ready():
+            outputs = state.dispatch()
+            _release_stale_op_outputs(self._cached_ops)
+            if results is not None:
+                default_results = self._default_results
+                requested_ids = {id(d) for d in results}
+                return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
+            return outputs
+
         if self._cached_run is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
@@ -905,14 +969,18 @@ class Parallel:
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(all_items)
         self._cached_run = None
+        self._dispatch_state = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
         """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
+        for op in self._cached_ops:
+            op._fusion_input_setter = None
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
         self._cached_run = None
+        self._dispatch_state = None
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
@@ -979,6 +1047,16 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
+        state = self._dispatch_state
+        if state is not None and state.ready():
+            outputs = state.dispatch()
+            _release_stale_op_outputs(self._cached_ops)
+            if results is not None:
+                default_results = self._default_results
+                requested_ids = {id(d) for d in results}
+                return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
+            return outputs
+
         if self._cached_run is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
