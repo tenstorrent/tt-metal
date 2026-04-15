@@ -17,7 +17,7 @@ constexpr uint32_t SEGMENT_DEGREES[] = {0, 11, 1, 1};
 #endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
-
+#undef HAS_SEGMENT_DEGREES
 
 namespace ckernel::sfpu {
 
@@ -67,11 +67,12 @@ constexpr std::array<float, 53> SELU_LUT = {{
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
 inline void calculate_selu(uint scale, uint alpha) {
-    sfpi::vFloat scale_val = Converter::as_float(scale);
-    sfpi::vFloat alpha_val = Converter::as_float(alpha);
+    const sfpi::vFloat scale_val = Converter::as_float(scale);
+    const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = scale_val * alpha_val * piecewise_polynomial_eval<SELU_NUM_DEGREE, SELU_NUM_SEGMENTS, SELU_LUT_SIZE>(SELU_LUT, x);
+        sfpi::vFloat result =
+            scale_alpha * piecewise_polynomial_eval<SELU_NUM_DEGREE, SELU_NUM_SEGMENTS, SELU_LUT_SIZE>(SELU_LUT, x);
         v_if(x >= 0.0f) { result = scale_val * x; }
         v_endif;
         v_if(x < -10.0f) { result = -1.7580993408e+00f; }

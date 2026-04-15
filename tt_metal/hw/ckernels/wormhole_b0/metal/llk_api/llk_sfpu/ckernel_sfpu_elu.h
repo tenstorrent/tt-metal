@@ -17,6 +17,7 @@ constexpr uint32_t SEGMENT_DEGREES[] = {0, 11, 1, 1};
 #endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
+#undef HAS_SEGMENT_DEGREES
 
 namespace ckernel::sfpu {
 

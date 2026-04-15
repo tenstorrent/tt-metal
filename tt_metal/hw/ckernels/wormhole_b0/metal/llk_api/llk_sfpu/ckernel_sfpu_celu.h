@@ -17,6 +17,7 @@ constexpr uint32_t SEGMENT_DEGREES[] = {0, 11, 1, 1};
 #endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
+#undef HAS_SEGMENT_DEGREES
 
 namespace ckernel::sfpu {
 
@@ -71,6 +72,8 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
         sfpi::vFloat result =
             alpha * piecewise_polynomial_eval<CELU_NUM_DEGREE, CELU_NUM_SEGMENTS, CELU_LUT_SIZE>(CELU_LUT, x_rescaled);
         v_if(x >= 0.0f) { result = x; }
+        v_endif;
+        v_if(x_rescaled < -10.0f) { result = -alpha; }
         v_endif;
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
