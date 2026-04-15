@@ -34,14 +34,15 @@ void kernel_main() {
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
 
     // Get compile-time arguments
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
-    constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key/value width in tiles
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
-    constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // number of query heads
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // Q/K width in tiles
+    constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key width in tiles (K read)
+    constexpr uint32_t vWt = get_compile_time_arg_val(2);              // V/dO/O width in tiles
+    constexpr uint32_t Ht = get_compile_time_arg_val(3);               // sequence length in tiles
+    constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_output_args = TensorAccessorArgs<5>();
+    constexpr auto grad_output_args = TensorAccessorArgs<6>();
     constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -73,16 +74,18 @@ void kernel_main() {
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto read_row = [&](const uint32_t global_row_idx) {
-        const uint32_t kv_start_idx = global_row_idx * kWt;
+        const uint32_t k_start_idx = global_row_idx * kWt;
+        const uint32_t v_start_idx = global_row_idx * vWt;
 
-        read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
 
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+        const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
 
         const uint32_t k_row_tile = global_row_idx % Ht;
 
@@ -108,8 +111,9 @@ void kernel_main() {
                     tile_bytes,
                     num_of_interm_tiles);
 
-                read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
-                read_tiles_by_row(cb_attn_output, attn_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+                const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
+                read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
+                read_tiles_by_row(cb_attn_output, attn_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
             }
             intermediates_offset += Ht * num_of_interm_tiles;
         }
@@ -136,10 +140,11 @@ void kernel_main() {
     // stream rows from Q, dO, O(for all heads associated with this group of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
-        const uint32_t kv_start_idx = global_row_idx * kWt;
+        const uint32_t k_start_idx = global_row_idx * kWt;
+        const uint32_t v_start_idx = global_row_idx * vWt;
 
-        read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;  // which group of K and V we are processing
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);  // which batch we are processing
@@ -147,6 +152,7 @@ void kernel_main() {
         // the index of the first head in Q associated with this group of K and V
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+        const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
 
         // k_row_tile = position within sequence (0 to Ht-1)
         const uint32_t k_row_tile = global_row_idx % Ht;
@@ -167,11 +173,9 @@ void kernel_main() {
         const uint32_t mask_offset = k_row_tile;
 #endif
 
-        // add change here: multiply by num_of_interm_tiles because we need to read 2 tiles per head row
+        // multiply by num_of_interm_tiles because we need to read 2 tiles per head row
         uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
 
-        // TODO: add calculation for dO, O indexes because in forward pass they are stored with shape (B, 1, S,
-        // qNH*qEmbd)
         for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
             for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
                 const uint32_t h = q_start_tile + q_idx;  // actual Q row tile index
@@ -198,8 +202,10 @@ void kernel_main() {
                     tile_bytes,
                     num_of_interm_tiles);
 
-                read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
-                read_tiles_by_row(cb_attn_output, attn_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+                // Read grad_output and attn_output rows (V-dim width)
+                const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
+                read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
+                read_tiles_by_row(cb_attn_output, attn_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
             }
             // update offset for intermediates only (mask is (1,1,S,S) - same for all heads)
             intermediates_offset += Ht * num_of_interm_tiles;  // jump to the head in intermediates

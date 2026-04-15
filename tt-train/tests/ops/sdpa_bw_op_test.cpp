@@ -171,6 +171,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const std::optional<xt::xarray<float>>& attn_mask = std::nullopt) {
     const auto shape = Q.shape();
     const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3], intermediate_size = 64;
+    const size_t D_v = V.shape()[3];
 
     const auto kv_shape = K.shape();
     const size_t G = kv_shape[1];  // number of KV heads (groups)
@@ -233,7 +234,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const auto& dO = grad_output;
 
     // Step 4: dV = P^T @ dO using xt::linalg::dot, then reduce to groups
-    xt::xarray<float> dV_expanded = xt::zeros<float>({B, H, S, D});
+    xt::xarray<float> dV_expanded = xt::zeros<float>({B, H, S, D_v});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, S)
@@ -484,6 +485,7 @@ struct SDPABackwardTestConfig {
     uint32_t sequence_length;
     uint32_t query_dim;
     uint32_t key_value_dim;
+    uint32_t value_dim = 0U;  // 0 means same as key_value_dim; total V dim = num_kv_heads * head_dim_v
     uint32_t num_query_heads;
     uint32_t num_kv_heads;
     float dropout_prob = 0.0F;
@@ -502,6 +504,8 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const uint32_t S = config.sequence_length;
     const uint32_t qD = config.query_dim;
     const uint32_t kvD = config.key_value_dim;
+    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
+    const uint32_t vD = effective_value_dim / config.num_kv_heads;
     const float dropout_probability = config.dropout_prob;
     const float atol = config.atol;
     const float rtol = config.rtol;
@@ -527,7 +531,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, kvNH, S, kvD});
+    xt::xarray<float> value_tensor = xt::empty<float>({B, kvNH, S, vD});
     ttml::core::parallel_generate(
         std::span{value_tensor.data(), value_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
@@ -536,7 +540,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
 
-    xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, qD});
+    xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, vD});
     ttml::core::parallel_generate(
         std::span{grad_output_tensor.data(), grad_output_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
@@ -815,6 +819,110 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+// ========== Different V Dimension Tests (qE == kE != vE) ==========
+
+TEST_F(SDPABackwardTest, DiffVDim_Causal_SmallV) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_Causal_SmallV (qD=32, vD=16)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, DiffVDim_Causal_LargeV) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 128U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_Causal_LargeV (qD=16, vD=32)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, DiffVDim_ArbitraryMask) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_ArbitraryMask (qD=32, vD=16)",
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, DiffVDim_GQA_Causal) {
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 32U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 2U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_GQA_Causal (qD=8, vD=16, qH=8, kvH=2)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, DiffVDim_SingleTile) {
+    SDPABackwardTestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 32U,
+        .num_query_heads = 2U,
+        .num_kv_heads = 2U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_SingleTile (qD=32, vD=16, S=32)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, DiffVDim_MultiBatch) {
+    SDPABackwardTestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "DiffVDim_MultiBatch (B=4, qD=32, vD=16)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
 }
