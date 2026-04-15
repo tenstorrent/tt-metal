@@ -206,3 +206,70 @@ Attempting to call `ttnn.tanhshrink()` at runtime would throw `TT_THROW("unexpec
 - **Output**: `.claude-analysis/softcap-2/hardtanh_analysis.md`
 - **Note**: The core SFPU kernel is fully implemented but the dispatch chain (API header, LLK dispatch, host-side parameterized case) is not yet wired. This is a partially-implemented operation.
 - **Breadcrumbs**: 8 events logged
+
+---
+
+## Session Info (tanh)
+- **Operation**: tanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-15
+- **Output file**: `.claude-analysis/softcap-2/tanh_analysis.md`
+
+## Execution Timeline (tanh)
+
+### 1. Initialization
+- Initialized breadcrumbs at `.claude-analysis/softcap-2/agent_logs/`
+- Read reference files: `sfpu-hardware-model.md`, `sfpu-dest-addressing-explained.md`, `sfpu-operation-analyzer.md` logging spec
+
+### 2. Dispatch Tracing
+- Read `unary_op_types.hpp`: Confirmed `TANH` enum exists at line 29
+- Read `unary_op_utils.cpp`: `get_op_init_and_func_default()` has NO case for TANH -- falls to `default: TT_THROW("unexpected op type")`
+- `get_op_approx_mode()` returns `false` (default case only)
+- `get_compute_kernel_path()` returns `"eltwise_sfpu.cpp"` (default)
+- Read `unary.hpp`: `REGISTER_UNARY_OPERATION(tanh, TANH)` -- simple registration at line 110 (no `fast_and_approximate_mode` parameter unlike `exp`/`gelu`)
+- Read `unary.cpp`: `unary_impl()` -> `prim::unary()` standard path
+- Read `unary_device_operation.cpp`: `UnaryProgramFactory` selected for non-sharded inputs
+- Read `unary_program_factory.cpp`: `get_block_defines()` called but TANH case missing -> would throw at runtime
+
+### 3. API Surface Check
+- Read `compute_kernel_api.h` (lines 154-180): `tanh_tile_init<false>()` and `tanh_tile<false>(idst)` SURVIVE
+- Both call `llk_math_eltwise_unary_sfpu_tanh_init` and `llk_math_eltwise_unary_sfpu_tanh` which are DELETED
+- Template parameter `fast_and_approx` (not `APPROX`) defaults to `false`
+- `DST_ACCUM_MODE` also passed as template parameter
+
+### 4. Kernel Source Search
+- Searched for `ckernel_sfpu_tanh.h` -- NOT FOUND (deleted in deep nuke Phase 1)
+- Searched for `llk_math_eltwise_unary_sfpu_tanh.h` -- NOT FOUND (deleted)
+- Searched for `SfpuType::tanh` -- NOT FOUND (removed from enum)
+- Confirmed via `DEEP_NUKE_MANIFEST.md` line 40: `ckernel_sfpu_tanh.h` was deleted from wh+bh+quasar
+- Searched for `SFPNONLINEAR` on all hardware platforms:
+  - Quasar: EXISTS (opcode 0x99, `p_sfpnonlinear::TANH_MODE = 0x5`)
+  - Wormhole: NOT FOUND
+  - Blackhole: NOT FOUND
+
+### 5. Reference Pattern Research
+- Read `ckernel_sfpu_swish.h` (WH): Sigmoid approximation using piecewise polynomial (3 segments)
+- Read `ckernel_sfpu_sqrt.h` (WH): Software Newton-Raphson, NOT using SFPNONLINEAR
+- Read `llk_math_eltwise_unary_sfpu_swish.h`: Standard LLK dispatch pattern
+- Read `llk_math_eltwise_unary_sfpu_sinh.h`: Standard LLK dispatch pattern (same structure)
+- Read `llk_math_eltwise_unary_sfpu_params.h` (WH and BH): Shared params dispatch infrastructure
+
+### 6. Hardware Model Analysis
+- SFPNONLINEAR tanh mode (Quasar only): single-instruction, max 1 ULP error FP16_B, opcode 0x99, instr_mod1=5
+- WH/BH: must use software approximation -- likely polynomial/piecewise similar to swish's sigmoid
+- Address mode: ADDR_MOD_7 with all-zero increments (standard for non-special-case ops)
+- VectorMode::RC: 4 faces x 8 iterations = 32 sfpi iterations = 1024 elements
+
+### 7. Verification
+- Verified `tanh_tile_init()` and `tanh_tile()` exist in `compute_kernel_api.h`
+- Verified `ckernel_sfpu_tanh.h` does NOT exist on disk
+- Verified `llk_math_eltwise_unary_sfpu_tanh.h` does NOT exist on disk
+- Verified `p_sfpnonlinear::TANH_MODE = 0x5` exists on Quasar only
+- Verified SFPNONLINEAR instruction macros exist on Quasar only
+- Confirmed test infrastructure expects `tanh_tile_init(); tanh_tile(0);` as SFPU_OP_CHAIN_0
+
+## Final Status (tanh)
+- **Status**: SUCCESS (analysis complete -- documented nuked state with surviving API surface and hardware model)
+- **Output**: `.claude-analysis/softcap-2/tanh_analysis.md`
+- **Note**: The entire SFPU kernel implementation is deleted (deep nuke Phase 1, Family 1: Exponential-Composition). API header survives but references deleted LLK functions. Dispatch case also removed. On Quasar, SFPNONLINEAR provides hardware tanh; on WH/BH, software polynomial approximation required.
+- **Breadcrumbs**: 8 events logged
