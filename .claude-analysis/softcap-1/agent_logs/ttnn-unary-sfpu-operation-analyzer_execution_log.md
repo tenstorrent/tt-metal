@@ -24,3 +24,33 @@ Analyzed the SFPU kernel implementation for the `atanh` unary operation. The ker
 3. Verified all SFPU intrinsics (exexp, setexp, int32_to_float, dst_reg, vConst1, vConstFloatPrgm0/1/2) appear in the kernel source
 4. Verified all file paths cited in the abstraction layers table exist
 5. Confirmed WH and BH implementations are identical (byte-for-byte same content)
+
+---
+
+## Operation: sinh
+## Status: SUCCESS
+
+## Summary
+Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel implements `sinh(x) = (exp(x) - exp(-x)) / 2` using a custom `exp_21f` helper (Moroz et al. 2022 2^z algorithm) with a Taylor fallback `x + x³/6` for |x| < 0.5 to avoid catastrophic cancellation. Uses SFPI abstractions throughout (Style A) and is identical across Wormhole and Blackhole.
+
+## Key Findings
+- **Compute kernel**: `eltwise_sfpu.cpp` (default for SINH)
+- **SFPU_OP_CHAIN_0**: `sinh_tile_init(); sinh_tile(0);`
+- **math_approx_mode**: `false` (default switch)
+- **APPROXIMATION_MODE template**: `false`; has no branching effect inside the kernel body
+- **Kernel style**: SFPI-based (Style A)
+- **SFPU instructions**: SFPLOAD, SFPSTORE, SFPMAD, SFPIADD, SFPLOADI, SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPSETEXP, SFPSETSGN, SFPCAST, SFP_STOCH_RND, SFPSETCC, SFPENCC, SFPMOV
+- **Address mode**: ADDR_MOD_7 (dest.incr=0) for both WH and BH — same configuration
+- **Key design**: Dual-path (exp-based for |x|≥0.5, Taylor for |x|<0.5); explicit BF16 output rounding via SFP_STOCH_RND; `_float_to_int32_positive_` is an IEEE bit-reinterpret used in the Moroz exp_21f algorithm
+
+## Output
+- Analysis file: `.claude-analysis/softcap-1/sinh_analysis.md`
+
+## Verification Steps Taken
+1. Verified `calculate_sinh` function exists in both WH and BH ckernel files
+2. Verified `exp_21f` helper exists in both WH and BH ckernel files
+3. Verified all SFPI intrinsics (addexp, exexp, exman9, setexp, setsgn, int32_to_float, float_to_fp16b) used in the kernel appear in sfpi_lib.h with correct instruction mappings
+4. Verified all file paths cited in the abstraction layers table exist
+5. Confirmed WH and BH ckernel_sfpu_sinh.h implementations are byte-for-byte identical
+6. Confirmed `SfpuType::sinh` is registered in both WH and BH llk_sfpu_types.h
+7. Confirmed ADDR_MOD_7 (not ADDR_MOD_6) is the only configured slot for sinh in eltwise_unary_sfpu_configure_addrmod
