@@ -368,7 +368,7 @@ def _reassemble_2d(
                 slices = [slice(None)] * ndim
                 slices[d0_out] = slice(r * s0, (r + 1) * s0)
                 slices[d1_out] = slice(c * s1, (c + 1) * s1)
-                out[tuple(slices)] = shard.permute(*permute)
+                out[tuple(slices)] = shard.permute(*permute).contiguous()
             return out
 
         out_dtype = dtype if dtype is not None else shards[0].dtype
