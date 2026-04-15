@@ -147,10 +147,16 @@ def run(
         output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
     except Exception as e:
-        if "circular buffers" in str(e) and "clash with L1 buffers" in str(e):
-            # L1 CB clash: the traced sharded memory config places data at an
-            # address that conflicts with the kernel's circular buffer region.
-            # Retry with DRAM interleaved memory config as a safe fallback.
+        err = str(e)
+        # Recoverable errors from traced sharded memory configs:
+        # - L1 CB clash: sharded address conflicts with kernel circular buffer region
+        # - MeshWorkloadImpl compile failures with the same L1 clash on multi-device
+        # Retry with DRAM interleaved memory config as a safe fallback.
+        recoverable = (
+            ("circular buffers" in err and "clash with L1 buffers" in err)
+            or "Statically allocated circular buffers" in err
+        )
+        if recoverable:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,

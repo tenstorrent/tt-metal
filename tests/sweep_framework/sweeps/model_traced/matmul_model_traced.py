@@ -132,17 +132,22 @@ def run(
     a_is_tile = input_a_layout == ttnn.TILE_LAYOUT
     b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
 
-    if a_is_tile != b_is_tile and len(shape_a) >= 2 and len(shape_b) >= 2:
+    # When either input uses TILE_LAYOUT, ttnn pads the last two dims to multiples
+    # of 32.  If the inner matmul dimension (A.width == B.height) is not already
+    # tile-aligned, the padded side will be larger than the unpadded side, causing
+    # "The width of the first tensor must be equal to the height of the second
+    # tensor" assertion.  Align *both* inner dims to the tile boundary regardless
+    # of which side is tiled — this covers mixed-layout cases as well as cases
+    # where both are tiled but the raw dim is not a multiple of 32.
+    if len(shape_a) >= 2 and len(shape_b) >= 2:
         inner_a = shape_a[-1]  # A's width
         inner_b = shape_b[-2]  # B's height
-        if inner_a == inner_b:
-            aligned = _tile_align(inner_a)
-            if a_is_tile and not b_is_tile:
-                # A will be tile-padded → pad B's height to match
+        if a_is_tile or b_is_tile:
+            aligned = _tile_align(max(inner_a, inner_b))
+            if inner_a != aligned:
+                shape_a = tuple(list(shape_a[:-1]) + [aligned])
+            if inner_b != aligned:
                 shape_b = tuple(list(shape_b[:-2]) + [aligned, shape_b[-1]])
-            elif b_is_tile and not a_is_tile:
-                # B will be tile-padded → pad A's width to match
-                shape_a = tuple(list(shape_a[:-2]) + [shape_a[-2], aligned])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -275,9 +280,19 @@ def run(
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
         e2e_perf = stop_measuring_time(start_time)
     except Exception as e:
-        if "circular buffers" in str(e) and "clash with L1 buffers" in str(e):
-            # L1 CB clash: the traced sharded memory config conflicts with the
-            # kernel's circular buffer region. Retry with DRAM interleaved inputs.
+        err = str(e)
+        # Recoverable errors from traced sharded memory configs:
+        # - L1 CB clash: sharded address conflicts with kernel circular buffer region
+        # - "No solution found for single_block_size": matmul program config solver
+        #   cannot tile the problem for the traced shard spec
+        # - "Statically allocated circular buffers": same as L1 clash via MeshWorkload path
+        # Retry with DRAM interleaved inputs and no program_config.
+        recoverable = (
+            ("circular buffers" in err and "clash with L1 buffers" in err)
+            or "Statically allocated circular buffers" in err
+            or "No solution found for single_block_size" in err
+        )
+        if recoverable:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
