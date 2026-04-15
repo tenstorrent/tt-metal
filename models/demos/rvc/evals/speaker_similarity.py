@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 DEFAULT_BACKEND = "transformers_wavlm_xvector"
 DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
-BASE_AUDIO_DIRECTORY = "/root/tt-metal2/models/demos/rvc/data"
+BASE_DIRECTORY = "/root/tt-metal2/models/demos/rvc/data"
 
 
 class SpeakerEmbeddingBackendError(RuntimeError):
@@ -37,8 +37,6 @@ class SpeakerEmbeddingBackendError(RuntimeError):
 
 @dataclass(frozen=True)
 class SpeakerSimilarityResult:
-    source_audio_path: str
-    generated_audio_path: str
     backend: str
     model_id: str
     similarity: float
@@ -59,11 +57,10 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
 
 
 def _resolve_audio_path(audio_filename: str) -> Path:
-    base_directory = os.path.abspath(BASE_AUDIO_DIRECTORY)
-    candidate_path = os.path.abspath(os.path.join(base_directory, os.fspath(audio_filename)))
-    if os.path.commonpath([base_directory, candidate_path]) != base_directory:
-        raise ValueError(f"Audio file must be located under {base_directory}")
-    return Path(candidate_path)
+    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, audio_filename))
+    if my_path.startswith(BASE_DIRECTORY):
+        return Path(my_path)
+    raise ValueError(f"Audio file must be located under {BASE_DIRECTORY}")
 
 
 def _load_audio_16khz_mono(audio_path: Path) -> torch.Tensor:
@@ -181,8 +178,6 @@ def compute_speaker_similarity(
     )
     similarity = cosine_similarity(source_embedding, generated_embedding)
     return SpeakerSimilarityResult(
-        source_audio_path=str(_resolve_audio_path(source_audio_path)),
-        generated_audio_path=str(_resolve_audio_path(generated_audio_path)),
         backend=backend,
         model_id=model_id,
         similarity=similarity,
