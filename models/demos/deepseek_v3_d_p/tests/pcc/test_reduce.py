@@ -19,7 +19,6 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    ExpertMapping,
     create_sparse_combine_output,
     extract_mesh_config,
     get_tp_mesh_composer,
@@ -107,13 +106,13 @@ def test_ttnn_reduce(
         )
         logger.debug(f"Created gate weights: {torch_gate_weights.shape}")
 
-    # Create indices (random expert IDs per token/topk slot) and dispatch table
+    # Create indices and dispatch table for the reduce kernel.
+    # Use a dispatch table where ALL experts are valid (no -1 entries) so
+    # the kernel processes every expert slot — matching the torch reference.
+    # Non-local expert skipping correctness is tested separately in
+    # test_deepseek_moe_post_combine_reduce.py::test_skip_nonlocal_experts.
     torch_indices = torch.randint(0, num_routed_experts, (dispatch_group_size, seq_len, topk), dtype=torch.int32)
-    expert_dispatch_table = ExpertMapping.create_dispatch_table(
-        num_routed_experts=num_routed_experts,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
-    )
+    expert_dispatch_table = torch.zeros((num_dispatch_groups, num_routed_experts), dtype=torch.int32)
 
     # Compute reference output using torch
     torch_reduce = TorchReduceModule(
