@@ -41,9 +41,12 @@ _IMPL_TO_DEFINE = {
 
 _CB_ADDR_SHIFT = 4  # CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT for TRISC on Blackhole
 # Must match MEM_ZEROS_BASE from dev_mem_map.h: ((MEM_MAILBOX_END + 31) & ~31)
-# MEM_MAILBOX_END = MEM_MAILBOX_BASE(96) + MEM_MAILBOX_SIZE(12896) = 12992
-_MEM_ZEROS_BASE = 12992
-_ZEROS_ADDR_SHIFTED = _MEM_ZEROS_BASE >> _CB_ADDR_SHIFT  # 812
+# MEM_MAILBOX_END = MEM_MAILBOX_BASE(96) + MEM_MAILBOX_SIZE(12912) = 13008
+# MEM_ZEROS_BASE = (13008 + 31) & ~31 = 13024
+# THCON format: real_addr = (reg + 1) * 16  →  reg = (addr >> 4) - 1
+# Matches cb_in1_base_shifted = (cb_in1_base >> _CB_ADDR_SHIFT) - 1
+_MEM_ZEROS_BASE = 13024
+_ZEROS_ADDR_SHIFTED = (_MEM_ZEROS_BASE >> _CB_ADDR_SHIFT) - 1  # 813; real_addr = (813+1)*16 = 13024
 
 
 def pack_tile_pairs(
@@ -56,7 +59,7 @@ def pack_tile_pairs(
 
     Args:
         assignment_flat: 1D array of format indices (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
-        base_addr_shifted: THCON-shifted base address of the weight shard (buffer_address >> 4).
+        base_addr_shifted: THCON-shifted base address of the weight shard ((buffer_address >> 4) - 1).
         zero_tile_addr: Address to use for zero tiles (bfp0). Defaults to _ZEROS_ADDR_SHIFTED.
             Use 0xFFFFFF for relative-address mode (DRAM streaming).
 

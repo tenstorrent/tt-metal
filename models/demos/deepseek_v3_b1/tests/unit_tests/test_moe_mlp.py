@@ -12,6 +12,7 @@ Run:
     pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_moe.py -v -s
 """
 
+import gc
 from typing import Any, NamedTuple
 
 import pytest
@@ -2384,8 +2385,212 @@ def _load_cached_expert_subset(cache_path, device, layer_idx: int, num_experts: 
     return gate_list, up_list, down_list
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("layer_idx", [4, 7, 9, 18, 30, 31, 57])
+def test_moe_fused_bspm_real_ct(device, get_reference_model_state_dict, layer_idx):
+    """Bridge test: MoeOp + real BSPM tile assignment via TensorCache + synthetic random weights.
+
+    Sits between B.4 (test_moe_fused_bspm — synthetic CT, fixed layer 4) and B.5
+    (test_moe_layer_real_weights — real HF weights). Uses the real BSPM tile assignment
+    for layer_idx from TensorCache but packs it with deterministic random weights, so
+    DEEPSEEK_V3_HF_MODEL is not needed.
+
+    The golden is computed from the same random weights (not the compressed approximation),
+    so PCC ≥ 0.90 validates that:
+      1. The BSPM tile assignment for this layer loads and shuffles correctly via TensorCache.
+      2. The CompressedTensor stores (miss → tiles.bin) and reloads (hit) correctly.
+      3. MoeOp correctly decompresses this layer's specific tile pattern — bfp4/bfp2/zero
+         distribution, subblock sizes, CBIn1BaseAddr — without needing real HF values.
+
+    Diagnostic interpretation:
+      - Fails here + passes test_moe_fused_bspm → layer-specific tile pattern or TensorCache
+        path is the root cause, independent of real weight values.
+      - Passes here + fails test_moe_layer_real_weights → something specific to real HF
+        weight values (e.g. activations + weights interaction, not tile layout).
+
+    Required env vars:
+      BSPM_DIR      — path to bit_sculpt results root (contains deepseek-r1-0528/ subdir)
+      TT_CACHE_PATH — path to TensorCache root (populated on first run)
+    """
+    import os
+    from pathlib import Path
+
+    bspm_dir_env = os.environ.get("BSPM_DIR")
+    tt_cache_path = os.environ.get("TT_CACHE_PATH")
+    if not bspm_dir_env or not tt_cache_path:
+        pytest.skip("BSPM_DIR and TT_CACHE_PATH must be set — skipping bridge BSPM real-CT test")
+
+    from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
+
+    bspm_dir_path = Path(bspm_dir_env) / "deepseek-r1-0528"
+    cache_config = CacheConfig(
+        cache=TensorCache(Path(tt_cache_path)),
+        context=CacheContext(
+            schema_version=1,
+            hf_model_id="deepseek-ai/DeepSeek-R1-0528",
+            hf_revision="local",
+            mesh_shape=(1, 1),
+        ),
+    )
+
+    # Deterministic random weights (fixed seed) → stable TensorCache fingerprint across runs.
+    state_dict = get_reference_model_state_dict(
+        layer_idx=layer_idx,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=1,
+        random_weights=True,
+    )
+
+    logger.info(
+        "test_moe_fused_bspm_real_ct: layer={}, bspm_dir={}, cache={}",
+        layer_idx,
+        bspm_dir_path,
+        tt_cache_path,
+    )
+
+    # Load CompressedTensor via TensorCache (miss → tiles.bin write; hit → reload).
+    # Random weights + real BSPM assignment → no HF checkpoint needed.
+    result = prepare_routed_expert_weights(
+        device,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=1,
+        move_to_device=True,
+        bspm_dir=bspm_dir_path,
+        cache_config=cache_config,
+    )
+    experts = (result.routed_gate_proj, result.routed_up_proj, result.routed_down_proj)
+
+    # create_routed_expert_tensors with preloaded_experts uses the CTs for device weights
+    # and builds the float golden dicts from state_dict (same random weights) — correct PCC.
+    r = create_routed_expert_tensors(
+        device,
+        use_hardcoded_expert_index=True,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=layer_idx,
+        bspm_dir=None,
+        preloaded_experts=experts,
+    )
+
+    sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
+    mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+    s = create_shared_expert_tensors(
+        device,
+        RoutedExpert.M,
+        RoutedExpert.K,
+        mcast_grid,
+        state_dict=state_dict,
+        is_moe=True,
+        layer_idx=layer_idx,
+    )
+
+    kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
+    kvpe_dim = SDPA.KVPE_DIM
+    num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
+    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR)
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+        ),
+    )
+
+    device_grid_size = device.compute_with_storage_grid_size()
+    full_device_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+    num_full_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        full_device_grid,
+        (SDPA.OUT_INTERM_SHARD_HEIGHT, SDPA.OUT_INTERM_SHARD_WIDTH),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((SDPA.OUT_INTERM_SHARD_HEIGHT * num_full_cores, SDPA.OUT_INTERM_SHARD_WIDTH), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            sdpa_out_interm_shard_spec,
+        ),
+        tile=Tiles.TILE_8x32,
+    )
+
+    moe_semaphores = MoeOp.create_semaphores(device)
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
+        r.ttnn_residual_mcast_src,
+        r.ttnn_gate_mm_weights,
+        r.ttnn_gate_bias,
+        r.ttnn_gate_indices,
+        r.gate_output_scores_tensor,
+        r.gate_output_indices_tensor,
+        r.gate_proj_weights,
+        r.up_proj_weights,
+        r.down_proj_weights,
+        r.final_output_tensor,
+        r.ttnn_rmsnorm_gamma,
+        shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
+        shared_up_weights_overlapped=s.shared_up_weights_overlapped,
+        shared_down_weights_tensor=s.ttnn_down_weights,
+        shared_k_parallel=s.k_parallel,
+        shared_n_parallel=s.n_parallel,
+        use_hardcoded_expert_index=True,
+        sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
+        sdpa_out_interm_buffer=sdpa_out_interm_buffer,
+        num_iterations=1,
+        reconfig_moe_cbs=True,
+        semaphores=moe_semaphores,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+    )
+    ttnn.synchronize_device(device)
+
+    output_final_torch = ttnn.to_torch(ttnn_result_final)
+    output_final_valid = extract_routed_expert_output(
+        output_final_torch,
+        r.num_gate_proj_cores,
+        r.final_output_width_per_core,
+        r.per_core_down_proj_N,
+    )
+
+    torch_expected_scores, torch_expected_indices, torch_expected_final = MoeOp.golden_single_device(
+        r.torch_input,
+        shared_gate_weights=s.torch_gate_weights,
+        shared_up_weights=s.torch_up_weights,
+        shared_down_weights=s.torch_down_weights,
+        gate_proj_weights_dict=r.expert_weights_dict,
+        up_proj_weights_dict=r.up_proj_weights_dict,
+        down_proj_weights_dict=r.down_proj_weights_dict,
+        rmsnorm_gamma=r.torch_rmsnorm_gamma,
+        rmsnorm_epsilon=1e-6,
+        routing_weights_tensor=r.torch_gate_mm_weights,
+        bias_tensor=r.torch_bias,
+        eps=r.gate_eps,
+        scaling_factor=r.gate_scaling_factor,
+        use_hardcoded_expert_index=True,
+    )
+
+    assert output_final_valid.abs().sum() > 0, "Output is all zeros — kernel may not have run"
+
+    passing, pcc = comp_pcc(torch_expected_final, output_final_valid, 0.90)
+    logger.info("test_moe_fused_bspm_real_ct layer={} PCC: {} (threshold=0.90)", layer_idx, pcc)
+    assert passing, f"PCC check failed for layer {layer_idx} (got {pcc}, expected >= 0.90)"
+
+    logger.info("test_moe_fused_bspm_real_ct layer={} PASSED! (PCC={})", layer_idx, pcc)
+
+
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("layer_idx", [4, 30, 57])
+@pytest.mark.parametrize("layer_idx", [4, 7, 9, 18, 30, 31, 57])
 def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
     """MoE MLP: real BSPM-compressed weights from TensorCache vs PyTorch float32 reference.
 
@@ -2616,7 +2821,7 @@ def test_moe_layer_real_weights(device, hf_state_dict, get_reference_model_state
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("layer_idx", [4, 30, 57])
+@pytest.mark.parametrize("layer_idx", list(range(3, 61)))
 def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_model_state_dict, layer_idx):
     """MoE MLP: experts 0-7 of a single layer vs PyTorch float32 reference.
 
@@ -2689,6 +2894,15 @@ def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_mod
         bspm_dir=bspm_dir_path,
         cache_config=cache_config,
     )
+
+    # Clear program cache once before the sweep so all 8 experts compile fresh
+    # with the current L1 layout.  Re-enable is deferred to after the loop so
+    # the cache stays ENABLED throughout (some layer/expert combos require the
+    # "enabled compilation path" for correct output, but we must not carry stale
+    # on-disk binaries into the loop — those can embed wrong compile-time args
+    # such as CBIn1BaseAddr / meta_l1_addr from a previous session's L1 layout).
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
 
     all_passing = True
     for e in range(num_experts_to_test):
@@ -2774,7 +2988,15 @@ def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_mod
             tile=Tiles.TILE_8x32,
         )
 
+        # Create fresh semaphores each iteration so their L1 addresses stay consistent with
+        # the rest of the inside-loop allocation order. GlobalSemaphore::setup_buffer already
+        # does a blocking write of the initial_value, so the reset below is redundant but kept
+        # as an explicit guard against any residual kernel writes to those L1 slots.
         moe_semaphores = MoeOp.create_semaphores(device)
+        # Reset all semaphores to 0 (blocking write) so each expert starts from a clean
+        # synchronization state, regardless of what the previous expert's kernel left behind.
+        for sem in moe_semaphores:
+            ttnn.reset_global_semaphore_value(sem, 0)
         ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
             r.ttnn_residual_mcast_src,
             r.ttnn_gate_mm_weights,
@@ -2871,6 +3093,19 @@ def test_moe_layer_real_weights_8expert(device, hf_state_dict, get_reference_mod
         # Drop scaffolding tensors; expert CompressedTensors (gate_ct/up_ct/down_ct) are
         # owned by all_experts and stay in DRAM for the duration of the test.
         del r, s
+        # Force Python GC to immediately free any L1 tensors kept alive inside MoeOp.op()
+        # (meta/fmt tensors stored in routed_ctx params). Without this, CPython might defer
+        # freeing if there are any reference cycles introduced by exception tracebacks or
+        # other indirect references, leaving stale L1 data visible to the next expert.
+        gc.collect()
+
+    # Explicitly free the last iteration's semaphores. Python loop variables remain in
+    # function scope after the loop ends, so moe_semaphores holds the last expert's L1
+    # semaphore slots alive until the test returns. Freeing here ensures those L1 addresses
+    # are returned to the allocator before the next layer test starts, preventing the
+    # shifted allocation order from corrupting subsequent tests that share the same device.
+    del moe_semaphores
+    gc.collect()
 
     assert all_passing, f"One or more experts failed PCC check (layer={layer_idx})"
     logger.info("test_moe_layer_real_weights_8expert PASSED (layer={})", layer_idx)

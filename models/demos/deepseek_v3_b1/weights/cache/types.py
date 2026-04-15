@@ -113,7 +113,7 @@ class CompressedTensorTarget:
     num_banks: int = 0  # DRAM bank count (device.dram_grid_size().x)
     bspm_variant: str = "B"  # allocation variant letter
     bspm_budget: float = 3.5  # bits-per-element budget
-    transform_version: int = 1  # bumped: removed cross-expert max_shard_bytes enforcement
+    transform_version: int = 3  # bumped: invalidate entries written with correct version but buggy reshape code
 
 
 @dataclass

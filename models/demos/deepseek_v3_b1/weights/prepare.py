@@ -1032,7 +1032,8 @@ def prepare_moe_routed_experts_bspm(
         tiles_h = K // tile_w
         tiles_w_count = N_padded // tile_w
         all_assignments = [
-            bspm_data["codes"][e, proj_idx].reshape(tiles_h, tiles_w_count) for e in range(num_routed_experts)
+            np.ascontiguousarray(bspm_data["codes"][e, proj_idx].reshape(tiles_w_count, tiles_h).T)
+            for e in range(num_routed_experts)
         ]
 
         tgt = CompressedTensorTarget(
