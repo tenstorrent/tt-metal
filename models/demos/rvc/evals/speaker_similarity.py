@@ -25,6 +25,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from models.demos.rvc.evals.wer import _load_audio_16khz_mono
+
 DEFAULT_BACKEND = "transformers_wavlm_xvector"
 DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
 
@@ -54,29 +56,6 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
     if denom == 0:
         raise ValueError("Speaker embeddings must have non-zero norm.")
     return float(np.dot(reference, candidate) / denom)
-
-
-def _load_audio_16khz_mono(audio_path: str | Path) -> torch.Tensor:
-    if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
-        raise SpeakerEmbeddingBackendError(
-            "Audio loading for speaker similarity requires optional dependencies. "
-            "Install them with: pip install librosa soundfile"
-        )
-
-    import librosa
-    import soundfile as sf
-
-    path = Path(audio_path).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Audio file does not exist: {path}")
-
-    audio, sample_rate = sf.read(path)
-    if audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
-    audio = np.asarray(audio, dtype=np.float32)
-    if sample_rate != 16000:
-        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-    return torch.from_numpy(audio).unsqueeze(0)
 
 
 def _load_speechbrain_encoder(model_id: str, device: str):
@@ -121,7 +100,7 @@ def compute_speaker_embedding(
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> np.ndarray:
-    waveform = _load_audio_16khz_mono(audio_path)
+    waveform = torch.from_numpy(_load_audio_16khz_mono(audio_path)).unsqueeze(0)
 
     if backend == "speechbrain_ecapa":
         classifier = _load_speechbrain_encoder(model_id=model_id, device=device)
