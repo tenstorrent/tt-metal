@@ -9,18 +9,15 @@
 
 /**
  * @file matmul_helpers_compute.hpp
- * @brief Runtime-config matmul compute helpers for SDPA
+ * @brief Unified matmul compute helper with absolute-offset packing
  *
- * Provides DST+CB-managed matmul helpers using runtime MatmulConfig for
- * patterns that don't fit the compile-time template params of
- * matmul_block_helpers.hpp. All helpers in this file serve SDPA compute
- * kernels (compute_common.hpp, compute_streaming.hpp).
+ * Single entry point for both standard matmul and SDPA. Uses absolute-offset
+ * packing (pack_tile<true>) so subblock dims can be chosen purely for compute
+ * efficiency, independent of output layout. Output tiles land in row-major
+ * order in the CB.
  *
- * ## MatmulMode
- *
- * Template parameter controlling the underlying LLK function:
- * - TILE: calls matmul_tiles (per-tile, 5 args)
- * - BLOCK: calls matmul_block (per-block, 9 args)
+ * Standard matmul: num_k_blocks > 1, K-blocking with spill/reload
+ * SDPA: num_k_blocks = 1, single-pass, all K tiles available upfront
  */
 
 namespace compute_kernel_lib {
@@ -35,7 +32,7 @@ inline constexpr MatmulMode TILE = MatmulMode::TILE;
 inline constexpr MatmulMode BLOCK = MatmulMode::BLOCK;
 
 // =============================================================================
-// MatmulConfig — runtime configuration for matmul operations
+// MatmulConfig — runtime configuration
 // =============================================================================
 
 struct MatmulConfig {
@@ -45,14 +42,10 @@ struct MatmulConfig {
 
     uint32_t ct_dim = 1;  // subblock_w
     uint32_t rt_dim = 1;  // subblock_h
-    uint32_t kt_dim = 1;  // in0_block_w
+    uint32_t kt_dim = 1;  // in0_block_w (K tiles per block)
 
     bool transpose = false;
-    uint32_t partials_cb_id = 0;
-
-    static constexpr MatmulConfig tile(uint32_t in0, uint32_t in1, uint32_t out, bool trans = false) {
-        return {in0, in1, out, 1, 1, 1, trans, 0};
-    }
+    uint32_t partials_cb_id = 0;  // intermediate CB for spill/reload
 
     static constexpr MatmulConfig block(
         uint32_t in0,
@@ -71,20 +64,13 @@ struct MatmulConfig {
 // Functor defaults
 // =============================================================================
 
-struct NoPostPack {
-    ALWI void operator()() const {}
-};
-
 struct NoPostCompute {
-    ALWI void operator()(uint32_t /* num_tiles */) const {}
+    ALWI void operator()(uint32_t) const {}
 };
 
-// =============================================================================
-// Initialization
-// =============================================================================
-
-template <MatmulMode mode>
-ALWI void matmul_init_short(const MatmulConfig& cfg);
+struct NoPreKBlock {
+    ALWI void operator()(uint32_t, uint32_t, bool) const {}
+};
 
 // =============================================================================
 // detail:: — Internal building blocks (no DST management)
@@ -106,93 +92,62 @@ ALWI void matmul_accumulate(
     uint32_t in1_stride,
     uint32_t dst_stride);
 
-#ifdef ARCH_BLACKHOLE
-template <MatmulMode mode>
-ALWI void matmul_accumulate_no_mop(
-    const MatmulConfig& cfg,
-    uint32_t in0_start,
-    uint32_t in1_start,
-    uint32_t dst_start,
-    uint32_t count,
-    uint32_t in0_stride,
-    uint32_t in1_stride,
-    uint32_t dst_stride);
-#endif
-
 }  // namespace detail
 
 // =============================================================================
-// SDPA Helpers
+// Initialization
 // =============================================================================
-//
-// Each helper fully manages the DST lifecycle (acquire/commit/wait/release)
-// and the relevant CB operations (wait/reserve/pack/push/pop) so that SDPA
-// kernel code never touches DST or CB primitives directly for matmul.
+
+template <MatmulMode mode>
+ALWI void matmul_init_short(const MatmulConfig& cfg);
+
+// =============================================================================
+// Unified matmul helper
+// =============================================================================
 
 /**
- * @brief Single-tile matmul with fused PostComputeFn, used by SDPA normalize_row.
+ * @brief Blocked matmul with K-blocking and absolute-offset packing.
  *
- * Full lifecycle: init_short + reconfig + wait(in0,1) + wait(in1,1) +
- * reserve(out_cb,1) → acquire → matmul → post_compute(1) → commit →
- * wait → pack(0, out_cb) → release → push(out_cb,1) → pop(in0,1)
+ * Handles both standard matmul (num_k_blocks > 1) and SDPA (num_k_blocks = 1).
+ * Output tiles are packed at row-major positions via pack_tile<true>.
  *
- * Caller must: ensure in1 tiles are produced (helper waits but does NOT pop in1).
- * The helper pops 1 tile from in0 after packing.
+ * K-blocking (num_k_blocks > 1):
+ *   - Non-last K-blocks: spill partial results to partials_cb (sequential pack)
+ *   - Last K-block: pack output at absolute offsets to out_cb (or partials_cb
+ *     if pack_last_to_interm), push per M-subblock row-group
+ *
+ * Single-pass (num_k_blocks = 1):
+ *   - No spill/reload
+ *   - Pack output at absolute offsets, push per row-group
+ *
+ * PREREQUISITE: Caller must call mm_block_init() and reconfig_data_format()
+ * before invoking this helper.
+ *
+ * @tparam packer_l1_acc      Enable packer L1 accumulation (avoids spill/reload)
+ * @tparam pack_last_to_interm Pack last K-block to partials_cb instead of out_cb
+ * @tparam pack_relu           Enable PACK_RELU on last K-block (when !pack_last_to_interm)
  */
-template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
-ALWI void matmul_single_and_pack(
-    const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t out_cb, PostComputeFn post_compute = {});
+template <
+    MatmulMode mode,
+    bool packer_l1_acc = false,
+    bool pack_last_to_interm = false,
+    bool pack_relu = false,
+    typename PostComputeFn = NoPostCompute,
+    typename PreKBlockFn = NoPreKBlock>
+ALWI void matmul_blocks_absolute(
+    const MatmulConfig& cfg,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t num_k_blocks,
+    PostComputeFn post_compute = {},
+    PreKBlockFn pre_k_block = {});
 
 /**
  * @brief Inplace reduce via matmul, used by SDPA matmul_reduce.
- *
- * Full lifecycle: init_short + reconfig + wait(in1,1) + wait(out_cb, total) +
- * per-subblock (acquire → matmul(0,0,0) → commit → pop(out,n) →
- *               wait → pack(n) → release → push(n))
- *
- * Caller must: ensure in1 (identity) tiles are produced, ensure out_cb has total_in0_tiles.
- * The helper waits on both, pops/pushes out_cb per subblock, does NOT pop in1.
  */
 template <MatmulMode mode>
 ALWI void matmul_reduce_subblock_inplace(
     const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles, uint32_t total_in0_tiles);
-
-/**
- * @brief Subblock matmul with absolute-offset packing, used by SDPA streaming QK*V.
- *
- * Sequence: acquire → accumulate(inner_dim) → commit → wait →
- *           pack_tile<true> at row-major offsets → post_pack() → release
- *
- * On Blackhole, uses matmul_block_no_mop automatically.
- * Caller must: reserve output CB upfront, push after all subblocks, wait on inputs.
- */
-template <MatmulMode mode, bool blocked_pack = false, typename PostPackFn = NoPostPack>
-ALWI void matmul_and_pack_absolute(
-    const MatmulConfig& cfg,
-    uint32_t in0_start,
-    uint32_t in1_start,
-    uint32_t inner_dim,
-    uint32_t in1_stride,
-    uint32_t out_num_cols,
-    uint32_t row_offset,
-    uint32_t col_offset,
-    PostPackFn post_pack = {});
-
-/**
- * @brief Full blocked matmul with absolute-offset packing, used by SDPA Q*K and QK*V.
- *
- * Manages: init_short, reconfig, DST lifecycle, CB lifecycle, double subblock loop.
- * Caller must: produce in0/in1 tiles, pop in0 after return.
- */
-template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
-ALWI void matmul_blocks_absolute(
-    const MatmulConfig& cfg,
-    uint32_t M,
-    uint32_t N,
-    uint32_t K,
-    uint32_t in0_num_subblocks,
-    uint32_t in1_num_subblocks,
-    PostComputeFn post_compute = {});
 
 }  // namespace compute_kernel_lib
 

@@ -75,7 +75,7 @@ constexpr uint32_t INVALID_CB = 32;
 
 /**
  * Blocked subblock matmul with absolute offset packing.
- * Uses matmul_and_pack_absolute helper for DST-managed subblock matmul.
+ * Always uses pack_tile<true> at row-major positions in out_cb.
  */
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, bool blocked_pack = false>
 SDPA_NOINLINE void blocked_matmul_and_pack(
@@ -91,28 +91,46 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t inner_dim,
     uint32_t matmul_stride,
     bool trigger_reduce = false) {
-    auto cfg = compute_kernel_lib::MatmulConfig::block(
-        in0_cb, in1_cb, out_cb, subblock_w, subblock_h, matmul_stride, transpose);
-    uint32_t row_offset = row_subblock_idx * subblock_h;
-
-    if (trigger_reduce) {
-        struct TriggerReducePostPack {
-            ALWI void operator()() const { PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU))); }
-        };
-        compute_kernel_lib::matmul_and_pack_absolute<compute_kernel_lib::BLOCK, blocked_pack>(
-            cfg,
-            in0_index_start,
-            in1_index_start,
-            inner_dim,
-            in1_stride,
-            out_num_cols,
-            row_offset,
-            out_col_offset,
-            TriggerReducePostPack{});
-    } else {
-        compute_kernel_lib::matmul_and_pack_absolute<compute_kernel_lib::BLOCK, blocked_pack>(
-            cfg, in0_index_start, in1_index_start, inner_dim, in1_stride, out_num_cols, row_offset, out_col_offset);
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    uint32_t in0_index = in0_index_start;
+    uint32_t in1_index = in1_index_start;
+    for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+#ifdef ARCH_BLACKHOLE
+        matmul_block_no_mop(
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
+#else
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
+#endif
+        in0_index++;
+        in1_index += in1_stride;
     }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    uint32_t dst_idx = 0;
+#ifdef ARCH_BLACKHOLE
+    if constexpr (blocked_pack) {
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
+            pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
+            dst_idx += subblock_w;
+        }
+    } else
+#endif
+    {
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
+            for (uint32_t c = 0; c < subblock_w; c++) {
+                pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                dst_idx++;
+            }
+        }
+    }
+    if (trigger_reduce) {
+        PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+    }
+    tile_regs_release();
 }
 
 /**
@@ -469,8 +487,20 @@ void normalize_row_streaming(
     uint32_t scratch_cb,
     uint32_t normalized_out_cb,
     uint32_t sbh) {
-    struct RecipPostCompute {
-        ALWI void operator()(uint32_t) const {
+    for (uint32_t s = 0; s < sbh; s++) {
+        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
+        {
+            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+            constexpr uint32_t N = 1;
+            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            reconfig_data_format(col_identity_cb, cur_sum_cb);
+
+            cb_wait_front(col_identity_cb, N);
+            cb_wait_front(cur_sum_cb, 1);
+
+            cb_reserve_back(scratch_cb, 1);
+            tile_regs_acquire();
+            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0, (int)VectorMode::C)));
@@ -478,17 +508,14 @@ void normalize_row_streaming(
             recip_tile_init();
             MATH((recip_tile_first_column(0)));
 #endif
-        }
-    };
+            tile_regs_commit();
 
-    for (uint32_t s = 0; s < sbh; s++) {
-        // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
-        {
-            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
-            constexpr uint32_t N = 1;
-            auto cfg = compute_kernel_lib::MatmulConfig::block(cur_sum_cb, col_identity_cb, scratch_cb, N, 1, N);
-            compute_kernel_lib::matmul_single_and_pack<compute_kernel_lib::BLOCK>(
-                cfg, 0, 0, scratch_cb, RecipPostCompute{});
+            tile_regs_wait();
+            pack_tile(0, scratch_cb);
+            tile_regs_release();
+            cb_push_back(scratch_cb, 1);
+
+            cb_pop_front(cur_sum_cb, 1);
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)

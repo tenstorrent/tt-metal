@@ -1207,6 +1207,10 @@ ALWI void matmul_blocks(
     auto cfg =
         compute_kernel_lib::MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, in0_block_w, transpose);
 
+    // Init + reconfig for this matmul phase (caller transitions from prior op)
+    compute_kernel_lib::matmul_init_short<compute_kernel_lib::BLOCK>(cfg);
+    reconfig_data_format(in1_cb, in0_cb);
+
     if (add_mask) {
         struct CausalMaskPostCompute {
             uint32_t mask_cb_id;
@@ -1221,10 +1225,10 @@ ALWI void matmul_blocks(
             }
         };
         compute_kernel_lib::matmul_blocks_absolute<compute_kernel_lib::BLOCK>(
-            cfg, M, N, K, in0_num_subblocks, in1_num_subblocks, CausalMaskPostCompute{mask_cb, zero_cb});
+            cfg, in0_num_subblocks, in1_num_subblocks, 1, CausalMaskPostCompute{mask_cb, zero_cb});
     } else {
         compute_kernel_lib::matmul_blocks_absolute<compute_kernel_lib::BLOCK>(
-            cfg, M, N, K, in0_num_subblocks, in1_num_subblocks);
+            cfg, in0_num_subblocks, in1_num_subblocks, 1);
     }
 }
 

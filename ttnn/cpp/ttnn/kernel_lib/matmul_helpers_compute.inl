@@ -8,10 +8,8 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-
-#ifdef ARCH_BLACKHOLE
-#include "api/compute/experimental/matmul_custom.h"
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
 
@@ -44,22 +42,6 @@ ALWI void matmul_accumulate(
     }
 }
 
-#ifdef ARCH_BLACKHOLE
-template <MatmulMode mode>
-ALWI void matmul_accumulate_no_mop(
-    const MatmulConfig& cfg,
-    uint32_t in0_start, uint32_t in1_start, uint32_t dst_start,
-    uint32_t count, uint32_t in0_stride, uint32_t in1_stride, uint32_t dst_stride) {
-    static_assert(mode == MatmulMode::BLOCK, "matmul_accumulate_no_mop is only supported in BLOCK mode");
-    for (uint32_t k = 0; k < count; ++k) {
-        ckernel::matmul_block_no_mop(
-            cfg.in0_cb_id, cfg.in1_cb_id,
-            in0_start + k * in0_stride, in1_start + k * in1_stride, dst_start + k * dst_stride,
-            cfg.transpose, cfg.ct_dim, cfg.rt_dim, cfg.kt_dim);
-    }
-}
-#endif
-
 }  // namespace detail
 
 // =============================================================================
@@ -77,36 +59,195 @@ ALWI void matmul_init_short(const MatmulConfig& cfg) {
 }
 
 // =============================================================================
-// DST-managed helpers
+// Unified matmul helper
 // =============================================================================
 
-template <MatmulMode mode, typename PostComputeFn>
-ALWI void matmul_single_and_pack(
-    const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx,
-    uint32_t out_cb, PostComputeFn post_compute) {
-    // Full lifecycle: init + reconfig + input CB wait + DST + output CB + input CB pop
-    matmul_init_short<mode>(cfg);
-    reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
-    cb_wait_front(cfg.in0_cb_id, 1);
-    cb_wait_front(cfg.in1_cb_id, 1);
+template <
+    MatmulMode mode,
+    bool packer_l1_acc,
+    bool pack_last_to_interm,
+    bool pack_relu,
+    typename PostComputeFn,
+    typename PreKBlockFn>
+ALWI void matmul_blocks_absolute(
+    const MatmulConfig& cfg,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t num_k_blocks,
+    PostComputeFn post_compute,
+    PreKBlockFn pre_k_block) {
 
-    cb_reserve_back(out_cb, 1);
-    tile_regs_acquire();
-    detail::matmul_single<mode>(cfg, in0_idx, in1_idx, 0);
-    post_compute(1);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, out_cb);
-    tile_regs_release();
-    cb_push_back(out_cb, 1);
+    const uint32_t out_subblock_h = cfg.rt_dim;
+    const uint32_t out_subblock_w = cfg.ct_dim;
+    const uint32_t block_w = cfg.kt_dim;
 
-    cb_pop_front(cfg.in0_cb_id, 1);
+    const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
+    const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;
+    const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * in0_num_subblocks;
+    const uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    const uint32_t in1_block_num_tiles = out_subblock_w * block_w * in1_num_subblocks;
+    const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
+    const uint32_t row_group_tiles = out_subblock_h * in1_per_core_w;
+
+    PACK(DPRINT << "mba: sbh=" << out_subblock_h << " sbw=" << out_subblock_w
+         << " bw=" << block_w << " m=" << in0_num_subblocks << " n=" << in1_num_subblocks
+         << " k=" << num_k_blocks << " rg=" << row_group_tiles
+         << " l1=" << (uint32_t)packer_l1_acc << ENDL());
+
+    // Pack target: last K-block goes to partials (for bias) or out
+    const uint32_t pack_target = pack_last_to_interm ? cfg.partials_cb_id : cfg.out_cb_id;
+
+    ASSERT(out_num_tiles <= DEST_AUTO_LIMIT);
+
+    bool enable_reload = false;
+
+    for (uint32_t block = 0; block < num_k_blocks; block++) {
+        bool last_out = block == (num_k_blocks - 1);
+
+        // PACK_RELU: enable on last block when packing directly to output
+        if constexpr (pack_relu && !pack_last_to_interm) {
+            if (last_out) {
+                PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+            }
+        }
+
+        pre_k_block(block, num_k_blocks, last_out);
+
+        // Wait for in1 block (full block per K-iteration)
+        cb_wait_front(cfg.in1_cb_id, in1_block_num_tiles);
+
+        // Progressive in0 wait
+        uint32_t in0_wait_tiles = in0_subblock_num_tiles;
+
+        int in0_index_subblock_offset = 0;
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+            cb_wait_front(cfg.in0_cb_id, in0_wait_tiles);
+            in0_wait_tiles += in0_subblock_num_tiles;
+
+            // Reserve per-row-group for absolute-offset packing on last K-block.
+            // Smaller than full-block reserve — doesn't starve shared partials_cb.
+            if (last_out) {
+                cb_reserve_back(pack_target, row_group_tiles);
+            }
+
+            int in1_index_subblock_offset = 0;
+            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                tile_regs_acquire();
+
+                if (enable_reload) {
+                    copy_tile_to_dst_init_short_with_dt(cfg.in1_cb_id, cfg.partials_cb_id);
+                    cb_wait_front(cfg.partials_cb_id, out_num_tiles);
+                    copy_block_matmul_partials(cfg.partials_cb_id, 0, 0, out_num_tiles);
+                    cb_pop_front(cfg.partials_cb_id, out_num_tiles);
+                    ckernel::mm_block_init_short_with_dt(
+                        cfg.in0_cb_id, cfg.in1_cb_id, cfg.partials_cb_id,
+                        cfg.transpose, out_subblock_w, out_subblock_h, block_w);
+                }
+
+                // Compute output sub-block
+                uint32_t dst_index = 0;
+                uint32_t in0_index = in0_index_subblock_offset;
+                uint32_t in1_index = in1_index_subblock_offset;
+                for (uint32_t inner_dim = 0; inner_dim < block_w; inner_dim++) {
+                    ckernel::matmul_block(
+                        cfg.in0_cb_id, cfg.in1_cb_id,
+                        in0_index, in1_index, dst_index,
+                        cfg.transpose, out_subblock_w, out_subblock_h, block_w);
+                    in0_index++;
+                    in1_index += in1_per_core_w;
+                }
+
+                if (last_out) {
+                    post_compute(out_num_tiles);
+
+                    tile_regs_commit();
+                    tile_regs_wait();
+
+                    if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                        PACK((pack_reconfig_data_format(pack_target)));
+                    }
+
+                    if constexpr (packer_l1_acc) {
+                        if constexpr (pack_last_to_interm) {
+                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                        } else {
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                        }
+                    }
+
+                    // Absolute-offset pack: row-major positions within row-group
+                    uint32_t dst_idx = 0;
+                    uint32_t col_base = in1_subblock * out_subblock_w;
+                    for (uint32_t r = 0; r < out_subblock_h; r++) {
+                        uint32_t row_pos = r * in1_per_core_w;
+                        for (uint32_t c = 0; c < out_subblock_w; c++) {
+                            pack_tile<true>(dst_idx, pack_target, row_pos + col_base + c);
+                            dst_idx++;
+                        }
+                    }
+                    tile_regs_release();
+
+                } else {
+                    // Spill to intermediate (sequential pack)
+                    tile_regs_commit();
+                    cb_reserve_back(cfg.partials_cb_id, out_num_tiles);
+                    tile_regs_wait();
+
+                    if constexpr (packer_l1_acc) {
+                        PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+                    }
+
+                    pack_tile_block(0, cfg.partials_cb_id, out_num_tiles);
+                    tile_regs_release();
+                    cb_push_back(cfg.partials_cb_id, out_num_tiles);
+                }
+
+                in1_index_subblock_offset += out_subblock_w;
+            }
+
+            // Push one row-group after all N-subblocks
+            if (last_out) {
+                cb_push_back(pack_target, row_group_tiles);
+            }
+
+            in0_index_subblock_offset += in0_subblock_num_tiles;
+        }
+
+        // Post-K-block: manage reload state
+        if constexpr (packer_l1_acc) {
+            if constexpr (pack_last_to_interm) {
+                if (block < num_k_blocks - 1) {
+                    cb_wait_front(cfg.partials_cb_id, out_block_num_tiles);
+                    cb_pop_front(cfg.partials_cb_id, out_block_num_tiles);
+                }
+                enable_reload = false;
+            } else {
+                if (num_k_blocks >= 2 && block < num_k_blocks - 2) {
+                    cb_wait_front(cfg.partials_cb_id, out_block_num_tiles);
+                    cb_pop_front(cfg.partials_cb_id, out_block_num_tiles);
+                }
+                if (block == num_k_blocks - 2) {
+                    enable_reload = true;
+                }
+            }
+        } else {
+            if (num_k_blocks > 1) {
+                enable_reload = true;
+            }
+        }
+
+        cb_pop_front(cfg.in0_cb_id, in0_block_num_tiles);
+        cb_pop_front(cfg.in1_cb_id, in1_block_num_tiles);
+    }
 }
+
+// =============================================================================
+// Reduce helper
+// =============================================================================
 
 template <MatmulMode mode>
 ALWI void matmul_reduce_subblock_inplace(
     const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles, uint32_t total_in0_tiles) {
-    // Full lifecycle: init + reconfig + input CB waits + per-subblock DST + output CB
     matmul_init_short<mode>(cfg);
     reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
     cb_wait_front(cfg.in1_cb_id, 1);
@@ -124,110 +265,6 @@ ALWI void matmul_reduce_subblock_inplace(
         tile_regs_release();
         cb_push_back(cfg.out_cb_id, subblock_tiles);
     }
-}
-
-// =============================================================================
-// SDPA Helpers: Absolute-offset packing patterns
-// =============================================================================
-
-template <MatmulMode mode, bool blocked_pack, typename PostPackFn>
-ALWI void matmul_and_pack_absolute(
-    const MatmulConfig& cfg,
-    uint32_t in0_start, uint32_t in1_start,
-    uint32_t inner_dim, uint32_t in1_stride,
-    uint32_t out_num_cols, uint32_t row_offset, uint32_t col_offset,
-    PostPackFn post_pack) {
-
-    const uint32_t subblock_h = cfg.rt_dim;
-    const uint32_t subblock_w = cfg.ct_dim;
-
-    tile_regs_acquire();
-#ifdef ARCH_BLACKHOLE
-    detail::matmul_accumulate_no_mop<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
-#else
-    detail::matmul_accumulate<mode>(cfg, in0_start, in1_start, 0, inner_dim, 1, in1_stride, 0);
-#endif
-    tile_regs_commit();
-
-    tile_regs_wait();
-    uint32_t dst_idx = 0;
-#ifdef ARCH_BLACKHOLE
-    if constexpr (blocked_pack) {
-        for (uint32_t r = 0; r < subblock_h; r++) {
-            uint32_t out_row_offset = (r + row_offset) * out_num_cols;
-            pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + col_offset);
-            dst_idx += subblock_w;
-        }
-    } else
-#endif
-    {
-        for (uint32_t r = 0; r < subblock_h; r++) {
-            uint32_t out_row_offset = (r + row_offset) * out_num_cols;
-            for (uint32_t c = 0; c < subblock_w; c++) {
-                pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + col_offset + c);
-                dst_idx++;
-            }
-        }
-    }
-    post_pack();
-    tile_regs_release();
-}
-
-template <MatmulMode mode, typename PostComputeFn>
-ALWI void matmul_blocks_absolute(
-    const MatmulConfig& cfg,
-    uint32_t M, uint32_t N, uint32_t K,
-    uint32_t in0_num_subblocks, uint32_t in1_num_subblocks,
-    PostComputeFn post_compute) {
-
-    const uint32_t subblock_h = cfg.rt_dim;
-    const uint32_t subblock_w = cfg.ct_dim;
-
-    matmul_init_short<mode>(cfg);
-
-    const uint32_t output_num_tiles = M * N;
-    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
-    const uint32_t in0_subblock_num_tiles = subblock_h * cfg.kt_dim;
-
-    reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
-    cb_wait_front(cfg.in1_cb_id, K * N);
-    cb_reserve_back(cfg.out_cb_id, output_num_tiles);
-
-    uint32_t in0_index_offset = 0;
-    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_wait_front(cfg.in0_cb_id, in0_wait_tiles);
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-            detail::matmul_accumulate<mode>(cfg, in0_index_offset, in1_index_offset, 0, cfg.kt_dim, 1, N, 0);
-
-            post_compute(out_subblock_num_tiles);
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            uint32_t dst_idx = 0;
-            uint32_t out_col_offset = in1_subblock * subblock_w;
-            for (uint32_t r = 0; r < subblock_h; r++) {
-                uint32_t out_row_offset = r * N;
-                for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, cfg.out_cb_id, out_row_offset + out_col_offset + c);
-                    dst_idx++;
-                }
-            }
-            tile_regs_release();
-
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += in0_subblock_num_tiles;
-        in0_wait_tiles += in0_subblock_num_tiles;
-        cb_push_back(cfg.out_cb_id, in0_subblock_all_cols_num_tiles);
-    }
-
-    cb_pop_front(cfg.in1_cb_id, K * N);
 }
 
 }  // namespace compute_kernel_lib

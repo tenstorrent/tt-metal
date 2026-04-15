@@ -141,6 +141,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .compile_args = compute_kernel_args,
+            .defines = {{"ROW_MAJOR_OUTPUT", "1"}},
             .named_compile_args = {
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in1", tt::CBIndex::c_1},

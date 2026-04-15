@@ -32,7 +32,11 @@
 #include "api/compute/transpose_wh.h"
 #include "internal/mod_div_lib.h"
 
+#ifdef ROW_MAJOR_OUTPUT
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+#else
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#endif
 
 #ifdef FUSE_BIAS
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
@@ -395,7 +399,6 @@ void kernel_main() {
 #endif
 
     // ── Callback type aliases ───────────────────────────────────────────
-    // PreKBlockFn: transpose before each K-block, or no-op.
     using XposeFn = TransposePreKBlock<
         in0_block_num_tiles,
         in0_transpose_cb_id,
@@ -406,7 +409,14 @@ void kernel_main() {
         out_subblock_h,
         in0_block_w,
         mm_partials_cb_id>;
-    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, matmul_block_config::NoPreKBlock>;
+#ifdef ROW_MAJOR_OUTPUT
+    using NoPreFn = compute_kernel_lib::NoPreKBlock;
+    using NoPostFn = compute_kernel_lib::NoPostCompute;
+#else
+    using NoPreFn = compute_kernel_lib::matmul_block_config::NoPreKBlock;
+    using NoPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
+#endif
+    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreFn>;
 
     // ── Init ────────────────────────────────────────────────────────────
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -464,43 +474,51 @@ void kernel_main() {
                     num_blocks_inner_dim,
                     spill>();
 #else
-#ifdef FUSE_BIAS
-                matmul_block<
-                    in0_cb_id,
-                    in1_cb_id,
-                    out_cb_id,
-                    mm_partials_cb_id,
-                    in1_transpose_tile,
-                    l1_acc,
-                    /*pack_last_to_interm=*/true,
-                    /*pack_relu=*/false,
-                    matmul_block_config::NoPostCompute,
-                    PreFn>(
-                    in0_block_w,
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    num_blocks_inner_dim,
-                    out_subblock_h,
-                    out_subblock_w,
-                    1,
-                    {},
-                    PreFn{});
-#else
                 {
-                    // PostComputeFn: SFPU activation on last K-block (no-bias path only).
-#ifdef SFPU_OP_INIT_ACTIVATION
-                    using PostFn = SFPUPostCompute;
+                    constexpr bool pack_to_interm =
+#ifdef FUSE_BIAS
+                        true;
 #else
-                    using PostFn = matmul_block_config::NoPostCompute;
+                        untilize_out;
 #endif
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    using PostFn = std::conditional_t<pack_to_interm, NoPostFn, SFPUPostCompute>;
+#else
+                    using PostFn = NoPostFn;
+#endif
+
+#ifdef ROW_MAJOR_OUTPUT
+                    // Unified helper: absolute-offset packing, row-major output per row-group.
+                    // Requires writers that read row-major tile order.
+                    auto cfg = compute_kernel_lib::MatmulConfig::block(
+                        in0_cb_id,
+                        in1_cb_id,
+                        out_cb_id,
+                        out_subblock_w,
+                        out_subblock_h,
+                        in0_block_w,
+                        in1_transpose_tile,
+                        mm_partials_cb_id);
+
+                    compute_kernel_lib::matmul_blocks_absolute<
+                        compute_kernel_lib::BLOCK,
+                        l1_acc,
+                        pack_to_interm,
+                        do_relu,
+                        PostFn,
+                        PreFn>(cfg, in0_num_subblocks, in1_num_subblocks, num_blocks_inner_dim, PostFn{}, PreFn{});
+#else
+                    // Legacy path: sequential packing, subblock-order output.
+                    // Used by multicast writers that haven't adopted row-major yet.
                     matmul_block<
                         in0_cb_id,
                         in1_cb_id,
-                        mm_out_cb_id,
+                        pack_to_interm ? mm_partials_cb_id : mm_out_cb_id,
                         mm_partials_cb_id,
                         in1_transpose_tile,
                         l1_acc,
-                        /*pack_last_to_interm=*/false,
+                        pack_to_interm,
                         do_relu,
                         PostFn,
                         PreFn>(
@@ -513,8 +531,8 @@ void kernel_main() {
                         1,
                         PostFn{},
                         PreFn{});
-                }
 #endif
+                }
 #endif  // SKIP_COMPUTE
 
                 // ── Phase 2: Bias addition ──────────────────────────────
