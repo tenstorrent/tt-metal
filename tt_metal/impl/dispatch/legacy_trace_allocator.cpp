@@ -38,6 +38,7 @@ void LegacyTraceAllocator::allocate_trace_programs_on_subdevice(
     config_buffer_mgr.init_add_buffer(0, 1);
 
     uint32_t expected_num_workers_completed = 0;
+    bool first_program_dispatched = false;
 
     for (auto* node_ptr : trace_nodes) {
         auto& node = *node_ptr;
@@ -74,15 +75,41 @@ void LegacyTraceAllocator::allocate_trace_programs_on_subdevice(
             dispatch_md);
 
         // Map ProgramDispatchMetadata → TraceDispatchMetadata.
-        // In the legacy path, binary and nonbinary share the same allocation.
+        // In the legacy contiguous allocation, binary and nonbinary share the
+        // same base address.  update_traced_program_dispatch_commands computes
+        //   binary_write_offset = binary_addr - kernel_text_offset
+        // so we must set binary_addr to base + kernel_text_offset for Tensix
+        // (where the dispatcher has a separate binary write offset) so that the
+        // firmware sees the same value as the old update_program_dispatch_commands
+        // path, which wrote the base address into both offset slots.
         for (uint32_t i = 0; i < programmable_core_count; i++) {
-            node.dispatch_metadata.nonbinary_kernel_config_addrs[i] = {.addr = dispatch_md.kernel_config_addrs[i].addr};
-            node.dispatch_metadata.binary_kernel_config_addrs[i] = {.addr = dispatch_md.kernel_config_addrs[i].addr};
+            uint32_t addr = dispatch_md.kernel_config_addrs[i].addr;
+            node.dispatch_metadata.nonbinary_kernel_config_addrs[i] = {.addr = addr};
+
+            auto core_type = hal.get_programmable_core_type(i);
+            bool has_separate_binary_offset = (core_type == HalProgrammableCoreType::TENSIX);
+            bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
+            if (has_separate_binary_offset && binary_in_config) {
+                ProgramConfig& program_config = node.program->get_program_config(i);
+                node.dispatch_metadata.binary_kernel_config_addrs[i] = {
+                    .addr = addr + program_config.kernel_text_offset};
+            } else {
+                node.dispatch_metadata.binary_kernel_config_addrs[i] = {.addr = addr};
+            }
         }
         node.dispatch_metadata.send_binary = true;
         node.dispatch_metadata.sync_count = dispatch_md.sync_count;
         node.dispatch_metadata.stall_first = dispatch_md.stall_first;
         node.dispatch_metadata.stall_before_program = dispatch_md.stall_before_program;
+
+        if (!first_program_dispatched) {
+            // Force a stall on the first program. Dummy GO signals may be
+            // prepended before the trace stream and must complete before we
+            // overwrite config data.
+            node.dispatch_metadata.sync_count = 0;
+            node.dispatch_metadata.stall_first = true;
+            first_program_dispatched = true;
+        }
     }
 }
 
