@@ -154,7 +154,7 @@ class OpDescriptor:
         "_input_names",
         "_complete_fn",
         "_fusion_input_setter",
-        "_pending_clear",
+        "_updated_indices",
     )
 
     def __init__(
@@ -201,7 +201,7 @@ class OpDescriptor:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
         self._fusion_input_setter = None
-        self._pending_clear = []
+        self._updated_indices = []
 
     def update(self, *args, **kwargs):
         """Replace input tensors by name or position.
@@ -215,13 +215,13 @@ class OpDescriptor:
             desc.update(input_tensor=new_q)
             desc.update(input_a=new_a, input_b=new_b)
         """
-        # Fast path: write to C++ set_input() AND keep Python list current
-        # (dispatch reads non-dirty slots from op.input_tensors via py_refs).
+        # Fast path: write to C++ set_input() AND keep Python list current.
+        # Slots not provided via set_input() are read from Python at dispatch time.
         setter = self._fusion_input_setter
         if setter is not None:
             state, mappings = setter
             if args:
-                pending = self._pending_clear
+                pending = self._updated_indices
                 for i, t in enumerate(args):
                     state.set_input(mappings[i][0], t)
                     self.input_tensors[i] = t
@@ -230,7 +230,7 @@ class OpDescriptor:
             elif kwargs:
                 names = self._input_names
                 if names is not None:
-                    pending = self._pending_clear
+                    pending = self._updated_indices
                     for name, t in kwargs.items():
                         idx = names.get(name)
                         if idx is not None:
