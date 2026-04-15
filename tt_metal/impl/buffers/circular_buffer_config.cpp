@@ -213,6 +213,8 @@ uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; 
 
 uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
 
+void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
+
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
     auto is_remote_index = parent.remote_buffer_indices_.contains(buffer_index);
