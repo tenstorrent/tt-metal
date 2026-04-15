@@ -96,9 +96,12 @@ class FusionDispatchState {
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_desc_;
 
     // Deduped input tensor slots — written by set_input(), read by dispatch().
-    // Slots hold the most recent tensor from either construction or the last
-    // set_input() call.  Released when the next set_input() overwrites them.
     std::vector<Tensor> inputs_;
+
+    // Tracks which slots set_input() wrote since the last dispatch.
+    // Dirty slots are cleared after dispatch to release L1 buffers.
+    // Non-dirty slots (weights set at construction) stay alive.
+    std::vector<bool> dirty_;
 
     // Set by set_input(), cleared by dispatch().  Tells run() whether update()
     // was called since the last dispatch — if not, fall back to _container_run
@@ -140,10 +143,14 @@ public:
 
         // 4. Build MeshProgramDescriptor ONCE (copies ProgramDescriptor here, never again).
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
+
+        // 5. All clean — nothing written by set_input yet.
+        dirty_.resize(inputs_.size(), false);
     }
 
     void set_input(size_t dedup_idx, const Tensor& t) {
         inputs_[dedup_idx] = t;
+        dirty_[dedup_idx] = true;
         ready_ = true;
     }
 
@@ -166,7 +173,14 @@ public:
         // 4. Dispatch.
         (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
 
-        // 5. Reset ready flag — next dispatch requires at least one set_input().
+        // 5. Release dirty input slots to free L1 between iterations.
+        //    Non-dirty slots (weights) stay alive — the caller holds those anyway.
+        for (size_t i = 0; i < dirty_.size(); ++i) {
+            if (dirty_[i]) {
+                inputs_[i] = Tensor{};
+                dirty_[i] = false;
+            }
+        }
         ready_ = false;
 
         // 6. Reorder if needed.
