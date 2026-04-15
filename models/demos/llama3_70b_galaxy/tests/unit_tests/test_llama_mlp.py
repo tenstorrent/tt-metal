@@ -69,10 +69,9 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     }
 
     model_args.WEIGHTS_DTYPE = dtype
-    ff_hidden_dim = model_args.hidden_dim if model_args.multiple_of is None else 4 * model_args.dim
     reference_model = FeedForward(
         dim=model_args.dim,
-        hidden_dim=ff_hidden_dim,
+        hidden_dim=4 * model_args.dim,
         multiple_of=model_args.multiple_of,
         ffn_dim_multiplier=model_args.ffn_dim_multiplier,
     )
