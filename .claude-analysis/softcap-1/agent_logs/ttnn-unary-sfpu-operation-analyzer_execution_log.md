@@ -59,3 +59,37 @@
 
 ## Output (atanh)
 - **Analysis file**: `.claude-analysis/softcap-1/atanh_analysis.md`
+
+---
+
+## Session Info (sinh)
+- **Operation**: sinh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Start time**: 2026-04-15
+- **Status**: SUCCESS
+
+## Analysis Steps (sinh)
+
+1. **Read unary_op_utils.cpp** - Found SINH dispatch: `sinh_tile_init()` / `sinh_tile(idst)`, compute kernel `eltwise_sfpu.cpp`, macro `SFPU_OP_SINH_INCLUDE`, approx_mode=false.
+2. **Read API header** (`sinh.h`) - Confirmed `sinh_tile()` calls `llk_math_eltwise_unary_sfpu_sinh<APPROX>(idst)`.
+3. **Read LLK dispatch** (`llk_math_eltwise_unary_sfpu_sinh.h`) - Both WH and BH identical. Forwards to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_sinh<APPROXIMATE, 8>`.
+4. **Read core SFPU kernel** (`ckernel_sfpu_sinh.h`) - Both WH and BH identical. SFPI-based kernel. Computes sinh(x) via exp_21f helper (Moroz 2022 fast 2^z) with Taylor approximation fallback for |x| < 0.5.
+5. **Read params dispatch** (`llk_math_eltwise_unary_sfpu_params.h`) - VectorMode::RC, 4 faces, standard DEST progression.
+6. **Read init/addrmod** (`llk_math_eltwise_unary_sfpu.h`) - SfpuType::sinh has no special case; only ADDR_MOD_7 configured (zero increments).
+7. **Verified APPROX generation** (`genfiles.cpp`) - `constexpr bool APPROX = {math_approx_mode}` from JIT.
+8. **Verified all identifiers** - `calculate_sinh`, `sinh_init`, `exp_21f` found in both WH and BH ckernels. All SFPU instruction mappings verified against sfpi_lib.h. All file paths verified.
+9. **Wrote analysis** to `.claude-analysis/softcap-1/sinh_analysis.md`.
+
+## Key Findings (sinh)
+- Sinh is implemented entirely using SFPI abstractions (no raw TTI instructions)
+- The `APPROXIMATION_MODE` template parameter is accepted but never branched on -- same code runs regardless
+- Uses exp_21f helper function implementing Moroz et al. 2022 fast 2^z algorithm via IEEE 754 bit manipulation
+- Taylor approximation (sinh(x) ~ x + x^3/6) for |x| < 0.5 to avoid catastrophic cancellation in exp(x)-exp(-x)
+- BF16 rounding at output via float_to_fp16b for deterministic results
+- 12 distinct SFPU instructions used: SFPLOAD, SFPSTORE, SFPMAD (dominant), SFPLOADI, SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPSETSGN, SFPSETEXP, SFPCAST, SFPSTOCHRND, SFPSETCC
+- `_float_to_int32_positive_` is referenced but not defined in any reachable header -- potential compilation issue
+- WH and BH implementations are identical at all layers
+- No special ADDR_MOD configuration needed (only ADDR_MOD_7 with zero increments)
+
+## Output (sinh)
+- **Analysis file**: `.claude-analysis/softcap-1/sinh_analysis.md`
