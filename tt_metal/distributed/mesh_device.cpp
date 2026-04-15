@@ -1961,8 +1961,11 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     const std::string realtime_profiler_push_kernel_path =
         "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
 
-    // Ring buffer size: header (64B) + 128 entries * 64B = 8256B
-    constexpr uint32_t kRingBufferSize = 64 + 128 * 64;
+    // Ring buffer: 64-byte header + N entries × 64 bytes each.
+    // Must match RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
+    constexpr uint32_t kRingBufferCapacity = 4096;
+    constexpr uint32_t kRingBufferEntrySize = 64;
+    constexpr uint32_t kRingBufferSize = 64 + kRingBufferCapacity * kRingBufferEntrySize;
 
     // Set up real-time profiler for each local device in the mesh
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {

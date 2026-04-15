@@ -11,7 +11,7 @@
 // entries at read_index and pushes them to the host via PCIe. Single-producer
 // single-consumer: no locks required.
 
-constexpr uint32_t RT_PROFILER_RING_CAPACITY = 128;  // must be power-of-2
+constexpr uint32_t RT_PROFILER_RING_CAPACITY = 4096;  // must be power-of-2
 constexpr uint32_t RT_PROFILER_ENTRY_SIZE = 64;      // matches D2H socket page size
 
 struct RtProfilerRingBuffer {
