@@ -6,7 +6,6 @@
 import pytest
 import torch
 from helpers.format_config import DataFormat
-
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
     quantize_mx_tensor_chunked,
@@ -202,8 +201,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         if eltwise_golden is not None
         else None
     )
-
-    debug_pre_quant_tile = None
 
     for out_t in range(tile_cnt_output):
         block_idx = out_t // output_tiles_in_block
