@@ -140,3 +140,14 @@ registry:
     config_count: 233
     loaded_at: '2026-04-07'
     notes: ''
+
+  - trace_id: 6
+    status: draft
+    models: [efficientnetb0]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: 4c7ebdf7-22c6-483a-a555-a94af810a142
+    tt_metal_sha: 7868346d06c56628dc275bfcb3e24c58208187a2
+    config_count: 163
+    loaded_at: '2026-04-15'
+    notes: ''
+
