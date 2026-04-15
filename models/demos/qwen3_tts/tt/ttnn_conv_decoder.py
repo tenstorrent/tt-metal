@@ -143,7 +143,7 @@ class TTNNConvTranspose1d:
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
     def __call__(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
