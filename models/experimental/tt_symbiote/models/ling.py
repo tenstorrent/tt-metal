@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Ling-mini (Bailing MoE V2) decode: HF-compatible logits capture, mesh→torch, paged KV helpers."""
+
 from __future__ import annotations
 
 import os
 import secrets
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +21,7 @@ from transformers.generation.logits_process import (
 )
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
+import models.experimental.tt_symbiote.core.run_config as _run_config
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
 from models.experimental.tt_symbiote.modules.attention import (
@@ -33,6 +36,101 @@ else:
 
 _DECODE_MAX_SAME_TOKEN_STREAK = 8
 _DECODE_CYCLE_WINDOW = 8
+
+# mesh_composer cache: (mesh_id, num_dev, mesh_shape), (dist_shape, placement_key) -> CppMeshToTensor | None
+_LING_MESH_TO_TORCH_COMPOSER_CACHE: "OrderedDict[tuple, object | None]" = OrderedDict()
+_LING_MESH_TO_TORCH_COMPOSER_CACHE_MAX = 64
+
+
+def clear_ling_mesh_to_torch_composer_cache() -> None:
+    """Clear cached ``mesh_composer`` objects (e.g. after closing a mesh or in tests)."""
+    _LING_MESH_TO_TORCH_COMPOSER_CACHE.clear()
+
+
+def _ling_extract_topology(tt_tensor: ttnn.Tensor) -> tuple[list[object], list[int]]:
+    topology = tt_tensor.tensor_topology()
+    return topology.placements(), list(topology.distribution_shape())
+
+
+def _ling_mesh_cache_key(mesh_device) -> tuple:
+    return (id(mesh_device), mesh_device.get_num_devices(), tuple(int(x) for x in mesh_device.shape))
+
+
+def _ling_placement_key(placements: list) -> tuple:
+    keys = []
+    for p in placements:
+        if isinstance(p, ttnn.PlacementShard):
+            keys.append(("shard", int(p.dim)))
+        elif isinstance(p, ttnn.PlacementReplicate):
+            keys.append(("rep",))
+        else:
+            keys.append(("other", repr(p)))
+    return tuple(keys)
+
+
+def _ling_infer_mesh_composer(
+    tt_tensor: ttnn.Tensor,
+    mesh_device,
+    placements: list,
+    dist_shape: list[int],
+) -> object | None:
+    """Infer ``CppMeshToTensor``; placement rules aligned with ``models.common.auto_compose``."""
+    if len(dist_shape) == 0 or (len(dist_shape) == 1 and dist_shape[0] == 1):
+        return None
+
+    tensor_device = tt_tensor.device()
+    mesh = tensor_device or mesh_device
+    if mesh is None:
+        mesh = ttnn.GetDefaultDevice()
+        if mesh is None:
+            raise RuntimeError(
+                "Ling mesh→torch: tensor is on host and no mesh_device was passed and no default device is set."
+            )
+
+    assert len(dist_shape) == len(placements)
+
+    if len(dist_shape) == 1 and mesh.shape.dims() == 1:
+        p0 = placements[0]
+        if isinstance(p0, ttnn.PlacementShard):
+            composer_cfg = ttnn.MeshComposerConfig(
+                dims=[p0.dim],
+                mesh_shape_override=ttnn.MeshShape(dist_shape),
+            )
+            return ttnn.create_mesh_composer(mesh, composer_cfg)
+        return None
+
+    dims: list[int] = []
+    shape_override: list[int] = []
+    for i, p in enumerate(placements):
+        if isinstance(p, ttnn.PlacementShard):
+            dims.append(p.dim)
+            shape_override.append(dist_shape[i])
+        else:
+            assert isinstance(p, ttnn.PlacementReplicate)
+            dims.append(0)
+            shape_override.append(1)
+
+    composer_cfg = ttnn.MeshComposerConfig(
+        dims=dims,
+        mesh_shape_override=ttnn.MeshShape(shape_override),
+    )
+    return ttnn.create_mesh_composer(mesh, composer_cfg)
+
+
+def _ling_cached_mesh_composer(tt_tensor: ttnn.Tensor, mesh_device) -> object | None:
+    placements, dist_shape = _ling_extract_topology(tt_tensor)
+    topo_key = (tuple(int(x) for x in dist_shape), _ling_placement_key(placements))
+    cache_key = (_ling_mesh_cache_key(mesh_device), topo_key)
+    if cache_key in _LING_MESH_TO_TORCH_COMPOSER_CACHE:
+        composer = _LING_MESH_TO_TORCH_COMPOSER_CACHE[cache_key]
+        _LING_MESH_TO_TORCH_COMPOSER_CACHE.move_to_end(cache_key)
+        return composer
+    composer = _ling_infer_mesh_composer(tt_tensor, mesh_device, placements, dist_shape)
+    _LING_MESH_TO_TORCH_COMPOSER_CACHE[cache_key] = composer
+    _LING_MESH_TO_TORCH_COMPOSER_CACHE.move_to_end(cache_key)
+    while len(_LING_MESH_TO_TORCH_COMPOSER_CACHE) > _LING_MESH_TO_TORCH_COMPOSER_CACHE_MAX:
+        _LING_MESH_TO_TORCH_COMPOSER_CACHE.popitem(last=False)
+    return composer
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -129,8 +227,21 @@ def _mesh_replicate_mapper(mesh_device):
     return None
 
 
-def _ttnn_to_torch_mesh(tt_tensor, mesh_device) -> torch.Tensor:
-    return to_torch_auto_compose(tt_tensor, device=mesh_device)
+def replicated_mesh_tt_to_torch(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
+    """Device mesh ``ttnn.Tensor`` → host ``torch.Tensor`` for Ling (ids, indices, …).
+
+    Infers ``mesh_composer`` from ``tensor.tensor_topology()`` (aligned with
+    ``models.common.auto_compose``) and caches composers by mesh + topology signature.
+
+    ``ttnn.ReplicateTensorToMesh`` is only valid as ``mesh_mapper`` on ``from_torch``, not as
+    ``mesh_composer`` here.
+    """
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tt_tensor)
+    mesh_composer = _ling_cached_mesh_composer(tt_tensor, mesh_device)
+    if mesh_composer is None:
+        return ttnn.to_torch(tt_tensor)
+    return ttnn.to_torch(tt_tensor, mesh_composer=mesh_composer)
 
 
 def _clamp_vocab_id(token_id: int, vocab_size: int) -> int:
@@ -198,7 +309,7 @@ def _captured_logits_last_row_to_torch(captured, mesh_device) -> torch.Tensor:
             ttnn.deallocate(tt_row)
 
 
-def _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz: int) -> tuple:
+def _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz: int) -> tuple:
     """Shared: last-token logits as ``[1, V]`` bf16 ROW_MAJOR on device (slice, trim, reshape, cast).
 
     Returns ``(work, to_free, orig_v, tt)`` where ``to_free`` lists tensors to deallocate (not ``tt``).
@@ -274,7 +385,7 @@ def _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz
     using :func:`_captured_logits_last_row_to_torch` — there is **no** silent CPU fallback from this
     function; missing device logits (no ``ttnn.Tensor`` / ``ttnn_tensor``) raises.
     """
-    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz)
+    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz)
     tt_idx = None
     try:
         tt_idx = ttnn.argmax(work, dim=-1, keepdim=True)
@@ -290,7 +401,7 @@ def _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz
 
 def _device_sample_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz: int, params: DecodeParams) -> int:
     """Sample next token via ``ttnn.sampling`` on captured lm_head logits (no full-vocab ``to_torch``)."""
-    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, mesh_device, vocab_sz)
+    work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz)
     try:
         return _ttnn_sampling_from_row_bf16(mesh_device, work, orig_v, params)
     finally:
@@ -365,7 +476,7 @@ def _ttnn_sampling_from_row_bf16(mesh_device, tt_2d, orig_v: int, params: Decode
     out_tt = None
     try:
         out_tt = ttnn.sampling(tt_vals, tt_ind, k=tt_k, p=tt_p, temp=tt_temp, seed=seed)
-        out = _ttnn_to_torch_mesh(out_tt, mesh_device)
+        out = replicated_mesh_tt_to_torch(out_tt, mesh_device)
         tok = int(out.reshape(-1)[0].item())
     finally:
         for t in (tt_vals, tt_ind, tt_k, tt_p, tt_temp):
@@ -426,7 +537,7 @@ def _greedy_argmax_logits_row(row) -> int:
 
 def _int_flat0_from_ttnn_tt(tt, mesh_device) -> int:
     """First element of a small TTNN tensor as Python ``int`` (e.g. sampled token id)."""
-    x = _ttnn_to_torch_mesh(tt, mesh_device)
+    x = replicated_mesh_tt_to_torch(tt, mesh_device)
     return int(x.reshape(-1)[0].item())
 
 
@@ -586,8 +697,6 @@ def decode_with_logit_postprocess(
     :func:`_causal_lm_forward_pure_ttnn` (device ids + ``forward_ttnn``). Set env
     ``SYMBIOTE_DECODE_PURE_TTNN=0`` or pass ``decode_pure_ttnn=False`` for ``model(**model_inputs)``.
     """
-    import models.experimental.tt_symbiote.core.run_config as _run_config
-
     if decode_pure_ttnn is None:
         decode_pure_ttnn = os.environ.get("SYMBIOTE_DECODE_PURE_TTNN", "1") != "0"
 

@@ -13,7 +13,6 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
@@ -29,6 +28,7 @@ from models.experimental.tt_symbiote.models.ling import (
     DecodeParams,
     create_paged_kv_cache,
     decode_with_logit_postprocess,
+    replicated_mesh_tt_to_torch,
 )
 
 
@@ -126,7 +126,7 @@ def test_ling_mini_2_0(mesh_device):
     output_ids_tt = decode_with_logit_postprocess(
         model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 128, decode_params, mesh_device
     )
-    output_ids = to_torch_auto_compose(output_ids_tt, device=mesh_device).long()
+    output_ids = replicated_mesh_tt_to_torch(output_ids_tt, mesh_device).long()
     ttnn.deallocate(output_ids_tt)
     prompt_len = inputs["input_ids"].shape[-1]
     decoded = tokenizer.decode(output_ids.reshape(-1)[prompt_len:].tolist())

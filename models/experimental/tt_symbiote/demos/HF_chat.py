@@ -30,7 +30,6 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
@@ -49,6 +48,7 @@ from models.experimental.tt_symbiote.models.ling import (
     decode_with_logit_postprocess,
     generation_torch_device,
     preprocess_generation_inputs,
+    replicated_mesh_tt_to_torch,
 )
 
 MESH_DEVICE_MAP = {
@@ -95,10 +95,6 @@ def cleanup(mesh_device):
         ttnn.close_mesh_device(submesh)
     ttnn.close_mesh_device(mesh_device)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-
-def _ttnn_to_torch_mesh(tt_tensor, mesh_device):
-    return to_torch_auto_compose(tt_tensor, device=mesh_device)
 
 
 def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
@@ -163,8 +159,8 @@ def warmup(model, _tokenizer, mesh_device, paged_cache, decode_params=None):
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        input_ids = _ttnn_to_torch_mesh(prompt_tt, mesh_device).long()
-        attention_mask = _ttnn_to_torch_mesh(mask_tt, mesh_device).long()
+        input_ids = replicated_mesh_tt_to_torch(prompt_tt, mesh_device).long()
+        attention_mask = replicated_mesh_tt_to_torch(mask_tt, mesh_device).long()
         ttnn.deallocate(mask_tt)
         out_tt = decode_with_logit_postprocess(
             model,
@@ -252,7 +248,7 @@ def chat_loop(
             mesh_device=mesh_device,
         )
         try:
-            outputs = _ttnn_to_torch_mesh(outputs_tt, mesh_device).long().to(torch_dev)
+            outputs = replicated_mesh_tt_to_torch(outputs_tt, mesh_device).long().to(torch_dev)
             gen_ids = outputs[0, prompt_len:].tolist()
             response = tokenizer.decode(gen_ids, skip_special_tokens=True)
         finally:
