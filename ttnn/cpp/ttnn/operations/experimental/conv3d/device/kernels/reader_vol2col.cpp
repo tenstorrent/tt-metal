@@ -282,6 +282,171 @@ void gather_rows_to_shard(
     noc_async_read_barrier();
 }
 
+#if defined(CONV3D_H_HALO)
+// Halo-aware gather: for H-boundary positions (h_in < 0 or h_in >= H_in),
+// reads from the compact halo buffer instead of zero-padding.
+// Interior and T/W boundary positions use the standard path.
+template <
+    uint32_t C_in_block_bytes,
+    uint32_t H_shard_max_W_shard_max,
+    uint32_t W_shard_max,
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    uint32_t H_in_W_in,
+    uint32_t in_row_size_bytes,
+    typename Reader>
+void gather_rows_halo(
+    const Reader& in_reader,
+    const Reader& halo_reader,
+    uint32_t shard_l1_base,
+    uint32_t batch_page_base,
+    uint32_t batch_idx,
+    uint32_t c_in_offset_bytes,
+    int32_t t_shard_start,
+    uint32_t T_shard_cur,
+    int32_t h_shard_start,
+    uint32_t h_start,
+    uint32_t h_end,
+    int32_t w_shard_start,
+    uint32_t w_col_start,
+    uint32_t w_count,
+    uint32_t h_halo_outer_dim_size,
+    uint32_t h_halo_H,
+    uint32_t h_halo_W,
+    uint32_t h_halo_padding_h,
+    uint32_t h_halo_padding_w,
+    uint32_t h_halo_hbot_base,
+    uint32_t h_halo_wleft_base,
+    uint32_t h_halo_wright_base) {
+    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
+        const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
+        const bool t_outside = (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
+        const int32_t t_clamped = t_outside ? clampIndex(t_in, 0, static_cast<int32_t>(T_in) - 1) : t_in;
+        for (uint32_t h_local = h_start; h_local < h_end; h_local++) {
+            const int32_t h_in = h_shard_start + static_cast<int32_t>(h_local);
+            const bool h_outside = (h_in < 0 || h_in >= static_cast<int32_t>(H_in));
+            const int32_t h_clamped = h_outside ? clampIndex(h_in, 0, static_cast<int32_t>(H_in) - 1) : h_in;
+            uint32_t shard_offset =
+                (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
+            for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
+                const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
+                const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
+                const int32_t w_clamped = w_outside ? clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1) : w_in;
+                const uint32_t shard_addr = shard_l1_base + shard_offset;
+
+                if (t_outside) {
+                    // T boundary: zero-fill (causal padding, no T halo buffer)
+                    zeroPad<C_in_block_bytes>(shard_addr);
+                } else if (h_outside) {
+                    // H boundary: read from H halo buffer (top or bottom half)
+                    const uint32_t t_global = batch_idx * T_in + static_cast<uint32_t>(t_clamped);
+                    uint32_t halo_page;
+                    if (h_in < 0) {
+                        // Top halo: h_in = -1 → pad_row = h_halo_padding_h + h_in
+                        const uint32_t pad_row = h_halo_padding_h + static_cast<uint32_t>(h_in);
+                        halo_page = t_global * h_halo_padding_h * h_halo_W + pad_row * h_halo_W +
+                                    static_cast<uint32_t>(w_clamped);
+                    } else {
+                        // Bottom halo: h_in >= H_in → pad_row = h_in - H_in
+                        const uint32_t pad_row = static_cast<uint32_t>(h_in) - H_in;
+                        halo_page = h_halo_hbot_base + t_global * h_halo_padding_h * h_halo_W + pad_row * h_halo_W +
+                                    static_cast<uint32_t>(w_clamped);
+                    }
+                    noc_async_read(
+                        get_input_noc_addr(halo_reader, halo_page, c_in_offset_bytes, in_row_size_bytes),
+                        shard_addr,
+                        C_in_block_bytes);
+                } else if (w_outside && h_halo_padding_w > 0) {
+                    // W boundary: read from W halo buffer (left or right half)
+                    const uint32_t t_global = batch_idx * T_in + static_cast<uint32_t>(t_clamped);
+                    uint32_t halo_page;
+                    if (w_in < 0) {
+                        // Left halo: w_in = -1 → pad_col = h_halo_padding_w + w_in
+                        const uint32_t pad_col = h_halo_padding_w + static_cast<uint32_t>(w_in);
+                        halo_page = h_halo_wleft_base + t_global * h_halo_padding_w * h_halo_H + pad_col * h_halo_H +
+                                    static_cast<uint32_t>(h_clamped);
+                    } else {
+                        // Right halo: w_in >= W_in → pad_col = w_in - W_in
+                        const uint32_t pad_col = static_cast<uint32_t>(w_in) - W_in;
+                        halo_page = h_halo_wright_base + t_global * h_halo_padding_w * h_halo_H + pad_col * h_halo_H +
+                                    static_cast<uint32_t>(h_clamped);
+                    }
+                    noc_async_read(
+                        get_input_noc_addr(halo_reader, halo_page, c_in_offset_bytes, in_row_size_bytes),
+                        shard_addr,
+                        C_in_block_bytes);
+                } else if (w_outside) {
+                    // W boundary but no W halo buffer: zero-fill
+                    zeroPad<C_in_block_bytes>(shard_addr);
+                } else {
+                    // Interior: read from original unpadded input tensor
+                    const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
+                                              static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
+                    noc_async_read(
+                        get_input_noc_addr(in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes),
+                        shard_addr,
+                        C_in_block_bytes);
+                }
+                shard_offset += C_in_block_bytes;
+            }
+        }
+    }
+    noc_async_read_barrier();
+}
+
+// Halo-aware GATHER_ROWS macro: same signature as the non-halo version.
+// Args: all_in_bounds, in_reader, shard_l1_base, batch_page_base, c_in_offset_bytes,
+//       t_shard_start, T_shard_cur, h_shard_start, h_start, h_end,
+//       w_shard_start, w_col_start, w_count
+#define GATHER_ROWS(                 \
+    all_in_bounds,                   \
+    in_rdr,                          \
+    shard_l1,                        \
+    batch_pg,                        \
+    c_in_off,                        \
+    t_sh_st,                         \
+    T_sh_cur,                        \
+    h_sh_st,                         \
+    h_st,                            \
+    h_en,                            \
+    w_sh_st,                         \
+    w_col_st,                        \
+    w_cnt)                           \
+    do {                             \
+        gather_rows_halo<            \
+            C_in_block_bytes,        \
+            H_shard_max_W_shard_max, \
+            W_shard_max,             \
+            T_in,                    \
+            H_in,                    \
+            W_in,                    \
+            H_in_W_in,               \
+            in_row_size_bytes>(      \
+            in_rdr,                  \
+            halo_reader,             \
+            shard_l1,                \
+            batch_pg,                \
+            batch_idx,               \
+            c_in_off,                \
+            t_sh_st,                 \
+            T_sh_cur,                \
+            h_sh_st,                 \
+            h_st,                    \
+            h_en,                    \
+            w_sh_st,                 \
+            w_col_st,                \
+            w_cnt,                   \
+            h_halo_outer_dim_size,   \
+            h_halo_H,                \
+            h_halo_W,                \
+            h_halo_padding_h,        \
+            h_halo_padding_w,        \
+            h_halo_hbot_base,        \
+            h_halo_wleft_base,       \
+            h_halo_wright_base);     \
+    } while (0)
+#else
 // Dispatch to fast or slow gather based on runtime bounds check.
 #define GATHER_ROWS(all_in_bounds, ...)  \
     do {                                 \
@@ -310,6 +475,7 @@ void gather_rows_to_shard(
                 in_row_size_bytes,       \
                 true>(__VA_ARGS__);      \
     } while (0)
+#endif  // CONV3D_H_HALO
 
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
@@ -366,10 +532,38 @@ void kernel_main() {
     const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
+#if defined(CONV3D_INPUT_PROGRESS_SEM)
+    const uint32_t input_progress_sem_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t input_progress_t_batch_size = get_arg_val<uint32_t>(argidx++);
+    volatile tt_l1_ptr uint32_t* progress_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_progress_sem_addr);
+    uint32_t progress_batches_waited = 0;
+#else
+    argidx += 2;
+#endif
+#if defined(CONV3D_H_HALO)
+    const uint32_t h_halo_buffer_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_halo_outer_dim_size = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_halo_H = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_halo_W = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_halo_padding_h = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_halo_padding_w = get_arg_val<uint32_t>(argidx++);
+    // Compact buffer layout: [H-top | H-bot | W-left | W-right]
+    const uint32_t h_halo_hbot_base = h_halo_outer_dim_size * h_halo_padding_h * h_halo_W;
+    const uint32_t h_halo_wleft_base = 2u * h_halo_outer_dim_size * h_halo_padding_h * h_halo_W;
+    const uint32_t h_halo_wright_base = h_halo_wleft_base + h_halo_outer_dim_size * h_halo_padding_w * h_halo_H;
+#else
+    argidx += 6;
+#endif
 
     // Tensor accessor for input tensor
     constexpr auto in_args = TensorAccessorArgs<36>();
-    const auto in_reader = TensorAccessor(in_args, in_addr);
+    const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
+#if defined(CONV3D_H_HALO)
+    // Halo tensor uses same page layout as input (same alignment, same element size).
+    // We reuse in_args since both are DRAM interleaved with the same page structure.
+    const auto halo_reader = TensorAccessor(in_args, h_halo_buffer_addr, in_row_size_bytes);
+#endif
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
@@ -400,6 +594,20 @@ void kernel_main() {
                 // 3D blocking loops over assigned ranges:
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
+#if defined(CONV3D_INPUT_PROGRESS_SEM)
+                    if (input_progress_t_batch_size > 0) {
+                        const uint32_t last_t_in = (t_block_end - 1) * stride_t + (kT - 1) * dilation_t;
+                        uint32_t last_input_t = last_t_in < padding_t ? 0 : last_t_in - padding_t;
+                        if (last_input_t >= T_in) {
+                            last_input_t = T_in - 1;
+                        }
+                        const uint32_t batches_needed = (last_input_t / input_progress_t_batch_size) + 1;
+                        if (batches_needed > progress_batches_waited) {
+                            noc_semaphore_wait_min(progress_sem_ptr, batches_needed);
+                            progress_batches_waited = batches_needed;
+                        }
+                    }
+#endif
 
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
