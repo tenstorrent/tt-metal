@@ -14,10 +14,8 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based selu via minimax polynomial
 //
-// BF16: degree-10 for scale*alpha*(exp(x)-1) on [-5, 0], pre-baked
-//       (Sollya remez, err=2.01e-6 in single precision)
+// BF16: Cody-Waite range reduction + degree-5 expm1, scale*alpha post-mul
 // FP32: degree-14 for exp(x)-1 on [-10, 0], runtime scale*alpha multiply
-// Saturation clamp via vec_min_max.
 // ======================================================================
 
 #ifdef INP_FLOAT32
@@ -40,22 +38,12 @@ constexpr float SELU_COEFFS[] = {
     1.4128406561e-13f};
 constexpr float SELU_CLAMP_LO = -10.0f;
 #else
-// BF16: degree-10 minimax for scale*alpha*(exp(x)-1) on [-5, 0]
-// Pre-baked scale*alpha (≈1.758) eliminates runtime multiply.
-constexpr uint32_t SELU_DEGREE = 10;
-constexpr float SELU_COEFFS[] = {
-    -9.6848864928e-08f,
-    1.7580944300e+00f,
-    8.7900894880e-01f,
-    2.9288360476e-01f,
-    7.3030054569e-02f,
-    1.4428040944e-02f,
-    2.3012275342e-03f,
-    2.9013518360e-04f,
-    2.7009362384e-05f,
-    1.6228416371e-06f,
-    4.6336307236e-08f};
-constexpr float SELU_CLAMP_LO = -5.0f;
+// BF16: Cody-Waite expm1 constants (same as ELU)
+constexpr float SELU_EXPM1_H0 = 1.0000000000e+00f;
+constexpr float SELU_EXPM1_H1 = 4.9999371171e-01f;
+constexpr float SELU_EXPM1_H2 = 1.6666433215e-01f;
+constexpr float SELU_EXPM1_H3 = 4.1875664145e-02f;
+constexpr float SELU_EXPM1_H4 = 8.3751315251e-03f;
 #endif
 
 // selu(x) = scale * x for x>=0, scale * alpha * (exp(x)-1) for x<0
@@ -64,25 +52,45 @@ constexpr float SELU_CLAMP_LO = -5.0f;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
 inline void calculate_selu(uint scale, uint alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
-#ifdef INP_FLOAT32
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
-#endif
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        // Clamp input to [SELU_CLAMP_LO, +inf) before polynomial eval (branchless)
+#ifdef INP_FLOAT32
         sfpi::vFloat clamped = x;
         sfpi::vFloat lo = SELU_CLAMP_LO;
-        sfpi::vec_min_max(lo, clamped);  // clamped = max(x, SELU_CLAMP_LO)
-#ifdef INP_FLOAT32
+        sfpi::vec_min_max(lo, clamped);
         sfpi::vFloat result = scale_alpha * piecewise_poly_eval<SELU_DEGREE>(SELU_COEFFS, clamped);
-#else
-        // BF16: polynomial already includes scale*alpha factor
-        sfpi::vFloat result = piecewise_poly_eval<SELU_DEGREE>(SELU_COEFFS, clamped);
-#endif
         v_if(x >= 0.0f) { result = scale_val * x; }
         v_endif;
         v_if(x < SELU_CLAMP_LO) { result = -1.7580993408e+00f; }
         v_endif;
+#else
+        // BF16: Cody-Waite range reduction + factored expm1
+        constexpr float INV_LN2 = 1.4426950408889634f;
+        constexpr float NEG_LN2_HI = -0.6931152343750000f;
+        constexpr float NEG_LN2_LO = -3.19461832987e-05f;
+        const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+
+        sfpi::vFloat tmp = x * INV_LN2 + c231;
+        sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+        sfpi::vFloat k_f = tmp - c231;
+        sfpi::vFloat r = k_f * NEG_LN2_HI + x;
+        r = r + k_f * NEG_LN2_LO;
+
+        sfpi::vFloat h = SELU_EXPM1_H4;
+        h = h * r + SELU_EXPM1_H3;
+        h = h * r + SELU_EXPM1_H2;
+        h = h * r + SELU_EXPM1_H1;
+        h = h * r + SELU_EXPM1_H0;
+        sfpi::vFloat p = r * h;
+
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::exexp_nodebias(sfpi::vConst1) + k_int);
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
+        result = scale_alpha * result;
+
+        v_if(x >= 0.0f) { result = scale_val * x; }
+        v_endif;
+#endif
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }
