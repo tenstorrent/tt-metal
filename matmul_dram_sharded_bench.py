@@ -385,3 +385,15 @@ if __name__ == "__main__":
 # DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
 # Mapping 12 DRAM shards to 2 compute core ranges: [0,0 - 7,0] [0,1 - 3,1]
 #   M=   32 K= 32768 N= 1024  dram_sharded= 157.0  dram_reshrd= 156.9  dram_tcast= 157.0  1d_mcast= 200.2  2d_mcast= 272.6  auto= 556.3  (vs dram_sharded: reshrd=1.00x tcast=1.00x 1d=1.28x 2d=1.74x auto=3.54x)
+
+# Get optimal cores for DRAM:
+#       M      K     N    dram_shrd  dram_reshrd  dram_tcast   1d_mcast   2d_mcast     auto  vs dram_sharded
+#   -------------------------------------------------------------------------------------
+# DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
+#   M=   32 K=  8192 N= 1280  dram_sharded=  61.6  dram_reshrd=  61.5  dram_tcast=  61.7  1d_mcast=  90.4  2d_mcast=  90.2  auto= 153.2  (vs dram_sharded: reshrd=1.00x tcast=1.00x 1d=1.47x 2d=1.46x auto=2.48x)
+# DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
+#   M=   32 K=  8192 N= 4096  dram_sharded= 163.0  dram_reshrd= 162.8  dram_tcast= 162.9  1d_mcast= 207.7  2d_mcast= 245.2  auto= 190.5  (vs dram_sharded: reshrd=1.00x tcast=1.00x 1d=1.27x 2d=1.50x auto=1.17x)
+# DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
+#   M=   32 K=  8192 N= 1024  dram_sharded=  50.7  dram_reshrd=  50.5  dram_tcast=  50.5  1d_mcast=  69.4  2d_mcast=  69.6  auto= 141.7  (vs dram_sharded: reshrd=1.00x tcast=1.00x 1d=1.37x 2d=1.37x auto=2.79x)
+# DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
+#   M=   32 K= 32768 N= 1024  dram_sharded= 157.1  dram_reshrd= 157.2  dram_tcast= 157.0  1d_mcast= 201.2  2d_mcast= 272.6  auto= 555.9  (vs dram_sharded: reshrd=1.00x tcast=1.00x 1d=1.28x 2d=1.74x auto=3.54x)

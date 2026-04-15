@@ -7,7 +7,6 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
-#include <iostream>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -59,6 +58,21 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
+    // When the destination is DRAM, the shard_spec grid uses DRAM bank coordinates
+    // (e.g. (0,0)-(11,0) on WH) which can exceed the compute grid (8x8).
+    // Map those to compute worker cores adjacent to each DRAM bank for kernel/CB placement.
+    // The output tensor's buffer shard spec retains the DRAM bank coords for correct
+    // buffer allocation and shard_builder address generation.
+    std::vector<CoreCoord> dram_worker_cores;
+    if (dst_is_dram) {
+        auto all_dram_workers = input.device()->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+        auto shard_grid_cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
+        dram_worker_cores.reserve(shard_grid_cores.size());
+        for (const auto& dram_core : shard_grid_cores) {
+            dram_worker_cores.push_back(all_dram_workers[dram_core.x]);
+        }
+    }
+
     if (input.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
         output_unit_size = tt::tile_size(output_cb_data_format);
@@ -104,37 +118,15 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         }
     }
 
-    // When the output is DRAM-sharded, shard_spec.grid contains DRAM bank
-    // coordinates (e.g. x=0..11 on WH), which are not valid compute-core
-    // coordinates.  Map the shards 1-to-1 onto real compute cores instead.
-    // The DRAM bank addresses are communicated to each kernel via
-    // shard_builder::extend_sharding_run_time_args, so the kernel can target
-    // the correct bank regardless of which compute core runs it.
-    CoreRangeSet all_cores;
-    CoreCoord end_core;
+    CoreRangeSet all_cores = shard_spec.grid;
+    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
     if (dst_is_dram) {
-        uint32_t num_shards = shard_spec.grid.num_cores();
-        auto compute_grid = input.device()->compute_with_storage_grid_size();
-        uint32_t grid_x = compute_grid.x;
-        uint32_t full_rows = num_shards / grid_x;
-        uint32_t remainder = num_shards % grid_x;
-        std::set<CoreRange> ranges;
-        if (full_rows > 0) {
-            ranges.insert(CoreRange({0, 0}, {grid_x - 1, full_rows - 1}));
+        std::vector<CoreRange> worker_ranges;
+        worker_ranges.reserve(dram_worker_cores.size());
+        for (const auto& wc : dram_worker_cores) {
+            worker_ranges.emplace_back(CoreRange(wc, wc));
         }
-        if (remainder > 0) {
-            ranges.insert(CoreRange({0, full_rows}, {remainder - 1, full_rows}));
-        }
-        std::cout << "Mapping " << num_shards << " DRAM shards to " << ranges.size() << " compute core ranges: ";
-        for (const auto& range : ranges) {
-            std::cout << "[" << range.start_coord.x << "," << range.start_coord.y << " - " << range.end_coord.x << "," << range.end_coord.y << "] ";
-        }
-        std::cout << std::endl;
-        all_cores = CoreRangeSet(ranges);
-        end_core = (*all_cores.ranges().rbegin()).end_coord;
-    } else {
-        all_cores = shard_spec.grid;
-        end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
+        all_cores = CoreRangeSet(std::move(worker_ranges));
     }
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
@@ -248,19 +240,27 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
-    for (const auto& core : cores) {
+    // When dst is DRAM, iterate over worker cores (in DRAM bank order) instead of
+    // shard_spec grid coords. The shard offset calculations are purely index-based.
+    const auto cores = dst_is_dram
+        ? dram_worker_cores
+        : corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
+    const uint32_t num_cores = cores.size();
+
+    for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
+        const auto& core = cores[core_idx];
+        bool is_last_core_in_shard = (core_idx == num_cores - 1);
         uint32_t curr_num_units_per_shard = num_units_per_shard;
         if (input.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
             uint32_t padded_offset = 0;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (core == end_core) {
+                if (dst_is_dram ? is_last_core_in_shard : (core == end_core)) {
                     shard_height = num_units_per_shard_height_last;
                 }
             } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-                if (core == end_core) {
+                if (dst_is_dram ? is_last_core_in_shard : (core == end_core)) {
                     shard_width = num_units_per_shard_width_last;
                     padded_offset = padded_offset_bytes;
                 }
@@ -328,12 +328,12 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = input_unit_size;
             if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
+                if (dst_is_dram ? is_last_core_in_shard : (core.x == end_core.x && core.y == end_core.y)) {
                     shard_height = num_units_per_shard_height_last;
                     curr_num_units_per_shard = shard_height * num_units_per_shard_width;
                 }
             } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
+                if (dst_is_dram ? is_last_core_in_shard : (core.x == end_core.x && core.y == end_core.y)) {
                     shard_width = num_units_per_shard_width_last;
                 }
             } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
