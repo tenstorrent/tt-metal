@@ -252,18 +252,8 @@ def _copy_non_weight_artifacts(source_model_path: Path, output_model_path: Path)
             shutil.copy2(source_path, destination)
 
 
-def _link_or_copy_file(source_path: Path, destination_path: Path) -> None:
-    try:
-        os.link(source_path, destination_path)
-        return
-    except OSError:
-        pass
-
-    try:
-        os.symlink(os.path.relpath(source_path, start=destination_path.parent), destination_path)
-        return
-    except OSError:
-        shutil.copy2(source_path, destination_path)
+def _copy_file(source_path: Path, destination_path: Path) -> None:
+    shutil.copy2(source_path, destination_path)
 
 
 def _load_tensor_from_shards(
@@ -348,7 +338,7 @@ def save_dequantized_hf_checkpoint(
     *,
     overwrite: bool = False,
     dtype: torch.dtype = torch.bfloat16,
-    stack_experts: bool = False,
+    stack_experts: bool = True,
 ) -> Path:
     source_model_path = Path(source_model_path).resolve()
     output_model_path = (
@@ -395,7 +385,7 @@ def save_dequantized_hf_checkpoint(
     shard_to_keys: dict[str, list[str]] = {}
     if can_reuse_source_shards:
         for shard_path in sorted(source_model_path.glob("*.safetensors")):
-            _link_or_copy_file(shard_path, output_model_path / shard_path.name)
+            _copy_file(shard_path, output_model_path / shard_path.name)
         output_weight_map = {
             key: shard_name
             for key, shard_name in weight_map.items()

@@ -94,7 +94,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         MESH_DEVICE: TG
         # Required for BenchmarkData to save to Superset
@@ -124,7 +124,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Prepare custom weights cache directory
+      - name: Prepare custom DeepSeek cache directory
         if: ${{ inputs.recreate_weights_cache == 'Yes' }}
         env:
           INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
@@ -162,7 +162,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
-      - name: Validate weight cache
+      - name: Validate DeepSeek cache directory
         if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: 10
         run: |

@@ -301,7 +301,7 @@ def create_parser() -> argparse.ArgumentParser:
         dest="force_recalculate",
         action="store_true",
         default=False,
-        help="Force regeneration of cached TTNN weight files and config.",
+        help="Legacy compatibility flag. The stacked DeepSeek path converts weights directly in memory, so this is ignored there.",
     )
     p.add_argument(
         "--stop-at-eos",

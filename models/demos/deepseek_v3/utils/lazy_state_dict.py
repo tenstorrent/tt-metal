@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from time import perf_counter
@@ -13,6 +14,10 @@ from typing import Optional
 import torch
 from loguru import logger
 from safetensors import safe_open
+
+_STACKED_EXPERT_ALIAS_RE = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
 
 
 class LazyStateDict(Mapping[str, torch.Tensor]):
@@ -101,7 +106,17 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         This is useful for dynamic weight loading flows that want per-module tensors
         to be released after a forward pass.
         """
-        self._cache.pop(self._full_key(key), None)
+        full_key = self._full_key(key)
+        self._cache.pop(full_key, None)
+        alias = self._resolve_stacked_expert_alias(full_key)
+        if alias is None:
+            return
+        stacked_full_key, _ = alias
+        for cached_key in self._cache:
+            cached_alias = self._resolve_stacked_expert_alias(cached_key)
+            if cached_alias is not None and cached_alias[0] == stacked_full_key:
+                return
+        self._cache.pop(stacked_full_key, None)
 
     def close(self) -> None:
         """
@@ -164,6 +179,31 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
     def _full_key(self, key: str) -> str:
         return self._base_prefix + key
 
+    def _resolve_stacked_expert_alias(self, full_key: str) -> tuple[str, int] | None:
+        match = _STACKED_EXPERT_ALIAS_RE.match(full_key)
+        if match is None:
+            return None
+        stacked_full_key = f"model.layers.{match.group('layer')}.mlp.experts_stacked.{match.group('projection')}.weight"
+        if stacked_full_key not in self._full_to_file or not self._passes_layer_filter(stacked_full_key):
+            return None
+        return stacked_full_key, int(match.group("expert"))
+
+    def _load_tensor(self, full_key: str) -> torch.Tensor:
+        if full_key in self._cache:
+            return self._cache[full_key]
+        if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
+            raise KeyError(full_key)
+
+        filename = self._full_to_file[full_key]
+        filepath = self._model_path / filename
+        if not filepath.exists():
+            raise KeyError(f"Attempted to load weight {full_key} from file {filepath} but the file does not exist.")
+
+        f = self._get_handle(filename)
+        tensor = f.get_tensor(full_key)
+        self._cache[full_key] = tensor
+        return tensor
+
     def _passes_layer_filter(self, full_key: str) -> bool:
         if self._num_layers is None:
             return True
@@ -184,19 +224,19 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         full_key = self._full_key(key)
         if full_key in self._cache:
             return self._cache[full_key]
-        if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
+        if full_key in self._full_to_file and self._passes_layer_filter(full_key):
+            return self._load_tensor(full_key)
+
+        alias = self._resolve_stacked_expert_alias(full_key)
+        if alias is None:
             raise KeyError(key)
 
-        filename = self._full_to_file[full_key]
-        filepath = self._model_path / filename
-        if not filepath.exists():
-            raise KeyError(f"Attempted to load weight {full_key} from file {filepath} but the file does not exist.")
-
-        # Reuse shard-level handle to avoid creating a new mmap per tensor
-        f = self._get_handle(filename)
-        tensor = f.get_tensor(full_key)
+        stacked_full_key, expert_idx = alias
+        stacked_tensor = self._load_tensor(stacked_full_key)
+        if expert_idx >= stacked_tensor.shape[0]:
+            raise KeyError(key)
+        tensor = stacked_tensor[expert_idx]
         self._cache[full_key] = tensor
-
         return tensor
 
     def __contains__(self, key: object) -> bool:
@@ -206,7 +246,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         if not isinstance(key, str):
             raise TypeError(f"Key must be a string but got {type(key)}")
         full_key = self._full_key(key)
-        return full_key in self._full_to_file and self._passes_layer_filter(full_key)
+        if full_key in self._full_to_file and self._passes_layer_filter(full_key):
+            return True
+        return self._resolve_stacked_expert_alias(full_key) is not None
 
     def __iter__(self) -> Iterator[str]:
         """

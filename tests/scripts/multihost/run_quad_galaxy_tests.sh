@@ -89,7 +89,7 @@ setup_dual_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
@@ -117,14 +117,14 @@ setup_quad_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
     export USE_TORUS_MODE=1
 }
 
 # Compute pytest --timeout value.
-# When DEEPSEEK_V3_CACHE_OVERRIDE is set (cache recalculation), add 6 hours.
+# When DEEPSEEK_V3_CACHE_OVERRIDE is set (custom DeepSeek cache dir), add 6 hours.
 _demo_timeout() {
     local base_timeout=$1
     local cache_extra=21600  # 6 hours

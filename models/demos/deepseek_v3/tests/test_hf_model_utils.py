@@ -110,7 +110,7 @@ def test_save_dequantized_hf_checkpoint_exports_bf16_weights(tmp_path: Path):
     output_dir = tmp_path / "deepseek-source-dequantized"
     quantized_weight, inverse_scale, plain_weight, integer_weight = _create_quantized_checkpoint(source_dir)
 
-    saved_path = save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir)
+    saved_path = save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=False)
 
     assert saved_path == output_dir.resolve()
     assert (output_dir / "config.json").is_file()
@@ -132,6 +132,28 @@ def test_save_dequantized_hf_checkpoint_exports_bf16_weights(tmp_path: Path):
         assert torch.equal(state_dict["w_int"], integer_weight)
     finally:
         state_dict.close()
+
+
+def test_save_dequantized_hf_checkpoint_defaults_to_stacked_export(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    saved_path = save_dequantized_hf_checkpoint(source_dir)
+
+    assert saved_path == output_dir.resolve()
+    output_index = json.loads((output_dir / "model.safetensors.index.json").read_text())
+    assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" in output_index["weight_map"]
+    assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in output_index["weight_map"]
 
 
 def test_save_dequantized_hf_checkpoint_can_stack_experts(tmp_path: Path):
@@ -177,7 +199,11 @@ def test_save_dequantized_hf_checkpoint_can_stack_experts(tmp_path: Path):
         )
         assert stacked_gate.dtype == torch.bfloat16
         assert torch.equal(stacked_gate, expected_gate)
-        assert "model.layers.0.mlp.experts.0.gate_proj.weight" not in state_dict
+        assert "model.layers.0.mlp.experts.0.gate_proj.weight" in state_dict
+        assert torch.equal(
+            state_dict["model.layers.0.mlp.experts.0.gate_proj.weight"],
+            expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"].to(torch.bfloat16),
+        )
         assert torch.equal(state_dict["lm_head.weight"], expert_tensors["lm_head.weight"].to(torch.bfloat16))
     finally:
         state_dict.close()

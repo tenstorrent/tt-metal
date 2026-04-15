@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 from copy import deepcopy
 from pathlib import Path
 
@@ -51,7 +52,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
-from models.demos.deepseek_v3.utils.hf_model_utils import default_dequantized_model_path
+from models.demos.deepseek_v3.utils.hf_model_utils import default_stacked_dequantized_model_path
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -114,6 +115,31 @@ class _OverrideStateDict:
     def values(self):
         for k in self._base:
             yield self[k]
+
+
+def test_bspm_state_dict_applies_overrides_to_stacked_expert_weights():
+    from models.demos.deepseek_v3.scripts.convert_bspm_weights import _BsprnStateDict
+
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(2 * 32 * 32, dtype=torch.bfloat16).reshape(2, 32, 32)
+    state_dict = {stacked_key: stacked_weight}
+    hf_config = types.SimpleNamespace(first_k_dense_replace=3)
+
+    wrapped_state_dict = _BsprnStateDict(
+        state_dict,
+        hf_config,
+        Path("/tmp"),
+        "unused",
+        "B",
+        3.5,
+    )
+    wrapped_state_dict._codes_cache[3] = np.array([[[0], [1], [1]], [[1], [1], [1]]], dtype=np.int32)
+    wrapped_state_dict._qdq = lambda tensor, mant_bits: tensor + mant_bits
+
+    result = wrapped_state_dict[stacked_key]
+
+    assert torch.equal(result[0], stacked_weight[0] + 7)
+    assert torch.equal(result[1], stacked_weight[1])
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +384,10 @@ def test_bspm_vs_uniform_5layers_decode(
 
     # Load from the dequantized (BF16) checkpoint — the raw HF checkpoint for
     # DeepSeek-R1-0528 uses float8_e4m3fn; convert_weights requires BF16 tensors.
-    deq_path = default_dequantized_model_path(model_path)
+    deq_path = default_stacked_dequantized_model_path(model_path)
     if not deq_path.exists():
         pytest.skip(
-            f"Dequantized checkpoint not found at {deq_path}. "
+            f"Stacked dequantized checkpoint not found at {deq_path}. "
             f"Run save_dequantized_hf_checkpoint() first to create it."
         )
     deq_state_dict_5 = sub_state_dict(LazyStateDict(deq_path), "", NUM_LAYERS)

@@ -426,3 +426,24 @@ def test_view_override_parent_layer_filter(tmp_path: Path):
     assert "0.k" in loose_keys
     assert "1.k" in loose_keys
     assert "3.k" in loose_keys
+
+
+def test_stacked_expert_alias_resolves_per_expert_keys(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    assert expert_key in state
+    assert torch.equal(state[expert_key], stacked_tensor[1])
+
+    sub = sub_state_dict(state, "model.layers.3.mlp.")
+    sub_expert_key = "experts.2.gate_proj.weight"
+    assert sub_expert_key in sub
+    assert torch.equal(sub[sub_expert_key], stacked_tensor[2])

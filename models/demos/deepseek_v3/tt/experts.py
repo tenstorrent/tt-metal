@@ -32,6 +32,7 @@ class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
 
     WEIGHT_TORCH_DTYPE = torch.bfloat16
+    _warned_legacy_expert_checkpoint = False
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -62,6 +63,18 @@ class Experts(AbstractModule):
                         f"Expected stacked expert weight '{stacked_weight_name}' to have rank 3, got {stacked_weight.ndim}"
                     )
                 return stacked_weight.contiguous()
+
+            if not cls._warned_legacy_expert_checkpoint:
+                logger.warning(
+                    "Stacked expert tensors were not found in the DeepSeek checkpoint. "
+                    "Falling back to the slower legacy per-expert compatibility path. "
+                    "Generate a stacked checkpoint with "
+                    "`python models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py "
+                    "<source-model-path> --stack-experts` "
+                    "and point `DEEPSEEK_V3_HF_MODEL` or `--model-path` at the resulting "
+                    "`*-dequantized-stacked` directory."
+                )
+                cls._warned_legacy_expert_checkpoint = True
 
             weight_name = f"{hf_name}.weight"
             expert_weights: list[torch.Tensor] = []

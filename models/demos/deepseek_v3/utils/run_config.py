@@ -429,7 +429,12 @@ def iter_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | 
 
 
 def deallocate_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | SavedWeight | None) -> None:
+    seen_tensor_ids: set[int] = set()
     for tensor in iter_weight_config_tensors(weight_config_item):
+        tensor_id = id(tensor)
+        if tensor_id in seen_tensor_ids:
+            continue
+        seen_tensor_ids.add(tensor_id)
         try:
             ttnn.deallocate(tensor)
         except Exception as exc:

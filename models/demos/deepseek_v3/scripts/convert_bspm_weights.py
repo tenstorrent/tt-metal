@@ -46,6 +46,7 @@ from transformers import AutoConfig
 _TT_CODE_TO_MANT: dict[int, int | None] = {0: 7, 1: 3, 2: 1, 3: None}
 _PROJ_IDX = {"gate_proj": 0, "up_proj": 1, "down_proj": 2}
 _EXPERT_KEY_RE = re.compile(r"model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(\w+)\.weight$")
+_STACKED_EXPERT_KEY_RE = re.compile(r"model\.layers\.(\d+)\.mlp\.experts_stacked\.(\w+)\.weight$")
 
 
 class _BsprnStateDict:
@@ -96,6 +97,23 @@ class _BsprnStateDict:
                 codes = self._codes_for_layer(layer_idx)
                 if codes is not None and expert_idx < codes.shape[0]:
                     return self._apply_bspm(self._base[key], codes, expert_idx, proj_name)
+        m = _STACKED_EXPERT_KEY_RE.match(key)
+        if m:
+            layer_idx, proj_name = int(m.group(1)), m.group(2)
+            if layer_idx >= self._first_k_dense and proj_name in _PROJ_IDX:
+                codes = self._codes_for_layer(layer_idx)
+                if codes is not None:
+                    stacked_weight = self._base[key]
+                    if stacked_weight.ndim != 3:
+                        raise ValueError(
+                            f"Expected stacked expert tensor '{key}' to have rank 3, got {stacked_weight.ndim}"
+                        )
+                    return torch.stack(
+                        [
+                            self._apply_bspm(stacked_weight[expert_idx], codes, expert_idx, proj_name)
+                            for expert_idx in range(stacked_weight.shape[0])
+                        ]
+                    ).contiguous()
         return self._base[key]
 
     def __contains__(self, key):
@@ -217,13 +235,22 @@ def main() -> None:
     args = create_parser().parse_args()
 
     # ── Resolve dequantized model path ──────────────────────────────────────
-    from models.demos.deepseek_v3.utils.hf_model_utils import default_dequantized_model_path
+    from models.demos.deepseek_v3.utils.hf_model_utils import (
+        default_dequantized_model_path,
+        default_stacked_dequantized_model_path,
+    )
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
-    deq_path = default_dequantized_model_path(args.model_path)
+    if args.model_path.name.endswith("-dequantized-stacked") or args.model_path.name.endswith("-dequantized"):
+        deq_path = args.model_path
+    else:
+        stacked_path = default_stacked_dequantized_model_path(args.model_path)
+        dequantized_path = default_dequantized_model_path(args.model_path)
+        deq_path = stacked_path if stacked_path.exists() else dequantized_path
     if not deq_path.exists():
         logger.error(
-            f"Dequantized checkpoint not found at {deq_path}. " f"Run scripts/dequantize_hf_checkpoint.py first."
+            f"Dequantized DeepSeek checkpoint not found at {deq_path}. "
+            f"Run scripts/dequantize_hf_checkpoint.py first."
         )
         sys.exit(1)
 
@@ -294,6 +321,7 @@ def main() -> None:
             output_path,
             mesh_device,
             force_recalculate=True,
+            emit_weight_cache=True,
         )
         logger.info(f"Weight conversion done in {time.time() - t1:.1f}s")
         logger.info(f"BSPM weight cache written to {output_path}")

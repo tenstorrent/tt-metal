@@ -17,7 +17,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
-from models.demos.deepseek_v3.utils.run_config import WeightConfig
+from models.demos.deepseek_v3.utils.run_config import WeightConfig, deallocate_weight_config_tensors
 
 
 @contextmanager
@@ -126,6 +126,7 @@ def get_weight_config(
     model_path: str | None = None,
     single_layer: str | None = None,
     cache_subdir_name: str | None = None,
+    emit_weight_cache: bool = False,
 ):
     """
     Convert HuggingFace weights directly into in-memory TTNN tensors.
@@ -143,6 +144,9 @@ def get_weight_config(
         single_layer: Optional single layer name (used for validation with random weights)
         cache_subdir_name: Optional cache subdirectory name under ``weight_cache_path``.
             Defaults to ``"{num_hidden_layers}_layers"``.
+        emit_weight_cache: If True, persist converted TTNN tensors to a legacy on-disk
+            weight cache rooted at ``weight_cache_path``. This is intended only for
+            compatibility flows such as BSPM cache export.
 
     Returns:
         Weight configuration dictionary
@@ -187,6 +191,13 @@ def get_weight_config(
             )
         validate_weight_config_paths(output_path, weight_config)
         return normalize_weight_config_paths(output_path, weight_config)
+    if emit_weight_cache:
+        if weight_cache_path is None:
+            raise ValueError("weight_cache_path must be provided when emit_weight_cache=True")
+        logger.info(f"Persisting converted DeepSeek weights to a legacy weight cache at {output_path}")
+        saved_weight_config = save_weight_config(output_path, weight_config)
+        deallocate_weight_config_tensors(weight_config)
+        return saved_weight_config
     return weight_config
 
 
@@ -198,6 +209,90 @@ def contains_saved_weights(weight_config: Any) -> bool:
     if isinstance(weight_config, (list, tuple)):
         return any(contains_saved_weights(value) for value in weight_config)
     return False
+
+
+def _tensor_cache_relpath(path_components: tuple[str, ...]) -> Path:
+    if not path_components:
+        raise ValueError("Cannot persist a TTNN tensor without a path in the weight-config tree")
+    return Path(*path_components[:-1]) / f"{path_components[-1]}{TENSOR_CACHE_EXTENSION}"
+
+
+def _save_weight_config_item(
+    root_path: Path,
+    weight_config: Any,
+    *,
+    path_components: tuple[str, ...],
+    seen_tensors: dict[int, SavedWeight],
+) -> Any:
+    if isinstance(weight_config, ttnn.Tensor):
+        tensor_id = id(weight_config)
+        if tensor_id in seen_tensors:
+            cached = seen_tensors[tensor_id]
+            return SavedWeight(path=cached.path, memory_config=cached.memory_config)
+
+        rel_path = _tensor_cache_relpath(path_components)
+        abs_path = root_path / rel_path
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        ttnn.dump_tensor(abs_path, weight_config)
+        saved_weight = SavedWeight(path=rel_path, memory_config=weight_config.memory_config())
+        seen_tensors[tensor_id] = saved_weight
+        return SavedWeight(path=rel_path, memory_config=saved_weight.memory_config)
+
+    if isinstance(weight_config, dict):
+        return {
+            key: _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(key)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for key, value in weight_config.items()
+        }
+
+    if isinstance(weight_config, list):
+        return [
+            _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(idx)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for idx, value in enumerate(weight_config)
+        ]
+
+    if isinstance(weight_config, tuple):
+        return tuple(
+            _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(idx)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for idx, value in enumerate(weight_config)
+        )
+
+    return weight_config
+
+
+def save_weight_config(root_path: Path, weight_config: WeightConfig) -> WeightConfig:
+    """Persist a TTNN-backed weight config as a legacy ``config.json`` + ``.tensorbin`` cache."""
+    root_path.mkdir(parents=True, exist_ok=True)
+    serialized_weight_config = _save_weight_config_item(
+        root_path,
+        weight_config,
+        path_components=(),
+        seen_tensors={},
+    )
+    config_path = root_path / "config.json"
+    with locked_file(config_path, "w", exclusive=True) as f:
+        json.dump(serialized_weight_config, f, cls=WeightConfigEncoder)
+    return normalize_weight_config_paths(root_path, serialized_weight_config)
 
 
 def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:

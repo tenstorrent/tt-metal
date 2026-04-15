@@ -28,8 +28,9 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-model-path",
         type=Path,
         default=None,
-        help="Output directory for the dequantized checkpoint. Defaults to '<source>-dequantized'.",
+        help="Output directory for the dequantized checkpoint. Defaults to '<source>-dequantized-stacked'.",
     )
+    parser.set_defaults(stack_experts=True)
     parser.add_argument(
         "--force",
         action="store_true",
@@ -38,7 +39,13 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stack-experts",
         action="store_true",
-        help="Export per-layer stacked expert tensors under 'experts_stacked.*.weight' and omit per-expert tensors.",
+        help="Export per-layer stacked expert tensors under 'experts_stacked.*.weight' and omit per-expert tensors. This is the default.",
+    )
+    parser.add_argument(
+        "--no-stack-experts",
+        dest="stack_experts",
+        action="store_false",
+        help="Export the legacy non-stacked dequantized checkpoint format.",
     )
     return parser
 

@@ -10,7 +10,11 @@ from typing import Sequence
 import pytest
 import torch
 
-from models.demos.deepseek_v3.utils.hf_model_utils import load_weight_from_weights_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import (
+    DEQUANTIZED_CHECKPOINT_SUFFIX,
+    STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX,
+    load_weight_from_weights_dict,
+)
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
 REFERENCE_WEIGHT_KEYS = [
@@ -137,8 +141,12 @@ def _resolve_quantized_model_path(model_path: Path) -> Path | None:
         return candidate if candidate.is_dir() else None
 
     model_path = Path(model_path).resolve()
-    if model_path.name.endswith("-dequantized"):
-        candidate = model_path.with_name(model_path.name.removesuffix("-dequantized"))
+    if model_path.name.endswith(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX):
+        candidate = model_path.with_name(model_path.name.removesuffix(STACKED_DEQUANTIZED_CHECKPOINT_SUFFIX))
+        return candidate if candidate.is_dir() else None
+
+    if model_path.name.endswith(DEQUANTIZED_CHECKPOINT_SUFFIX):
+        candidate = model_path.with_name(model_path.name.removesuffix(DEQUANTIZED_CHECKPOINT_SUFFIX))
         return candidate if candidate.is_dir() else None
 
     return None
@@ -268,7 +276,7 @@ def test_dequantized_checkpoint_has_all_original_weights(model_path):
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     deq_path = Path(model_path).resolve()
@@ -305,7 +313,7 @@ def test_saved_dequantized_reference_weights_match_old_pipeline(model_path, hf_c
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     quantized_state_dict = load_state_dict(quantized_model_path, "")
@@ -331,7 +339,7 @@ def test_all_saved_dequantized_weights_match_old_pipeline(model_path, hf_config,
     if quantized_model_path is None:
         pytest.skip(
             f"Could not resolve the original quantized checkpoint. Set {QUANTIZED_MODEL_PATH_ENV_VAR} "
-            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized' checkpoint."
+            "or run with DEEPSEEK_V3_HF_MODEL pointing at a '-dequantized-stacked' checkpoint."
         )
 
     quantized_state_dict = load_state_dict(quantized_model_path, "")
