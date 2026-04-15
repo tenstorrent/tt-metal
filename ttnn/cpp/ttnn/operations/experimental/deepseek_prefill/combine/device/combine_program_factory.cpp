@@ -675,6 +675,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             .defines = writer_defines});
 
     // Compute kernel on idle cores that untilizes dispatched_buffer data
+    const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
+    uint32_t block_ct_dim = 8;
+    while (full_ct_dim % block_ct_dim != 0) {
+        --block_ct_dim;
+    }
+
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
@@ -682,12 +688,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         idle_core_grid,
         tt::tt_metal::ComputeConfig{
             .compile_args = {
-                static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_signal_id (CB used for signaling on the same core that
-                                                          // data is loaded and ready to be untilized)
-                static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_untilize_id (untilized dispatched_buffer data)
-                static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_in_id (dispatched_buffer data)
-                static_cast<uint32_t>(hidden_size),       // hidden_size
-                static_cast<uint32_t>(read_batch_size),   // read_batch_size
+                static_cast<uint32_t>(
+                    tt::CBIndex::c_3),  // 0: cb_signal_id (CB used for signaling on the same core that
+                                        //    data is loaded and ready to be untilized)
+                static_cast<uint32_t>(tt::CBIndex::c_2),  // 1: cb_untilize_id (untilized dispatched_buffer data)
+                static_cast<uint32_t>(tt::CBIndex::c_0),  // 2: cb_in_id (dispatched_buffer data)
+                read_batch_size,                          // 3: read_batch_size
+                full_ct_dim,                              // 4: full_ct_dim = hidden_size / 32
+                block_ct_dim,                             // 5: block_ct_dim = largest divisor of full_ct_dim <= 8
             }});
 
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)

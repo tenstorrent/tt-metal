@@ -26,17 +26,16 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 //   0: cb_signal_id    - CB for reader->compute signaling (c_17)
 //   1: cb_untilize_id  - CB for compute untilized output (c_18)
 //   2: cb_in_id        - CB for untilize input tile data (c_0)
-//   3: hidden_size     - hidden dimension (e.g., 7168)
-//   4: read_batch_size - number of rows per untilize batch (e.g., 32)
+//   3: read_batch_size - number of rows per untilize batch (e.g., 32)
+//   4: full_ct_dim     - hidden_size / 32 (e.g., 224 for hidden_size=7168)
+//   5: block_ct_dim    - largest divisor of full_ct_dim <= 8
 void kernel_main() {
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(2);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(3);
-    constexpr uint32_t read_batch_size = get_compile_time_arg_val(4);
-
-    constexpr uint32_t block_ct_dim = 8;
-    constexpr uint32_t full_ct_dim = hidden_size / 32;
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(3);
+    constexpr uint32_t full_ct_dim = get_compile_time_arg_val(4);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(5);
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
 
     compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
