@@ -122,8 +122,7 @@ void RemoteCompileCoordinator::finish() {
                     write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
                 }
 
-                fs::create_directories(pend.descriptor.output_dir);
-                std::ofstream marker(pend.descriptor.output_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+                tt::jit_build::utils::create_file(pend.descriptor.output_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 
                 pend.dedup_promise->set_value();
                 pend.dedup_promise.reset();
