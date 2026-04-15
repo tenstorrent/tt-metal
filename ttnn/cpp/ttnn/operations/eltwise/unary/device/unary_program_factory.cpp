@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::prim {
@@ -21,7 +22,7 @@ static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/
 
 using namespace tt::constants;
 
-UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
+tt::tt_metal::ProgramDescriptor UnaryProgramFactory::create_descriptor(
     const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -30,7 +31,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     const auto& ops_chain = args.op_chain;
     uint32_t packed_scalar1 = 0u;
     uint32_t packed_scalar2 = 0u;
-    tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -47,56 +47,62 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
-    // For bitcast, use output format for input CB to avoid unpacker conversion
-    // This ensures raw bit copying without conversion
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    // Set CB page size correctly based on layout (tile size for tile layout, buffer page size for row-major)
+    // Set CB page size correctly based on layout
     const uint32_t input_cb_page_size = is_row_major ? src_buffer->page_size() : single_tile_size;
     const uint32_t output_cb_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
 
+    // For bitcast, use output format for input CB to avoid unpacker conversion
     tt::DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * input_cb_page_size, {{src0_cb_index, cb_data_format_for_input}})
-            .set_page_size(src0_cb_index, input_cb_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    ProgramDescriptor desc;
+
+    // ---- Circular buffers ----
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * input_cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format_for_input,
+            .page_size = input_cb_page_size,
+        }}},
+    });
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * output_cb_page_size, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, output_cb_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * output_cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = cb_data_format_output,
+            .page_size = output_cb_page_size,
+        }}},
+    });
+
+    // ---- Kernel compile-time args and defines ----
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_pages_per_core_group_1,  // per_core_block_cnt
         1,                           // per_core_block_size
     };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
@@ -133,98 +139,119 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     const auto default_fp32_acc_math_fidelity =
-        (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+        (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0)
+            ? tt::tt_metal::MathFidelity::HiFi3
+            : tt::tt_metal::MathFidelity::HiFi4;
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
-        program,
-        path,
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = default_fp32_acc_math_fidelity,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = unary_defines});
+    // Convert map defines to vector of pairs for KernelDescriptor
+    KernelDescriptor::Defines kernel_defines;
+    for (const auto& [key, value] : unary_defines) {
+        kernel_defines.emplace_back(key, value);
+    }
 
-    auto eltwise_unary_kernel_group_2_id = 0;
-    if (!core_group_2.ranges().empty()) {
+    // ---- Reader kernel ----
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    // ---- Writer kernel ----
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    // ---- Compute kernel (core_group_1) ----
+
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = path;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = compute_kernel_args_group_1;
+    compute_desc_1.defines = kernel_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = default_fp32_acc_math_fidelity,
+        .fp32_dest_acc_en = args.fp32_dest_acc_en,
+        .unpack_to_dest_mode =
+            {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
+        .bfp8_pack_precise = args.bfp8_pack_precise,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    // ---- Compute kernel (core_group_2, if non-empty) ----
+
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_pages_per_core_group_2,  // per_core_block_cnt
             1,                           // per_core_block_size
         };
 
-        eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            path,
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = default_fp32_acc_math_fidelity,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = unary_defines});
+        compute_desc_2.kernel_source = path;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = compute_kernel_args_group_2;
+        compute_desc_2.defines = kernel_defines;
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = default_fp32_acc_math_fidelity,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode =
+                {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .math_approx_mode = math_approx_mode,
+        };
     }
+
+    // ---- Per-core runtime args ----
 
     for (uint32_t i = 0, num_pages_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
-        auto kernel_id = eltwise_unary_kernel_group_1_id;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_2;
-            kernel_id = eltwise_unary_kernel_group_2_id;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_pages_per_core, num_pages_written});
+        reader_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), num_pages_per_core, num_pages_written});
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_pages_per_core, num_pages_written});
+        writer_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_pages_per_core, num_pages_written});
 
-        tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {packed_scalar1, packed_scalar2});
+        // Compute runtime args go to the appropriate core group's descriptor
+        if (core_group_1.contains(core)) {
+            compute_desc_1.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{packed_scalar1, packed_scalar2});
+        } else if (has_core_group_2) {
+            compute_desc_2.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{packed_scalar1, packed_scalar2});
+        }
+
         num_pages_written += num_pages_per_core;
     }
 
-    return cached_program_t{
-        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
-}
-
-void UnaryProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const UnaryParams& /*operation_attributes*/,
-    const UnaryInputs& tensor_args,
-    Tensor& output) {
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    const uint32_t num_cores = cached_program.shared_variables.num_cores;
-    const uint32_t num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    auto& program = cached_program.program;
-
-    const auto& input = tensor_args.input;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
 
 // Sub Core Grids : should be fused later with UnaryProgramFactory directing all_device_cores to use cores from
@@ -250,11 +277,6 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-
-    // TODO:
-    // auto compute_with_storage_grid_size = sub_core_grids.value();
-    // auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-    //     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
     uint32_t ncores = sub_core_grids->num_cores();
 
@@ -324,7 +346,8 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
         (uint32_t)ntiles_per_block,  // per_block_num_tiles // per_core_block_size
     };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
@@ -361,8 +384,9 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     const auto default_fp32_acc_math_fidelity_sub =
-        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
-                                                                                   : tt::tt_metal::MathFidelity::HiFi4;
+        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0)
+            ? tt::tt_metal::MathFidelity::HiFi3
+            : tt::tt_metal::MathFidelity::HiFi4;
 
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,
