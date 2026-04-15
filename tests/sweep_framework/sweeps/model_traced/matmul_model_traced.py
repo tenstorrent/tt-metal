@@ -114,7 +114,10 @@ def _create_tensor(torch_tensor, dtype, layout, device, memory_config, is_host, 
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        return ttnn.interleaved_to_sharded(tensor, memory_config)
+        try:
+            return ttnn.interleaved_to_sharded(tensor, memory_config)
+        except Exception:
+            return tensor  # Stay on DRAM if shard conversion fails
 
     return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
@@ -250,9 +253,11 @@ def run(
         err_msg = str(e)
         if ("circular buffers" in err_msg and "clash with L1 buffers" in err_msg) or (
             "single_block_size" in err_msg
+        ) or (
+            "beyond max L1 size" in err_msg
         ):
-            # L1 CB clash or tilize work-split failure: the traced sharded memory
-            # config is incompatible. Retry with DRAM interleaved inputs.
+            # L1 CB clash / tilize work-split failure / L1 overflow: the traced sharded
+            # memory config is incompatible. Retry with DRAM interleaved inputs.
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
