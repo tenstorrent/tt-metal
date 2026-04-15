@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -76,14 +75,7 @@ def test_eltwise_bcast_col_custom(
     broadcast_type,
     input_dimensions_A,
     input_dimensions_B,
-    workers_tensix_coordinates,
 ):
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and cpp_source == "sources/multiple_tiles_eltwise_custom_test.cpp"
-    ):
-        pytest.skip("Custom test not supported on Wormhole")
-
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
@@ -155,7 +147,7 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     res_from_L1 = untilize_block(
         res_from_L1, formats.output_format, input_dimensions_A
