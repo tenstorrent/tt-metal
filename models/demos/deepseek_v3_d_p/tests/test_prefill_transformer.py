@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefill
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    ABC_1K_PATH,
     PROMPTS_PATH,
     create_hf_model,
     download_infinitebench_subset,
@@ -53,7 +54,6 @@ PCC_THRESHOLD = 0.99
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
-ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
 
 
 @pytest.skipif(not is_blackhole(), reason="Requires Blackhole.")
@@ -222,7 +222,6 @@ def test_prefill_transformer(
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
                 prompt_text = json.load(f)["prompt"]
-            token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
         else:
             raise ValueError(f"Unknown input_source: {input_source}")
         token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)

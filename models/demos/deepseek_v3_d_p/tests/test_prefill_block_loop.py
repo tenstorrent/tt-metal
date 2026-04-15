@@ -23,6 +23,7 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
+from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -35,7 +36,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPTS_PATH,
     create_hf_model_with_weights,
-    tokenize_prompts_to_isl,
+    get_4d_causal_mask,
+    tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -359,7 +361,12 @@ def test_prefill_block_loop(
     # 2. Tokenize & embed (shared initial input)
     # ------------------------------------------------------------------
     tok = request.getfixturevalue("tokenizer")
-    token_ids = tokenize_prompts_to_isl(tok, PROMPTS_PATH, isl_total, sp_factor)
+
+    prompts = load_prompts_from_json(str(PROMPTS_PATH))
+    prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+    token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+
     logger.info(f"Token IDs shape: {token_ids.shape}, first 10: {token_ids[0, :10].tolist()}")
 
     with torch.no_grad():
@@ -394,10 +401,7 @@ def test_prefill_block_loop(
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
-
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-    attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
-
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
 
     # Shard initial input to device
