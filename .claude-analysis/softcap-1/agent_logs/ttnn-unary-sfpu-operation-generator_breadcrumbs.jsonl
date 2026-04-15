@@ -25,3 +25,6 @@
 {"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-tester","status":"failed","error":"kernel compilation failure - SFPI incompatible operations","ts":"2026-04-14T23:53:13+00:00"}
 {"event":"iteration_decision","iteration":2,"reason":"tester reported compilation errors in SFPU kernel - using incompatible operations","action":"orchestrator fixing SFPU kernel directly","ts":"2026-04-14T23:53:13+00:00"}
 {"event":"phase_complete","phase":4,"phase_name":"Testing","status":"partial","tests_passed":"3/6","tests_failed":"3/6","issue":"fp32 tests fail due to Pade approximation precision limits","ts":"2026-04-15T00:20:12+00:00"}
+{"event":"phase_start","phase":5,"phase_name":"Documentation","ts":"2026-04-15T00:20:40+00:00"}
+{"event":"phase_complete","phase":5,"phase_name":"Documentation","status":"ok","ts":"2026-04-15T00:21:31+00:00"}
+{"event":"pipeline_complete","op_name":"softcap","final_status":"PARTIAL","total_iterations":10,"phases_completed":[1,2,3,4,5],"tests_passed":"3/6","tests_failed":"3/6","ts":"2026-04-15T00:21:31+00:00"}
