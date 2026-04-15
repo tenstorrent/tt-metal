@@ -13,8 +13,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -155,19 +153,6 @@ def test_llama_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
-            )
-        )
-    }
 
     prompts = ["Life is "] * model_args.max_batch_size
     if dummy_weights:
@@ -176,15 +161,14 @@ def test_llama_model_inference(
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.create_tokenizer()
         # if instruct:
         #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
         # else:
         encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer()
 
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -408,11 +392,11 @@ def test_llama_model_inference(
                 if cache_pcc:
                     for l in range(model_args.n_layers):
                         pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
+                            reference_model.cache_k[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
+                            reference_model.cache_v[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                         ]
                         tt_layer_present = []

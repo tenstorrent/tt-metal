@@ -20,7 +20,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.common.sampling.tt_sampling import TTSampling
 
@@ -182,7 +181,7 @@ def run_llama3_demo(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]

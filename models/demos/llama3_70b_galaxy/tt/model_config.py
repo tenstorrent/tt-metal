@@ -9,7 +9,6 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -30,6 +29,7 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
+    convert_meta_to_hf,
     standardize_hf_keys,
 )
 
@@ -2284,10 +2284,12 @@ class TtModelArgs:
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
         if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
+            hf_model = self.reference_transformer(wrap=False)
+            hf_state_dict = hf_model.state_dict()
+            hf_state_dict = standardize_hf_keys(hf_state_dict)
+            meta_state_dict = convert_hf_to_meta(hf_state_dict, self.head_dim)
             state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in meta_state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
@@ -2308,6 +2310,82 @@ class TtModelArgs:
                 state_dict.pop(k)
 
         return state_dict
+
+    def reference_transformer(self, wrap=True):
+        """Return an HF reference model (wrapped or raw) for use in unit tests."""
+        from transformers import AutoConfig, AutoModelForCausalLM
+
+        if self.dummy_weights:
+            config = AutoConfig.from_pretrained(
+                self.CKPT_DIR,
+                local_files_only=os.getenv("CI") == "true",
+            )
+            config.num_hidden_layers = self.n_layers
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    config=config,
+                    torch_dtype="auto",
+                    local_files_only=True,
+                )
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Could not load pretrained with local_files_only, creating from config: {e}")
+                model = AutoModelForCausalLM.from_config(config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                self.CKPT_DIR,
+                torch_dtype="auto",
+                local_files_only=os.getenv("CI") == "true",
+            )
+            model.model.layers = model.model.layers[: self.n_layers]
+
+        if wrap:
+            from models.tt_transformers.tt.model_config import HfModelWrapper
+
+            return HfModelWrapper(model, self.head_dim, use_hf_rope=False)
+        return model
+
+    def reference_mlp(self):
+        """Return the HF MLP layer from layer 0 with a Meta→HF load_state_dict shim."""
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_rms_norm(self):
+        """Return the HF input_layernorm from layer 0 (same 'weight' key as Meta RMSNorm)."""
+        model = self.reference_transformer(wrap=False)
+        return model.model.layers[0].input_layernorm
+
+    def reference_attention(self):
+        """Return an HfAttentionWrapper around layer 0's self_attn."""
+        import inspect
+        from models.tt_transformers.tt.model_config import HfAttentionWrapper
+
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].self_attn
+        use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
+        return HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb if use_position_embeddings else None,
+            use_hf_rope=False,
+        )
+
+    def reference_decoder(self):
+        """Return an HfDecoderWrapper around layer 0."""
+        from models.tt_transformers.tt.model_config import HfDecoderWrapper
+
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0]
+        return HfDecoderWrapper(
+            layer,
+            self.head_dim,
+            model.model.rotary_emb,
+            use_hf_rope=False,
+        )
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""

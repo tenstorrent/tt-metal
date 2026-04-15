@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -69,13 +68,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     }
 
     model_args.WEIGHTS_DTYPE = dtype
-    ff_hidden_dim = model_args.hidden_dim if model_args.multiple_of is None else 4 * model_args.dim
-    reference_model = FeedForward(
-        dim=model_args.dim,
-        hidden_dim=ff_hidden_dim,
-        multiple_of=model_args.multiple_of,
-        ffn_dim_multiplier=model_args.ffn_dim_multiplier,
-    )
+    reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtLlamaMLP(

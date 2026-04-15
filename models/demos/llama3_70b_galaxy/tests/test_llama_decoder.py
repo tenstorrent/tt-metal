@@ -13,7 +13,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -92,13 +91,7 @@ def test_llama_decoder_inference(
     )
 
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model = model_args.reference_decoder()
 
     generation_start_pos = 127
     generation_length = 10

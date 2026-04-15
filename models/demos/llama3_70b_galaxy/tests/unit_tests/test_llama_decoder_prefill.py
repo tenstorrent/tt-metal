@@ -12,7 +12,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock, precompute_freqs_cis
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -80,7 +79,7 @@ def test_llama_decoder_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
@@ -156,18 +155,10 @@ def test_llama_decoder_inference(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))
-        freqs_cis_i = precompute_freqs_cis(
-            model_args.head_dim,
-            model_args.max_seq_len * 2,
-            model_args.rope_theta,
-            model_args.use_scaled_rope,
-            model_args.rope_scaling_factor,
-        )[positions]
-
         # Reference model
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        ref_output = reference_model(pt_decode_input, positions[0], None, mask=attn_mask_torch)
         # Run TT model
         tt_out, _ = tt_model(decode_input, None, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
         tt_out = ttnn.to_torch(

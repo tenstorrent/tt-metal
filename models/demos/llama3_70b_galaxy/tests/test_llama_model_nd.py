@@ -12,7 +12,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import skip_for_blackhole
 
 
@@ -120,7 +119,7 @@ def test_llama_model_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
 
     prompts = ["Test"] * model_args.max_batch_size
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.create_tokenizer()
     encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     # Embedding on host
