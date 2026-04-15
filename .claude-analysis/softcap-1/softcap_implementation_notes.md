@@ -80,7 +80,47 @@ The implementation follows standard TTNN SFPU operation patterns exactly:
 - For very large |x/cap| values, tanh approaches ±1 and softcap approaches ±cap
 - No explicit saturation handling, relying on tanh's built-in behavior
 
-## Testing Recommendations
+## Testing Attempts and Issues
+
+### Test Run 1: Python Binding Missing
+**Issue**: `ttnn.softcap` was not available in Python
+**Root Cause**: Missing Python binding in `unary_nanobind.cpp`
+**Fix Applied**: Added Python binding for softcap operation with proper documentation and default parameters
+
+### Test Run 2: Kernel Header Include Error
+**Issue**: Compilation failed with "trigonometry.h: No such file or directory"
+**Root Cause**: Incorrect include in `eltwise_sfpu.cpp`
+**Fix Applied**: Changed `#include "api/compute/eltwise_unary/trigonometry.h"` to `#include "api/compute/eltwise_unary/softcap.h"`
+
+### Test Run 3: Additional Missing Headers
+**Issue**: Compilation failed due to missing `ckernel_sfpu_mul_int32.h`
+**Root Cause**: Unnecessary includes in compute kernel
+**Fix Applied**: Removed problematic includes (`mul_int_sfpu.h`, `rpow.h`, `rdiv.h`, `fill.h`)
+
+### Test Run 4: SFPU Type Compilation Errors
+**Issue**: Multiple compilation errors related to SFPU type definitions
+**Root Cause**: Potential compatibility issues with SFPU infrastructure
+**Status**: Unresolved - compilation still fails
+
+### Test Run 5: Segmentation Fault
+**Issue**: Direct test of ttnn.softcap caused segmentation fault
+**Root Cause**: Unknown - could be related to implementation issues or missing SFPU kernel components
+**Status**: Unresolved
+
+## Current Status: FAILED
+The softcap implementation has critical issues that prevent testing:
+1. ✅ Python binding registered
+2. ✅ Basic header includes fixed
+3. ❌ SFPU compilation errors
+4. ❌ Runtime segmentation fault
+
+## Next Steps Required
+1. **Investigate SFPU compilation errors** - May need to examine SFPU type definitions and template specializations
+2. **Review SFPU kernel implementation** - The ckernel_sfpu_softcap.h files may have implementation issues
+3. **Check parameter handling** - Verify that parameter packing/unpacking is correct
+4. **Validate against working operations** - Compare implementation against known working SFPU operations like swish
+
+## Testing Recommendations (When Fixed)
 
 1. **Parameter Validation**: Test with edge cases (very small cap, very large cap)
 2. **Range Testing**: Test with various input ranges to verify tanh behavior
