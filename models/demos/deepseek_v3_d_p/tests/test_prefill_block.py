@@ -18,6 +18,7 @@ from transformers import DynamicCache
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -25,18 +26,18 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    ABC_1K_PATH,
     create_hf_model,
     extract_layer_state_dict,
-    tokenize_prompts_to_isl,
+    get_4d_causal_mask,
+    tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-PCC_THRESHOLD_DENSE = 0.999
-PCC_THRESHOLD_MOE_GATE_HOST = 0.993
-PCC_THRESHOLD_MOE_GATE_DEVICE = 0.980
-PCC_THRESHOLD_KVPE = 0.99
-
-ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
+PCC_THRESHOLD_DENSE = 0.996
+PCC_THRESHOLD_MOE_GATE_HOST = 0.996
+PCC_THRESHOLD_MOE_GATE_DEVICE = 0.995
+PCC_THRESHOLD_KVPE = 0.999
 
 
 @pytest.mark.parametrize(
@@ -133,7 +134,10 @@ def test_prefill_block(
     if input_source == "abc_1k":
         profiler.start("tokenization")
         tok = request.getfixturevalue("tokenizer")
-        token_ids = tokenize_prompts_to_isl(tok, ABC_1K_PATH, isl_total, sp_factor)
+        prompts = load_prompts_from_json(str(ABC_1K_PATH))
+        prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
         profiler.end("tokenization")
         logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
         with torch.no_grad():
