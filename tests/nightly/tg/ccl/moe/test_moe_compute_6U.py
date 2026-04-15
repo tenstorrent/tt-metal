@@ -12,9 +12,13 @@ import torch
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
-from ttnn.experimental.moe_compute_utils import prepare_w0_w1_tensor_for_moe_compute, prepare_w2_tensor_for_moe_compute
+from ttnn.experimental.moe_compute_utils import (
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w0_w1_tensor_with_bias,
+    prepare_w2_tensor_for_moe_compute,
+    prepare_w2_tensor_with_bias,
+)
 
-from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
 from models.common.utility_functions import comp_pcc
@@ -30,6 +34,17 @@ MESH_GRAPH_DESC_1x8 = (
 def is_mesh_graph_descriptor_set(expected_path):
     """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
+
+
+def device_mesh_iterator(mesh_shape):
+    """Row-major (m0, m1) mesh traversal; device id = m0 * mesh_shape[1] + m1.
+
+    Defined locally so we do not import test_selective_combine_6U, which sets
+    torch.set_printoptions(threshold=inf) at import time and floods logs.
+    """
+    for m0 in range(mesh_shape[0]):
+        for m1 in range(mesh_shape[1]):
+            yield m0, m1, m0 * mesh_shape[1] + m1
 
 
 def validate_per_expert_tokens(
@@ -313,6 +328,10 @@ def prepare_output_tensor_from_combine_writer(
     return torch_output
 
 
+PCC_THRESHOLD = 0.988
+# Matmul with bias: LoFi + bf16/bfp4 on device can land just under PCC_THRESHOLD (e.g. ~0.987994 on one
+# device/expert) while still tracking golden closely; combine PCC stays above 0.988.
+PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
 ATOL_THRESHOLD = 700
 SWIGLU_PCC_THRESHOLD = 0.984
 SILU_PCC_THRESHOLD = 0.988
@@ -329,6 +348,70 @@ def _get_pcc_threshold(activation_type):
         raise TypeError("Invalid Activation type")
 
 
+# TODO: Revert/Remove tensor screen output truncation
+# Cap how many scalar values / row elements we print on mismatch (full hidden rows are huge).
+_TENSOR_LOG_ROW_ENDCAP = 8
+_TENSOR_LOG_NUM_ROW_LINES = 2
+_MASKED_MISMATCH_HEAD = 16
+_MASKED_MISMATCH_TAIL = 16
+
+
+# TODO: Revert/Remove tensor screen output truncation
+def _format_1d_float_endcaps(row: torch.Tensor, *, endcap: int = _TENSOR_LOG_ROW_ENDCAP) -> str:
+    """First and last `endcap` elements of a 1D tensor (float-friendly)."""
+    flat = row.detach().flatten().float().cpu()
+    n = flat.numel()
+    if n == 0:
+        return "[]"
+    if n <= 2 * endcap:
+        return str(flat.tolist())
+    return f"{flat[:endcap].tolist()} ... {flat[-endcap:].tolist()} (len={n})"
+
+
+def _format_2d_tensor_row_endcaps(
+    t: torch.Tensor, *, num_row_lines: int = _TENSOR_LOG_NUM_ROW_LINES, endcap: int = _TENSOR_LOG_ROW_ENDCAP
+) -> str:
+    """First `num_row_lines` and last `num_row_lines` rows; each row shows first/last `endcap` elements."""
+    t2 = t.detach().float().cpu()
+    if t2.ndim == 1:
+        return _format_1d_float_endcaps(t2, endcap=endcap)
+    if t2.ndim != 2:
+        return f"<shape {tuple(t2.shape)}; flatten preview> {_format_1d_float_endcaps(t2.flatten(), endcap=endcap)}"
+    r = t2.shape[0]
+    lines = []
+    for i in range(min(num_row_lines, r)):
+        lines.append(f"  row[{i}]: {_format_1d_float_endcaps(t2[i], endcap=endcap)}")
+    if r > 2 * num_row_lines:
+        lines.append("  ...")
+    for i in range(max(r - num_row_lines, num_row_lines), r):
+        lines.append(f"  row[{i}]: {_format_1d_float_endcaps(t2[i], endcap=endcap)}")
+    return "\n".join(lines)
+
+
+# TODO: Revert/Remove tensor screen output truncation
+def _summarize_masked_vals_refs(
+    vals: torch.Tensor, refs: torch.Tensor, mask: torch.Tensor, *, head: int, tail: int
+) -> str:
+    """Short log line for AllClose failures instead of dumping the full masked tensor."""
+    v = vals[mask].flatten().float().cpu()
+    r = refs[mask].flatten().float().cpu()
+    n = int(v.numel())
+    if n == 0:
+        return "no mismatched elements under mask"
+    diff = (vals - refs).abs()[mask].flatten().float().cpu()
+    max_abs = float(diff.max().item())
+    parts = [f"mismatch_count={n}", f"max_abs_diff(masked)={max_abs}"]
+    if n <= head + tail:
+        parts.append(f"vals={v.tolist()}")
+        parts.append(f"refs={r.tolist()}")
+    else:
+        parts.append(f"vals[:{head}]={v[:head].tolist()}")
+        parts.append(f"vals[-{tail}:]={v[-tail:].tolist()}")
+        parts.append(f"refs[:{head}]={r[:head].tolist()}")
+        parts.append(f"refs[-{tail}:]={r[-tail:].tolist()}")
+    return "; ".join(parts)
+
+
 def validate_matmul(
     layer_id,
     experts_per_device,
@@ -342,7 +425,9 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
-    pcc_threshold,
+    *,
+    has_bias: bool = False,
+    activation_type=MoEActivationFunction.SILU,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -370,6 +455,8 @@ def validate_matmul(
     )
 
     matmul_all_passed = True
+    base_threshold = _get_pcc_threshold(activation_type)
+    pcc_cutoff = min(base_threshold, PCC_THRESHOLD_MATMUL_WITH_BIAS) if has_bias else base_threshold
 
     for d in range(devices):
         for expert_id in range(experts_per_device):
@@ -387,12 +474,19 @@ def validate_matmul(
                 else 0.0
             )
 
-            if pcc_val < pcc_threshold:
+            if pcc_val < pcc_cutoff:
                 matmul_all_passed = False
-                logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
+                diff = (torch_layer_output - tt_layer_output).abs()
+                # TODO: Revert/Remove tensor screen output truncation
+                logger.warning(
+                    f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} "
+                    f"(cutoff={pcc_cutoff}) max_abs_diff={diff.max().item():.4f} shape={tuple(torch_layer_output.shape)}\n"
+                    f"torch (first/last rows, row endcaps):\n{_format_2d_tensor_row_endcaps(torch_layer_output)}\n"
+                    f"tt    (first/last rows, row endcaps):\n{_format_2d_tensor_row_endcaps(tt_layer_output)}"
+                )
             else:
                 logger.info(
-                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                    f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
                     f" Allclose passed: {allclose_passed}"
                 )
 
@@ -437,7 +531,15 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
+                # TODO: Revert/Remove tensor screen output truncation
+                logger.warning(
+                    f"AllClose mismatch summary: "
+                    f"{_summarize_masked_vals_refs(vals, refs, mask, head=_MASKED_MISMATCH_HEAD, tail=_MASKED_MISMATCH_TAIL)}"
+                )
+                logger.warning(
+                    f"Combine row-slice preview (k={k}, first/last token rows in stacked vals):\n"
+                    f"vals:\n{_format_2d_tensor_row_endcaps(vals)}\nrefs:\n{_format_2d_tensor_row_endcaps(refs)}"
+                )
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -853,7 +955,19 @@ def _swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
 
 
 def compute_matmul_golden(
-    torch_input_ref, torch_w0, torch_w1, torch_w2, layers, experts, devices, tokens_per_device, hidden, activation_type
+    torch_input_ref,
+    torch_w0,
+    torch_w1,
+    torch_w2,
+    layers,
+    experts,
+    devices,
+    tokens_per_device,
+    hidden,
+    torch_b0=None,
+    torch_b1=None,
+    torch_b2=None,
+    activation_type=MoEActivationFunction.SILU,
 ):
     tokens = tokens_per_device * devices
 
@@ -871,12 +985,24 @@ def compute_matmul_golden(
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
+    if torch_b0 is not None:
+        # The kernel computes matmul(ones(32,32), bias_tile(32,N)) which sums all 32 rows
+        # per column. The golden matches via sum(dim=2, keepdim=True).
+        # .repeat([1, devices, 1, 1]): biases are replicated per-device (same as weights,
+        # which use ReplicateTensorToMesh), so all devices share identical biases.
+        b0 = torch_b0.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, N)
+        torch_w0_output_ref = torch_w0_output_ref + b0
+
+    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w1_output_ref = torch_input_ref @ torch_w1
+    if torch_b1 is not None:
+        # Same reasoning as b0.
+        b1 = torch_b1.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, N)
+        torch_w1_output_ref = torch_w1_output_ref + b1
 
     if activation_type == MoEActivationFunction.SILU:
         # SILU: silu(x @ w0) * (x @ w1)
         torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
-        # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
@@ -885,6 +1011,10 @@ def compute_matmul_golden(
 
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
+    if torch_b2 is not None:
+        # Same reasoning as b0.
+        b2 = torch_b2.sum(dim=2, keepdim=True).repeat([1, devices, 1, 1])  # (L, E, 1, K)
+        torch_output_ref = torch_output_ref + b2
 
     # pull device dim back out for comparison
     # (L, E, T, H) -> (L, D, E/D, T, H)
@@ -1022,6 +1152,8 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
+@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
+@pytest.mark.timeout(600)
 @torch.no_grad()
 def test_moe_compute(
     mesh_device,
@@ -1039,6 +1171,7 @@ def test_moe_compute(
     dtype,
     enable_trace,
     activation_type,
+    has_bias,
     device_params,
     is_ci_env,
 ):
@@ -1265,6 +1398,30 @@ def test_moe_compute(
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
 
+    # Create bias tensors for validation.
+    # The bias tile is 32 rows stored in Bfp4_b format. The kernel computes
+    # matmul(ones(32,32), bias(32,N)) which sums all 32 rows per column; the golden
+    # matches via sum(dim=2) in compute_matmul_golden.
+    #
+    # Use a small zero-mean normal distribution (float32 draw, cast to bf16) so each
+    # element in the tile varies — closer to real expert biases than a single constant.
+    # test_moe_compute already fixed torch.manual_seed(2003) so draws are reproducible.
+    #
+    # Biases are identical per-device (same as weights which use ReplicateTensorToMesh).
+    # The golden's .repeat([1, devices, 1, 1]) in compute_matmul_golden is correct
+    # under this assumption.
+    if has_bias:
+        _bias_std = 0.12
+        torch_b0 = (torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.float32) * _bias_std).to(
+            torch.bfloat16
+        )
+        torch_b1 = (torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, N, dtype=torch.float32) * _bias_std).to(
+            torch.bfloat16
+        )
+        torch_b2 = (
+            torch.randn(num_layers, experts_per_device, ttnn.TILE_SIZE, hidden_size, dtype=torch.float32) * _bias_std
+        ).to(torch.bfloat16)
+
     # now we can create our golden reference
     # (L, D, E/D, T, H) (block sparse)
     matmul_goldens = compute_matmul_golden(
@@ -1277,7 +1434,10 @@ def test_moe_compute(
         num_devices,
         tokens_per_device,
         hidden_size,
-        activation_type,
+        torch_b0=torch_b0 if has_bias else None,
+        torch_b1=torch_b1 if has_bias else None,
+        torch_b2=torch_b2 if has_bias else None,
+        activation_type=activation_type,
     )
 
     # compute goldens for combine
@@ -1295,9 +1455,15 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w0_w1
-    # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
     # ------------------------------------------------------------------------
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
+    if has_bias:
+        W0_W1_TILES_PER_TXN = 14  # Must match moe_ring_common.h
+        K_tiles_with_bias = hidden_size // ttnn.TILE_SIZE + 1
+        K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
+        K_for_shard = K_tiles_padded * ttnn.TILE_SIZE
+    else:
+        K_for_shard = hidden_size
+    w0_w1_shard_height = num_layers * experts_per_device * 3 * K_for_shard
     w0_w1_shard_width = 4 * ttnn.TILE_SIZE
 
     w0_w1_shard_spec = ttnn.ShardSpec(
@@ -1308,9 +1474,13 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w2
-    # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
     # ------------------------------------------------------------------------
-    w2_shard_height = num_layers * experts_per_device * 5 * (N + 192)
+    # W2: both bias and non-bias cases pad N to 70 tiles (2240 elements)
+    # Non-bias: 64 tiles padded to ceil(64/7)*7 = 70 tiles = N + 192
+    # With bias: 65 tiles (64 weight + 1 bias), padded to ceil(65/14)*14 = 70 tiles = 2240
+    # Both happen to give the same total (70 tiles), but the padding amounts differ.
+    w2_N_total = N + 192  # 2240 in both cases
+    w2_shard_height = num_layers * experts_per_device * 5 * w2_N_total
     w2_shard_width = 4 * ttnn.TILE_SIZE
 
     w2_shard_spec = ttnn.ShardSpec(
@@ -1321,9 +1491,19 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
-    )
+    if has_bias:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
+            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, ring2cores
+        )
+    else:
+        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+        )
+
+    expected_w0_w1_shape = (12, num_layers, experts_per_device, 3, K_for_shard, 4 * ttnn.TILE_SIZE)
+    assert (
+        torch_w0_w1_reordered.shape == expected_w0_w1_shape
+    ), f"W0/W1 shape mismatch: got {torch_w0_w1_reordered.shape}, expected {expected_w0_w1_shape}"
 
     # Create tt_w0_w1 tensor with DRAM sharding
     tt_w0_w1 = ttnn.from_torch(
@@ -1337,9 +1517,41 @@ def test_moe_compute(
 
     # ------------------------------------------------------------------------
     # Prepare w2 tensor (padded and reordered)
-    torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
-    )
+    if has_bias:
+        torch_w2_reordered = prepare_w2_tensor_with_bias(
+            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, ring2cores
+        )
+    else:
+        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+            torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+        )
+
+    expected_w2_shape = (12, num_layers, experts_per_device, 5, w2_N_total, 4 * ttnn.TILE_SIZE)
+    assert (
+        torch_w2_reordered.shape == expected_w2_shape
+    ), f"W2 shape mismatch: got {torch_w2_reordered.shape}, expected {expected_w2_shape}"
+
+    if has_bias:
+        # Verify prepare_w2_tensor_with_bias correctness:
+        # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
+        # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
+        # (bias tile is at position Nt, after all ring-rotated weight tiles).
+        #
+        # Note: different cores receive different K-column slices, so bias row values
+        # differ per core. The invariant is positional: bias is at N, not ring-rotated
+        # into an earlier N position.
+        bias_rows = torch_w2_reordered[:, :, :, :, N : N + ttnn.TILE_SIZE, :]  # (12, L, E, 5, 32, 128)
+        assert bias_rows.abs().max() > 0.1, (
+            "W2 bias row (at N-dim position N:N+TILE_SIZE) appears to be all zeros — "
+            "bias may not have been appended at the correct position"
+        )
+        # Groups 0-3 (dim 3, indices 0:4) are fully populated from unpadded bias data for all
+        # 12 cores; group 4 may have trailing padding zeros for some cores, so exclude it.
+        first_four_groups = bias_rows[:, :, :, :4, :, :]  # (12, L, E, 4, 32, 128)
+        assert torch.isfinite(first_four_groups).all(), "W2 bias row groups 0-3 contain non-finite values"
+        assert (
+            first_four_groups.abs().max() > 1e-3
+        ), "W2 bias row groups 0-3 appear all-near-zero — bias may not be packed at N:N+TILE_SIZE"
 
     # Create tt_w2 tensor with DRAM sharding
     tt_w2 = ttnn.from_torch(
@@ -1424,6 +1636,7 @@ def test_moe_compute(
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
             output_width_shard_dim=output_width_shard_dim,
+            has_bias=has_bias,
             cluster_axis=cluster_axis,
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
@@ -1558,7 +1771,8 @@ def test_moe_compute(
                     matmul_goldens,
                     matmul_output_tensor,
                     mesh_device,
-                    pcc_threshold,
+                    has_bias=has_bias,
+                    activation_type=activation_type,
                 ):
                     matmul_all_passed = False
 

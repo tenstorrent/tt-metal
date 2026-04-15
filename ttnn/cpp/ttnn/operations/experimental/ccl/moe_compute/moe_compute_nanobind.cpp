@@ -37,6 +37,7 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("layer_id"),
         nb::arg("output_height_shard_dim"),
         nb::arg("output_width_shard_dim"),
+        nb::arg("has_bias") = false,
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),

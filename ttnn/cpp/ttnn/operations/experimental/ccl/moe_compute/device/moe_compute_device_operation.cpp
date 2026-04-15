@@ -208,6 +208,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
+    const bool has_bias,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
@@ -252,6 +253,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
+            .has_bias = has_bias,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{
