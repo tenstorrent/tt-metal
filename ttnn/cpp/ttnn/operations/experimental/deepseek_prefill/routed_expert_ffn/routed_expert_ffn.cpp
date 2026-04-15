@@ -280,7 +280,10 @@ ttnn::Tensor routed_expert_ffn(
     std::optional<ttnn::Tensor> output) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
 
-    if (M_tiles > 64) {
+    // The optimized path uses manually configured matmul program configs that are tuned
+    // for Blackhole's larger L1. Fall back to default (auto-configured) matmuls on
+    // Wormhole and for large M.
+    if (M_tiles > 64 || x.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         return routed_expert_ffn_default(
             /*x=*/x,
             /*gate_proj=*/gate_proj,
