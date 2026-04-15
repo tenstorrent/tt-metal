@@ -99,7 +99,9 @@ class MoE(AbstractModuleBase):
 
         # Load balancing bias buffer (on device, TILE layout)
         bias_np = np.zeros((1, 1, 1, config.n_routed_experts), dtype=np.float32)
-        self._expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(bias_np, ttnn.Layout.TILE))
+        self._expert_bias = Buffer(
+            ttml.autograd.Tensor.from_numpy(bias_np, ttnn.Layout.TILE, new_type=ttnn.bfloat16)
+        )
 
         # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
         # Each forward adds to this; update_expert_bias reads and resets it.
