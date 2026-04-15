@@ -7,7 +7,6 @@ import time
 
 import pytest
 import torch
-from diffusers.utils import export_to_video
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
@@ -106,6 +105,7 @@ def test_stability(
                     num_inference_steps=num_inference_steps,
                     guidance_scale=3.0,
                     guidance_scale_2=4.0,
+                    output_type="uint8",
                 )
 
             # Check output
@@ -117,13 +117,15 @@ def test_stability(
             print("✓ Inference completed successfully")
             print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
 
-            # Save video using diffusers utility
+            # Save video
             # Remove batch dimension
             frames_to_save = frames[0]
             out_path = os.path.join(
                 "wan_outputs",
                 f"wan_stability_prompt_{prompt_idx}_iter{iteration}.mp4",
             )
+            from models.tt_dit.utils.video import export_to_video
+
             export_to_video(frames_to_save, out_path, fps=16)
             print(f"✓ Saved video to: {out_path}")
 
