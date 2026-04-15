@@ -8,6 +8,7 @@
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
 #include <string_view>
+#include <tt_stl/assert.hpp>
 
 std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {
@@ -57,6 +58,65 @@ bool tt::is_integer_format(DataFormat format) {
         (format == DataFormat::UInt32) || (format == DataFormat::Int8) || (format == DataFormat::UInt16) ||
         (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32) ||
         (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+}
+
+// TT-1.x (Wormhole / Blackhole) host-side enumeration.
+bool is_supported_wormhole_blackhole(tt::DataFormat format, bool is_blackhole) {
+    switch (format) {
+        case tt::DataFormat::Bfp2:
+        case tt::DataFormat::Bfp2_b:
+        case tt::DataFormat::Bfp4:
+        case tt::DataFormat::Bfp4_b:
+        case tt::DataFormat::Bfp8:
+        case tt::DataFormat::Bfp8_b:
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8:
+        case tt::DataFormat::UInt16:
+        case tt::DataFormat::UInt32: return true;
+        case tt::DataFormat::Fp8_e4m3: return is_blackhole;
+        case tt::DataFormat::Invalid:
+        default: return false;
+    }
+}
+
+// TT-2.x (Quasar) host-side enumeration.
+bool is_supported_quasar(tt::DataFormat format) {
+    switch (format) {
+        case tt::DataFormat::Float16:
+        case tt::DataFormat::Float16_b:
+        case tt::DataFormat::Float32:
+        case tt::DataFormat::Fp8_e4m3:
+        case tt::DataFormat::Int8:
+        case tt::DataFormat::Int16:
+        case tt::DataFormat::Int32:
+        case tt::DataFormat::Lf8:
+        case tt::DataFormat::RawUInt8:
+        case tt::DataFormat::RawUInt16:
+        case tt::DataFormat::RawUInt32:
+        case tt::DataFormat::Tf32:
+        case tt::DataFormat::UInt8: return true;
+        case tt::DataFormat::Invalid:
+        default: return false;
+    }
+}
+
+bool tt::is_data_format_supported(DataFormat format, ARCH arch) {
+    switch (arch) {
+        case ARCH::WORMHOLE_B0: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/false);
+        case ARCH::BLACKHOLE: return is_supported_wormhole_blackhole(format, /*is_blackhole=*/true);
+        case ARCH::QUASAR: return is_supported_quasar(format);
+        case ARCH::Invalid:
+        default: TT_FATAL(false, "Unsupported architecture");
+    }
 }
 
 std::ostream& tt::operator<<(std::ostream& os, const DataFormat& format) {
