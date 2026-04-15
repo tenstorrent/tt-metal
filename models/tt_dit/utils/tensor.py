@@ -65,9 +65,14 @@ def bf16_tensor(
 
 
 def float32_tensor(
-    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+    x: torch.Tensor,
+    device: ttnn.Device | None = None,
+    mesh_axis=None,
+    shard_dim=None,
+    layout=ttnn.TILE_LAYOUT,
+    on_host=False,
 ) -> ttnn.Tensor:
-    return typed_tensor(x, ttnn.float32, device, mesh_axis, shard_dim, layout)
+    return typed_tensor(x, ttnn.float32, device, mesh_axis, shard_dim, layout, on_host=on_host)
 
 
 def bf16_tensor_host(

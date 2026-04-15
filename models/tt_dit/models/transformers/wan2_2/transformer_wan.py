@@ -591,7 +591,17 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep):
+    def inner_step(
+        self,
+        spatial_1BNI,
+        prompt_1BLP,
+        rope_cos_1HND,
+        rope_sin_1HND,
+        trans_mat,
+        N,
+        timestep,
+        gather_output: bool = True,
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -634,11 +644,12 @@ class WanTransformer3DModel(Module):
         )
 
         # Gather fp32 spatial output across sequence parallel devices (remains on device)
-        spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
-            proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-        )
+        if gather_output:
+            proj_out_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            )
 
-        return spatial_1BNI
+        return proj_out_1BNI
 
     # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
@@ -654,6 +665,7 @@ class WanTransformer3DModel(Module):
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance_scale: float,
+        gather_output: bool = True,
     ) -> ttnn.Tensor:
         cond = self.inner_step(
             spatial_1BNI,
@@ -663,6 +675,7 @@ class WanTransformer3DModel(Module):
             trans_mat,
             N,
             timestep,
+            gather_output=gather_output,
         )
         if not do_classifier_free_guidance:
             return cond

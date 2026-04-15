@@ -76,13 +76,13 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
-[[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
+std::optional<MeshCoordinate> get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
         if (mesh_device->impl().is_local(coord)) {
             return coord;
         }
     }
-    TT_THROW("No local device found for range");
+    return std::nullopt;
 }
 
 }  // namespace
@@ -1217,7 +1217,12 @@ void FDMeshCommandQueue::record_end() {
         // cache manager to give each range a clean slate.
         this->reset_prefetcher_cache_manager();
 
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
+        auto local_coord = get_local_start_coord(mesh_device_, range);
+        if (!local_coord.has_value()) {
+            // This range has no local devices on the current host; skip it.
+            continue;
+        }
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(*local_coord)->sysmem_manager();
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             worker_launch_message_buffer_state[sub_device_id].reset();
@@ -1341,12 +1346,14 @@ void FDMeshCommandQueue::record_end() {
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
 #if defined(TRACY_ENABLE)
-            for (auto& [is_multicast, original_launch_msg, launch_msg] :
-                 cached_program_command_sequence.launch_messages) {
-                auto* device = mesh_device_->get_device(range.start_coord());
-                TT_ASSERT(range.start_coord() == range.end_coord());
-                launch_msg.kernel_config().host_assigned_id() =
-                    tt_metal::detail::EncodePerDeviceProgramID(node.program_runtime_id, device->id());
+            if (mesh_device_->impl().is_local(range.start_coord())) {
+                for (auto& [is_multicast, original_launch_msg, launch_msg] :
+                     cached_program_command_sequence.launch_messages) {
+                    auto* device = mesh_device_->get_device(range.start_coord());
+                    TT_ASSERT(range.start_coord() == range.end_coord());
+                    launch_msg.kernel_config().host_assigned_id() =
+                        tt_metal::detail::EncodePerDeviceProgramID(node.program_runtime_id, device->id());
+                }
             }
 #endif
 
