@@ -167,7 +167,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
-            max_prompts=24,
+            max_prompts=64,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -197,7 +197,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,
@@ -228,7 +228,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         _demo_case(
-            max_prompts=512,
+            max_prompts=128,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -258,7 +258,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,
