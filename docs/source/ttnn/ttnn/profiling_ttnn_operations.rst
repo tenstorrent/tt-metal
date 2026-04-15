@@ -240,16 +240,22 @@ The following metrics are automatically computed from raw counters. Each metric 
 These metrics depend on hardware signals inactive on Blackhole and are automatically hidden from BH output.
 
 - **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE). On Blackhole, falls back to ``FIDELITY_PHASE_STALLS / ref_cnt`` since ``MATH_INSTRN_STARTED`` is inactive.
-- **Math Src Data Ready Rate (%)**: Cycles where math was not blocked by source data.
 - **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
 - **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
-- **Packer Engine 0/1/2 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
+- **Packer Engine 0/1/2/3 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
+- **Packer Load Imbalance (%)**: Spread between most and least utilized pack engines.
 - **Unpacker0/1 Write Efficiency (%)**: Source register write throughput per unpacker.
 - **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability.
 
 *Additional Idle Waits*
 
 - **MMIO/SFPU/THCON/MOVE Idle Wait T0/T1 (%)**: Fraction of total cycles each thread spent waiting for specific hardware units.
+
+*Composite Metrics*
+
+- **Stall Cause Overlap T0/T1/T2 (x)**: Ratio of sum of stall reasons to total stalls per thread. >1.0 means multiple stall conditions overlap.
+- **Compute-to-Unpack Ratio (%)**: MATH_COUNTER / unpack busy. >100% = compute-bound, <100% = memory-bound.
+- **Unpack/Math/Pack Instrn Issue Rate T0/T1/T2**: Instructions issued per cycle per thread.
 
 **Architecture Differences**
 

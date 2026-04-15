@@ -20,7 +20,7 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 
 3. **Kernel ends**: TRISC1 calls `stop_perf_counter()` which freezes all counters. The counter values remain latched in the debug registers.
 
-4. **BRISC reads counters**: After all TRISCs complete (`wait_ncrisc_trisc()`), BRISC calls `read_perf_counters()` which reads each counter by cycling through `counter_sel` values. Each counter value is packed into a 64-bit profiler marker and written to BRISC's profiler buffer. Between counter groups, BRISC calls `quick_push()` to flush the buffer to DRAM when it fills up. TRISCs cannot do this because they have no NOC access.
+4. **BRISC reads counters**: After all TRISCs complete (`wait_ncrisc_trisc()`), BRISC calls `read_perf_counters()` which loops over enabled counter groups, reading each counter by cycling through `counter_sel` values. Each counter value is packed into a 64-bit profiler marker and written to BRISC's profiler buffer. Before each group (starting from the 2nd), BRISC calls `perf_counter_flush()` to push the buffer to DRAM, ensuring each group starts with a fresh buffer. TRISCs cannot do this because they have no NOC access.
 
 5. **Host reads**: After the kernel completes, the host reads the profiler data from DRAM and decodes each marker into a counter type, value, and reference count.
 
@@ -43,11 +43,11 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | Tensix raw counters | 181 (0 dead) | 230 (12 empirically-dead filtered) |
 | Derived metrics | 68+ | 68+ |
 
-**Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 5 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH), `MATH_INSTRN_NOT_BLOCKED_SRC` (grant sel 256 = `hf_cycles==2'b11`, always 0 since fidelity off), and `INSTRN_2_HF_CYCLES` (grant sel 257 = `hf_cycles==2'b01`, always 0). The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
+**Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. RTL-dead counters (`FIDELITY_PHASE_STALLS`, `MATH_INSTRN_NOT_BLOCKED_SRC`, `INSTRN_2_HF_CYCLES`, `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT`) have been removed from the counter arrays entirely and are not read from hardware. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
 **Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive on silicon. 14 dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
-**INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog concatenation in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons (thcon, unpack, pack, math, sem_zero, sem_max, move, trisc_reg_access, sfpu) start at sel 39 on WH and sel 31 on BH. The `instrn_counters` array is split by `#if defined(ARCH_BLACKHOLE)` to handle this difference.
+**INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog generate array in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons use **thread-major layout**: on WH sels 39-47 = all 9 stall types for thread 0, sels 48-56 = thread 1, sels 57-65 = thread 2 (order within each thread: thcon, unpack, pack, math, sem_zero, sem_max, move, mmio, sfpu). On BH the same layout starts at sel 31. Both req and grant counters for these stall reasons are now read (grant = `inst_stall_thread[th]` per-thread). The counter arrays are in arch-specific `hw_counters.h` files; `perf_counters.hpp` is arch-agnostic (WH defines empty L1_2/3/4 arrays).
 
 **Note**: Per-thread instruction issue/grant counters exist (e.g. `*_INSTRN_ISSUED_*`), but there is no dedicated counter for *total* instructions per thread. Sel 24-26 measures total stall cycles per thread (`THREAD_STALLS`), not instruction counts. The `Thread IPC` metric was removed for this reason.
 
@@ -795,13 +795,11 @@ When the packer is busy, how often does L1 serve it.
 | **Counter group** | L1_0 + PACK |
 
 ```
-Packer L1 Efficiency = min(100, L1_0_PORT1_GRANT / PACKER_BUSY * 100)
+Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
 ```
 
-- **High value (100%)**: L1 always serves packer when busy. Matmul shows 100%.
+- **High value (>100%)**: L1 port has headroom. Values can exceed 100% because the packer port is shared with other clients (ECC on WH, other traffic on BH), so grant cycles may exceed packer busy cycles.
 - **Low value (<50%)**: Packer is being starved by L1.
-
-**Note:** Capped at 100% because the packer port is shared with other clients (ECC on WH, other traffic on BH).
 
 **Use case:** Confirms packer is not L1-bottlenecked. Low values would indicate L1 port contention affecting write-back.
 
@@ -848,6 +846,67 @@ TDMA vs NOC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NOC_Out + NOC_In) * 100
 
 ---
 
+**39. Stall Cause Overlap Factor T0/T1/T2**
+
+Ratio of the sum of all 9 per-thread stall reason counters to the total thread stalls. Values >1.0 mean multiple stall conditions are active simultaneously.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN |
+
+```
+Stall Overlap TN = sum(all 9 WAITING_FOR_*_N) / THREAD_STALLS_N
+```
+
+- **~1.0x**: Single dominant stall cause. The thread is stalled for one reason at a time.
+- **>2.0x**: Multiple hardware units are busy simultaneously when the thread stalls. Common for Thread 2 (pack) which may have move + pack stalls overlapping.
+
+**Use case:** Tells you whether to focus on a single bottleneck or multiple interacting ones.
+
+---
+
+**40. Packer Load Imbalance**
+
+Spread between the most and least utilized packer engines. WH only (PACK_COUNT=4).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole only |
+| **Counter group** | PACK |
+
+```
+Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
+```
+
+- **Low value (<10%)**: Work is evenly distributed across pack engines.
+- **High value (>25%)**: Significant imbalance. Some engines are idle while others are busy.
+
+**Use case:** Detects uneven work distribution across WH's 4 packer engines which may indicate suboptimal tile packing.
+
+---
+
+**41. Compute-to-Unpack Ratio**
+
+Whether the operation is compute-bound or memory-bound.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | FPU + UNPACK |
+
+```
+Compute-to-Unpack Ratio = MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY) * 100
+```
+
+- **>100%**: Compute-bound — math takes longer than data unpacking.
+- **~50%**: Balanced between compute and data movement. Matmul shows ~53%.
+- **<20%**: Memory-bound — unpackers are busy much longer than math.
+
+**Use case:** Quick one-number diagnostic for whether to optimize compute kernels or data placement.
+
+---
+
 ### Architecture-Specific Metrics
 
 Some of these metrics use BH-specific fallback formulas. Others are truly Wormhole-only (marked below) because the required hardware signal is inactive on Blackhole.
@@ -876,23 +935,9 @@ On Blackhole, `MATH_INSTRN_STARTED` is inactive. The BH fallback uses `FIDELITY_
 
 ---
 
-**40. Math Src Data Ready Rate**
+**40. Math Src Data Ready Rate** *(Inactive)*
 
-Fraction of cycles where math was not blocked by source data unavailability.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole only |
-| **Counter group** | UNPACK |
-
-```
-Math Src Data Ready Rate = MATH_INSTRN_NOT_BLOCKED_SRC / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **High value (>90%)**: Source data is almost always ready when math needs it.
-- **Low value (<50%)**: Math frequently blocked waiting for source data from unpackers.
-
-**Not available on Blackhole**: `MATH_INSTRN_NOT_BLOCKED_SRC` is inactive on BH.
+This metric is currently inactive on all architectures. The counter it depends on (`MATH_INSTRN_NOT_BLOCKED_SRC`, grant sel 256 = `hf_cycles==2'b11`) is always 0 because `fidelity_phases_ongoing = 1'b0` on both WH and BH, making `hf_cycles` permanently `2'b00`. The counter has been removed from the hw_counters.h arrays.
 
 **Use case:** Identifies source data starvation as the cause of math pipeline stalls.
 
