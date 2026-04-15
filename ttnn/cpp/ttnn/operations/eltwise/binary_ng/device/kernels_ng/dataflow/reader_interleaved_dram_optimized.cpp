@@ -38,8 +38,15 @@ void kernel_main() {
 
     constexpr uint32_t large_chunk = num_batches * num_tiles_per_batch;
 
-    cb_reserve_back(cb_a, large_chunk);
-    cb_reserve_back(cb_b, large_chunk);
+    auto get_chunk = [](uint32_t remaining) -> uint32_t {
+        if (remaining >= large_chunk) {
+            return large_chunk;
+        } else if (remaining >= num_tiles_per_batch) {
+            return num_tiles_per_batch;
+        } else {
+            return remaining;
+        }
+    };
 
     uint32_t a_write_base_ptr = get_write_ptr(cb_a);
     uint32_t b_write_base_ptr = get_write_ptr(cb_b);
@@ -61,25 +68,47 @@ void kernel_main() {
 
     uint32_t a_addr_ofs = 0;
     uint32_t b_addr_ofs = 0;
-    uint32_t trid = 1u;
-    uint32_t trid_to_wait = trid;
     uint32_t remaining = num_tiles;
-    bool first_iter = true;
-    uint32_t prev_chunk = 0;
 
+    // Issue first chunk: reserve space, then DMA
+    uint32_t chunk = get_chunk(remaining);
+    uint32_t a_transfer_sz = chunk * a_tile_size;
+    uint32_t b_transfer_sz = chunk * b_tile_size;
+
+    cb_reserve_back(cb_a, chunk);
+    cb_reserve_back(cb_b, chunk);
+
+    uint32_t trid = 1u;
+    noc_async_read_set_trid(trid);
+
+    noc_async_read_one_packet_set_state<true>(a_noc_addr, a_transfer_sz);
+    noc_async_read_one_packet_with_state_with_trid(a_noc_addr, a_addr_ofs, a_write_ptr, trid);
+    a_addr_ofs += a_transfer_sz;
+    a_write_ptr = next_cb_addr(a_write_ptr, a_tile_size, a_write_base_ptr, a_write_end_ptr, chunk);
+
+    noc_async_read_one_packet_set_state<true>(b_noc_addr, b_transfer_sz);
+    noc_async_read_one_packet_with_state_with_trid(b_noc_addr, b_addr_ofs, b_write_ptr, trid);
+    b_addr_ofs += b_transfer_sz;
+    b_write_ptr = next_cb_addr(b_write_ptr, b_tile_size, b_write_base_ptr, b_write_end_ptr, chunk);
+
+    uint32_t prev_trid = trid;
+    uint32_t prev_chunk = chunk;
+    trid = get_next_trid(trid);
+    remaining -= chunk;
+
+    // Main loop: barrier previous, push, reserve, then issue next DMA
     while (remaining > 0) {
-        uint32_t chunk;
-        // TODO: We need to validate aligment
-        if (remaining >= large_chunk) {
-            chunk = large_chunk;
-        } else if (remaining >= num_tiles_per_batch) {
-            chunk = num_tiles_per_batch;
-        } else {
-            chunk = remaining;
-        }
+        chunk = get_chunk(remaining);
+        a_transfer_sz = chunk * a_tile_size;
+        b_transfer_sz = chunk * b_tile_size;
 
-        uint32_t a_transfer_sz = chunk * a_tile_size;
-        uint32_t b_transfer_sz = chunk * b_tile_size;
+        noc_async_read_barrier_with_trid(prev_trid);
+        cb_push_back(cb_a, prev_chunk);
+        cb_push_back(cb_b, prev_chunk);
+
+        cb_reserve_back(cb_a, chunk);
+        cb_reserve_back(cb_b, chunk);
+
         noc_async_read_set_trid(trid);
 
         noc_async_read_one_packet_set_state<true>(a_noc_addr, a_transfer_sz);
@@ -92,22 +121,14 @@ void kernel_main() {
         b_addr_ofs += b_transfer_sz;
         b_write_ptr = next_cb_addr(b_write_ptr, b_tile_size, b_write_base_ptr, b_write_end_ptr, chunk);
 
-        if (!first_iter) {
-            noc_async_read_barrier_with_trid(trid_to_wait);
-            trid_to_wait = get_next_trid(trid_to_wait);
-            cb_push_back(cb_a, prev_chunk);
-            cb_push_back(cb_b, prev_chunk);
-            cb_reserve_back(cb_a, prev_chunk);
-            cb_reserve_back(cb_b, prev_chunk);
-        }
-
-        trid = get_next_trid(trid);
-        first_iter = false;
+        prev_trid = trid;
         prev_chunk = chunk;
+        trid = get_next_trid(trid);
         remaining -= chunk;
     }
 
-    noc_async_read_barrier_with_trid(trid_to_wait);
+    // Final barrier and push for the last chunk
+    noc_async_read_barrier_with_trid(prev_trid);
     cb_push_back(cb_a, prev_chunk);
     cb_push_back(cb_b, prev_chunk);
 }

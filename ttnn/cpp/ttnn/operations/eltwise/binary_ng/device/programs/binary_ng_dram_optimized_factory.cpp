@@ -19,6 +19,20 @@
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// TODO: Move to utilities?
+uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
+    uint32_t noc_max_burst_size;
+    const auto arch = mesh_device.arch();
+    if (arch == tt::ARCH::BLACKHOLE) {
+        noc_max_burst_size = 16384;
+    } else if (arch == tt::ARCH::WORMHOLE_B0) {
+        noc_max_burst_size = 8192;
+    } else {
+        TT_THROW("Unsupported architecture for zero-init: {}", arch);
+    }
+    return noc_max_burst_size;
+}
+
 template <bool initialize_args>
 inline void set_eltwise_binary_runtime_args_for_dram_cores(
     tt::tt_metal::Program& program,
@@ -40,14 +54,14 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
 
     // TODO: Move FATAL to validate function?
     TT_FATAL(
-        a_tensor.logical_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
+        a_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
         "num_tiles mismatch, {} % {} != 0",
-        a_tensor.logical_shape()[-1],
+        a_tensor.padded_shape()[-1],
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        a_tensor.logical_shape()[-2] % tt::constants::TILE_WIDTH == 0,
+        a_tensor.padded_shape()[-2] % tt::constants::TILE_WIDTH == 0,
         "num_tiles mismatch, {} % {} != 0",
-        a_tensor.logical_shape()[-2],
+        a_tensor.padded_shape()[-2],
         tt::constants::TILE_WIDTH);
 
     // vector of cores
@@ -140,6 +154,20 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     if (!b.memory_config().is_dram()) {
         return "Input tensor B must be on DRAM";
     }
+
+    if (a.dtype() != b.dtype()) {
+        return "Input tensors A and B must have the same dtype";
+    }
+    if (a.layout() != Layout::TILE) {
+        return "Input tensor A must be in tile layout";
+    }
+    if (b.layout() != Layout::TILE) {
+        return "Input tensor B must be in tile layout";
+    }
+    if (a.padded_shape() != b.padded_shape()) {
+        return "Input tensors A and B must have the same padded shape";
+    }
+
     if (!operation_attributes.rhs_activations.empty()) {
         return "Right hand side activations are not supported";
     }
@@ -207,9 +235,22 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     constexpr auto intermediate_cb0_index = tt::CBIndex::c_3;
     constexpr auto intermediate_cb1_index = tt::CBIndex::c_4;
 
-    constexpr uint32_t num_tiles_per_batch = 4;
-    constexpr uint32_t num_batches = 2;
-    constexpr uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * (num_batches);
+    const auto b_data_format =
+        args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
+    const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+    bool fp32_dest_acc_en = is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
+
+    // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
+    // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
+    // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
+    // num_tiles_per_batch = 4 supposed to macth NOC_MAX_BURST_SIZE (bytes)
+    const uint32_t num_tiles_per_batch =
+        fp32_dest_acc_en or operation_attributes.is_sfpu
+            ? 1
+            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size;
+
+    constexpr uint32_t num_batches = 2;  // perf tuning parameter, default  = 2
+    const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * num_batches;
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
@@ -222,6 +263,8 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     /***************   READER KERNEL ***************/
 
+    // TODO: We can't use num_batches and num_tiles_per_batch as compile time aruments, the op expect one kernels for
+    // tensors with different shapes.
     std::vector<uint32_t> reader_compile_time_vec = {
         a_tensor_cb,
         b_tensor_cb,
@@ -242,7 +285,8 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /***************   WRITER KERNEL ***************/
-
+    // TODO: We can't use num_batches and num_tiles_per_batch as compile time aruments, the op expect one kernels for
+    // tensors with different shapes.
     std::vector<uint32_t> writer_compile_time_vec = {output_cb_index, num_batches, num_tiles_per_batch};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
 
@@ -261,20 +305,15 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
                          : operation_attributes.is_quant_op ? DataType::FLOAT32
                          : operation_attributes.is_sfpu     ? a_dtype
                                                             : DataType::BFLOAT16;
-    const auto c_dtype = output.dtype();
-    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
-    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
-    const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
-    bool fp32_dest_acc_en = is_fp32_dest_acc_en(a_data_format, b_data_format, c_data_format);
 
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
-    log_info(tt::LogOp, "is_sfpu_op: {}", is_sfpu_op);
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
-    log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
 
+    // TODO: create a common func and merge with op_config.as_defines(a_dtype);
     {
+        const auto c_dtype = output.dtype();
         const auto input_dtype = operation_attributes.input_dtype;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -326,6 +365,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         bool op_has_exp =
             op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
+        const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
         if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
             auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                          : op_has_exp ? tt::DataFormat::Float16_b
@@ -354,6 +394,8 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         }
     }
 
+    // TODO: Don't hardcode num_batches and num_tiles_per_batch, that should be runtime args, when device compute hash,
+    // that info is not taken into account
     std::vector<uint32_t> compute_compile_time_vec = {
         num_batches,
         num_tiles_per_batch,
@@ -364,14 +406,23 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     //     compute_kernel_path = "compute/where_compute_kernel.cpp";
     // }
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (is_sfpu_op && op_type != BinaryOpType::POWER) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_4] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        kernel_prefix + compute_kernel_path,  //"sfpu_compute_kernel.cpp",  //
+        kernel_prefix + compute_kernel_path,
         dram_optimal_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = false,
             .compile_args = compute_compile_time_vec,
             .defines = std::move(compute_kernel_defines)});
