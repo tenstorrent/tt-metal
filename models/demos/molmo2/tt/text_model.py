@@ -225,6 +225,7 @@ class TextModel(LightweightModule):
         user_id: int = 0,
         chunk_page_table: Optional[ttnn.Tensor] = None,
         chunk_start_idx: Optional[int] = None,
+        last_token_idx: Optional[int] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -278,6 +279,11 @@ class TextModel(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
             )
             new_kv_caches.append(new_kv_cache)
+
+        # For long sequences, slice to last real token before LM head to avoid
+        # materializing [seq_len, vocab_size] logits (9.5GB at 32K).
+        if last_token_idx is not None:
+            x = ttnn.slice(x, (0, 0, last_token_idx, 0), (1, 1, last_token_idx + 1, self.hidden_dim))
 
         # Final normalization
         x = self.ln_f(x)
