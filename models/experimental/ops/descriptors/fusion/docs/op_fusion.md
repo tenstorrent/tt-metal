@@ -2646,40 +2646,46 @@ hit without re-running codegen:
 | `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
 | `merged_input_len` | `int` or `None` | Length of deduped input list; enables preallocated list on cache hit |
 | `address_slots` | `AddressSlots` (opaque C++) | Maps every descriptor position (CB buffer pointers, runtime args) to an IO tensor index for address patching |
+| `output_specs` | `list[TensorSpec]` or `None` | Cached output tensor metadata (output_sources order) for ephemeral allocation on the hot path |
+| `shared_output_map` | `list[int]` | Maps shared outputs to their canonical index (empty = all unique) |
+| `result_reorder` | `tuple[int, ...]` or `None` | Reorders outputs from output_sources order to default_results order |
 
-**No IO tensors are stored.**  The cache holds only the descriptor and
-metadata — never references to `Tensor` objects.  This avoids pinning device
-buffers in the cache and prevents stale-buffer bugs when activations are
-reallocated between forward passes.
+**No IO tensors are stored.**  The cache holds only the descriptor,
+`TensorSpec` metadata, and index mappings — never references to `Tensor`
+objects.  Output tensors are **ephemeral**: allocated fresh each hot-path
+call from the cached `TensorSpec` list and returned to the caller.  This
+avoids pinning device buffers in the cache and prevents stale-buffer bugs
+when activations are reallocated between forward passes.
 
 
 ### Cache Hit: Fast Path
 
-On a cache hit, `_fused_op_from_cache_entry` constructs a **new** `FusedOp`
-from the cached descriptor and the caller's current branch ops' tensor lists:
+On a cache hit, `_container_run` dispatches directly via the allocating
+`patchable_generic_op` overload — no `FusedOp` is constructed:
 
 ```python
-cache_id, ops = _fusion_cache_id_and_ops(self._items, "S", cache_device)
-entry = _BUILD_CACHE.get(cache_id)
+entry = _BUILD_CACHE.get(cache_key)
 if entry is not None:
-    result = _fused_op_from_cache_entry(entry, ops)
-    return result
+    inputs = <identity-deduplicated branch input_tensors>
+    outputs = patchable_generic_op(
+        inputs, entry.output_specs, entry.shared_output_map,
+        entry.cached_descriptor, entry.address_slots,
+    )
 ```
 
 The hit path:
 
 1. **Collect merged inputs**: Identity-deduplicate branch `input_tensors` in
-   flatten order.  The preallocated list size (`merged_input_len`) avoids
-   dynamic resizing.
-2. **Recover merged outputs**: The `output_sources` map `(op_idx, tensor_idx)`
-   indexes into the current branch ops' `output_tensors` — no descriptor
-   access needed.
-3. **Wrap**: A new `FusedOp` is returned with the cached `ProgramDescriptor`,
-   the fresh IO lists, and the pinned semaphore/label metadata.
+   flatten order.
+2. **Allocate + dispatch (single C++ call)**: `patchable_generic_op` allocates
+   fresh output tensors from the cached `TensorSpec` list, patches the
+   descriptor with the new addresses via `AddressSlots`, and dispatches.
+3. **Reorder**: The returned outputs (in `output_sources` order) are reordered
+   to `default_results` order via `result_reorder`.
 
 The `.descriptor` property of deferred branch `OpDescriptor` objects is **never
-accessed** on a cache hit.  Only their `input_tensors` / `output_tensors`
-(which the caller populated before `build()`) are read.
+accessed** on a cache hit.  Only their `input_tensors` (which the caller
+populated before `run()`) are read.
 
 
 ### Cache Miss: Full Build
@@ -2711,22 +2717,34 @@ _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
 
 ### Dispatch: patchable_generic_op
 
-`FusedOp.launch()` dispatches via `patchable_generic_op` — a C++ device
-operation designed for address-slot patching:
+`patchable_generic_op` has two overloads, both taking inputs and outputs as
+separate vectors:
+
+**Allocating (5-arg, hot path):** Allocates fresh output tensors from cached
+`TensorSpec` metadata, patches the descriptor, and dispatches — all in one
+C++ call.  `shared_output_map` handles the case where multiple kernel outputs
+alias the same buffer (e.g. sharded branches writing to a shared output).
 
 ```python
-def launch(self, *branch_ops_override):
-    if branch_ops_override:
-        self.refresh_merged_io(list(branch_ops_override))
-    elif self._branch_ops is not None:
-        self.refresh_merged_io(list(self._branch_ops))
-    io_tensors = list(self.input_tensors) + list(self.output_tensors)
-    ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor)
-    return self.output_tensors  # results written in-place to pre-allocated output tensors
+outputs = patchable_generic_op(
+    inputs, output_specs, shared_output_map,
+    descriptor, address_slots,
+)
 ```
 
-Before dispatch, `refresh_merged_io` copies the current branch ops' tensor
-lists into the fused op's merged IO lists in place — so in-place updates to
+**Non-allocating (4-arg, cold path):** Dispatches into pre-allocated output
+tensors.  Used by `FusedOp.launch()` on the cold path where outputs already
+exist from `build()`:
+
+```python
+patchable_generic_op(
+    list(self.input_tensors), list(self.output_tensors),
+    self.descriptor, self._address_slots,
+)
+```
+
+Before cold-path dispatch, `refresh_merged_io` copies the current branch ops'
+tensor lists into the fused op's merged IO lists — so in-place updates to
 branch tensor lists (e.g. activation buffer swaps between forward passes) are
 visible to the dispatch.
 
@@ -2768,12 +2786,14 @@ called on the same container:
 | 1st | `_materialize_chain` → `_container_run` (cold build) | Full codegen |
 | 2nd+ | `_container_run` (cache hit → `patchable_generic_op`) | ~tens of µs |
 
-The first `run()` call builds the fused program and populates `_BUILD_CACHE`.
-All subsequent calls hit the cache directly — `_container_run` gathers IO
-from the branch descriptors' current tensors, deduplicates them, and
-dispatches via `patchable_generic_op`.  No `FusedOp` is retained on the
-container between calls, so no tensor references are held and L1 buffer
-lifetime is not extended.
+The first `run()` call builds the fused program and populates `_BUILD_CACHE`
+(including `output_specs` and `shared_output_map`).  All subsequent calls hit
+the cache directly — `_container_run` gathers inputs from the branch
+descriptors' current tensors, deduplicates them, and dispatches via the
+allocating `patchable_generic_op` overload which allocates ephemeral output
+tensors from the cached specs.  No `FusedOp` is retained on the container
+between calls, and output tensors are not pinned in the cache — zero L1
+retention between forward passes.
 
 See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
 at the top of this document for usage examples.
