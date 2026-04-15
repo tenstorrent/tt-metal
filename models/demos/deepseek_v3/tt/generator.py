@@ -154,6 +154,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         mesh_device: ttnn.MeshDevice | None = None,
         model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
+        use_weight_cache: bool = False,
         batch_size_per_row: int = USERS_PER_ROW,
         tokenizer=None,
         random_weights: bool = False,
@@ -174,6 +175,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
+        self.use_weight_cache = bool(use_weight_cache)
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -412,7 +414,11 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
         weight_cache_base = Path(cache_dir) if cache_dir is not None else None
-        if weight_cache_base is not None:
+        if self.use_weight_cache:
+            if weight_cache_base is None:
+                raise ValueError("cache_dir must be provided when use_weight_cache=True")
+            logger.info(f"Loading DeepSeek weights from legacy weight cache at '{weight_cache_base}'.")
+        elif weight_cache_base is not None:
             logger.info(
                 f"DeepSeek weight cache directory '{weight_cache_base}' is ignored; weights are converted directly in memory."
             )
@@ -431,6 +437,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             model_path=self.model_path,
             single_layer=self.single_layer,
             cache_subdir_name=cache_subdir_name,
+            use_weight_cache=self.use_weight_cache,
         )
 
     def _assert_mtp_available(self) -> None:

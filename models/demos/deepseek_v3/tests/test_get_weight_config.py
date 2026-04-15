@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,6 +107,61 @@ def test_get_weight_config_allows_missing_weight_cache_path_for_direct_weights()
     )
 
     assert cfg == {"ok": True}
+
+
+def test_get_weight_config_loads_legacy_cache_when_requested(tmp_path: Path) -> None:
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, output_path: Path, mesh_device):
+            raise AssertionError("convert_weights should not be called when use_weight_cache=True")
+
+    mesh_device = _FakeMeshDevice(shape=(4, 8))
+    hf_config = _make_hf_config(num_hidden_layers=3)
+    cache_root = tmp_path / "weight_cache"
+    output_path = cache_root / "3_layers" / "mesh_4x8"
+    weight_path = output_path / "weights" / f"w{TENSOR_CACHE_EXTENSION}"
+    weight_path.parent.mkdir(parents=True, exist_ok=True)
+    weight_path.write_bytes(b"unit-test")
+    (output_path / "config.json").write_text(
+        json.dumps(
+            {
+                "w": {
+                    "path": f"weights/w{TENSOR_CACHE_EXTENSION}",
+                    "memory_config": json.loads(ttnn.DRAM_MEMORY_CONFIG.to_json()),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=None,
+        weight_cache_path=cache_root,
+        mesh_device=mesh_device,
+        use_weight_cache=True,
+    )
+
+    assert isinstance(cfg["w"], SavedWeight)
+    assert cfg["w"].path == weight_path
+
+
+def test_get_weight_config_use_weight_cache_requires_existing_cache(tmp_path: Path) -> None:
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, output_path: Path, mesh_device):
+            raise AssertionError("convert_weights should not be called when use_weight_cache=True")
+
+    with pytest.raises(FileNotFoundError, match="Requested DeepSeek weight cache"):
+        get_weight_config(
+            ModuleClass=FakeModule,
+            hf_config=_make_hf_config(num_hidden_layers=3),
+            state_dicts=None,
+            weight_cache_path=tmp_path / "weight_cache",
+            mesh_device=_FakeMeshDevice(shape=(4, 8)),
+            use_weight_cache=True,
+        )
 
 
 def test_get_weight_config_legacy_saved_weights_are_validated_and_normalized(tmp_path: Path) -> None:

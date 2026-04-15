@@ -127,6 +127,7 @@ def get_weight_config(
     single_layer: str | None = None,
     cache_subdir_name: str | None = None,
     emit_weight_cache: bool = False,
+    use_weight_cache: bool = False,
 ):
     """
     Convert HuggingFace weights directly into in-memory TTNN tensors.
@@ -147,6 +148,8 @@ def get_weight_config(
         emit_weight_cache: If True, persist converted TTNN tensors to a legacy on-disk
             weight cache rooted at ``weight_cache_path``. This is intended only for
             compatibility flows such as BSPM cache export.
+        use_weight_cache: If True, require and load a legacy on-disk weight cache from
+            ``weight_cache_path`` instead of converting weights directly in memory.
 
     Returns:
         Weight configuration dictionary
@@ -154,8 +157,8 @@ def get_weight_config(
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
-    if force_recalculate:
-        logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
+    if emit_weight_cache and use_weight_cache:
+        raise ValueError("emit_weight_cache and use_weight_cache cannot both be True")
 
     if weight_cache_path is not None:
         weight_cache_path = weight_cache_path.expanduser()
@@ -169,6 +172,23 @@ def get_weight_config(
             / f"{hf_config.num_hidden_layers}_layers"
             / (f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}")
         )
+
+    if use_weight_cache:
+        if weight_cache_path is None:
+            raise ValueError("weight_cache_path must be provided when use_weight_cache=True")
+        if force_recalculate:
+            raise ValueError("force_recalculate cannot be used when use_weight_cache=True")
+        config_path = output_path / "config.json"
+        cached_weight_config = _try_load_cached_config(config_path, output_path, force_recalculate=False)
+        if cached_weight_config is None:
+            raise FileNotFoundError(
+                f"Requested DeepSeek weight cache was not found or was invalid at {output_path}. "
+                "Generate the cache first or disable use_weight_cache."
+            )
+        return cached_weight_config
+
+    if force_recalculate:
+        logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
 
     if state_dicts is None:
         logger.info("State dict was not provided, preparing from random weights or model path")

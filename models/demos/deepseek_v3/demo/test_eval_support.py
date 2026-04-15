@@ -28,6 +28,9 @@ class _FakeGenerator:
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
         self.tokenizer = kwargs["tokenizer"]
+        self.enable_mtp = kwargs.get("enable_mtp", False)
+        mesh_rows = getattr(kwargs.get("mesh_device"), "shape", (1, 1))[0]
+        self.batch_size = kwargs.get("batch_size_per_row", 1) * mesh_rows
         self.generate_kwargs = None
 
     def generate(self, prompts, **kwargs):
@@ -35,7 +38,7 @@ class _FakeGenerator:
         on_user_finished = kwargs["on_user_finished"]
         if on_user_finished is not None:
             on_user_finished(0, [11, 12])
-        return [[11, 12], [21, 22, 23]], {"decode_t/s": 1.0}
+        return [[11, 12], [21, 22, 23]], {"decode_t/s": 1.0}, {"sampling": {}}
 
     def cleanup_all(self):
         return None
@@ -44,6 +47,7 @@ class _FakeGenerator:
 def test_create_parser_stop_at_eos_flag():
     args = demo_module.create_parser().parse_args(["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache"])
     assert args.stop_at_eos is True
+    assert args.use_weight_cache is False
 
     args = demo_module.create_parser().parse_args(
         ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--stop-at-eos"]
@@ -54,6 +58,11 @@ def test_create_parser_stop_at_eos_flag():
         ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--no-stop-at-eos"]
     )
     assert args.stop_at_eos is False
+
+    args = demo_module.create_parser().parse_args(
+        ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--use-weight-cache"]
+    )
+    assert args.use_weight_cache is True
 
 
 def test_stop_at_eos_signature_defaults():
@@ -71,7 +80,15 @@ def _patch_demo_runtime(monkeypatch, fake_generator, *, mesh_shape=(1, 1)):
     monkeypatch.setattr(demo_module.ttnn, "open_mesh_device", lambda *args, **kwargs: _FakeMeshDevice(shape=mesh_shape))
     monkeypatch.setattr(demo_module.ttnn, "synchronize_device", lambda *args, **kwargs: None)
     monkeypatch.setattr(demo_module.ttnn, "close_mesh_device", lambda *args, **kwargs: None)
-    monkeypatch.setattr(demo_module, "DeepseekGeneratorDP", lambda **kwargs: fake_generator)
+
+    def _construct_fake_generator(**kwargs):
+        fake_generator.init_kwargs = kwargs
+        fake_generator.tokenizer = kwargs["tokenizer"]
+        fake_generator.enable_mtp = kwargs.get("enable_mtp", False)
+        fake_generator.batch_size = kwargs["batch_size_per_row"] * kwargs["mesh_device"].shape[0]
+        return fake_generator
+
+    monkeypatch.setattr(demo_module, "DeepseekGeneratorDP", _construct_fake_generator)
 
 
 @pytest.mark.parametrize("stop_at_eos", [True, False], ids=["stop_at_eos", "no_stop_at_eos"])
@@ -132,6 +149,30 @@ def test_run_demo_sizes_sampling_params_from_max_users_per_row(monkeypatch, tmp_
     assert len(sampling_params.temperature) == expected_batch
     assert len(sampling_params.top_p) == expected_batch
     assert len(sampling_params.top_k) == expected_batch
+
+
+def test_run_demo_passes_use_weight_cache_to_generator(monkeypatch, tmp_path):
+    fake_generator = _FakeGenerator(tokenizer=_FakeTokenizer())
+
+    _patch_demo_runtime(monkeypatch, fake_generator)
+
+    demo_module.run_demo(
+        prompts=["prompt-0"],
+        model_path=tmp_path / "model",
+        cache_dir=tmp_path / "cache",
+        use_weight_cache=True,
+    )
+
+    assert fake_generator.init_kwargs["use_weight_cache"] is True
+
+
+def test_run_demo_rejects_use_weight_cache_without_cache_dir(tmp_path):
+    with pytest.raises(SystemExit, match="--use-weight-cache requires --cache-dir"):
+        demo_module.run_demo(
+            prompts=["prompt-0"],
+            model_path=tmp_path / "model",
+            use_weight_cache=True,
+        )
 
 
 def test_lmeval_helpers():
