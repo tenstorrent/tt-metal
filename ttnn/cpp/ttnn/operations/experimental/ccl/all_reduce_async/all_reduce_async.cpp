@@ -176,7 +176,7 @@ ttnn::Tensor all_reduce_async(
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
         input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
-    const auto& initial_shape = input_tensor.logical_shape();
+    auto initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == input_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
         composite_common::use_composite_all_gather(input_tensor, composite_dim, out_memory_config);
@@ -201,20 +201,17 @@ ttnn::Tensor all_reduce_async(
         ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
-        // All reduce = all gather + local reduce
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
-        // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
-        ag_shape_vec[0] = 1;
-        std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
-        auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
+        // All reduce = all gather + local reduce
+        composite_dim = 0;
+        auto reshaped_tensor = ttnn::reshape(
+            working_input_tensor,
+            ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
         if (interleaved_input_tensor.has_value()) {
             interleaved_input_tensor->deallocate();
         }
 
-        // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
-        composite_dim = 0;
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -224,7 +221,6 @@ ttnn::Tensor all_reduce_async(
             std::nullopt);
         reshaped_tensor.deallocate();
 
-        // Reduce (num_devices, B, C, H, W) -> (1, B, C, H, W)
         bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);
         auto sum_tensor = is_float32
                               ? ttnn::operations::experimental::ccl::local_sum_float32(
@@ -233,7 +229,6 @@ ttnn::Tensor all_reduce_async(
                                     gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
-        // Reshape (1, B, C, H, W) -> (B, C, H, W)
         return ttnn::reshape(sum_tensor, initial_shape);
     }
 
@@ -303,7 +298,7 @@ ttnn::Tensor all_reduce_async(
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(input_tensor, num_devices);
-    const auto& initial_shape = input_tensor.logical_shape();
+    auto initial_shape = input_tensor.logical_shape();
 
     // Convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates.
     // Otherwise work directly with input_tensor.
@@ -329,20 +324,20 @@ ttnn::Tensor all_reduce_async(
         ttnn::operations::experimental::ccl::detail::is_true_2d_mesh(input_tensor, topology_);
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || composite_for_2d_mesh) {
-        // All reduce = all gather + local reduce
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
+        // All reduce = all gather + local reduce
+        composite_dim = 0;
 
-        // Reshape (B, C, H, W) -> (1, B, C, H, W)
-        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank() + 1);
+        ttnn::SmallVector<uint32_t> ag_shape_vec(initial_shape.rank());
+        std::copy(initial_shape.cbegin() + 2, initial_shape.cend(), ag_shape_vec.begin() + 2);
         ag_shape_vec[0] = 1;
-        std::copy(initial_shape.cbegin(), initial_shape.cend(), ag_shape_vec.begin() + 1);
+        ag_shape_vec[1] = initial_shape[0] * initial_shape[1];
+
         auto reshaped_tensor = ttnn::reshape(working_input_tensor, ttnn::Shape(ag_shape_vec));
         if (interleaved_input_tensor.has_value()) {
             interleaved_input_tensor->deallocate();
         }
 
-        // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
-        composite_dim = 0;
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -352,7 +347,6 @@ ttnn::Tensor all_reduce_async(
             cluster_axis);
         reshaped_tensor.deallocate();
 
-        // Reduce (num_devices, B, C, H, W) -> (1, B, C, H, W)
         bool is_float32 = (input_tensor.dtype() == ttnn::DataType::FLOAT32);
         auto sum_tensor = is_float32
                               ? ttnn::operations::experimental::ccl::local_sum_float32(
@@ -361,7 +355,6 @@ ttnn::Tensor all_reduce_async(
                                     gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
-        // Reshape (1, B, C, H, W) -> (B, C, H, W)
         return ttnn::reshape(sum_tensor, initial_shape);
     }
 
