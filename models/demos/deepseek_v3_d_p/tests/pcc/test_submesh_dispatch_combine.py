@@ -25,7 +25,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    MAX_PAYLOAD_SIZE,
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
@@ -352,7 +351,7 @@ def validate_roundtrip(ctx: SubmeshContext):
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
             1,
             ttnn.Topology.Linear,
@@ -363,7 +362,7 @@ def validate_roundtrip(ctx: SubmeshContext):
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
             },
             2,
             ttnn.Topology.Linear,
