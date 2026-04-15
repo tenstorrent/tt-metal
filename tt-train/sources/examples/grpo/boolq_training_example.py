@@ -8,7 +8,8 @@ import os
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.grpo_trainer import GrpoConfig, GrpoTrainer, TrainerCallback
+from ttml.trainers import TrainerCallback
+from utils.grpo_trainer import GrpoConfig, GrpoTrainer
 
 
 class GRPOMonitor(TrainerCallback):
@@ -19,9 +20,9 @@ class GRPOMonitor(TrainerCallback):
             writer = csv.writer(f)
             writer.writerow(["step", "reward", "avg_length"])
 
-    def on_step_end(self, trainer, step, metrics):
-        reward = metrics["reward_mean"]
-        length = metrics["mean_completion_len"]
+    def on_step_end(self, trainer, step, **kwargs):
+        reward = kwargs["reward_mean"]
+        length = kwargs["mean_completion_len"]
         print(f"Step {step} | Reward: {reward:.4f} | Len: {length:.2f} tokens")
         with open(self.file_path, mode="a", newline="") as f:
             writer = csv.writer(f)
@@ -81,8 +82,8 @@ if __name__ == "__main__":
     }
 
     device_config = {
-        "enable_ddp": True,
-        "mesh_shape": [1, 2],
+        "enable_ddp": False,
+        "mesh_shape": [1, 1],
     }
 
     optimizer_config = {
@@ -106,14 +107,14 @@ if __name__ == "__main__":
 
     config = GrpoConfig(
         epsilon=0.2,
-        batch_size=4,
-        micro_batch_size=32,
+        batch_size=2,
+        micro_batch_size=16,
         num_iterations=1,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=8,
         logging_steps=1,
         output_dir=output_dir,
-        checkpointing=False,
-        checkpoint_interval=50,
+        checkpointing=True,
+        checkpoint_interval=5,
         prompts_to_train=1600,
         temperature=1.5,
         max_completion_length=256,

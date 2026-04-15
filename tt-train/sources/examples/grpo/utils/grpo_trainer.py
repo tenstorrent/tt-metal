@@ -17,14 +17,7 @@ import ttml
 import ttnn
 from safetensors.torch import save_file
 from ttml.common.utils import create_optimizer, no_grad
-
-
-class TrainerCallback:
-    def on_step_end(self, trainer, step, metrics):
-        pass
-
-    def on_train_end(self, trainer):
-        pass
+from ttml.trainers.callback import TrainerCallback
 
 
 @dataclass
@@ -185,10 +178,6 @@ class GrpoTrainer:
         self.callbacks = callbacks or []
         self.model = None
 
-    def _notify(self, method, *args, **kwargs):
-        for cb in self.callbacks:
-            getattr(cb, method)(self, *args, **kwargs)
-
     def train(self):
         grpo_cfg = self.config
 
@@ -224,6 +213,9 @@ class GrpoTrainer:
         accum_completion_lens = []
 
         optimizer.zero_grad()
+
+        for cb in self.callbacks:
+            cb.on_train_begin(self)
 
         for prompts_batch, completions_batch, dataset_columns_dict in iter_batched_completions(
             inference_ctx, prompts, extra_columns, grpo_cfg.batch_size
@@ -296,6 +288,8 @@ class GrpoTrainer:
                     if inference_ctx.dp_mapper is not None:
                         ttml.core.distributed.synchronize_gradients(inference_ctx.tt_model.parameters())
 
+                    for cb in self.callbacks:
+                        cb.on_before_optimizer_step(self)
                     optimizer.step()
                     optimizer.zero_grad()
                     accum_count = 0
@@ -312,12 +306,14 @@ class GrpoTrainer:
                             "mean_completion_len": mean_completion_len,
                             "lr": base_lr * warmup_factor,
                         }
-                        self._notify("on_step_end", num_steps, step_metrics)
+                        for cb in self.callbacks:
+                            cb.on_step_end(self, num_steps, **step_metrics)
 
                     accum_rewards.clear()
                     accum_completion_lens.clear()
 
                     if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
+                        ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
                         save_checkpoint(
                             inference_ctx.tt_model,
                             num_steps,
@@ -328,8 +324,11 @@ class GrpoTrainer:
                             optimizer=optimizer,
                             model_source=self.model_source,
                         )
+                        for cb in self.callbacks:
+                            cb.on_save(self, num_steps, ckpt_dir)
 
             for nlog_old, mask_old, _ in probs_old_list:
                 deallocate_tensors([nlog_old, mask_old])
 
-        self._notify("on_train_end")
+        for cb in self.callbacks:
+            cb.on_train_end(self)
