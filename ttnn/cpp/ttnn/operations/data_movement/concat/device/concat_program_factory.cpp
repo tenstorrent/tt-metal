@@ -294,9 +294,10 @@ void ConcatProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
-    std::vector<uint32_t> src_addrs(tensor_args.input_tensors.size());
+    std::vector<uint32_t> src_addrs;
+    src_addrs.reserve(tensor_args.input_tensors.size());
     for (uint32_t i = 0; i < tensor_args.input_tensors.size(); ++i) {
-        src_addrs[i] = tensor_args.input_tensors[i].buffer()->address();
+        src_addrs.push_back(tensor_args.input_tensors[i].buffer()->address());
     }
 
     Buffer* dst_buffer = tensor_return_value.buffer();
