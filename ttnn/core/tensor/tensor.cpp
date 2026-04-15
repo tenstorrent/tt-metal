@@ -174,7 +174,7 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = tensor_impl::host_tensor::from_span(buffer, spec, pad_value);
+    auto host_tensor = HostTensor::from_span(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
@@ -188,7 +188,7 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    auto host_tensor = tensor_impl::host_tensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
     return Tensor(std::move(host_tensor));
 }
 
@@ -199,7 +199,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = tensor_impl::host_tensor::from_vector(std::move(buffer), spec, pad_value);
+    auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     res = to_dtype(res, spec.data_type());
     if (device) {
@@ -212,7 +212,7 @@ template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
     // Type support is checked by HostTensor::to_vector
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    return tensor_impl::host_tensor::to_vector<T>(cpu_tensor.host_tensor());
+    return cpu_tensor.host_tensor().to_vector<T>();
 }
 
 // Instantiate explicitly for the supported types.
@@ -427,79 +427,6 @@ uint64_t Tensor::physical_volume() const { return padded_shape().volume(); }
 bool Tensor::is_scalar() const {
     const tt::tt_metal::Shape logical_shape = this->logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
-}
-
-void memcpy(
-    distributed::MeshCommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region,
-    bool blocking) {
-    ZoneScoped;
-    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
-
-    TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
-        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
-            .host_data(dst)
-            .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, src.device_storage().get_mesh_buffer_leak_ownership(), blocking);
-}
-
-void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
-    ZoneScoped;
-    auto* mesh_device = src.device();
-    TT_FATAL(mesh_device, "Tensor must be on device");
-    memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
-}
-
-void memcpy(
-    distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
-    TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
-        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
-            .host_data(const_cast<void*>(src))
-            .region(region)};
-    queue.enqueue_write_shards(dst.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
-}
-
-void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    auto* mesh_device = dst.device();
-    TT_FATAL(mesh_device, "Tensor must be on device");
-    memcpy(mesh_device->mesh_command_queue(), dst, src, region);
-}
-
-void memcpy(
-    distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    TT_ASSERT(dst.dtype() == src.dtype());
-    TT_ASSERT(dst.layout() == src.layout());
-
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto dst_buffer = host_buffer::get_host_buffer(dst);
-        memcpy(queue, dst_buffer.view_bytes().data(), src, region);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto src_buffer = host_buffer::get_host_buffer(src);
-        memcpy(queue, dst, src_buffer.view_bytes().data(), region);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto* mesh_device = src.device();
-        memcpy(mesh_device->mesh_command_queue(), dst, src, region);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto* mesh_device = dst.device();
-        memcpy(mesh_device->mesh_command_queue(), dst, src, region);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
 }
 
 // TODO #32045: Remove this function since IDs are assigned in the constructor.
