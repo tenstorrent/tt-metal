@@ -312,7 +312,7 @@
     wh_n300:
       timeout: 15
       tier: 1
-  owner_id: U05RWH3QUPM # Salar Hosseini
+  owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
 - name: QwQ-32B unit tests

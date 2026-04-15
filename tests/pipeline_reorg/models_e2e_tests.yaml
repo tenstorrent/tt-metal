@@ -244,7 +244,7 @@
     wh_n300:
       timeout: 15
       tier: 1
-  owner_id: U05RWH3QUPM # Salar Hosseini
+  owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
 - name: QwQ-32B e2e tests
@@ -268,7 +268,7 @@
     wh_n150:
       timeout: 5
       tier: 3
-  owner_id: U05RWH3QUPM # Salar Hosseini
+  owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
 - name: Falcon-40B e2e tests
