@@ -65,6 +65,15 @@ def _golden_function_frac(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 
+def _golden_function_softcap(input_tensor_a, parameter, *args, **kwargs):
+    import torch
+
+    return parameter * torch.tanh(input_tensor_a / parameter)
+
+
+ttnn.attach_golden_function(ttnn.softcap, golden_function=_golden_function_softcap)
+
+
 try:
     SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 except AttributeError:
