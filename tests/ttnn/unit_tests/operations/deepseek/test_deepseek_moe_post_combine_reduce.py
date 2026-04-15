@@ -18,13 +18,14 @@ import torch
 import ttnn
 from loguru import logger
 
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 
 NUM_TOKENS = 3200
 NUM_EXPERTS = 8
-EMB_DIM = 7168
+EMB_DIM = DeepSeekV3Config.EMB_SIZE
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
-NUM_ROUTED_EXPERTS = 256
+NUM_ROUTED_EXPERTS = DeepSeekV3Config.NUM_ROUTED_EXPERTS
 
 
 def pytorch_reference(combine, weights):
