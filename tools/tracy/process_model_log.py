@@ -91,7 +91,7 @@ def _build_profiler_cmd(
     return f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
 
 
-def _merge_l1_pass2_csv(pass1_csv_path, pass2_csv_path):
+def merge_pass_csv(pass1_csv_path, pass2_csv_path):
     """Merge L1 bank 1 columns from pass 2 CSV into the pass 1 CSV."""
     df1 = pd.read_csv(pass1_csv_path)
     df2 = pd.read_csv(pass2_csv_path)
@@ -108,7 +108,7 @@ def _merge_l1_pass2_csv(pass1_csv_path, pass2_csv_path):
     logger.info(f"Merged {len(l1_1_cols)} L1 bank 1 columns from pass 2 into {pass1_csv_path}")
 
 
-def _needs_l1_two_pass(capture_perf_counters_groups):
+def requires_multi_pass_profile(capture_perf_counters_groups):
     """Check if both L1 banks are requested, requiring two-pass execution.
 
     L1_0 and L1_1 share a hardware mux and cannot be captured simultaneously.
@@ -122,7 +122,7 @@ def _needs_l1_two_pass(capture_perf_counters_groups):
     return has_l1_0 and has_l1_1
 
 
-def _split_l1_groups(capture_perf_counters_groups):
+def get_multi_pass_configs(capture_perf_counters_groups):
     """Split counter groups into pass 1 (L1 bank 0) and pass 2 (L1 bank 1) groups."""
     groups_lower = [g.lower() for g in capture_perf_counters_groups]
     groups_pass1 = [g for g in capture_perf_counters_groups if g.lower() != "l1_1"]
@@ -137,7 +137,7 @@ def _split_l1_groups(capture_perf_counters_groups):
     return groups_pass1, groups_pass2
 
 
-def _run_l1_two_pass(
+def run_multi_pass(
     command,
     output_logs_subdir,
     check_test_return_code,
@@ -149,7 +149,7 @@ def _run_l1_two_pass(
     is_command_binary_exe,
 ):
     """Run profiler twice to capture both L1 banks, then merge results."""
-    groups_pass1, groups_pass2 = _split_l1_groups(capture_perf_counters_groups)
+    groups_pass1, groups_pass2 = get_multi_pass_configs(capture_perf_counters_groups)
 
     # Pass 1: all groups except L1_1
     output_profiler_dir = get_profiler_folder(output_logs_subdir)
@@ -188,7 +188,7 @@ def _run_l1_two_pass(
     if python_post_process:
         pass1_csv = get_latest_ops_log_filename(output_logs_subdir)
         pass2_csv = get_latest_ops_log_filename(pass2_subdir)
-        _merge_l1_pass2_csv(pass1_csv, pass2_csv)
+        merge_pass_csv(pass1_csv, pass2_csv)
 
 
 def run_device_profiler(
@@ -207,8 +207,8 @@ def run_device_profiler(
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
 ):
-    if _needs_l1_two_pass(capture_perf_counters_groups):
-        _run_l1_two_pass(
+    if requires_multi_pass_profile(capture_perf_counters_groups):
+        run_multi_pass(
             command,
             output_logs_subdir,
             check_test_return_code,
