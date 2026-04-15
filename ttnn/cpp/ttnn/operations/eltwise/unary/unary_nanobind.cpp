@@ -1977,6 +1977,51 @@ void py_module(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none());
     }
+
+    {
+        auto doc = fmt::format(
+            R"doc(
+            Applies softcap function element-wise: cap * tanh(x / cap).
+
+            Softcap limits (caps) the magnitude of the input to [-cap, cap] using a smooth
+            tanh-based transition. As |x| grows, the output asymptotically approaches +/-cap.
+
+            .. math::
+                \mathrm{{output\_tensor}}_i = \mathrm{{cap}} \cdot \tanh(\mathrm{{input\_tensor}}_i / \mathrm{{cap}})
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
+            Keyword Args:
+                cap (float, optional): the cap value (must be positive). Defaults to `50.0`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, BFLOAT8_B, FLOAT32
+                     - TILE, ROW_MAJOR
+            )doc");
+
+        ttnn::bind_function<"softcap">(
+            mod,
+            doc.c_str(),
+            &unary_4param_to_5param_wrapper<&ttnn::softcap>,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("cap") = 50.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none());
+    }
 }
 
 }  // namespace ttnn::operations::unary
