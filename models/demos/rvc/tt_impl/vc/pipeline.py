@@ -9,9 +9,9 @@ import math
 import os
 
 import numpy as np
-import parselmouth
 import torch
 import torch.nn.functional as F
+from pysptk import sptk
 from safetensors.torch import load_file
 from scipy import signal
 
@@ -212,7 +212,7 @@ class Pipeline:
         config: Config | None = None,
         speaker_id: int = 0,
         f0_up_key: int = 0,
-        f0_method: str = "pm",
+        f0_method: str = "rapt",
         index_rate: float = 0.75,
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
@@ -274,23 +274,26 @@ class Pipeline:
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
-        if self.f0_method == "pm":
-            f0 = (
-                parselmouth.Sound(audio.detach().cpu().numpy(), self.sr)
-                .to_pitch_ac(
-                    time_step=self.window / self.sr,
-                    voicing_threshold=0.6,
-                    pitch_floor=f0_min,
-                    pitch_ceiling=f0_max,
-                )
-                .selected_array["frequency"]
+        if self.f0_method == "rapt":
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
+            audio_scaled = np.clip(audio_np * 32767, -32768, 32767)
+            rapt_threshold = 0.525
+            voice_bias = -0.6 + rapt_threshold * (0.7 - (-0.6))
+            f0 = sptk.rapt(
+                audio_scaled,
+                self.sr,
+                self.window,
+                min=f0_min,
+                max=f0_max,
+                voice_bias=voice_bias,
+                otype="f0",
             )
             f0 = torch.from_numpy(f0)
             pad_size = (num_frames - len(f0) + 1) // 2
             if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
                 f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
         else:
-            raise ValueError("f0_method must be 'pm'.")
+            raise ValueError("f0_method must be 'rapt'")
 
         f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()
@@ -453,7 +456,7 @@ class Pipeline:
 
         # post-process
         if self.rms_mix_rate != 1:
-            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, self.rms_mix_rate)
+            audio_output = _change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
         if audio_max > 1:
@@ -467,7 +470,7 @@ class Pipeline:
         if not os.path.exists(audio_path):
             raise FileNotFoundError("input_audio_path not found.")
 
-        audio = load_audio(audio_path, 16000)
+        audio = load_audio(audio_path, self.sr)
         # preprocess
         audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:
