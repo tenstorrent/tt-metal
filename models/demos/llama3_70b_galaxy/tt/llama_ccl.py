@@ -1116,8 +1116,6 @@ class TT_CCL:
                         if seqlen in self.all_gather_buffers
                         else None
                     )
-                if buffer_key == "ATTN_REPLICATE":
-                    persistent_buffer = None
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
@@ -1171,8 +1169,6 @@ class TT_CCL:
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
         )
-        if buffer_key == "ATTN_REPLICATE":
-            persistent_buffers = None
         # persistent_buffers = None
 
         num_links = 4
