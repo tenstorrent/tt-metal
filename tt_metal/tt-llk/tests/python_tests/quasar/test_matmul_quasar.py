@@ -177,7 +177,6 @@ def test_matmul(
     )
 
     res_from_L1 = configuration.run().result
-
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

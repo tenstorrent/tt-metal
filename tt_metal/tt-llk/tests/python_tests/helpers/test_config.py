@@ -136,7 +136,6 @@ class TestConfig:
     LLK_ROOT: ClassVar[Path]
     TESTS_WORKING_DIR: ClassVar[Path]
     TOOL_PATH: ClassVar[Path]
-    HEADER_DIR: ClassVar[Path]
 
     HELPERS: ClassVar[Path]
     RISCV_SOURCES: ClassVar[Path]
@@ -273,9 +272,6 @@ class TestConfig:
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
         TestConfig.TOOL_PATH = TestConfig.LLK_ROOT / "tests/sfpi/compiler/bin"
-        TestConfig.HEADER_DIR = (
-            TestConfig.TESTS_WORKING_DIR / f"hw_specific/{TestConfig.ARCH.value}/inc"
-        )
 
         TestConfig.HELPERS = TestConfig.TESTS_WORKING_DIR / "helpers"
         TestConfig.RISCV_SOURCES = TestConfig.TESTS_WORKING_DIR / "helpers/src"
@@ -346,6 +342,24 @@ class TestConfig:
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
 
+        hw_specific_includes = []
+        if TestConfig.ARCH == ChipArchitecture.WORMHOLE:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-1xx/wormhole",
+                "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+            ]
+        if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-1xx/blackhole",
+                "-I../../hw/ckernels/blackhole/metal/llk_api",
+            ]
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            hw_specific_includes = [
+                "-I../../hw/inc/internal/tt-2xx/quasar",
+                "-I../../hw/ckernels/quasar/metal/llk_api",
+            ]
+
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
                 "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
@@ -364,12 +378,10 @@ class TestConfig:
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
             "-I../common",
-            f"-I{TestConfig.HEADER_DIR}",
-            f"-Ihw_specific/{TestConfig.ARCH.value}",
-            f"-Ihw_specific/{TestConfig.ARCH.value}/metal_sfpu",
+            "-I../../hw/inc",
             "-Ifirmware/riscv/common",
             "-Ihelpers/include",
-        ]
+        ] + hw_specific_includes
 
     @staticmethod
     def setup_build(
@@ -936,6 +948,11 @@ class TestConfig:
         return header_content
 
     def generate_build_header(self) -> str:
+        if TestConfig.ARCH == ChipArchitecture.QUASAR:
+            sfpu_types_include = ""
+        else:
+            sfpu_types_include = '#include "llk_sfpu_types.h"'
+
         header_content: list[str] = [
             "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
             "//",
@@ -949,7 +966,7 @@ class TestConfig:
             "",
             '#include "operand.h"',
             '#include "llk_defs.h"',
-            '#include "llk_sfpu_types.h"',
+            f"{sfpu_types_include}",
             (
                 '#include "perf.h"'
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
