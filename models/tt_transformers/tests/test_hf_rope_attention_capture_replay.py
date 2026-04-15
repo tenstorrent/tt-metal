@@ -13,11 +13,20 @@ Requires the same mesh topology class as capture (see manifest ``cluster_shape``
 
 ``test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden`` checks the op against
 torch HF RoPE using the captured ``cos``/``sin`` tensors only (no ``position_indices.pt``).
+
+Sweep parity: set ``TT_HF_ROPE_SWEEP_PARITY_LOG=1`` to log the live ``compute_kernel_config``
+object and, per step after ``ttnn.load_tensor``, each tensor's shape (including logical /
+padded when available), ``dtype``, ``layout``, and ``memory_config`` digest — suitable for
+aligning ``rotary_embedding_hf`` sweep vectors without hardcoded shape tables
+(see sweep suites ``hf_rope_capture_run3_{prefill,decode}`` and ``nightly_{prefill,decode}`` in
+``tests/sweep_framework/sweeps/transformer/rotary_embedding_hf/rotary_embedding_hf.py``).
 """
 
 from __future__ import annotations
 
+import json
 import os
+import statistics
 from pathlib import Path
 
 import pytest
@@ -29,6 +38,7 @@ from models.common.utility_functions import comp_pcc, is_blackhole
 from models.tt_transformers.tt.hf_rope_decode_capture import (
     list_capture_step_dirs,
     load_manifest,
+    tensor_device_layout_digest,
     tensor_memory_config_shard_digest,
     torch_golden_hf_rope_decode_1b32d,
     torch_golden_hf_rope_decode_from_cos_sin,
@@ -44,10 +54,100 @@ def _rope_hf_hifi4_compute_kernel_config():
     )
 
 
+def _sweep_parity_log_enabled() -> bool:
+    return os.environ.get("TT_HF_ROPE_SWEEP_PARITY_LOG", "0") in ("1", "true", "True")
+
+
+def _compute_kernel_config_digest(cfg) -> dict:
+    """Serialize the same object passed to ``rotary_embedding_hf`` (no hardcoded HiFi4 table)."""
+    return {
+        "type": type(cfg).__name__,
+        "math_fidelity": str(getattr(cfg, "math_fidelity", None)),
+        "math_approx_mode": getattr(cfg, "math_approx_mode", None),
+        "fp32_dest_acc_en": getattr(cfg, "fp32_dest_acc_en", None),
+        "packer_l1_acc": getattr(cfg, "packer_l1_acc", None),
+    }
+
+
+def _sweep_decode_input_shape_from_tensor(tt: ttnn.Tensor) -> list[int]:
+    """``rotary_embedding_hf`` decode sweep uses ``input_shape`` = logical shape when exposed."""
+    fn = getattr(tt, "logical_shape", None)
+    if callable(fn):
+        try:
+            return list(fn())
+        except Exception:
+            pass
+    return list(tt.shape)
+
+
+def _log_sweep_parity_compute_banner(compute_cfg) -> None:
+    if not _sweep_parity_log_enabled():
+        return
+    block = json.dumps({"compute_kernel_config": _compute_kernel_config_digest(compute_cfg)}, indent=2)
+    msg = f"[hf_rope_sweep_parity] Live compute_kernel_config (passed to rotary_embedding_hf):\n{block}"
+    print(msg)
+    logger.info(msg)
+
+
+def _log_sweep_parity_from_loaded_tensors(
+    step_dir: Path,
+    manifest: dict,
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    cos_tt: ttnn.Tensor,
+    sin_tt: ttnn.Tensor,
+) -> None:
+    """Log shapes, dtype, layout, memory_config from device tensors after load (not manifest tables)."""
+    if not _sweep_parity_log_enabled():
+        return
+    payload = {
+        "step_dir": step_dir.name,
+        "model_name": manifest.get("model_name"),
+        "Q": tensor_device_layout_digest(q),
+        "K": tensor_device_layout_digest(k),
+        "cos": tensor_device_layout_digest(cos_tt),
+        "sin": tensor_device_layout_digest(sin_tt),
+        "suggested_sweep_decode_spec_q": {
+            "input_shape": _sweep_decode_input_shape_from_tensor(q),
+            "is_decode": True,
+        },
+        "suggested_sweep_decode_spec_k": {
+            "input_shape": _sweep_decode_input_shape_from_tensor(k),
+            "is_decode": True,
+        },
+    }
+    shape_q = _sweep_decode_input_shape_from_tensor(q)
+    max_sl = manifest.get("max_seq_len")
+    if len(shape_q) == 4 and max_sl is not None:
+        _, _, n_heads, head_d = shape_q
+        payload["suggested_sweep_prefill_spec_if_same_heads_seq"] = {
+            "input_shape": [1, n_heads, int(max_sl), head_d],
+            "cache_size": int(max_sl),
+            "note": "decode capture only; seq/cache_size from manifest max_seq_len, head_dim/heads from loaded Q",
+        }
+    line = "[hf_rope_sweep_parity] loaded tensors → sweep hints: " + json.dumps(payload, default=str)
+    print(line)
+    logger.info(line)
+
+
 def _digest_subset(d: dict) -> dict:
     """Stable fields for post-load sanity (full string repr can vary slightly)."""
     keys = ("memory_layout", "buffer_type", "shard_shape", "shard_orientation", "grid_repr")
     return {k: d.get(k) for k in keys}
+
+
+def _print_pcc_stats_table(log_prefix: str, series: dict[str, list[float]], row_order: tuple[str, ...]) -> None:
+    """Print and log a fixed-width id / mean / min / max table (one row per metric)."""
+    lines: list[str] = [f"{'id':<16} {'mean':>12} {'min':>12} {'max':>12}"]
+    for name in row_order:
+        vals = series.get(name, [])
+        if not vals:
+            lines.append(f"{name:<16} {'(no data)':>12} {'':>12} {'':>12}")
+            continue
+        lines.append(f"{name:<16} {statistics.mean(vals):>12.6f} {min(vals):>12.6f} {max(vals):>12.6f}")
+    block = "\n".join(lines)
+    print(block)
+    logger.info(f"{log_prefix} PCC summary (completed steps):\n{block}")
 
 
 @pytest.mark.parametrize(
@@ -75,8 +175,12 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
         pytest.skip(f"No step_* directories under {replay_root}")
 
     pcc_floor = float(os.environ.get("TT_HF_ROPE_DECODE_REPLAY_PCC", "0.95"))
-    # pcc_floor = float(os.environ.get("TT_HF_ROPE_DECODE_REPLAY_PCC", "0.95"))
     compute_cfg = _rope_hf_hifi4_compute_kernel_config()
+    _log_sweep_parity_compute_banner(compute_cfg)
+
+    pcc_series = {"layer_pcc": [], "k_cache_pcc": []}
+    pcc_assert_msgs: list[str] = []
+    other_failures: list[str] = []
 
     for step_dir in step_dirs:
         manifest = load_manifest(step_dir)
@@ -85,7 +189,9 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
         k = ttnn.load_tensor(step_dir / tf["k_pre_rot"], device=mesh_device)
         cos_tt = ttnn.load_tensor(step_dir / tf["cos"], device=mesh_device)
         sin_tt = ttnn.load_tensor(step_dir / tf["sin"], device=mesh_device)
+        _log_sweep_parity_from_loaded_tensors(step_dir, manifest, q, k, cos_tt, sin_tt)
 
+        digest_mismatch = False
         for name, tensor, expected in (
             ("q", q, manifest.get("q_digest")),
             ("k", k, manifest.get("k_digest")),
@@ -96,10 +202,19 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
                 continue
             got = tensor_memory_config_shard_digest(tensor)
             if _digest_subset(expected) != _digest_subset(got):
-                pytest.fail(
+                other_failures.append(
                     f"{step_dir.name} {name} memory_config digest mismatch after load_tensor:\n"
                     f"expected={_digest_subset(expected)}\nactual={_digest_subset(got)}"
                 )
+                digest_mismatch = True
+                break
+
+        if digest_mismatch:
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
+            continue
 
         ctc = manifest.get("to_torch_composer") or {}
         dims = tuple(ctc.get("dims", (1, 3)))
@@ -121,9 +236,10 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
             ttnn.deallocate(k)
             ttnn.deallocate(cos_tt)
             ttnn.deallocate(sin_tt)
-            pytest.fail(
+            other_failures.append(
                 f"{step_dir.name}: missing position_indices.pt (set capture from test_attention with capture env)."
             )
+            continue
 
         pos = torch.load(pos_path, map_location="cpu")
 
@@ -146,14 +262,18 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
         k_tt = k_tt[:, :, : k_ref.shape[2], :]
         ok_q, pcc_q = comp_pcc(q_ref, q_tt, pcc=pcc_floor)
         ok_k, pcc_k = comp_pcc(k_ref, k_tt, pcc=pcc_floor)
+        pcc_series["layer_pcc"].append(pcc_q)
+        pcc_series["k_cache_pcc"].append(pcc_k)
         logger.info(
             f"[hf_rope_capture_replay] step={step_dir.name} Q vs torch PCC={pcc_q} floor={pcc_floor} pass={ok_q}"
         )
         logger.info(
             f"[hf_rope_capture_replay] step={step_dir.name} K vs torch PCC={pcc_k} floor={pcc_floor} pass={ok_k}"
         )
-        assert ok_q, f"{step_dir.name} Q rotary_embedding_hf vs torch PCC={pcc_q} (need >= {pcc_floor})"
-        assert ok_k, f"{step_dir.name} K rotary_embedding_hf vs torch PCC={pcc_k} (need >= {pcc_floor})"
+        if not ok_q:
+            pcc_assert_msgs.append(f"{step_dir.name} Q rotary_embedding_hf vs torch PCC={pcc_q} (need >= {pcc_floor})")
+        if not ok_k:
+            pcc_assert_msgs.append(f"{step_dir.name} K rotary_embedding_hf vs torch PCC={pcc_k} (need >= {pcc_floor})")
 
         ttnn.deallocate(q_out)
         ttnn.deallocate(k_out)
@@ -161,6 +281,20 @@ def test_hf_rope_attention_capture_replay(mesh_device, reset_seeds):
         ttnn.deallocate(k)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
+
+    _print_pcc_stats_table("[hf_rope_capture_replay]", pcc_series, ("layer_pcc", "k_cache_pcc"))
+    if other_failures:
+        pytest.fail(
+            "Non-PCC failures after running all steps:\n"
+            + "\n---\n".join(other_failures)
+            + ("\n\nPCC failures (also below floor):\n" + "\n".join(pcc_assert_msgs) if pcc_assert_msgs else "")
+        )
+    if pcc_assert_msgs:
+        pytest.fail(
+            f"PCC floor={pcc_floor} not met for one or more steps:\n"
+            + "\n".join(pcc_assert_msgs)
+            + f"\n\nCompleted steps with PCC: layer={len(pcc_series['layer_pcc'])}, k_cache={len(pcc_series['k_cache_pcc'])}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -189,6 +323,11 @@ def test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden(mesh_device
 
     pcc_floor = float(os.environ.get("TT_HF_ROPE_DECODE_REPLAY_PCC", "0.95"))
     compute_cfg = _rope_hf_hifi4_compute_kernel_config()
+    _log_sweep_parity_compute_banner(compute_cfg)
+
+    pcc_series = {"layer_pcc": [], "k_cache_pcc": []}
+    pcc_assert_msgs: list[str] = []
+    other_failures: list[str] = []
 
     for step_dir in step_dirs:
         manifest = load_manifest(step_dir)
@@ -197,7 +336,9 @@ def test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden(mesh_device
         k = ttnn.load_tensor(step_dir / tf["k_pre_rot"], device=mesh_device)
         cos_tt = ttnn.load_tensor(step_dir / tf["cos"], device=mesh_device)
         sin_tt = ttnn.load_tensor(step_dir / tf["sin"], device=mesh_device)
+        _log_sweep_parity_from_loaded_tensors(step_dir, manifest, q, k, cos_tt, sin_tt)
 
+        digest_mismatch = False
         for name, tensor, expected in (
             ("q", q, manifest.get("q_digest")),
             ("k", k, manifest.get("k_digest")),
@@ -208,10 +349,19 @@ def test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden(mesh_device
                 continue
             got = tensor_memory_config_shard_digest(tensor)
             if _digest_subset(expected) != _digest_subset(got):
-                pytest.fail(
+                other_failures.append(
                     f"{step_dir.name} {name} memory_config digest mismatch after load_tensor:\n"
                     f"expected={_digest_subset(expected)}\nactual={_digest_subset(got)}"
                 )
+                digest_mismatch = True
+                break
+
+        if digest_mismatch:
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
+            continue
 
         ctc = manifest.get("to_torch_composer") or {}
         dims = tuple(ctc.get("dims", (1, 3)))
@@ -238,18 +388,22 @@ def test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden(mesh_device
         k_tt = k_tt[:, :, : k_ref.shape[2], :]
         ok_q, pcc_q = comp_pcc(q_ref, q_tt, pcc=pcc_floor)
         ok_k, pcc_k = comp_pcc(k_ref, k_tt, pcc=pcc_floor)
+        pcc_series["layer_pcc"].append(pcc_q)
+        pcc_series["k_cache_pcc"].append(pcc_k)
         logger.info(
             f"[hf_rope_capture_replay_cos_golden] step={step_dir.name} Q PCC={pcc_q} floor={pcc_floor} pass={ok_q}"
         )
         logger.info(
             f"[hf_rope_capture_replay_cos_golden] step={step_dir.name} K PCC={pcc_k} floor={pcc_floor} pass={ok_k}"
         )
-        assert (
-            ok_q
-        ), f"{step_dir.name} Q rotary_embedding_hf vs torch(captured cos/sin) PCC={pcc_q} (need >= {pcc_floor})"
-        assert (
-            ok_k
-        ), f"{step_dir.name} K rotary_embedding_hf vs torch(captured cos/sin) PCC={pcc_k} (need >= {pcc_floor})"
+        if not ok_q:
+            pcc_assert_msgs.append(
+                f"{step_dir.name} Q rotary_embedding_hf vs torch(captured cos/sin) PCC={pcc_q} (need >= {pcc_floor})"
+            )
+        if not ok_k:
+            pcc_assert_msgs.append(
+                f"{step_dir.name} K rotary_embedding_hf vs torch(captured cos/sin) PCC={pcc_k} (need >= {pcc_floor})"
+            )
 
         ttnn.deallocate(q_out)
         ttnn.deallocate(k_out)
@@ -257,3 +411,17 @@ def test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden(mesh_device
         ttnn.deallocate(k)
         ttnn.deallocate(cos_tt)
         ttnn.deallocate(sin_tt)
+
+    _print_pcc_stats_table("[hf_rope_capture_replay_cos_golden]", pcc_series, ("layer_pcc", "k_cache_pcc"))
+    if other_failures:
+        pytest.fail(
+            "Non-PCC failures after running all steps:\n"
+            + "\n---\n".join(other_failures)
+            + ("\n\nPCC failures (also below floor):\n" + "\n".join(pcc_assert_msgs) if pcc_assert_msgs else "")
+        )
+    if pcc_assert_msgs:
+        pytest.fail(
+            f"PCC floor={pcc_floor} not met for one or more steps:\n"
+            + "\n".join(pcc_assert_msgs)
+            + f"\n\nCompleted steps with PCC: layer={len(pcc_series['layer_pcc'])}, k_cache={len(pcc_series['k_cache_pcc'])}"
+        )
