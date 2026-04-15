@@ -2156,10 +2156,30 @@ jobs:
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Team $team already approved (combined check), skipping"
+              # Check team-specific approval: only skip if an actual member of THIS team approved.
+              # The FILES_HAS_APPROVAL map uses combined/cross-team approval which is correct
+              # for display purposes, but for notifications we must verify the approver belongs
+              # to this team — otherwise a reviewer from a different team that owns overlapping
+              # files would incorrectly suppress the Slack ping for this team.
+              team_has_own_approval=false
+              if [ -n "$TEAM_MEMBERS" ]; then
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  this_team_members=$(echo "$team_members_entry" | cut -d':' -f2)
+                  if [ "$this_team_members" != "insufficient-permissions" ] && [ "$this_team_members" != "team-not-found" ] && [ "$this_team_members" != "unauthorized" ] && [ "$this_team_members" != "api-error" ] && [ "$this_team_members" != "no-members" ]; then
+                    IFS=',' read -ra THIS_TEAM_ARRAY <<< "$this_team_members"
+                    for member in "${THIS_TEAM_ARRAY[@]}"; do
+                      [ -z "$member" ] && continue
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        team_has_own_approval=true
+                        echo "Team $team approved by own member $member, skipping"
+                        break
+                      fi
+                    done
+                  fi
+                fi
+              fi
+              if [ "$team_has_own_approval" = "true" ]; then
                 continue
               fi
 
