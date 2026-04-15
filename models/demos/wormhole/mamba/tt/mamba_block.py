@@ -88,7 +88,6 @@ class TtMambaBlock(torch.nn.Module):
 
         mamba_conv_config = MambaConvConfig(
             input_length=self.configs["outer_dim"] + (args.d_conv - 1),
-            weights_dtype=ttnn.bfloat16,
             output_dtype=ttnn.bfloat16,
         )
         self.mamba_conv = MambaConv(device, load_fn, mamba_conv_config)

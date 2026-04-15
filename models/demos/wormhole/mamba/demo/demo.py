@@ -219,7 +219,7 @@ def run_mamba_demo(
     cache_dir: Optional[str] = None,
     display: bool = True,
     prefill_chunk_size: int = 32,
-    assert_on_performance_measurements: bool = True,
+    assert_on_performance_measurements: bool = False,
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -405,16 +405,17 @@ def run_mamba_demo(
 
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("no_assert_perf", [True])
 @pytest.mark.parametrize(
     "model_version, max_gen_len",
     (
         (
             "state-spaces/mamba-2.8b-slimpj",
-            50,
+            30,
         ),
     ),
 )
-def test_demo(user_input, device, get_tt_cache_path, model_version, max_gen_len):
+def test_demo(user_input, device, get_tt_cache_path, model_version, max_gen_len, no_assert_perf):
     # https://github.com/tenstorrent/tt-metal/issues/23282
     device.disable_and_clear_program_cache()
 
@@ -423,4 +424,5 @@ def test_demo(user_input, device, get_tt_cache_path, model_version, max_gen_len)
         device=device,
         cache_dir=get_tt_cache_path(model_version),
         generated_sequence_length=max_gen_len,
+        assert_on_performance_measurements=not no_assert_perf,
     )

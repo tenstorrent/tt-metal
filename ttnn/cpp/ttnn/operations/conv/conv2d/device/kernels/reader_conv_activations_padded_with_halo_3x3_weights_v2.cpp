@@ -63,8 +63,11 @@ void kernel_main() {
     // so the loop can be removed
     constexpr bool coalesce_window_inner_reads = true;
     constexpr uint32_t num_coalesced_reads = weight_size_w;
-    constexpr uint32_t coalesced_read_bytes =
+    constexpr uint32_t full_coalesced_read_bytes =
         ((dilation_w == 1) ? num_coalesced_reads * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    // Fall back to non-coalesced reads when the coalesced size exceeds the NOC max burst size
+    constexpr uint32_t coalesced_read_bytes =
+        (full_coalesced_read_bytes <= NOC_MAX_BURST_SIZE) ? full_coalesced_read_bytes : conv_act_c_read_bytes;
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
     // the other path away this has shown to be a big perf win
 

@@ -527,13 +527,13 @@ bool is_1d_depthwise_conv(
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_height,
-    uint32_t kernel_width,
+    uint32_t /*kernel_width*/,
     uint32_t image_height,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    // Only use 1D depthwise path when kernel is truly pointwise (1x1)
-    // is_1d_conv checks height=1, we also need kernel_width=1 to ensure no spatial computation
-    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && kernel_width == 1 && !has_bias;
+    // Use the 1D depthwise path when the height dimension is trivial (1D conv).
+    // The depthwise reader/compute kernels handle kernel_width > 1 via the window iteration loop.
+    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && !has_bias;
 }
 
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {

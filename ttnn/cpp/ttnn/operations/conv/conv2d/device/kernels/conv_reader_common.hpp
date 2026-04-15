@@ -46,7 +46,7 @@ FORCE_INLINE void read_sticks(
         uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 
-        if constexpr (dilation_w == 1) {
+        if constexpr (coalesced_read_bytes > conv_act_c_read_bytes) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
                 noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
