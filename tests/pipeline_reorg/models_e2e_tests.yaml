@@ -189,7 +189,7 @@
 
 - name: Llama 3.3-70B e2e tests (Galaxy)
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
   model: llama3.3-70b-galaxy
