@@ -19,6 +19,7 @@
 | `matmul_and_pack_absolute` | Subblock matmul + absolute-offset pack | SDPA streaming |
 | `matmul_blocks_absolute` | Full blocked matmul + absolute-offset pack + CB management | SDPA non-streaming |
 | `matmul` | Full automated blocked matmul | bmm.cpp, bmm_large_block_zm |
+| `add_bias_bcast_rows` | Row-broadcast bias addition + PostBiasFn + pack | fused_bias kernel |
 | `matmul_init`, `matmul_init_short`, etc. | Hardware init/reinit | All matmul kernels |
 
 ## PostComputeFn / PostPackFn Callbacks

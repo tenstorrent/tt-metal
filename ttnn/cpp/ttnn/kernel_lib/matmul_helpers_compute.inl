@@ -8,7 +8,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
+#include "api/compute/bcast.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/debug/assert.h"
 
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
@@ -467,6 +469,73 @@ ALWI void matmul_blocks_absolute(
     }
 
     cb_pop_front(cfg.in1_cb_id, K * N);
+}
+
+// =============================================================================
+// Bias Addition Helper
+// =============================================================================
+
+template <uint32_t partials_cb, uint32_t bias_cb, uint32_t out_cb, typename PostBiasFn>
+ALWI void add_bias_bcast_rows(
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t bias_width_tiles,
+    PostBiasFn post_bias) {
+
+    static_assert(partials_cb < 32, "add_bias_bcast_rows: partials_cb must be less than 32");
+    static_assert(bias_cb < 32, "add_bias_bcast_rows: bias_cb must be less than 32");
+    static_assert(out_cb < 32, "add_bias_bcast_rows: out_cb must be less than 32");
+
+    const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
+
+    // Format reconfig for bias phase
+    reconfig_data_format_srca(partials_cb);
+    reconfig_data_format_srcb(bias_cb);
+    pack_reconfig_data_format(out_cb);
+
+    // Init bias broadcast
+    add_bcast_rows_init_short(partials_cb, bias_cb);
+
+    // Wait for bias tiles
+    cb_wait_front(bias_cb, bias_width_tiles);
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+        int in1_index_subblock_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+            cb_wait_front(partials_cb, out_num_tiles);
+            tile_regs_acquire();
+
+            // Row-broadcast bias addition
+            for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+                uint32_t bcast_tile_idx = in1_index_subblock_offset;
+                for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                    add_tiles_bcast_rows(partials_cb, bias_cb, i, bcast_tile_idx, i);
+                    bcast_tile_idx++;
+                }
+            }
+
+            // PostBiasFn fires BEFORE commit (matches production kernel's SFPU placement)
+            post_bias(out_num_tiles);
+
+            tile_regs_commit();
+            cb_pop_front(partials_cb, out_num_tiles);
+
+            // Pack out to output buffer
+            cb_reserve_back(out_cb, out_num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < out_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+            cb_push_back(out_cb, out_num_tiles);
+
+            in1_index_subblock_offset += out_subblock_w;
+        }
+    }
+
+    // NOTE: does NOT pop bias_cb. Caller manages bias tile lifetime.
 }
 
 }  // namespace compute_kernel_lib

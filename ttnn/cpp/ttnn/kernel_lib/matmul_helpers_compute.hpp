@@ -614,6 +614,49 @@ ALWI void matmul_blocks_absolute(
     uint32_t in1_num_subblocks,
     PostComputeFn post_compute = {});
 
+// =============================================================================
+// Bias Addition Helper
+// =============================================================================
+
+/**
+ * @brief Row-broadcast bias addition on matmul output.
+ *
+ * Reads matmul output sub-blocks from partials_cb, adds bias with row broadcast,
+ * optionally applies a post-bias operation (e.g., SFPU activation), and packs
+ * the result to out_cb. Composes with matmul helpers by reading from the same
+ * interm_cb that the matmul packed to.
+ *
+ * Manages full DST lifecycle and CB management per sub-block.
+ * Do NOT call tile_regs_acquire/release around this — the helper owns DST.
+ *
+ * Caller responsibilities:
+ *   - Call add_bcast_rows_init_short() before first use (or use reconfig_data_format)
+ *   - Ensure partials and bias tiles are produced before calling
+ *   - cb_pop_front(bias_cb, ...) after this function returns if needed
+ *     (the helper does NOT pop bias_cb — caller manages bias tile lifetime)
+ *
+ * @tparam partials_cb    CB containing matmul output (= interm_cb from matmul_block).
+ * @tparam bias_cb        CB containing bias tiles. One tile per output column, row-broadcast.
+ * @tparam out_cb         Output CB for biased result.
+ * @tparam PostBiasFn     Functor called per sub-block after bias addition, before commit.
+ *                        See PostComputeFn rules. (default: NoPostCompute)
+ *
+ * @param in0_num_subblocks  Number of sub-blocks along M dimension.
+ * @param in1_num_subblocks  Number of sub-blocks along N dimension.
+ * @param out_subblock_h     Output sub-block height in tiles.
+ * @param out_subblock_w     Output sub-block width in tiles.
+ * @param bias_width_tiles   Number of bias tiles to wait for (= in1_num_subblocks * out_subblock_w).
+ * @param post_bias          PostBiasFn instance (default: no-op).
+ */
+template <uint32_t partials_cb, uint32_t bias_cb, uint32_t out_cb, typename PostBiasFn = NoPostCompute>
+ALWI void add_bias_bcast_rows(
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t bias_width_tiles,
+    PostBiasFn post_bias = {});
+
 }  // namespace compute_kernel_lib
 
 // Include implementation
