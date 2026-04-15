@@ -5,7 +5,7 @@
 """Unit tests for math fidelity module (CPU-only, no hardware required)."""
 
 import pytest
-from ttnn.operations.auto_config.math_fidelity import (
+from ttnn._experimental.auto_config.math_fidelity import (
     CYCLES_PER_TILE,
     DTYPE_FIDELITY_CONSTRAINTS,
     GPT_ATTENTION_SHAPES,

@@ -6,18 +6,18 @@
 
 
 def matmul_auto(*args, **kwargs):
-    from ttnn.operations.auto_config.matmul_auto import matmul_auto as _fn
+    from ttnn._experimental.auto_config.matmul_auto import matmul_auto as _fn
 
     return _fn(*args, **kwargs)
 
 
 def __getattr__(name):
     if name == "AutoConfigSelector":
-        from ttnn.operations.auto_config.base import AutoConfigSelector
+        from ttnn._experimental.auto_config.base import AutoConfigSelector
 
         return AutoConfigSelector
     if name == "ConfigCache":
-        from ttnn.operations.auto_config.config_cache import ConfigCache
+        from ttnn._experimental.auto_config.config_cache import ConfigCache
 
         return ConfigCache
     raise AttributeError(name)

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from ttnn.operations.auto_config.math_fidelity import default_fidelity, fidelity_cycle_cost, valid_fidelities
+from ttnn._experimental.auto_config.math_fidelity import default_fidelity, fidelity_cycle_cost, valid_fidelities
 
 import ttnn
 

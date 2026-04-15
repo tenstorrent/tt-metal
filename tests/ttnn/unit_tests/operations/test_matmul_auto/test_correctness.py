@@ -110,7 +110,7 @@ class TestMatmulAutoCorrectness:
     @pytest.mark.parametrize("batch,m,k,n", ALL_SHAPES)
     def test_output_correctness(self, device, batch, m, k, n):
         """Test that matmul_auto produces correct results for all shapes."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(batch, k, n, dtype=torch.float32) if batch > 1 else torch.randn(k, n, dtype=torch.float32)
@@ -128,7 +128,7 @@ class TestMatmulAutoCorrectness:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:5])
     def test_output_with_bias(self, device, batch, m, k, n):
         """Test matmul_auto with bias."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -148,7 +148,7 @@ class TestMatmulAutoCorrectness:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:3])
     def test_bfloat8_b_dtype(self, device, batch, m, k, n):
         """Test matmul_auto with bfloat8_b data type."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -167,7 +167,7 @@ class TestMatmulAutoCorrectness:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:3])
     def test_force_program_config(self, device, batch, m, k, n):
         """Test that force_program_config bypasses auto-selection."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -186,7 +186,7 @@ class TestMatmulAutoCorrectness:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:3])
     def test_config_selection_no_errors(self, device, batch, m, k, n):
         """Test that config selection itself doesn't error."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -218,8 +218,8 @@ class TestMatmulAutoCache:
     @pytest.mark.parametrize("batch,m,k,n", BASIC_SHAPES[:3])
     def test_cache_hit_on_repeat(self, device, batch, m, k, n):
         """Test that repeated calls with same signature hit the cache."""
-        from ttnn.operations.auto_config.config_cache import ConfigCache
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.config_cache import ConfigCache
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -248,7 +248,7 @@ class TestMatmulAutoFeatureExtraction:
 
     def test_features_contain_all_keys(self, device):
         """Test that features dict contains all expected keys."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         torch_a = torch.randn(1, 128, 256, dtype=torch.float32)
         torch_b = torch.randn(256, 512, dtype=torch.float32)
@@ -292,7 +292,7 @@ class TestConstraintValidator:
 
     def test_tile_alignment_validation(self):
         """Test tile alignment validation."""
-        from ttnn.operations.auto_config.constraint_validator import validate_tile_alignment
+        from ttnn._experimental.auto_config.constraint_validator import validate_tile_alignment
 
         # Valid alignment
         is_valid, _ = validate_tile_alignment({"M": 128, "K": 256, "N": 512})
@@ -304,7 +304,7 @@ class TestConstraintValidator:
 
     def test_subblock_validation(self):
         """Test subblock parameter validation."""
-        from ttnn.operations.auto_config.constraint_validator import validate_subblock_params
+        from ttnn._experimental.auto_config.constraint_validator import validate_subblock_params
 
         class MockConfig:
             per_core_M = 4
@@ -329,8 +329,8 @@ class TestHeuristicScorer:
 
     def test_scorer_returns_valid_score(self):
         """Test that scorer returns a score in [0, 1]."""
-        from ttnn.operations.auto_config.base import ConfigCandidate
-        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
+        from ttnn._experimental.auto_config.base import ConfigCandidate
+        from ttnn._experimental.auto_config.scorer.heuristic import HeuristicScorer
 
         scorer = HeuristicScorer()
         candidate = ConfigCandidate(
@@ -370,8 +370,8 @@ class TestHeuristicScorer:
 
     def test_tall_shape_prefers_mcast_in1(self):
         """Test that tall shapes score higher with mcast_in0=False."""
-        from ttnn.operations.auto_config.base import ConfigCandidate
-        from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
+        from ttnn._experimental.auto_config.base import ConfigCandidate
+        from ttnn._experimental.auto_config.scorer.heuristic import HeuristicScorer
 
         scorer = HeuristicScorer()
         features = {

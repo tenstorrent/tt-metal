@@ -15,10 +15,10 @@ Sweep bounds are capped to prevent combinatorial explosion (MAX_CANDIDATES_PER_F
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from ttnn.operations.auto_config.base import ConfigCandidate
-from ttnn.operations.auto_config.math_fidelity import MathFidelity
+from ttnn._experimental.auto_config.base import ConfigCandidate
+from ttnn._experimental.auto_config.math_fidelity import MathFidelity
 
 import ttnn
 
@@ -776,3 +776,100 @@ def generate_matmul_candidates(features: Dict[str, Any]) -> List[ConfigCandidate
 
     logger.debug(f"Total candidates generated: {len(candidates)}")
     return candidates
+
+
+def _build_config_from_params(
+    params: Dict[str, Any],
+    features: Dict[str, Any],
+) -> Optional[ConfigCandidate]:
+    """Build a ConfigCandidate from predicted or cached config parameters.
+
+    Used by:
+    - DNN config generator (to build configs from raw predictions)
+    - Config cache (to reconstruct configs from cached entries)
+
+    Args:
+        params: Dict with keys: config_family, in0_block_w, per_core_M,
+            per_core_N, out_subblock_h, out_subblock_w, math_fidelity, mcast_in0
+        features: Matmul feature dict (for grid size, etc.)
+
+    Returns:
+        A ConfigCandidate with a valid program config, or None if construction fails.
+    """
+    family = params.get("config_family", "MultiCast1D")
+    grid_x = features.get("grid_x", 8)
+    grid_y = features.get("grid_y", 8)
+    in0_block_w = params.get("in0_block_w", 1)
+    per_core_M = params.get("per_core_M", 1)
+    per_core_N = params.get("per_core_N", 1)
+    out_subblock_h = params.get("out_subblock_h", 1)
+    out_subblock_w = params.get("out_subblock_w", 1)
+    mcast_in0 = params.get("mcast_in0", True)
+
+    config = None
+    backend = "matmul"
+
+    try:
+        if family == "MultiCast1D":
+            config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                out_block_h=per_core_M,
+                out_block_w=per_core_N,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
+                fuse_batch=True,
+                mcast_in0=mcast_in0,
+            )
+        elif family == "MultiCast2D":
+            config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                out_block_h=per_core_M,
+                out_block_w=per_core_N,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
+                transpose_mcast=params.get("transpose_mcast", False),
+                fuse_batch=True,
+            )
+        elif family == "DRAMSharded":
+            config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=in0_block_w,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
+            )
+        elif family == "Reuse":
+            config = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
+            )
+        else:
+            logger.debug("Cannot build config for family: %s", family)
+            return None
+    except Exception as e:
+        logger.debug("Failed to build config from params: %s", e)
+        return None
+
+    # Resolve math fidelity
+    fidelity_name = params.get("math_fidelity", "HiFi4")
+    try:
+        fidelity = MathFidelity[fidelity_name]
+    except (KeyError, TypeError):
+        fidelity = MathFidelity.HiFi4
+
+    return ConfigCandidate(
+        config=config,
+        config_family=family,
+        backend=backend,
+        params=params,
+        math_fidelity=fidelity,
+    )
+

@@ -10,7 +10,7 @@ matmul configuration for both single-device and multi-device inputs.
 
 Usage:
     import ttnn
-    from ttnn.operations.auto_config import matmul_auto
+    from ttnn._experimental.auto_config import matmul_auto
 
     # Simple usage (like torch.matmul)
     output = matmul_auto(input_a, input_b)
@@ -31,12 +31,13 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from ttnn.operations.auto_config.base import AutoConfigSelector, ConfigCandidate, SelectionResult
-from ttnn.operations.auto_config.candidate_generator import generate_matmul_candidates
-from ttnn.operations.auto_config.config_cache import ConfigCache
-from ttnn.operations.auto_config.constraint_validator import validate_candidate
-from ttnn.operations.auto_config.feature_extraction import extract_matmul_features, get_cache_key_from_features
-from ttnn.operations.auto_config.scorer.heuristic import HeuristicScorer
+from ttnn._experimental.auto_config.base import AutoConfigSelector, ConfigCandidate, SelectionResult
+from ttnn._experimental.auto_config.candidate_generator import generate_matmul_candidates
+from ttnn._experimental.auto_config.config_cache import ConfigCache
+from ttnn._experimental.auto_config.constraint_validator import validate_candidate
+from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features, get_cache_key_from_features
+from ttnn._experimental.auto_config.scorer.heuristic import HeuristicScorer
+from ttnn._experimental.auto_config.scorer.dnn_scorer import DNNConfigGenerator
 
 import ttnn
 
@@ -45,6 +46,14 @@ logger = logging.getLogger(__name__)
 # Global singleton instances
 _global_cache: Optional[ConfigCache] = None
 _global_scorer: Optional[HeuristicScorer] = None
+_global_dnn_generator: Optional[DNNConfigGenerator] = None
+
+
+def _get_global_dnn_generator() -> DNNConfigGenerator:
+    global _global_dnn_generator
+    if _global_dnn_generator is None:
+        _global_dnn_generator = DNNConfigGenerator()
+    return _global_dnn_generator
 
 
 def _get_global_cache() -> ConfigCache:
@@ -194,6 +203,38 @@ class MatmulAutoConfig(AutoConfigSelector):
         return suggestions
 
 
+def _build_compute_kernel_config(selected: ConfigCandidate) -> Optional[Any]:
+    """Build a WormholeComputeKernelConfig with the candidate's math_fidelity.
+
+    This ensures the selected math_fidelity is actually applied to the
+    matmul call, addressing the Copilot review feedback about fidelity
+    not being plumbed through execution.
+    """
+    fidelity = getattr(selected, "math_fidelity", None)
+    if fidelity is None:
+        return None
+    try:
+        from ttnn._experimental.auto_config.math_fidelity import MathFidelity
+
+        fidelity_map = {
+            MathFidelity.LoFi: ttnn.MathFidelity.LoFi,
+            MathFidelity.HiFi2: ttnn.MathFidelity.HiFi2,
+            MathFidelity.HiFi3: ttnn.MathFidelity.HiFi3,
+            MathFidelity.HiFi4: ttnn.MathFidelity.HiFi4,
+        }
+        ttnn_fidelity = fidelity_map.get(fidelity)
+        if ttnn_fidelity is None:
+            return None
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn_fidelity,
+            math_approx_mode=True,
+            fp32_dest_acc_en=(fidelity == MathFidelity.HiFi4),
+            packer_l1_acc=True,
+        )
+    except Exception:
+        return None
+
+
 def _execute_with_config(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
@@ -210,12 +251,14 @@ def _execute_with_config(
     selected = result.selected_config
     backend = selected.backend
 
+    # Build compute kernel config with math_fidelity
+    compute_kernel_config = _build_compute_kernel_config(selected)
+
     if backend == "minimal_matmul":
         # Use the experimental minimal_matmul API
         try:
             fused_activation = None
             if activation:
-                # Map string activation to UnaryWithParam if needed
                 fused_activation = None  # TODO: map activation string
 
             output = ttnn.experimental.minimal_matmul(
@@ -229,37 +272,40 @@ def _execute_with_config(
             )
             return output
         except Exception as e:
-            logger.warning(f"minimal_matmul failed ({e}), falling back to ttnn.matmul")
+            logger.warning("minimal_matmul failed (%s), falling back to ttnn.matmul", e)
             # Fall through to standard matmul
 
     # Standard ttnn.matmul
     program_config = selected.config if selected.config_family != "MinimalMatmul" else None
+
+    # Build common kwargs
+    matmul_kwargs: Dict[str, Any] = {
+        "transpose_a": transpose_a,
+        "transpose_b": transpose_b,
+        "memory_config": memory_config,
+        "dtype": dtype,
+        "program_config": program_config,
+        "activation": activation,
+    }
+    if compute_kernel_config is not None:
+        matmul_kwargs["compute_kernel_config"] = compute_kernel_config
+
     if bias is not None:
         output = ttnn.linear(
             input_tensor_a,
             input_tensor_b,
             bias=bias,
-            transpose_a=transpose_a,
-            transpose_b=transpose_b,
-            memory_config=memory_config,
-            dtype=dtype,
-            program_config=program_config,
-            activation=activation,
+            **matmul_kwargs,
         )
     else:
-        import ttnn.operations.auto_config.matmul_auto as _selfmod
+        import ttnn._experimental.auto_config.matmul_auto as _selfmod
 
         _selfmod._last_selected_config = program_config
         _selfmod._last_selected_api = "matmul"
         output = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            transpose_a=transpose_a,
-            transpose_b=transpose_b,
-            memory_config=memory_config,
-            dtype=dtype,
-            program_config=program_config,
-            activation=activation,
+            **matmul_kwargs,
         )
 
     return output
@@ -510,18 +556,62 @@ def matmul_auto(
         )
 
     # Auto-selection path
+    # Try DNN generator first (if trained model available), then heuristic
     selector = MatmulAutoConfig()
+    dnn_gen = _get_global_dnn_generator()
 
-    result = selector.select(
-        input_tensor_a,
-        input_tensor_b,
-        bias=bias,
-        activation=activation,
-        dtype=dtype,
-        memory_config=memory_config,
-        transpose_a=transpose_a,
-        transpose_b=transpose_b,
-    )
+    result = None
+    if dnn_gen.is_available():
+        try:
+            features = selector.extract_features(
+                input_tensor_a,
+                input_tensor_b,
+                bias=bias,
+                activation=activation,
+                dtype=dtype,
+                memory_config=memory_config,
+                transpose_a=transpose_a,
+                transpose_b=transpose_b,
+            )
+            generated = dnn_gen.generate(features)
+            if generated is not None:
+                # Build a ConfigCandidate from DNN output and validate
+                from ttnn._experimental.auto_config.candidate_generator import (
+                    _build_config_from_params,
+                )
+
+                dnn_candidate = _build_config_from_params(generated, features)
+                if dnn_candidate is not None:
+                    is_valid, reason = selector.validate(dnn_candidate, features)
+                    if is_valid:
+                        dnn_candidate.score = 1.0
+                        dnn_candidate.is_valid = True
+                        result = SelectionResult(
+                            selected_config=dnn_candidate,
+                            all_candidates=[dnn_candidate],
+                            cache_hit=False,
+                            selection_time_ms=0.0,
+                            suggestions=[],
+                        )
+                        logger.info(
+                            "[matmul_auto] DNN generator selected: %s",
+                            generated.get("config_family", "unknown"),
+                        )
+        except Exception as e:
+            logger.debug("DNN generator path failed: %s, falling back to heuristic", e)
+
+    # Heuristic fallback
+    if result is None:
+        result = selector.select(
+            input_tensor_a,
+            input_tensor_b,
+            bias=bias,
+            activation=activation,
+            dtype=dtype,
+            memory_config=memory_config,
+            transpose_a=transpose_a,
+            transpose_b=transpose_b,
+        )
 
     # Fallback chain: if all candidates fail, use default ttnn.matmul
     if result is None or result.selected_config is None:

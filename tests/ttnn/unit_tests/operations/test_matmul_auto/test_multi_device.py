@@ -62,7 +62,7 @@ class TestMatmulAutoMultiDevice:
     @pytest.mark.parametrize("batch,m,k,n", MULTI_DEVICE_SHAPES)
     def test_multi_device_detection(self, mesh_device, batch, m, k, n):
         """Test that matmul_auto correctly detects multi-device inputs."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -90,7 +90,7 @@ class TestMatmulAutoMultiDevice:
     @pytest.mark.parametrize("batch,m,k,n", MULTI_DEVICE_SHAPES[:2])
     def test_multi_device_correctness(self, mesh_device, batch, m, k, n):
         """Test that matmul_auto produces correct results on multi-device."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -129,7 +129,7 @@ class TestMatmulAutoSingleDeviceFallback:
     @pytest.mark.parametrize("batch,m,k,n", MULTI_DEVICE_SHAPES)
     def test_single_device_features_correct(self, single_device, batch, m, k, n):
         """Test that single device is detected correctly."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)

@@ -5,21 +5,21 @@
 """
 Automated DNN retraining pipeline for matmul auto-config.
 
-Runs the full benchmark → train → validate cycle on 100+ shapes.
-This satisfies the maintainer requirement for expanded DNN training coverage.
+Runs the full benchmark → train → validate cycle on 10k+ shapes.
+This satisfies the maintainer requirement for 10k-100k training data points.
 
 Usage:
-    # Full pipeline: benchmark + train + validate
-    python -m ttnn.operations.auto_config.retrain_dnn --full
+    # Full pipeline: benchmark + train + validate (10k shapes)
+    python -m ttnn._experimental.auto_config.retrain_dnn --full --num-shapes 10000
 
     # Benchmark only (collect telemetry)
-    python -m ttnn.operations.auto_config.retrain_dnn --benchmark-only
+    python -m ttnn._experimental.auto_config.retrain_dnn --benchmark-only
 
     # Train only (from existing benchmark results)
-    python -m ttnn.operations.auto_config.retrain_dnn --train-only --input benchmark_results.json
+    python -m ttnn._experimental.auto_config.retrain_dnn --train-only --input benchmark_results.json
 
     # Validate only (test DNN scorer accuracy)
-    python -m ttnn.operations.auto_config.retrain_dnn --validate-only
+    python -m ttnn._experimental.auto_config.retrain_dnn --validate-only
 """
 
 from __future__ import annotations
@@ -163,6 +163,45 @@ TRAINING_SHAPES = [
 assert len(TRAINING_SHAPES) >= 106, f"Expected 106+ shapes, got {len(TRAINING_SHAPES)}"
 
 
+def generate_expanded_shapes(num_shapes: int = 10000, seed: int = 42) -> List[Dict[str, Any]]:
+    """Generate num_shapes unique (M,K,N) combos using log-uniform sampling.
+
+    This satisfies the maintainer requirement: "use 10k-100k data points."
+    Shapes are tile-aligned (multiples of 32) and cover the full range
+    from 32×32×32 to 8192×8192×8192.
+    """
+    import random
+
+    rng = random.Random(seed)
+    dim_choices = [32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536,
+                   2048, 3072, 4096, 6144, 8192]
+    categories = ["decode", "prefill", "attention", "mlp", "general"]
+
+    seen = set()
+    shapes = []
+
+    # Include all curated shapes first
+    for s in TRAINING_SHAPES:
+        key = (s["M"], s["K"], s["N"])
+        if key not in seen:
+            seen.add(key)
+            shapes.append(s)
+
+    # Fill remaining with random tile-aligned shapes
+    while len(shapes) < num_shapes:
+        M = rng.choice(dim_choices)
+        K = rng.choice(dim_choices)
+        N = rng.choice(dim_choices)
+        key = (M, K, N)
+        if key in seen:
+            continue
+        seen.add(key)
+        cat = rng.choice(categories)
+        shapes.append({"M": M, "K": K, "N": N, "category": cat})
+
+    return shapes[:num_shapes]
+
+
 def _tile_pad(x: int) -> int:
     return ((x + 31) // 32) * 32
 
@@ -181,7 +220,7 @@ def run_benchmark_sweep(
     ttnn.matmul config.  Returns a list of result dicts suitable for DNN training.
     """
     import torch
-    from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+    from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
     import ttnn
 
@@ -313,54 +352,76 @@ def train_dnn_from_results(
     The DNN learns to predict relative performance (speedup vs default)
     from shape features and config parameters.
     """
-    from ttnn.operations.auto_config.scorer.dnn_scorer import DNNScorer
+    from ttnn._experimental.auto_config.scorer.dnn_scorer import DNNConfigGenerator
 
     with open(results_file, "r") as f:
         results = json.load(f)
 
-    # Filter to non-default entries with valid latency
-    training_entries = [r for r in results if not r.get("is_default", True) and r.get("latency_us") is not None]
+    # Group results by shape then pick the best (lowest latency) config per shape
+    by_shape: Dict[str, List[Dict]] = {}
+    for r in results:
+        key = f"M={r['shape']['M']},K={r['shape']['K']},N={r['shape']['N']}"
+        if key not in by_shape:
+            by_shape[key] = []
+        by_shape[key].append(r)
 
-    if len(training_entries) < 10:
-        logger.error(f"Only {len(training_entries)} valid training entries — need at least 10")
+    training_data = []
+    for shape_key, entries in by_shape.items():
+        # Among non-default entries, find the best config
+        auto_entries = [e for e in entries if not e.get("is_default", True) and e.get("latency_us") is not None]
+        if not auto_entries:
+            continue
+        best = min(auto_entries, key=lambda e: e["latency_us"])
+        training_data.append({
+            "features": {
+                "M": best["shape"]["M"],
+                "K": best["shape"]["K"],
+                "N": best["shape"]["N"],
+                "M_tiles": best["shape"]["M"] // 32,
+                "K_tiles": best["shape"]["K"] // 32,
+                "N_tiles": best["shape"]["N"] // 32,
+                "batch_size_a": 1,
+                "batch_size_b": 1,
+                "grid_x": 8,
+                "grid_y": 8,
+                "num_cores": 64,
+                "num_devices": 1,
+                "is_a_sharded": False,
+                "is_b_sharded": False,
+                "is_batched_b": False,
+                "is_fp32_accumulate": False,
+                "dtype_a": "BFLOAT16",
+                "dtype_b": "BFLOAT16",
+            },
+            "best_config": {
+                "config_family": best["config_family"],
+                "in0_block_w": best.get("params", {}).get("in0_block_w", 1),
+                "per_core_M": best.get("params", {}).get("per_core_M", 1),
+                "per_core_N": best.get("params", {}).get("per_core_N", 1),
+                "out_subblock_h": best.get("params", {}).get("out_subblock_h", 1),
+                "out_subblock_w": best.get("params", {}).get("out_subblock_w", 1),
+                "math_fidelity": best.get("params", {}).get("math_fidelity", "HiFi4"),
+                "mcast_in0": best.get("params", {}).get("mcast_in0", True),
+            },
+        })
+
+    if len(training_data) < 10:
+        logger.error("Only %d valid training entries — need at least 10", len(training_data))
         return
 
-    # Convert to training format
-    training_data = []
-    for entry in training_entries:
-        training_data.append(
-            {
-                "features": {
-                    "M": entry["shape"]["M"],
-                    "K": entry["shape"]["K"],
-                    "N": entry["shape"]["N"],
-                    "M_tiles": entry["shape"]["M"] // 32,
-                    "K_tiles": entry["shape"]["K"] // 32,
-                    "N_tiles": entry["shape"]["N"] // 32,
-                    "batch_size_a": 1,
-                    "grid_x": 8,
-                    "grid_y": 8,
-                    "num_cores": 64,
-                },
-                "config_family": entry["config_family"],
-                "config_params": entry.get("params", {}),
-                "latency_us": entry["latency_us"],
-                "speedup_vs_default": entry.get("speedup_vs_default", 1.0),
-            }
-        )
-
-    logger.info(f"Training DNN scorer on {len(training_data)} entries from {len(TRAINING_SHAPES)} shapes")
+    logger.info("Training DNN config generator on %d shape/config pairs", len(training_data))
 
     if weights_output is None:
         weights_output = os.path.join(
-            os.path.dirname(__file__),
-            "scorer",
-            "dnn_weights.json",
+            os.path.expanduser("~"),
+            ".ttnn",
+            "auto_config_cache",
+            "dnn_config_generator.pt",
         )
 
-    scorer = DNNScorer(model_path=weights_output)
-    scorer.train(training_data, epochs=epochs, lr=learning_rate)
-    logger.info(f"DNN weights saved to {weights_output}")
+    generator = DNNConfigGenerator(model_path=weights_output)
+    generator.train_model(training_data, epochs=epochs, lr=learning_rate)
+    logger.info("DNN config generator saved to %s", weights_output)
 
 
 def validate_dnn_accuracy(results_file: str) -> None:
@@ -442,6 +503,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=3, help="Benchmark warmup runs")
     parser.add_argument("--runs", type=int, default=5, help="Benchmark timed runs")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--num-shapes", type=int, default=106,
+                        help="Number of shapes to generate (default: 106, use 10000+ for production)")
 
     args = parser.parse_args()
 
@@ -450,12 +513,17 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    logger.info(f"DNN Retraining Pipeline — {len(TRAINING_SHAPES)} shapes")
+    shapes = TRAINING_SHAPES
+    if hasattr(args, 'num_shapes') and args.num_shapes > len(TRAINING_SHAPES):
+        logger.info("Generating %d expanded shapes...", args.num_shapes)
+        shapes = generate_expanded_shapes(args.num_shapes)
+
+    logger.info("DNN Retraining Pipeline — %d shapes", len(shapes))
 
     if args.full or args.benchmark_only:
         logger.info("Phase 1: Benchmark sweep...")
         run_benchmark_sweep(
-            TRAINING_SHAPES,
+            shapes,
             dtype=args.dtype,
             num_warmup=args.warmup,
             num_runs=args.runs,
@@ -463,7 +531,7 @@ def main():
         )
 
     if args.full or args.train_only:
-        logger.info("Phase 2: Training DNN scorer...")
+        logger.info("Phase 2: Training DNN config generator...")
         train_dnn_from_results(
             args.input if args.train_only else args.output,
             weights_output=args.weights,

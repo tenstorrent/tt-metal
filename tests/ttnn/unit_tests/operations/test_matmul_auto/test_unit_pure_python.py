@@ -74,7 +74,7 @@ def mock_ttnn_module():
 
     # Also patch sub-modules that might be imported
     sys.modules["ttnn.operations"] = MagicMock()
-    sys.modules["ttnn.operations.auto_config"] = MagicMock()
+    sys.modules["ttnn._experimental.auto_config"] = MagicMock()
     sys.modules["ttnn.distributed"] = MagicMock()
 
     yield mock
@@ -86,7 +86,7 @@ def mock_ttnn_module():
         sys.modules.pop("ttnn", None)
 
     for key in list(sys.modules.keys()):
-        if key.startswith("ttnn.operations.auto_config"):
+        if key.startswith("ttnn._experimental.auto_config"):
             sys.modules.pop(key, None)
 
 
@@ -99,7 +99,7 @@ class TestFindLargestDivisor:
     def _get_fn(self):
         """Import the function under test."""
         # Force reimport with mocked ttnn
-        mod_name = "ttnn.operations.auto_config.candidate_generator"
+        mod_name = "ttnn._experimental.auto_config.candidate_generator"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
 
@@ -158,7 +158,7 @@ class TestFindGrid:
     """Test _find_grid — mirrors ModelArgs.find_grid."""
 
     def _get_fn(self):
-        mod_name = "ttnn.operations.auto_config.candidate_generator"
+        mod_name = "ttnn._experimental.auto_config.candidate_generator"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(
@@ -210,7 +210,7 @@ class TestGetOutSubblockW:
     """Test _get_out_subblock_w."""
 
     def _get_fn(self):
-        mod_name = "ttnn.operations.auto_config.candidate_generator"
+        mod_name = "ttnn._experimental.auto_config.candidate_generator"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(
@@ -513,7 +513,7 @@ class TestProductionFormulas:
     """Test that production formulas produce correct values for known shapes."""
 
     def _get_helpers(self):
-        mod_name = "ttnn.operations.auto_config.candidate_generator"
+        mod_name = "ttnn._experimental.auto_config.candidate_generator"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(

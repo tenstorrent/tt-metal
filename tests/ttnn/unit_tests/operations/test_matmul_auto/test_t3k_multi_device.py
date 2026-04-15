@@ -110,7 +110,7 @@ class TestN300MultiDevice:
         Replicated tensors: both A and B replicated across devices.
         Output should match torch.matmul on each device.
         """
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(batch, M, K, dtype=torch.float32)
@@ -147,7 +147,7 @@ class TestN300MultiDevice:
     @pytest.mark.parametrize("name,batch,m,k,n", MULTI_DEVICE_SHAPES[:3])
     def test_feature_detection(self, n300_mesh, name, batch, m, k, n):
         """Verify multi-device feature extraction is correct."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(batch, M, K, dtype=torch.float32)
@@ -183,7 +183,7 @@ class TestN300MultiDevice:
         Each device computes A × B_shard, producing partial output columns.
         No CCL needed — results are directly usable as column shards.
         """
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = 128, 4096, 4096
         torch_a = torch.randn(1, M, K, dtype=torch.float32)
@@ -218,7 +218,7 @@ class TestN300MultiDevice:
         Each device computes A_shard × B_shard, producing partial sums.
         Requires reduce_scatter to sum partial results.
         """
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = 128, 4096, 4096
         torch_a = torch.randn(1, M, K, dtype=torch.float32)
@@ -254,7 +254,7 @@ class TestT3KMultiDevice:
     @pytest.mark.parametrize("name,batch,m,k,n", MULTI_DEVICE_SHAPES)
     def test_t3k_replicated_correctness(self, t3k_mesh, name, batch, m, k, n):
         """T3K: replicated tensors produce correct output on all 8 devices."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(batch, M, K, dtype=torch.float32)
@@ -291,7 +291,7 @@ class TestT3KMultiDevice:
     @REQUIRES_T3K
     def test_t3k_feature_detection(self, t3k_mesh):
         """Verify T3K feature extraction shows 8 devices."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         torch_a = torch.randn(1, 128, 4096, dtype=torch.float32)
         torch_b = torch.randn(4096, 4096, dtype=torch.float32)
@@ -321,7 +321,7 @@ class TestT3KMultiDevice:
         Verify CCL strategy selection logic for T3K.
         Auto-config should not crash and should select a valid strategy.
         """
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(1, 32, 4096, dtype=torch.float32)
         torch_b = torch.randn(4096, 4096, dtype=torch.float32)
@@ -360,7 +360,7 @@ class TestT3KMultiDevice:
         T3K performance: multi-device auto should not be slower than
         single-device default per-device (accounting for CCL overhead).
         """
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(batch, M, K, dtype=torch.float32)
@@ -430,7 +430,7 @@ class TestSingleDeviceBaseline:
 
     def test_single_device_features(self, single_device):
         """Single device should be detected as non-multi-device."""
-        from ttnn.operations.auto_config.feature_extraction import extract_matmul_features
+        from ttnn._experimental.auto_config.feature_extraction import extract_matmul_features
 
         torch_a = torch.randn(1, 128, 256, dtype=torch.float32)
         torch_b = torch.randn(256, 512, dtype=torch.float32)
@@ -448,7 +448,7 @@ class TestSingleDeviceBaseline:
     )
     def test_single_device_auto_correctness(self, single_device, m, k, n):
         """Single-device matmul_auto correctness baseline."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(1, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)

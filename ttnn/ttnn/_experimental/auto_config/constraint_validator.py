@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Tuple
 
-from ttnn.operations.auto_config.math_fidelity import MathFidelity
+from ttnn._experimental.auto_config.math_fidelity import MathFidelity
 
 logger = logging.getLogger(__name__)
 

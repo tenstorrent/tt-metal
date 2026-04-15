@@ -98,7 +98,7 @@ class TestFalcon7BPerformance:
     @pytest.mark.parametrize("name,m,k,n", FALCON_7B_SHAPES)
     def test_single_shape_no_regression(self, device, name, m, k, n):
         """Each shape: auto must not be >5% slower than default."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(1, M, K, dtype=torch.float32)
@@ -147,7 +147,7 @@ class TestFalcon7BPerformance:
         This directly satisfies bounty requirement #4:
         "showcasing performance improvement"
         """
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         speedups = []
 
@@ -196,7 +196,7 @@ class TestFalcon7BPerformance:
     @pytest.mark.parametrize("name,m,k,n", FALCON_7B_SHAPES[:4])
     def test_falcon_correctness(self, device, name, m, k, n):
         """Verify correctness: auto output matches torch.matmul within PCC threshold."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(1, M, K, dtype=torch.float32)
@@ -217,7 +217,7 @@ class TestFalcon7BPerformance:
     @pytest.mark.parametrize("name,m,k,n", FALCON_7B_SHAPES[:4])
     def test_production_candidate_selected(self, device, name, m, k, n):
         """Verify that production-derived candidates are being selected."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         M, K, N = _tile_pad(m), _tile_pad(k), _tile_pad(n)
         torch_a = torch.randn(1, M, K, dtype=torch.float32)

@@ -48,7 +48,7 @@ def _bench(fn, device, warmup=5, runs=20):
 @pytest.mark.parametrize("name,M,K,N", TEST_SHAPES)
 def test_auto_beats_default(device, name, M, K, N):
     """Auto-selected config should be at least as fast as default ttnn.matmul."""
-    from ttnn.operations.auto_config.matmul_auto import matmul_auto
+    from ttnn._experimental.auto_config.matmul_auto import matmul_auto
 
     a = torch.randn(1, 1, M, K)
     b = torch.randn(1, 1, K, N)
@@ -65,7 +65,7 @@ def test_auto_beats_default(device, name, M, K, N):
 @pytest.mark.parametrize("name,M,K,N", TEST_SHAPES)
 def test_auto_beats_degraded_neighbors(device, name, M, K, N):
     """Auto-selected config should beat deliberately suboptimal configs."""
-    from ttnn.operations.auto_config.matmul_auto import matmul_auto
+    from ttnn._experimental.auto_config.matmul_auto import matmul_auto
 
     a = torch.randn(1, 1, M, K)
     b = torch.randn(1, 1, K, N)

@@ -17,11 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from ttnn.operations.auto_config.base import ConfigCandidate
+from ttnn._experimental.auto_config.base import ConfigCandidate
 
 logger = logging.getLogger(__name__)
 
-from ttnn.operations.auto_config.math_fidelity import CYCLES_PER_TILE, MAX_CYCLES_PER_TILE, MathFidelity
+from ttnn._experimental.auto_config.math_fidelity import CYCLES_PER_TILE, MAX_CYCLES_PER_TILE, MathFidelity
 
 TILE_SIZE = 32
 

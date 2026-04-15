@@ -23,12 +23,12 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ttnn.operations.auto_config.base import ConfigCandidate
+from ttnn._experimental.auto_config.base import ConfigCandidate
 
 logger = logging.getLogger(__name__)
 
 # Current selector version — bump when config selection logic changes
-SELECTOR_VERSION = "1.0.0"
+SELECTOR_VERSION = "2.0.0"
 
 # Default cache directory, configurable via env var for CI
 DEFAULT_CACHE_DIR = os.environ.get(
@@ -104,11 +104,16 @@ class ConfigCache:
         """Create a compact hash of the cache key."""
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
-    def get(self, key: str) -> Optional[ConfigCandidate]:
+    def get(self, key: str, features: Optional[Dict[str, Any]] = None) -> Optional[ConfigCandidate]:
         """
         Look up a cached config by key.
 
-        Returns None on cache miss or version mismatch.
+        Args:
+            key: Cache key string.
+            features: Matmul feature dict needed to reconstruct the config.
+                If None, returns None (cannot reconstruct without features).
+
+        Returns None on cache miss, version mismatch, or reconstruction failure.
         """
         hashed = self._hash_key(key)
         with self._lock:
@@ -120,13 +125,25 @@ class ConfigCache:
                 del self._memory_cache[hashed]
                 return None
 
-            # We cannot safely reconstruct a full program config object
-            # from cached params alone. Returning a ConfigCandidate with
-            # config=None would cause callers to fall back to default
-            # behavior (program_config=None) without running selection.
-            # Treat as cache miss so normal config selection runs.
-            # TODO: Persist enough info to reconstruct the exact program_config.
-            return None
+            if features is None:
+                # Cannot reconstruct without features
+                return None
+
+            # Reconstruct the full program config from cached params
+            try:
+                from ttnn._experimental.auto_config.candidate_generator import _build_config_from_params
+
+                params = entry.get("params", {})
+                params["config_family"] = entry.get("config_family", "MultiCast1D")
+                candidate = _build_config_from_params(params, features)
+                if candidate is not None:
+                    candidate.score = entry.get("score", 0.0)
+                    candidate.is_valid = True
+                    candidate.validation_reason = "cached"
+                return candidate
+            except Exception as e:
+                logger.debug("Failed to reconstruct cached config: %s", e)
+                return None
 
     def put(self, key: str, candidate: ConfigCandidate) -> None:
         """Store a config candidate in the cache."""

@@ -9,8 +9,8 @@ Collects telemetry for all valid configs across representative shapes,
 measures device latency, and optionally trains the DNN scorer.
 
 Usage:
-    python -m ttnn.operations.auto_config.benchmark --op matmul --shapes shapes.json
-    python -m ttnn.operations.auto_config.benchmark --op matmul --sweep
+    python -m ttnn._experimental.auto_config.benchmark --op matmul --shapes shapes.json
+    python -m ttnn._experimental.auto_config.benchmark --op matmul --sweep
 
 Example shapes.json:
     [
@@ -156,7 +156,7 @@ DEFAULT_SWEEP_SHAPES = [
 
 # Import GPT/LLM attention training shapes for expanded coverage
 try:
-    from ttnn.operations.auto_config.math_fidelity import GPT_ATTENTION_SHAPES
+    from ttnn._experimental.auto_config.math_fidelity import GPT_ATTENTION_SHAPES
 
     for m, k, n, _desc in GPT_ATTENTION_SHAPES:
         shape = {"M": ((m + 31) // 32) * 32, "K": ((k + 31) // 32) * 32, "N": ((n + 31) // 32) * 32}
@@ -189,7 +189,7 @@ def run_benchmark(
         List of benchmark result dicts.
     """
     import torch
-    from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+    from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
     import ttnn
 
@@ -203,7 +203,7 @@ def run_benchmark(
 
         # Build compute_kernel_config with appropriate math fidelity
         try:
-            from ttnn.operations.auto_config.math_fidelity import default_fidelity, fidelity_to_ttnn_string
+            from ttnn._experimental.auto_config.math_fidelity import default_fidelity, fidelity_to_ttnn_string
 
             fidelity_str = fidelity_to_ttnn_string(default_fidelity(str(dt), str(dt)))
             math_fidelity = getattr(ttnn.MathFidelity, fidelity_str.split(".")[-1], ttnn.MathFidelity.HiFi4)
@@ -319,7 +319,7 @@ def run_benchmark(
 
 def train_dnn_scorer(benchmark_results: List[Dict[str, Any]], model_path: Optional[str] = None) -> None:
     """Train the DNN scorer on benchmark results."""
-    from ttnn.operations.auto_config.scorer.dnn_scorer import DNNScorer
+    from ttnn._experimental.auto_config.scorer.dnn_scorer import DNNScorer
 
     # Convert benchmark results to training data
     training_data = []

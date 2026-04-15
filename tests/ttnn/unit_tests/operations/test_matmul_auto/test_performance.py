@@ -70,7 +70,7 @@ class TestMatmulAutoPerformance:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES)
     def test_selected_config_is_valid(self, device, batch, m, k, n):
         """Test that the selected config can execute without errors."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -95,7 +95,7 @@ class TestMatmulAutoPerformance:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:3])
     def test_selected_beats_default(self, device, batch, m, k, n):
         """Test that the selected config is at least as fast as default config."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -126,7 +126,7 @@ class TestMatmulAutoPerformance:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:3])
     def test_selected_beats_random_configs(self, device, batch, m, k, n):
         """Test that the selected config beats randomly sampled valid configs."""
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -178,7 +178,7 @@ class TestMatmulAutoPerformance:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:2])
     def test_benchmark_mode(self, device, batch, m, k, n):
         """Test that benchmark mode works and finds the fastest config."""
-        from ttnn.operations.auto_config import matmul_auto
+        from ttnn._experimental.auto_config import matmul_auto
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -197,8 +197,8 @@ class TestMatmulAutoSelectionConsistency:
     @pytest.mark.parametrize("batch,m,k,n", PERF_SHAPES[:3])
     def test_deterministic_selection(self, device, batch, m, k, n):
         """Test that same inputs always produce the same config selection."""
-        from ttnn.operations.auto_config.config_cache import ConfigCache
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.config_cache import ConfigCache
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
@@ -240,7 +240,7 @@ class TestSelectedIsLocalOptimum:
         Test that modifying any single parameter of the selected config
         results in equal or worse performance (within 5% noise tolerance).
         """
-        from ttnn.operations.auto_config.matmul_auto import MatmulAutoConfig
+        from ttnn._experimental.auto_config.matmul_auto import MatmulAutoConfig
 
         torch_a = torch.randn(batch, m, k, dtype=torch.float32)
         torch_b = torch.randn(k, n, dtype=torch.float32)
