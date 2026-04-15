@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     encode_expert_indices,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_matmul_custom_compressed import scale_tiles_for_mixed_formats
 
 
 def _build_down_grid(device):
@@ -547,6 +548,7 @@ def _build_dram_experts(
     mesh_rows,
     mesh_cols,
     subblock_k,
+    subblock_n,
     Kt,
     tile_w,
 ):
@@ -577,6 +579,7 @@ def _build_dram_experts(
             per_core_allocation=False,
             mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
         )
+        logger.info(f"DRAM expert {eidx} tile counts: {ct.tile_counts}")
         dram_cts.append(ct)
         logger.info(f"  DRAM expert {eidx} uploaded (packed idx {len(dram_cts) - 1})")
 
@@ -590,12 +593,13 @@ def _build_dram_experts(
         cores_per_dram_bank=cores_per_dram_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
+        subblock_n=subblock_n,
     )
     return dram_cts, dram_meta_tensors
 
 
 def _compute_dram_matmul_params(
-    K, N, tile_w, num_banks, num_dram_cores, num_dram_cores_active, cores_per_dram_bank, subblock_k
+    K, N, tile_w, num_banks, num_dram_cores, num_dram_cores_active, cores_per_dram_bank, subblock_k, subblock_n=None
 ):
     """Compute DRAM per-core tiling and subblock_k."""
     Kt = K // tile_w
@@ -606,8 +610,16 @@ def _compute_dram_matmul_params(
     if subblock_k % 2 != 0:
         subblock_k = max(2, subblock_k - 1)
     assert Kt % subblock_k == 0
+    if subblock_n is None:
+        subblock_n = 1
+    assert (
+        dram_per_core_N % subblock_n == 0
+    ), f"dram_per_core_N ({dram_per_core_N}) must be divisible by subblock_n ({subblock_n})"
     N_dram_per_device = dram_per_core_N * tile_w * num_dram_cores_active
-    return Kt, dram_per_core_N, subblock_k, N_dram_per_device
+    logger.info(
+        f"DRAM matmul params: Kt={Kt}, dram_per_core_N={dram_per_core_N}, subblock_k={subblock_k}, subblock_n={subblock_n}, N_dram_per_device={N_dram_per_device}"
+    )
+    return Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device
 
 
 def _build_assigner(formats_per_device):
@@ -626,7 +638,7 @@ def _build_weight_tensors(num_experts, K, N, N_dram_per_device, sram_id_set, for
         per_dev = []
         for dev_idx in range(num_devices):
             b = torch.randn((K, N_per_dev)).float()
-            _scale_tiles_random_formats(b, formats_per_device[dev_idx])
+            scale_tiles_for_mixed_formats(b, formats_per_device[dev_idx])
             per_dev.append(b)
         torch_b_all[eidx] = per_dev
         logger.info(f"  torch_b expert {eidx}/{num_experts} created")
@@ -659,6 +671,7 @@ def _build_dram_experts_replicated(
     num_experts,
     dram_meta_flags,
     subblock_k,
+    subblock_n,
     Kt,
     tile_w,
 ):
@@ -689,6 +702,7 @@ def _build_dram_experts_replicated(
             per_core_allocation=False,
             mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
         )
+        logger.info(f"DRAM expert {eidx} tile counts: {ct.tile_counts}")
         dram_cts.append(ct)
         logger.info(f"  DRAM expert {eidx} uploaded replicated (packed idx {len(dram_cts) - 1})")
 
@@ -702,6 +716,7 @@ def _build_dram_experts_replicated(
         cores_per_dram_bank=cores_per_dram_bank,
         num_total_experts=num_experts,
         is_dram_flags=dram_meta_flags,
+        subblock_n=subblock_n,
     )
     return dram_cts, dram_meta_tensors
 
@@ -814,6 +829,7 @@ def _run_standard(
     active_expert_ids,
     formats_per_device,
     subblock_k,
+    subblock_n,
     cores_per_dram_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -840,7 +856,7 @@ def _run_standard(
     num_banks = num_dram_cores // cores_per_dram_bank
     num_cores = compute_core_grid.num_cores()
 
-    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+    Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device = _compute_dram_matmul_params(
         K,
         N,
         tile_w,
@@ -849,6 +865,7 @@ def _run_standard(
         num_dram_cores,
         cores_per_dram_bank,
         subblock_k,
+        subblock_n,
     )
 
     torch.manual_seed(0)
@@ -882,6 +899,7 @@ def _run_standard(
             mesh_device.shape[0],
             mesh_device.shape[1],
             subblock_k,
+            subblock_n,
             Kt,
             tile_w,
         )
@@ -908,6 +926,7 @@ def _run_standard(
             num_experts,
             dram_meta_flags,
             subblock_k,
+            subblock_n,
             Kt,
             tile_w,
         )
@@ -981,6 +1000,7 @@ def _run_standard(
         index_tensor,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
+        subblock_n=subblock_n,
         dram_core_grid=dram_core_grid,
         dram_meta_tensors=dram_meta_tensors,
         dram_per_core_n=dram_per_core_N,
@@ -1034,6 +1054,7 @@ def _run_accum(
     active_expert_ids,
     formats_per_device,
     subblock_k,
+    subblock_n,
     cores_per_dram_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -1059,7 +1080,7 @@ def _run_accum(
     num_banks = num_dram_cores // cores_per_dram_bank
     num_cores = compute_core_grid.num_cores()
 
-    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+    Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device = _compute_dram_matmul_params(
         K,
         N,
         tile_w,
@@ -1103,6 +1124,7 @@ def _run_accum(
         mesh_device.shape[0],
         mesh_device.shape[1],
         subblock_k,
+        subblock_n,
         Kt,
         tile_w,
     )
@@ -1172,6 +1194,7 @@ def _run_accum(
         index_tensor,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
+        subblock_n=subblock_n,
         dram_core_grid=dram_core_grid,
         dram_meta_tensors=dram_meta_tensors,
         dram_per_core_n=dram_per_core_N,
@@ -1223,6 +1246,7 @@ def _run_slice_k(
     active_expert_ids,
     formats_per_device,
     subblock_k,
+    subblock_n,
     cores_per_dram_bank,
     sram_cores_override,
     sram_k_parallel,
@@ -1249,7 +1273,7 @@ def _run_slice_k(
     num_banks = num_dram_cores // cores_per_dram_bank
     num_cores = compute_core_grid.num_cores()
 
-    Kt, dram_per_core_N, subblock_k, N_dram_per_device = _compute_dram_matmul_params(
+    Kt, dram_per_core_N, subblock_k, subblock_n, N_dram_per_device = _compute_dram_matmul_params(
         K,
         N,
         tile_w,
@@ -1289,6 +1313,7 @@ def _run_slice_k(
         mesh_device.shape[0],
         mesh_device.shape[1],
         subblock_k,
+        subblock_n,
         Kt,
         tile_w,
     )
@@ -1357,6 +1382,7 @@ def _run_slice_k(
         index_tensor,
         num_active_experts=num_active_experts,
         subblock_k=subblock_k,
+        subblock_n=subblock_n,
         dram_core_grid=dram_core_grid,
         dram_meta_tensors=dram_meta_tensors,
         dram_per_core_n=dram_per_core_N,
@@ -1413,6 +1439,7 @@ def _run_hybrid_expert_multi_device(
     active_expert_ids,
     formats_per_device,
     subblock_k=None,
+    subblock_n=None,
     cores_per_dram_bank=1,
     pcc_threshold=0.97,
     accum_experts=False,
@@ -1443,6 +1470,7 @@ def _run_hybrid_expert_multi_device(
             active_expert_ids,
             formats_per_device,
             subblock_k,
+            subblock_n,
             cores_per_dram_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1463,6 +1491,7 @@ def _run_hybrid_expert_multi_device(
             active_expert_ids,
             formats_per_device,
             subblock_k,
+            subblock_n,
             cores_per_dram_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1482,6 +1511,7 @@ def _run_hybrid_expert_multi_device(
             active_expert_ids,
             formats_per_device,
             subblock_k,
+            subblock_n,
             cores_per_dram_bank,
             sram_cores_override,
             sram_k_parallel,
@@ -1979,4 +2009,26 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
         ],
         sram_cores_override=down_cores,
         accum_experts=True,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_benchmark(device):
+    down_cores = _build_down_grid(device)
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=1,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(1)),
+        active_expert_ids=[0],
+        formats_per_device=[
+            ["bfp4", "bfp0"],
+        ],
+        subblock_n=4,
+        sram_cores_override=down_cores,
+        accum_experts=False,
     )
