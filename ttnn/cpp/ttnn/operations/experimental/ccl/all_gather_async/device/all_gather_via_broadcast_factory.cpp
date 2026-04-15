@@ -116,12 +116,16 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
         cb_page_size *= 4;
     }
 
-    // per device input and output page numbers
-    uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    for (uint32_t i = 0; i < operation_attributes.dim; ++i) {
-        num_input_pages /= input_tensor.logical_shape()[i];
-    }
-    uint32_t num_output_pages = (num_input_pages * input_page_size) / output_page_size;
+    // Per-device page counts are defined by the local shard buffer, not by raw logical dims.
+    // Converting pages via logical_shape() breaks tiled tensors and can zero out num_input_pages.
+    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    TT_FATAL(num_input_pages > 0, "Broadcast all-gather requires at least one input page");
+    TT_FATAL(
+        (num_input_pages * input_page_size) % output_page_size == 0,
+        "Broadcast all-gather requires per-device bytes ({}) to be divisible by output page size ({})",
+        num_input_pages * input_page_size,
+        output_page_size);
+    const uint32_t num_output_pages = (num_input_pages * input_page_size) / output_page_size;
     // offset into the gathered tensor
     uint32_t write_page_offset = num_output_pages * ring_index;
 
