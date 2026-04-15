@@ -484,18 +484,45 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             ensure_safe_create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
                 fs::path target_path = genfiles_dir / file.name;
-                tt::jit_build::utils::FileRenamer tmp(target_path);
+                fs::path temp_path = target_path;
+                temp_path += ".tmp";
+
+                std::error_code cleanup_ec;
+                fs::remove(temp_path, cleanup_ec);
+
                 std::ofstream out;
                 std::error_code open_ec;
-                if (!open_ofstream_with_retry(out, tmp.path(), open_ec, std::ios::binary)) {
+                if (!open_ofstream_with_retry(out, temp_path, open_ec, std::ios::binary)) {
                     throw std::runtime_error(
                         fmt::format("Cannot create file {}: {}", target_path.string(), open_ec.message()));
                 }
-                out.write(
-                    reinterpret_cast<const char*>(file.content.data()),
-                    static_cast<std::streamsize>(file.content.size()));
-                if (!out) {
-                    throw std::runtime_error("Failed to write file: " + target_path.string());
+
+                try {
+                    out.write(
+                        reinterpret_cast<const char*>(file.content.data()),
+                        static_cast<std::streamsize>(file.content.size()));
+                    if (!out) {
+                        throw std::runtime_error("Failed to write file: " + target_path.string());
+                    }
+
+                    out.close();
+                    if (!out) {
+                        throw std::runtime_error("Failed to finalize file: " + target_path.string());
+                    }
+                } catch (...) {
+                    std::error_code remove_ec;
+                    fs::remove(temp_path, remove_ec);
+                    throw;
+                }
+
+                std::error_code rename_ec;
+                fs::rename(temp_path, target_path, rename_ec);
+                if (rename_ec) {
+                    std::error_code remove_ec;
+                    fs::remove(temp_path, remove_ec);
+                    throw std::runtime_error(
+                        fmt::format(
+                            "Failed to publish generated file {}: {}", target_path.string(), rename_ec.message()));
                 }
             }
         }

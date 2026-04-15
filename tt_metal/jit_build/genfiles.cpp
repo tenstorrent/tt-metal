@@ -7,6 +7,7 @@
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -77,9 +79,19 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
         std::error_code open_ec;
         const bool existing_is_open = tt::filesystem::retry_on_estale_ec(
             [&](std::error_code& ec) {
+                existing.clear();
+                if (existing.is_open()) {
+                    existing.close();
+                }
+
+                errno = 0;
                 existing.open(path, std::ios::binary);
                 if (!existing.is_open()) {
-                    ec.assign(errno, std::system_category());
+                    if (errno != 0) {
+                        ec.assign(errno, std::system_category());
+                    } else {
+                        ec = std::make_error_code(std::errc::io_error);
+                    }
                     return false;
                 }
                 return true;
@@ -93,14 +105,32 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
             }
         }
     }
-    jit_build::utils::FileRenamer tmp(path);
-    std::ofstream f(tmp.path());
-    if (!f) {
-        throw std::runtime_error("Cannot create file: " + path.string());
-    }
-    f << content;
-    if (!f) {
-        throw std::runtime_error("Failed to write file: " + path.string());
+
+    const fs::path tmp_path = path.string() + ".tmp";
+    std::error_code remove_ec;
+    fs::remove(tmp_path, remove_ec);
+
+    try {
+        std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            throw std::runtime_error("Cannot create file: " + path.string());
+        }
+
+        f.write(content.data(), static_cast<std::streamsize>(content.size()));
+        if (!f) {
+            throw std::runtime_error("Failed to write file: " + path.string());
+        }
+
+        f.close();
+        if (f.fail()) {
+            throw std::runtime_error("Failed to finalize file: " + path.string());
+        }
+
+        tt::filesystem::safe_rename(tmp_path, path);
+    } catch (...) {
+        std::error_code cleanup_ec;
+        fs::remove(tmp_path, cleanup_ec);
+        throw;
     }
 }
 

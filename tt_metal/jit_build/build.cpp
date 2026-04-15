@@ -855,9 +855,18 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             fs::path src_path = out_dir / this->temp_objs_[i];
             fs::path dst_path = out_dir / this->objs_[i];
             if (compiled.test(i)) {
-                tt::filesystem::safe_rename(src_path, dst_path);
-                tt::filesystem::safe_rename(
-                    fs::path{src_path} += ".dephash", fs::path{dst_path} += ".dephash");
+                const fs::path src_dephash_path = fs::path{src_path} += ".dephash";
+                const fs::path dst_dephash_path = fs::path{dst_path} += ".dephash";
+                if (!tt::filesystem::safe_rename(src_path, dst_path)) {
+                    tt::filesystem::safe_remove(src_path);
+                    tt::filesystem::safe_remove(src_dephash_path);
+                    TT_THROW("Failed to publish JIT object {} to {}", src_path, dst_path);
+                }
+                if (!tt::filesystem::safe_rename(src_dephash_path, dst_dephash_path)) {
+                    tt::filesystem::safe_remove(src_dephash_path);
+                    tt::filesystem::safe_remove(dst_path);
+                    TT_THROW("Failed to publish JIT dependency hash {} to {}", src_dephash_path, dst_dephash_path);
+                }
             } else {
                 tt::filesystem::safe_remove(src_path);
             }

@@ -224,9 +224,15 @@ void create_file(const std::filesystem::path& file_path) {
     [[maybe_unused]] std::error_code open_ec;
     [[maybe_unused]] auto _ = tt::filesystem::retry_on_estale_ec(
         [&](std::error_code& ec) {
+            errno = 0;
             std::ofstream file(file_path);
             if (!file.is_open() || file.fail()) {
-                ec.assign(errno, std::system_category());
+                const int open_errno = errno;
+                if (open_errno != 0) {
+                    ec.assign(open_errno, std::system_category());
+                } else {
+                    ec = std::make_error_code(std::errc::io_error);
+                }
                 return false;
             }
             file.close();

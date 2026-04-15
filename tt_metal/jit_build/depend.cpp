@@ -7,6 +7,7 @@
 #include "common/stable_hash.hpp"
 #include "tt_stl/fmt.hpp"
 
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -123,9 +124,18 @@ public:
         std::error_code open_ec;
         const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
             [&](std::error_code& ec) {
+                if (dep_file.is_open()) {
+                    dep_file.close();
+                }
+                dep_file.clear();
+                errno = 0;
                 dep_file.open(path, std::ios::binary);
                 if (!dep_file.is_open()) {
-                    ec.assign(errno, std::system_category());
+                    if (errno != 0) {
+                        ec.assign(errno, std::system_category());
+                    } else {
+                        ec = std::make_error_code(std::errc::io_error);
+                    }
                     return false;
                 }
                 return true;
@@ -231,11 +241,18 @@ void write_dependency_hashes(
     std::error_code open_ec;
     const bool hash_file_opened = tt::filesystem::retry_on_estale_ec(
         [&](std::error_code& ec) {
+            if (hash_file.is_open()) {
+                hash_file.close();
+            }
+            hash_file.clear();
+            errno = 0;
             hash_file.open(hash_path);
             if (!hash_file.is_open()) {
-                ec.assign(errno, std::system_category());
+                const int open_errno = errno;
+                ec.assign(open_errno != 0 ? open_errno : EIO, std::system_category());
                 return false;
             }
+            ec.clear();
             return true;
         },
         open_ec);
@@ -247,11 +264,18 @@ void write_dependency_hashes(
     std::ifstream dep_file;
     const bool dep_file_opened = tt::filesystem::retry_on_estale_ec(
         [&](std::error_code& ec) {
+            if (dep_file.is_open()) {
+                dep_file.close();
+            }
+            dep_file.clear();
+            errno = 0;
             dep_file.open(dep_path);
             if (!dep_file.is_open()) {
-                ec.assign(errno, std::system_category());
+                const int open_errno = errno;
+                ec.assign(open_errno != 0 ? open_errno : EIO, std::system_category());
                 return false;
             }
+            ec.clear();
             return true;
         },
         open_ec);

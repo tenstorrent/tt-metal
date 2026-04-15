@@ -67,8 +67,15 @@ void dump_kernel_defines_and_args(const std::filesystem::path& out_kernel_root_p
             file << full_kernel_name << defines_and_args_str << "\n";
         }
         file.close();
-        if (!file.fail()) {
-            tt::filesystem::safe_rename(tmp_path, kernel_args_csv, false);
+        if (file.fail()) {
+            std::error_code ec;
+            std::filesystem::remove(tmp_path, ec);
+            TT_THROW("Failed to write file: {}", tmp_path);
+        }
+        if (!tt::filesystem::safe_rename(tmp_path, kernel_args_csv, false)) {
+            std::error_code ec;
+            std::filesystem::remove(tmp_path, ec);
+            TT_THROW("Failed to rename {} to {}", tmp_path, kernel_args_csv);
         }
     } else {
         TT_THROW("Failed to open file: {}", tmp_path);
