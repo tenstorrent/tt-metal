@@ -7,6 +7,12 @@
 // Blackhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
+// FPU bank (2 banks, same on WH and BH): sel 0 req, sel 1 req, sel 257 grant.
+// Bank 0 grant (fpu_req_ready) is hardwired to 0 in RTL — not read.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
+    {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
+constexpr size_t NUM_FPU_COUNTERS = 3;
+
 // BH TDMA_UNPACK: 11 req banks + 11 grant banks.
 // Grant banks 4-6 (sels 260-262) have IDENTICAL wiring on WH and BH (verified in RTL):
 //   grant[4] (sel 260) = srcB not blocked by write port   (dma_srcb_wr_port_avail)

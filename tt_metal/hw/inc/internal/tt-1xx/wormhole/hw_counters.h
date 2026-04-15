@@ -7,6 +7,12 @@
 // Wormhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
+// FPU bank (2 banks, same on WH and BH): sel 0 req, sel 1 req, sel 257 grant.
+// Bank 0 grant (fpu_req_ready) is an undriven wire in RTL — not read.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
+    {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
+constexpr size_t NUM_FPU_COUNTERS = 3;
+
 // WH TDMA_UNPACK: 11 req banks + 11 grant banks.
 // RTL-dead counters removed (not read from hardware):
 //   sel 2 req: fidelity_phases_ongoing = 1'b0 (always 0)

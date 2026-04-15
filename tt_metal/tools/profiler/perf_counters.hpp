@@ -300,11 +300,7 @@ static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-b
 
 namespace kernel_profiler {
 
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
-    {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
-constexpr size_t NUM_FPU_COUNTERS = 3;
-
-// Architecture-specific counter arrays (unpack, pack, l1_0-l1_4, instrn)
+// Architecture-specific counter arrays (fpu, unpack, pack, l1_0-l1_4, instrn)
 #if defined(ARCH_BLACKHOLE)
 #include "tt_metal/hw/inc/internal/tt-1xx/blackhole/hw_counters.h"
 #else
