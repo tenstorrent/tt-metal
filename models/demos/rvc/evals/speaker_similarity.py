@@ -6,8 +6,6 @@
 
 Example:
     ./python_env/bin/python models/demos/rvc/scripts/eval_speaker_similarity.py \
-      --source-audio ./models/demos/rvc/data/sample-speech.wav \
-      --generated-audio ./models/demos/rvc/data/output/output_ttnn.wav \
       --device cpu
 
 This computes cosine similarity between speaker embeddings extracted from the
@@ -18,17 +16,17 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from models.demos.rvc.evals.wer import _load_audio_16khz_mono
-
 DEFAULT_BACKEND = "transformers_wavlm_xvector"
 DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
+BASE_DIRECTORY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+FIXED_AUDIO_FILE = "sample-speech.wav"
 
 
 class SpeakerEmbeddingBackendError(RuntimeError):
@@ -37,8 +35,6 @@ class SpeakerEmbeddingBackendError(RuntimeError):
 
 @dataclass(frozen=True)
 class SpeakerSimilarityResult:
-    source_audio_path: str
-    generated_audio_path: str
     backend: str
     model_id: str
     similarity: float
@@ -56,6 +52,30 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
     if denom == 0:
         raise ValueError("Speaker embeddings must have non-zero norm.")
     return float(np.dot(reference, candidate) / denom)
+
+
+def _load_audio_16khz_mono() -> torch.Tensor:
+    if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
+        raise SpeakerEmbeddingBackendError(
+            "Audio loading for speaker similarity requires optional dependencies. "
+            "Install them with: pip install librosa soundfile"
+        )
+
+    import librosa
+    import soundfile as sf
+
+    audio_path = os.path.abspath(os.path.join(BASE_DIRECTORY, FIXED_AUDIO_FILE))
+    if audio_path.startswith(BASE_DIRECTORY):
+        with open(audio_path, "rb") as audio_file:
+            audio, sample_rate = sf.read(audio_file)
+    else:
+        raise ValueError(f"Audio file must be located under {BASE_DIRECTORY}")
+    if audio.ndim == 2:
+        audio = np.mean(audio, axis=1)
+    audio = np.asarray(audio, dtype=np.float32)
+    if sample_rate != 16000:
+        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+    return torch.from_numpy(audio).unsqueeze(0)
 
 
 def _load_speechbrain_encoder(model_id: str, device: str):
@@ -94,13 +114,12 @@ def _load_transformers_wavlm_encoder(model_id: str, device: str):
 
 
 def compute_speaker_embedding(
-    audio_path: str | Path,
     *,
     backend: str = DEFAULT_BACKEND,
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> np.ndarray:
-    waveform = torch.from_numpy(_load_audio_16khz_mono(audio_path)).unsqueeze(0)
+    waveform = _load_audio_16khz_mono()
 
     if backend == "speechbrain_ecapa":
         classifier = _load_speechbrain_encoder(model_id=model_id, device=device)
@@ -128,29 +147,23 @@ def compute_speaker_embedding(
 
 
 def compute_speaker_similarity(
-    source_audio_path: str | Path,
-    generated_audio_path: str | Path,
     *,
     backend: str = DEFAULT_BACKEND,
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> SpeakerSimilarityResult:
     source_embedding = compute_speaker_embedding(
-        source_audio_path,
         backend=backend,
         model_id=model_id,
         device=device,
     )
     generated_embedding = compute_speaker_embedding(
-        generated_audio_path,
         backend=backend,
         model_id=model_id,
         device=device,
     )
     similarity = cosine_similarity(source_embedding, generated_embedding)
     return SpeakerSimilarityResult(
-        source_audio_path=str(source_audio_path),
-        generated_audio_path=str(generated_audio_path),
         backend=backend,
         model_id=model_id,
         similarity=similarity,
@@ -158,11 +171,7 @@ def compute_speaker_similarity(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Compute speaker similarity between the original source audio and the generated RVC audio."
-    )
-    parser.add_argument("--source-audio", required=True, help="Original source audio file.")
-    parser.add_argument("--generated-audio", required=True, help="Generated audio file from the RVC pipeline.")
+    parser = argparse.ArgumentParser(description="Compute speaker similarity using the fixed RVC demo audio input.")
     parser.add_argument(
         "--backend",
         default=DEFAULT_BACKEND,
@@ -181,8 +190,6 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     result = compute_speaker_similarity(
-        source_audio_path=args.source_audio,
-        generated_audio_path=args.generated_audio,
         backend=args.backend,
         model_id=args.model_id,
         device=args.device,
