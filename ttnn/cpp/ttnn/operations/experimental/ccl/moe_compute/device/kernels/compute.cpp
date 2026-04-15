@@ -192,7 +192,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            pack_init_activation<activation_type>();
+            detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
