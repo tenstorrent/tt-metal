@@ -87,7 +87,7 @@ jobs:
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
             should_continue=false
-          elif [[ "$CURRENT_HOUR" -lt 6 || "$CURRENT_HOUR" -ge 22 ]]; then
+          elif [[ "$CURRENT_HOUR" -lt 6 || "$CURRENT_HOUR" -ge 23 ]]; then
             echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 6am-10pm PT. Not re-trying"
             should_continue=false
           else
