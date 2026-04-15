@@ -175,7 +175,10 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             }
         }
         if (!kernel.common_runtime_args.empty()) {
-            SetCommonRuntimeArgs(program, k, kernel.common_runtime_args);
+            auto& common_args = GetCommonRuntimeArgs(program, k);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(kernel.common_runtime_args.size()); ++i) {
+                common_args[i] = kernel.common_runtime_args[i];
+            }
         }
     }
 
