@@ -126,6 +126,8 @@ ALWI void matmul_init_short(const MatmulConfig& cfg);
  * @tparam packer_l1_acc      Enable packer L1 accumulation (avoids spill/reload)
  * @tparam pack_last_to_interm Pack last K-block to partials_cb instead of out_cb
  * @tparam pack_relu           Enable PACK_RELU on last K-block (when !pack_last_to_interm)
+ * @param retain_in0           When true, skip popping in0 on the last K-block so the
+ *                             caller retains the data (e.g. SDPA reuses Q across K chunks)
  */
 template <
     MatmulMode mode,
@@ -140,7 +142,8 @@ ALWI void matmul_blocks_absolute(
     uint32_t in1_num_subblocks,
     uint32_t num_k_blocks,
     PostComputeFn post_compute = {},
-    PreKBlockFn pre_k_block = {});
+    PreKBlockFn pre_k_block = {},
+    bool retain_in0 = false);
 
 /**
  * @brief Inplace reduce via matmul, used by SDPA matmul_reduce.

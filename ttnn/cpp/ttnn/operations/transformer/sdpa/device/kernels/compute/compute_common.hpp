@@ -1225,10 +1225,22 @@ ALWI void matmul_blocks(
             }
         };
         compute_kernel_lib::matmul_blocks_absolute<compute_kernel_lib::BLOCK>(
-            cfg, in0_num_subblocks, in1_num_subblocks, 1, CausalMaskPostCompute{mask_cb, zero_cb});
+            cfg,
+            in0_num_subblocks,
+            in1_num_subblocks,
+            1,
+            CausalMaskPostCompute{mask_cb, zero_cb},
+            compute_kernel_lib::NoPreKBlock{},
+            true /* retain_in0: SDPA reuses Q/QK across calls */);
     } else {
         compute_kernel_lib::matmul_blocks_absolute<compute_kernel_lib::BLOCK>(
-            cfg, in0_num_subblocks, in1_num_subblocks, 1);
+            cfg,
+            in0_num_subblocks,
+            in1_num_subblocks,
+            1,
+            compute_kernel_lib::NoPostCompute{},
+            compute_kernel_lib::NoPreKBlock{},
+            true /* retain_in0: SDPA reuses Q/QK across calls */);
     }
 }
 

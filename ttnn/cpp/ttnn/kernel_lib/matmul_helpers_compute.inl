@@ -75,7 +75,8 @@ ALWI void matmul_blocks_absolute(
     uint32_t in1_num_subblocks,
     uint32_t num_k_blocks,
     PostComputeFn post_compute,
-    PreKBlockFn pre_k_block) {
+    PreKBlockFn pre_k_block,
+    bool retain_in0) {
 
     const uint32_t out_subblock_h = cfg.rt_dim;
     const uint32_t out_subblock_w = cfg.ct_dim;
@@ -236,7 +237,11 @@ ALWI void matmul_blocks_absolute(
             }
         }
 
-        cb_pop_front(cfg.in0_cb_id, in0_block_num_tiles);
+        // retain_in0: skip in0 pop on last K-block so caller retains the data
+        // (e.g. SDPA reuses Q across K chunks). Intermediate K-blocks always pop.
+        if (!retain_in0 || !last_out) {
+            cb_pop_front(cfg.in0_cb_id, in0_block_num_tiles);
+        }
         cb_pop_front(cfg.in1_cb_id, in1_block_num_tiles);
     }
 }
