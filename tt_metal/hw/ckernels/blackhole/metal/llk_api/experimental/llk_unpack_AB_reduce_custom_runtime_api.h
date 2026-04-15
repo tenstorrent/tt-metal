@@ -80,6 +80,9 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
+    // This may miss some cases because block_ct_dim should be used instead of 1.
+    // That value is not available at this point in time and upstream team is okay
+    // with this and does not want to plumb through the value.
     LLK_ASSERT(
         get_local_cb_interface(operandA_id).fifo_rd_ptr +
                 (row_start_index + 1) * get_local_cb_interface(operandA_id).fifo_page_size <=
