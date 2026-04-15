@@ -1264,8 +1264,13 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    TT_ASSERT(logical_mesh_chip_id_to_physical_chip_id_mapping_.contains(fabric_node_id));
-    return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    TT_FATAL(
+        it != logical_mesh_chip_id_to_physical_chip_id_mapping_.end(),
+        "FabricNodeId {} not found in logical-to-physical chip mapping. Check for a fabric mesh/topology "
+        "mismatch or a node outside the configured fabric cluster.",
+        fabric_node_id);
+    return it->second;
 }
 
 std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
