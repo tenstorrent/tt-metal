@@ -265,24 +265,8 @@ def main():
                     f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
-        # Validate L1 bank mutual exclusion - all L1 banks (l1_0, l1_1, l1_2, l1_3, l1_4) share hardware mux
-        l1_banks_enabled = []
-        if bitfield & (1 << 3):
-            l1_banks_enabled.append("l1_0")
-        if bitfield & (1 << 4):
-            l1_banks_enabled.append("l1_1")
-        if bitfield & (1 << 6):
-            l1_banks_enabled.append("l1_2")
-        if bitfield & (1 << 7):
-            l1_banks_enabled.append("l1_3")
-        if bitfield & (1 << 8):
-            l1_banks_enabled.append("l1_4")
-        if len(l1_banks_enabled) > 1:
-            raise ValueError(
-                f"L1 banks {', '.join(l1_banks_enabled)} cannot be enabled simultaneously. "
-                "They share the same hardware registers (selected via MUX_CTRL). "
-                "Please choose one L1 bank per run."
-            )
+        # L1 bank mutual exclusion is enforced at runtime by rtoptions.cpp
+        # (multiple L1 banks share the hardware mux and only one can be active).
 
         # Reject BH-only groups on non-BH architectures.
         # Detect arch from env vars or by querying the device at runtime.
