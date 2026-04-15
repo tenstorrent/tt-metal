@@ -174,7 +174,7 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = tensor_impl::host_tensor::from_span(buffer, spec, pad_value);
+    auto host_tensor = HostTensor::from_span(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
@@ -188,7 +188,7 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
-    auto host_tensor = tensor_impl::host_tensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
     return Tensor(std::move(host_tensor));
 }
 
@@ -199,7 +199,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
-    auto host_tensor = tensor_impl::host_tensor::from_vector(std::move(buffer), spec, pad_value);
+    auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     res = to_dtype(res, spec.data_type());
     if (device) {
@@ -212,7 +212,7 @@ template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
     // Type support is checked by HostTensor::to_vector
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    return tensor_impl::host_tensor::to_vector<T>(cpu_tensor.host_tensor());
+    return cpu_tensor.host_tensor().to_vector<T>();
 }
 
 // Instantiate explicitly for the supported types.
