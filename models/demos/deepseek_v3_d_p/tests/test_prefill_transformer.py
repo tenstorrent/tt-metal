@@ -19,6 +19,7 @@ Parametrized over:
 
 import gc
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -524,71 +525,96 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
 
 
 @pytest.mark.parametrize(
-    "input_source",
-    ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+    "input_path",
+    [
+        Path("/tmp/r1/pretrained_abc_1k_isl1024_layers61_experts256.pt"),
+        Path(
+            "/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Reference-prefill/pretrained_abc_1k_isl1024_layers61_experts256.pt"
+        ),
+        Path(
+            "/workspace/ds_output_all_sources_new_/norm_20260415_114721_mesh8x4_isl1024_L61_e256_cf32_gatehost_all_pretrained_abc_1k.pt"
+        ),
+    ],
 )
-@pytest.mark.parametrize("isl_total", [1024])
-@pytest.mark.timeout(0)
-def test_first_token_from_reference(input_source, config_only, isl_total, weight_cache_path, model_path):
-    mesh_shape = (8, 4)
-    pcc_validation = True
-    use_pretrained = True
-    return_kv_cache = True
-    num_layers = DeepSeekV3Config.NUM_LAYERS
-    n_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
+def test_first_token_from_reference(input_path, model_path, config_only, tokenizer):
+    # Use weights_only=False since this is a trusted local file with custom objects
+    logger.info(f"{input_path=}")
+    data = torch.load(input_path, weights_only=False)
 
-    torch.manual_seed(42)
+    if "norm_output" in data:  # this is ttnn output; norm only
+        norm_output = data["norm_output"]
+        logger.info(f"{norm_output.shape=}")
+    elif "ref_snapshots" in data:  # this is torch output; all emb + layers + norm
+        logger.info(f"Number of reference snapshots: {len(data['ref_snapshots'])}")
+        assert len(data["ref_snapshots"]) == DeepSeekV3Config.NUM_LAYERS + 2  # token embedding + final RMS norm
+        norm_output = data["ref_snapshots"][-1]  # Last snapshot's tensor
+        logger.warning("Loaded data does not have 'norm_output' key, assuming last snapshot is final rms norm output")
+    else:
+        logger.warning(data)
+        raise ValueError("Loaded data format is unexpected and does not contain 'norm_output' or expected snapshots.")
 
-    config = config_only
-    config.max_seq_len = isl_total
+    #  Remove batch dimension if present
+    if norm_output.shape[0] == 1:
+        norm_output = norm_output.squeeze(0)
+    logger.success("Data loaded successfully.")
 
-    weight_type = "pretrained" if use_pretrained else "random"
-
-    rows, cols = mesh_shape
-    effective_cache_path = weight_cache_path / f"{rows}x{cols}"
-    effective_cache_path.mkdir(parents=True, exist_ok=True)
-
-    logger.info(
-        f"isl_total={isl_total},  "
-        f"num_layers={num_layers},"
-        f"input_source={input_source}, pcc_validation={pcc_validation}, "
-        f"weights={weight_type}"
-    )
-
-    # --- Cache-aware loading strategy ---
-
-    from models.demos.deepseek_v3_d_p.utils.cache_utils import check_reference_cache_exists
-
-    # Check cache states
-    profiler.start("cache_check")
-    logger.info("Check reference cache...")
-    cache_key = f"{weight_type}_{input_source}_isl{isl_total}_layers{num_layers}_experts{n_routed_experts}"
-    ref_cache_exists = check_reference_cache_exists(cache_key) if pcc_validation else False
-    profiler.end("cache_check")
-
-    profiler.start("loading_ref")
-    logger.info("Loading reference from cache...")
-    ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
-    profiler.end("loading_ref")
-
-    logger.info(f"Number of reference snapshots: {len(ref_snapshots)}")
-    assert len(ref_snapshots) == DeepSeekV3Config.NUM_LAYERS + 2  # token embedding + final RMS norm
-    logger.success("Reference cache loaded successfully.")
-
-    for ref_host in ref_snapshots:
-        logger.info(ref_host.shape)
-
-    from pathlib import Path
-
+    # LM HEAD loading
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 
     lazy_sd = LazyStateDict(Path(model_path))
+    # lm_head_sd = sub_state_dict(lazy_sd, "model.embed_tokens.")
+    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_dequant = dequantize_state_dict(lm_head_sd, config_only)
+    lm_head_dequant_weight = lm_head_dequant.get("weight")
+    assert (
+        lm_head_dequant_weight.shape[0] == config_only.vocab_size
+    ), f"Expected lm_head_dequant_weight shape[0] to be {config_only.vocab_size}, got {lm_head_dequant_weight.shape[0]}"
+    logger.success("LM head weight loaded and dequantized successfully.")
 
-    norm_sd = sub_state_dict(lazy_sd, "model.lm_head.")
-    print(norm_sd.keys())
-    norm_dequant = dequantize_state_dict(norm_sd, config)
-    lm_head_weight = norm_sd.weight
-    # logger.info(f"✓ Found lm_head in {shard_file}")
-    # logger.info(f"LM head weight shape: {lm_head_weight.shape}")
+    # Apply LM HEAD
+    norm_output = norm_output.to(lm_head_dequant_weight.dtype)
+    # norm_output = ref_snapshots[-1][0,:,:].to(lm_head_dequant_weight.dtype)
+    logger.debug("Computing logits...")
+    with torch.no_grad():
+        # lm_head is just a linear layer: logits = hidden @ lm_head_weight.T
+        logits = torch.matmul(norm_output, lm_head_dequant_weight.T)  # Shape: [1, 1, vocab_size]
+    logger.debug(f"Logits shape: {logits.shape}")
+
+    # Apply sampling
+    # https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/generate.py
+    def sample(logits, temperature: float = 1.0):
+        """
+        Samples a token from the logits using temperature scaling.
+
+        Args:
+            logits (torch.Tensor): The logits tensor for token predictions.
+            temperature (float, optional): Temperature for scaling logits. Defaults to 1.0.
+
+        Returns:
+            torch.Tensor: The sampled token.
+        """
+        logits = logits / max(temperature, 1e-5)
+        probs = torch.softmax(logits, dim=-1)
+        return probs.div_(torch.empty_like(probs).exponential_(1)).argmax(dim=-1)
+
+    index = -1  # Last token
+    for temperature in [0.0, 0.5, 1]:
+        first_token = sample(logits=logits[index].clone(), temperature=temperature)
+        token_text = tokenizer.decode([first_token.item()])
+        logger.info(f"{index} First token (temperature={temperature}): {first_token.item()} -> {repr(token_text)}")
+
+    last_logit = logits[-1, :].clone()
+    top_k = 5
+    top_logits, top_indices = torch.topk(last_logit, top_k, dim=-1)
+    probs = torch.softmax(last_logit, dim=-1)
+
+    for i, (token_id, logit_value) in enumerate(zip(top_indices.tolist(), top_logits.tolist())):
+        token_text = tokenizer.decode([token_id])
+        prob = probs[token_id].item()
+
+        logger.info(
+            f"{i+1}. Token ID: {token_id:6d} | Logit: {logit_value:8.4f} | "
+            f"Prob: {prob:8.6f} | Text: {repr(token_text)}"
+        )
