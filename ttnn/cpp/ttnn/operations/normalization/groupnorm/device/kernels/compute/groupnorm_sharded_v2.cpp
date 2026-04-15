@@ -219,6 +219,12 @@ void kernel_main() {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        // When the last group spans fewer than block_w tiles, the index can
+                        // exceed the CB tile count. Clamp it so the read stays in bounds;
+                        // the input mask guarantees the result from the clamped tile is zeroed.
+                        if (index >= per_core_MN) {
+                            index = per_core_MN - 1;
+                        }
                         uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
                         mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
