@@ -102,7 +102,6 @@ AllGatherViaBroadcastFactory::cached_program_t AllGatherViaBroadcastFactory::cre
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
-    TT_ASSERT(operation_attributes.sub_device_id.has_value(), "function currently does not support subdevices");
     auto sender_worker_core_range =
         get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
