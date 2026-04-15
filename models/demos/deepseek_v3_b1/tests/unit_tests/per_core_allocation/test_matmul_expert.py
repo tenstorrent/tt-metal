@@ -2295,7 +2295,6 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
 @pytest.mark.skip_post_commit
 @pytest.mark.requires_grid_size((12, 10))
 def test_benchmark(device):
-    down_cores = _build_down_grid(device)
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2309,6 +2308,5 @@ def test_benchmark(device):
             ["bfp4", "bfp0"],
         ],
         subblock_n=4,
-        sram_cores_override=down_cores,
         accum_experts=False,
     )

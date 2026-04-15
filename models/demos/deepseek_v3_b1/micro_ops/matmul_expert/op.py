@@ -63,14 +63,23 @@ def _compute_expert_subblock_metadata(
     block_sizes = []
     tile_infos = []
 
+    # Iteration order matches the kernel's NCRISC read loop:
+    # for each N-group (per_core_n / subblock_n groups):
+    #   for each K-subblock (num_subblocks_k):
+    #     read subblock_n columns × subblock_k tiles = one block_size entry
+    #
+    # Tile order in shard_assignment is column-major:
+    #   col0: [k0..k_{Kt-1}], col1: [k0..k_{Kt-1}], ...
     tile_idx = 0
     for _ng in range(per_core_n // subblock_n):
-        # Cumulative byte offset within this group of subblock_n columns.
-        slot_offset_shifted = 0
-        group_bytes = 0
+        for _sb_k in range(num_subblocks_k):
+            iter_bytes = 0
+            # When subblock_n > 1, columns are packed contiguously in one CB slot.
+            # Fmt offsets accumulate so all addresses are relative to a single slot_base.
+            # When subblock_n == 1, each column has its own slot — offset is always 0.
+            slot_offset_shifted = 0
 
-        for _sn in range(subblock_n):
-            for _sb_k in range(num_subblocks_k):
+            for _sn in range(subblock_n):
                 subblock_bytes = 0
                 subblock_start = tile_idx
                 for _t in range(subblock_k):
@@ -78,7 +87,7 @@ def _compute_expert_subblock_metadata(
                     subblock_bytes += _TILE_SIZES[fmt_idx]
                     tile_idx += 1
 
-                group_bytes += subblock_bytes
+                iter_bytes += subblock_bytes
 
                 subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
                 tiles = pack_tile_pairs(
@@ -86,10 +95,10 @@ def _compute_expert_subblock_metadata(
                 )
                 tile_infos.extend(tiles)
 
-                slot_offset_shifted += subblock_bytes >> _CB_ADDR_SHIFT
+                if subblock_n > 1:
+                    slot_offset_shifted += subblock_bytes >> _CB_ADDR_SHIFT
 
-        # One block_size entry per group (sum of subblock_n columns).
-        block_sizes.append(group_bytes)
+            block_sizes.append(iter_bytes)
 
     return block_sizes, tile_infos
 
