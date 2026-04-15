@@ -79,6 +79,109 @@ std::vector<Tensor> allocate_outputs(
     return outputs;
 }
 
+/// Persistent dispatch state — caches all marshalling work at construction.
+/// ``set_input()`` writes tensors into pre-sized slots; ``dispatch()`` allocates
+/// ephemeral outputs, patches the descriptor in-place, and dispatches.
+class FusionDispatchState {
+    // Cached at construction (never changes)
+    std::vector<TensorSpec> output_specs_;
+    std::vector<std::uint32_t> shared_output_map_;
+    std::vector<std::uint32_t> result_reorder_;
+    AddressSlots address_slots_;
+    tt::tt_metal::distributed::MeshDevice* mesh_device_;
+
+    // Pre-built MeshProgramDescriptor — patched IN PLACE each dispatch.
+    // Safe because patch_stale_descriptor writes addresses unconditionally
+    // and custom_program_hash is pre-set at cache-write time.
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_desc_;
+
+    // Deduped input tensor slots — written by set_input(), read by dispatch().
+    // Slots hold the most recent tensor from either construction or the last
+    // set_input() call.  Released when the next set_input() overwrites them.
+    std::vector<Tensor> inputs_;
+
+    // Set by set_input(), cleared by dispatch().  Tells run() whether update()
+    // was called since the last dispatch — if not, fall back to _container_run
+    // which reads op.input_tensors (supports direct assignment patterns).
+    bool ready_ = false;
+
+public:
+    FusionDispatchState(
+        nb::list ops_input_tensors,
+        nb::list output_specs_py,
+        const std::vector<std::uint32_t>& shared_output_map,
+        const std::vector<std::uint32_t>& result_reorder,
+        const tt::tt_metal::ProgramDescriptor& program_descriptor,
+        const AddressSlots& address_slots) :
+        shared_output_map_(shared_output_map), result_reorder_(result_reorder), address_slots_(address_slots) {
+        // 1. Dedup inputs from ops' input_tensors (by Python object identity).
+        std::unordered_set<PyObject*> seen;
+        for (auto op_list_handle : ops_input_tensors) {
+            auto op_list = nb::cast<nb::list>(op_list_handle);
+            for (auto tensor_handle : op_list) {
+                PyObject* py_ptr = tensor_handle.ptr();
+                if (seen.insert(py_ptr).second) {
+                    inputs_.push_back(nb::cast<Tensor>(tensor_handle));
+                }
+            }
+        }
+        TT_FATAL(!inputs_.empty(), "ops_input_tensors must contain at least one tensor");
+
+        // 2. Convert output specs.
+        output_specs_.reserve(output_specs_py.size());
+        for (auto item : output_specs_py) {
+            output_specs_.push_back(nb::cast<TensorSpec>(item));
+        }
+
+        // 3. Extract mesh device.
+        auto* device = inputs_.front().device();
+        mesh_device_ = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
+        TT_FATAL(mesh_device_ != nullptr, "Tensor must be on a MeshDevice");
+
+        // 4. Build MeshProgramDescriptor ONCE (copies ProgramDescriptor here, never again).
+        mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
+    }
+
+    void set_input(size_t dedup_idx, const Tensor& t) {
+        inputs_[dedup_idx] = t;
+        ready_ = true;
+    }
+
+    bool ready() const { return ready_; }
+
+    std::vector<Tensor> dispatch() {
+        // 1. Allocate ephemeral outputs from cached specs.
+        auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
+
+        // 2. Build io_tensors.
+        std::vector<Tensor> io_tensors;
+        io_tensors.reserve(inputs_.size() + outputs.size());
+        io_tensors.insert(io_tensors.end(), inputs_.begin(), inputs_.end());
+        io_tensors.insert(io_tensors.end(), outputs.begin(), outputs.end());
+
+        // 3. Patch descriptor in place (skips null-buffer entries).
+        auto& desc = mesh_desc_.mesh_programs.back().second;
+        patch_stale_descriptor(desc, io_tensors, address_slots_);
+
+        // 4. Dispatch.
+        (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
+
+        // 5. Reset ready flag — next dispatch requires at least one set_input().
+        ready_ = false;
+
+        // 6. Reorder if needed.
+        if (!result_reorder_.empty()) {
+            std::vector<Tensor> reordered;
+            reordered.reserve(result_reorder_.size());
+            for (auto idx : result_reorder_) {
+                reordered.push_back(outputs[idx]);
+            }
+            return reordered;
+        }
+        return outputs;
+    }
+};
+
 }  // namespace
 
 void bind_patchable_generic_op(nb::module_& mod) {
@@ -182,6 +285,30 @@ void bind_patchable_generic_op(nb::module_& mod) {
         Used by the cold path (``FusedOp.launch()``) where outputs already
         exist from ``build()``.  Inputs and outputs are separate vectors.
         )doc");
+
+    nb::class_<FusionDispatchState>(mod, "FusionDispatchState", R"doc(
+        Persistent dispatch state that caches all marshalling work at construction.
+        ``set_input()`` writes tensors into deduped slots; ``dispatch()`` allocates
+        ephemeral outputs, patches the descriptor in-place, and dispatches — all
+        with zero per-call argument marshalling.
+    )doc")
+        .def(
+            nb::init<
+                nb::list,
+                nb::list,
+                const std::vector<std::uint32_t>&,
+                const std::vector<std::uint32_t>&,
+                const tt::tt_metal::ProgramDescriptor&,
+                const AddressSlots&>(),
+            nb::arg("ops_input_tensors"),
+            nb::arg("output_specs"),
+            nb::arg("shared_output_map"),
+            nb::arg("result_reorder"),
+            nb::arg("program_descriptor"),
+            nb::arg("address_slots"))
+        .def("set_input", &FusionDispatchState::set_input, nb::arg("dedup_idx"), nb::arg("tensor"))
+        .def("dispatch", &FusionDispatchState::dispatch)
+        .def("ready", &FusionDispatchState::ready);
 }
 
 }  // namespace ttnn::operations::experimental::generic::detail

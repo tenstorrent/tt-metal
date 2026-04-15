@@ -153,6 +153,7 @@ class OpDescriptor:
         "program_cache_key",
         "_input_names",
         "_complete_fn",
+        "_fusion_input_setter",
     )
 
     def __init__(
@@ -198,6 +199,8 @@ class OpDescriptor:
         else:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
+        self._fusion_input_setter = None
+
     def update(self, *args, **kwargs):
         """Replace input tensors by name or position.
 
@@ -210,6 +213,26 @@ class OpDescriptor:
             desc.update(input_tensor=new_q)
             desc.update(input_a=new_a, input_b=new_b)
         """
+        # Ultra-fast path: write directly to C++ FusionDispatchState input slots.
+        # No Python list update — inputs_ in C++ is the source of truth while
+        # _dispatch_state is active.  If invalidate_run() clears the fast path,
+        # the next update() falls through to the normal path below.
+        setter = self._fusion_input_setter
+        if setter is not None:
+            state, mappings = setter
+            if args:
+                for i, t in enumerate(args):
+                    state.set_input(mappings[i][0], t)
+                return
+            elif kwargs:
+                names = self._input_names
+                if names is not None:
+                    for name, t in kwargs.items():
+                        idx = names.get(name)
+                        if idx is not None:
+                            state.set_input(mappings[idx][0], t)
+                    return
+
         if args:
             if kwargs:
                 raise ValueError("update(): positional OR keyword arguments, not both")
