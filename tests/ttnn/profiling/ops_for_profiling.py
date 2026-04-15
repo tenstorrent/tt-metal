@@ -1297,8 +1297,8 @@ def erf_slow(x):
     ttnn.erf(x, fast_and_approximate_mode=False)
 
 
-def erfc_slow(x):
-    ttnn.erfc(x, fast_and_approximate_mode=False)
+def erfc_default(x):
+    ttnn.erfc(x)
 
 
 def rsqrt_slow(x):
@@ -2063,11 +2063,7 @@ all_unary_ops = [
     },
     {
         "op": ttnn.erfc,
-        "name": "ttnn.erfc_fast_and_approx_True",
-    },
-    {
-        "op": erfc_slow,
-        "name": "ttnn.erfc_fast_and_approx_False",
+        "name": "ttnn.erfc",
     },
     {
         "op": ttnn.rsqrt,

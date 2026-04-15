@@ -1994,7 +1994,7 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_with_fast_and_approximate_mode<"exp", &ttnn::exp>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"erfc", &ttnn::erfc>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_subcoregrids<"erfc">(mod, &ttnn::erfc, "", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
