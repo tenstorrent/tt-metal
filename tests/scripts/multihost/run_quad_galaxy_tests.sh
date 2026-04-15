@@ -51,6 +51,13 @@ _export_tcp_interface_for_multihost() {
     export TCP_INTERFACE="${TCP_INTERFACE:-$(_default_mpi_tcp_interface)}"
 }
 
+_extract_hosts_from_hostfile() {
+    local host_count="$1"
+    local hostfile="${2:-/etc/mpirun/hostfile}"
+
+    awk '!/^#/ && NF {print $1}' "$hostfile" | head -n "$host_count" | paste -sd,
+}
+
 ###############################################################################
 # Infrastructure unit tests (quad galaxy only)
 ###############################################################################
@@ -61,7 +68,9 @@ run_quad_galaxy_unit_tests() {
   _export_tcp_interface_for_multihost
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="${TCP_INTERFACE}"
-  local hosts="g05glx04,g05glx03,g05glx02,g05glx01"
+  local hosts="$(_extract_hosts_from_hostfile 4)"
+  local rank_binding_yaml="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  local tt_mpi_args="--host $hosts --map-by rankfile:file=/etc/mpirun/rankfile --bind-to none --output-filename logs/mpi_job"
   local mpi_host="--host $hosts"
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
@@ -74,12 +83,12 @@ run_quad_galaxy_unit_tests() {
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  _tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  _tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
   #_tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  _tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  _tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -124,8 +133,7 @@ _resolve_deepseekv3_model() {
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
-    # heuristic to extract only 2 first hosts from the hostfile
-    export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
+    export HOSTS="$(_extract_hosts_from_hostfile 2)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     _export_tcp_interface_for_multihost
@@ -157,9 +165,9 @@ setup_dual_galaxy_env() {
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
-    # heuristic to extract only 4 first hosts from the hostfile
-    export HOSTS="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 4 | paste -sd,)"
+    export HOSTS="$(_extract_hosts_from_hostfile 4)"
     export RANKFILE=/etc/mpirun/rankfile
+    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     _export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
@@ -179,6 +187,7 @@ setup_quad_galaxy_env() {
 
     echo "Using quad Galaxy hosts: ${HOSTS}"
     echo "Using MPI TCP interface (tt-run / Open MPI): ${TCP_INTERFACE}"
+    echo "Using quad Galaxy rankfile: ${RANKFILE}"
 
     _resolve_deepseekv3_model
     _resolve_deepseekv3_cache
@@ -240,7 +249,11 @@ _demo_case_selector() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    _tt_run --tcp-interface $TCP_INTERFACE --mesh-graph-descriptor "$MESH_GRAPH_DESCRIPTOR" --hosts "$HOSTS" "$@"
+    if [[ -n "${MPI_ARGS:-}" ]]; then
+        _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@"
+    else
+        _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@"
+    fi
 }
 
 ###############################################################################
