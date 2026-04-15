@@ -272,41 +272,30 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from previous core
+                // K: get data into CB buffer
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 if (is_mux_writer) {
                     cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
                 }
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (should_receive) {
-                    // Receive forwarded K chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_k_in, k_chunk_tiles);
-                    if (is_mux_writer) {
-                        cb_push_back(cb_k_writer_in, k_chunk_tiles);
-                    }
                 } else {
-                    read_block(
+                    fetch_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
                         kv_slice,
                         end_seq_tile,
-                        cb_k_in,
+                        cb_k_start_address,
                         k_tile_bytes,
                         true /*transpose*/
                     );
-                    if (is_mux_writer) {
-                        cb_push_back(cb_k_writer_in, k_chunk_tiles);
-                    }
-                }
-                if (is_mux_writer) {
-                    ASSERT(get_write_ptr(cb_k_in) == get_write_ptr(cb_k_writer_in));
                 }
 
-                // Forward K chunk to next core(s): initiate async write (NOC write channel)
-                // For mcast: send linked data + companion semaphore back-to-back.
+                // Forward K to next core(s) before push_back — prevents compute from
+                // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -318,15 +307,23 @@ void kernel_main() {
                             k_chunk_tiles * k_tile_bytes,
                             mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
-                        // noc_async_writes_flushed();
                         noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                     } else {
                         uint64_t k_unicast_data_addr =
                             get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
                         noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                        noc_async_writes_flushed();
+                    }
+                    noc_async_writes_flushed();
+                    if constexpr (!mcast_enabled) {
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }
+                }
+
+                // Make K available to compute
+                cb_push_back(cb_k_in, k_chunk_tiles);
+                if (is_mux_writer) {
+                    cb_push_back(cb_k_writer_in, k_chunk_tiles);
+                    ASSERT(get_write_ptr(cb_k_in) == get_write_ptr(cb_k_writer_in));
                 }
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
@@ -357,40 +354,30 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from previous core
+                // V: get data into CB buffer
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 if (is_mux_writer) {
                     cb_reserve_back(cb_v_writer_in, v_chunk_tiles);
                 }
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (should_receive) {
-                    // Receive forwarded V chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_v_in, v_chunk_tiles);
-                    if (is_mux_writer) {
-                        cb_push_back(cb_v_writer_in, v_chunk_tiles);
-                    }
                 } else {
-                    read_block(
+                    fetch_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
                         kv_slice,
                         end_seq_tile,
-                        cb_v_in,
+                        cb_v_start_address,
                         v_tile_bytes,
                         false /*transpose*/
                     );
-                    if (is_mux_writer) {
-                        cb_push_back(cb_v_writer_in, v_chunk_tiles);
-                    }
-                }
-                if (is_mux_writer) {
-                    ASSERT(get_write_ptr(cb_v_in) == get_write_ptr(cb_v_writer_in));
                 }
 
-                // Forward V chunk to next core(s) if applicable
+                // Forward V to next core(s) before push_back — prevents compute from
+                // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -402,15 +389,23 @@ void kernel_main() {
                             v_chunk_tiles * v_tile_bytes,
                             mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
-                        // noc_async_writes_flushed();
                         noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                     } else {
                         uint64_t v_unicast_data_addr =
                             get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
                         noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                        noc_async_writes_flushed();
+                    }
+                    noc_async_writes_flushed();
+                    if constexpr (!mcast_enabled) {
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }
+                }
+
+                // Make V available to compute
+                cb_push_back(cb_v_in, v_chunk_tiles);
+                if (is_mux_writer) {
+                    cb_push_back(cb_v_writer_in, v_chunk_tiles);
+                    ASSERT(get_write_ptr(cb_v_in) == get_write_ptr(cb_v_writer_in));
                 }
             }
         }
