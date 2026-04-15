@@ -182,9 +182,14 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
-    """Fuse TP4 ``shuffle_q_a`` o_proj, gate_mm, norms, and q_a / q_b / kv_a into one L1 buffer.
+    """Fuse TP4 ``shuffle_q_a`` o_proj, norms, and q_a / q_b / kv_a into one per-core L1 buffer.
+
+    ``gate_mm`` is excluded from the overlap and returned as a standalone
+    ``OverlappedTensor`` backed by its own per-core allocated tensor, avoiding
+    lockstep L1 reservation on the ~115 cores used by the fused buffer.
 
     Requires a **4×2** mesh.  ``o_proj_weights`` shape ``(16384, 7168)``.
+    Must be the first per-core allocation on the device.
     """
     o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
@@ -219,10 +224,9 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mla_proj_dtype
     )
 
-    return overlap_tensors(
+    result = overlap_tensors(
         [
             OverlapEntry("o_proj", o_packed, o_spec),
-            OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm),
             OverlapEntry("attn_norm", attn_norm, o_cfg.attn_norm),
             OverlapEntry("q_norm", q_norm, o_cfg.q_norm),
             OverlapEntry("ffn_norm", ffn_norm, o_cfg.ffn_norm),
@@ -231,7 +235,18 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         ],
         device=device,
         move_to_device=move_to_device,
+        per_core=True,
     )
+
+    gate_mm_result = overlap_tensors(
+        [OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm)],
+        device=device,
+        move_to_device=move_to_device,
+        per_core=True,
+    )
+    result["gate_mm"] = gate_mm_result["gate_mm"]
+
+    return result
 
 
 def fuse_kv_b12(
