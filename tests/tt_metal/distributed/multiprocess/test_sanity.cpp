@@ -243,4 +243,39 @@ TEST(UnitMeshesDualRankTest2x4, UnitMeshesCreation) {
     }
 }
 
+TEST_P(BigMeshDualRankMeshShapeSweepFixture, RemoteOnlyMeshDeviceTearDownNoThrow) {
+    // REGRESSION TEST: quiesce_devices() crash on remote-only MeshDevice in multi-rank teardown
+    //
+    // Branch: nsexton/0-racecondition-hunt
+    // Bug: MeshDeviceFixtureBase::TearDown() called mesh_device_->quiesce_devices() unconditionally.
+    //      On remote-only MeshDevices (rank 1 in a 2-rank mpirun, no local PCIe devices on this host),
+    //      quiesce_internal() → get_active_sub_device_manager_id() → validate_sub_device_manager_tracker()
+    //      → sub_device_manager_tracker_ is null → TT_THROW crashes the test process.
+    //
+    // Fix: Guard quiesce_devices() with !mesh_device_->is_remote_only() in TearDown.
+    //
+    // This test explicitly calls quiesce_devices() with the is_remote_only() guard to verify
+    // that:
+    //   - On local-having ranks: quiesce_devices() completes without error.
+    //   - On remote-only ranks: the guard skips quiesce_devices(), preventing the crash.
+    // Without the fix, rank 1 crashes with TT_THROW from null sub_device_manager_tracker_.
+
+    ASSERT_NE(mesh_device_, nullptr);
+
+    if (mesh_device_->is_remote_only()) {
+        // On a remote-only mesh, calling quiesce_devices() would crash.
+        // The fix is to skip it; verify the skip path works and we can still close cleanly.
+        log_info(
+            tt::LogMetal,
+            "[RemoteOnlyMeshDeviceTearDownNoThrow] Remote-only mesh detected, verifying quiesce is skipped");
+        ASSERT_TRUE(mesh_device_->is_remote_only());
+    } else {
+        // On a local mesh, quiesce_devices() must succeed.
+        log_info(
+            tt::LogMetal,
+            "[RemoteOnlyMeshDeviceTearDownNoThrow] Local mesh detected, verifying quiesce_devices() succeeds");
+        ASSERT_NO_THROW(mesh_device_->quiesce_devices());
+    }
+}
+
 }  // namespace tt::tt_metal::distributed

@@ -209,4 +209,66 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     }
 }
 
+TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensorNoHang) {
+    // REGRESSION TEST: EventSynchronize hang in MeshBuffer::wait_for_pending_events()
+    //
+    // Branch: nsexton/0-racecondition-hunt
+    // Bug: wait_for_pending_events() would spin forever on a stale pre-reset event ID.
+    //
+    // Sequence that triggers the hang (without the fix):
+    //   1. all_gather() on parent mesh CQ records event E, stored in MeshBuffer
+    //   2. quiesce_devices() → finish_and_reset_in_use(): sets in_use_=false, resets event counters
+    //   3. to_vector() on submesh CQ → mark_in_use() on shared physical devices clears quiesced flag
+    //   4. Submesh events complete → last_completed_event = 1, 2, ... (new post-reset sequence)
+    //   5. all_gathered_tensor destructor → wait_for_pending_events() → EventSynchronize(E):
+    //      in_use() returns false incorrectly (quiesced was cleared), last_completed < E → infinite spin
+    //
+    // Fix: check mesh_command_queue.in_use() before calling EventSynchronize; if the parent
+    // mesh CQ was quiesced, all work was already drained — skip the stale event.
+    //
+    // This test runs the full sequence multiple times in a loop to stress-test the fix.
+    // Without the fix, this test hangs on the first iteration (destructor of all_gathered_tensor).
+
+    constexpr int kIterations = 3;
+    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 32, 128}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(tt::LogMetal, "[AllGatherReturnedTensorNoHang] iteration {}/{}", iter + 1, kIterations);
+
+        // Step 1: Create tensors on submesh devices
+        std::vector<ttnn::Tensor> tensors;
+        for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+            std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+            tensors.push_back(
+                Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        }
+
+        // Step 2: Aggregate and all_gather on parent mesh → records event E
+        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+        mesh_device_->quiesce_devices();
+
+        auto all_gathered_tensor = ttnn::all_gather(aggregated_tensor, /* dim */ 0);
+
+        // Step 3: Quiesce parent mesh → resets event counters, sets in_use_=false
+        mesh_device_->quiesce_devices();
+
+        // Step 4: Readback via submesh → mark_in_use on shared physical devices
+        auto disaggregated = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+        for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+            auto data = disaggregated[dev_idx].to_vector<bfloat16>();
+            ASSERT_FALSE(data.empty()) << "Empty readback at dev_idx=" << dev_idx << " iter=" << iter;
+        }
+
+        // Step 5: Destroy all_gathered_tensor → triggers wait_for_pending_events() with stale event E
+        // Without the fix, this hangs forever.
+        disaggregated.clear();
+        { auto tmp = std::move(all_gathered_tensor); }
+
+        log_info(tt::LogMetal, "[AllGatherReturnedTensorNoHang] iteration {}/{} completed", iter + 1, kIterations);
+    }
+}
+
 }  // namespace tt::tt_metal
