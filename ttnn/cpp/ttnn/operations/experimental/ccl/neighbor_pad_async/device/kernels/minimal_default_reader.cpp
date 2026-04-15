@@ -61,7 +61,7 @@ void kernel_main() {
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
