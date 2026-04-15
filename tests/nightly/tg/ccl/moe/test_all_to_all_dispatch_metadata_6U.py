@@ -27,6 +27,7 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_8x4 = "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -173,22 +174,27 @@ def run_all_to_all_dispatch_metadata_test(
 
     total_tokens = batch * seq_len
 
-    # Compute tokens per device for height sharding the input indices/scores
-    # After mesh sharding, each device gets batch/devices tokens
-    tokens_per_device = batch // devices
+    # Compute batch elements per device for height sharding the input indices/scores
+    # After mesh sharding, each device gets batch / shard_axis_size batch elements
+    # For [1,32] cluster_axis=1: shard across 32 cols -> batch/32 per device
+    # For [8,4] cluster_axis=1: shard across 4 cols -> batch/4 per device
+    num_dispatch_devices_for_shard = mesh_shape[cluster_axis] if cluster_axis is not None else devices
+    batches_per_device_after_shard = batch // num_dispatch_devices_for_shard
 
     # Create height sharded memory config for input indices and scores
-    # 1 row per core, with tokens_per_device cores total
-    # Arrange cores in a grid - use 8 rows (Y) and ceil(tokens_per_device/8) columns (X)
-    num_cores_y = min(8, tokens_per_device)
-    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
+    # Spread batch elements across cores, with multiple rows per shard if needed
+    max_cores = 64  # Stay within WH's ~70 compute cores
+    num_shards = min(batches_per_device_after_shard, max_cores)
+    rows_per_shard = (batches_per_device_after_shard + num_shards - 1) // num_shards
+    num_shards = (batches_per_device_after_shard + rows_per_shard - 1) // rows_per_shard
+    num_cores_y = min(8, num_shards)
+    num_cores_x = (num_shards + num_cores_y - 1) // num_cores_y
     input_indices_scores_core_range = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
     )
-    # Shard shape: [1 row, seq_len * select_experts_k columns]
     input_indices_shard_spec = ttnn.ShardSpec(
         input_indices_scores_core_range,
-        [1, seq_len * select_experts_k],
+        [rows_per_shard, seq_len * select_experts_k],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     input_indices_sharded_mem_config = ttnn.MemoryConfig(
@@ -197,8 +203,8 @@ def run_all_to_all_dispatch_metadata_test(
         input_indices_shard_spec,
     )
     logger.info(
-        f"Input indices/scores height sharded: {tokens_per_device} tokens across {num_cores_x}x{num_cores_y} cores, "
-        f"shard shape [1, {seq_len * select_experts_k}]"
+        f"Input indices/scores height sharded: {batches_per_device_after_shard} batch elements across "
+        f"{num_cores_x}x{num_cores_y} cores, shard shape [{rows_per_shard}, {seq_len * select_experts_k}]"
     )
 
     for iter in range(num_iters):
@@ -301,9 +307,10 @@ def run_all_to_all_dispatch_metadata_test(
     if use_persistent_mode:
         logger.info("Creating persistent output buffers for persistent mode (1 buffer set, 2 semaphores)")
 
-        # Compute output shapes - use global shapes [devices, ...] for sharding across mesh
-        output_tokens_shape = [devices, total_tokens, hidden_size]
-        metadata_shape = [devices, total_tokens, select_experts_k]
+        # Compute output shapes for mesh sharding
+        # Shard dimension size = cluster axis size (dispatch_devices), replicated on the other axis
+        output_tokens_shape = [num_dispatch_devices_for_shard, total_tokens, hidden_size]
+        metadata_shape = [num_dispatch_devices_for_shard, total_tokens, select_experts_k]
 
         # Create core range set for worker cores (needed for global semaphore creation)
         worker_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
@@ -608,29 +615,18 @@ def run_all_to_all_dispatch_metadata_test(
         ), f"First failing index: {first_failed_tensor_index} token {first_failed_batch_index} sequence {first_failed_sequence_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
-# Correctness test - single focused test case for pipeline validation
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
-@pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
-)
+# Correctness test - validates dispatch_metadata on 1D and 2D mesh topologies
 @pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
-            "trace_region_size": 500000,
-        },
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device, cluster_axis",
+    "device_params, mesh_shape, mesh_device, cluster_axis",
     [
         pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+                "trace_region_size": 500000,
+            },
             (1, 8),
             (1, 8),
             1,
@@ -641,6 +637,13 @@ def run_all_to_all_dispatch_metadata_test(
             id="1x8",
         ),
         pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+                "trace_region_size": 500000,
+            },
             (1, 16),
             (1, 16),
             1,
@@ -650,27 +653,57 @@ def run_all_to_all_dispatch_metadata_test(
             ),
             id="1x16",
         ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+                "trace_region_size": 500000,
+            },
+            (8, 4),
+            (8, 4),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_8x4),
+                reason=f"8x4 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_8x4}",
+            ),
+            id="8x4",
+        ),
     ],
-    indirect=["mesh_device"],
+    indirect=["device_params", "mesh_device"],
 )
 @pytest.mark.parametrize("experts_per_device", [2])
 def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
-    batches_per_device = 32
-    experts = experts_per_device * mesh_shape[cluster_axis]
+    devices = mesh_shape[0] * mesh_shape[1]
+    dispatch_devices = mesh_shape[cluster_axis]
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1
-    num_iters = 20
-    warmup_iters = 5
     num_links = 4
     dtype = ttnn.bfloat16
     congestion_scheme = "random_sequential_experts"
     worker_mode = ttnn.WorkerMode.DIRECT
-    use_persistent_mode = False
 
-    dispatch_devices = mesh_shape[cluster_axis]
-    batch = batches_per_device * dispatch_devices
-    trace_mode = True
+    # 2D meshes: persistent mode, adjusted batch for L1 core constraints
+    # 1D meshes: original params (trace mode, no persistent)
+    is_2d = mesh_shape[0] > 1 and mesh_shape[1] > 1
+    if is_2d:
+        batches_per_device = 16
+        experts = experts_per_device * devices
+        batch = batches_per_device * devices
+        num_iters = 2
+        warmup_iters = 0
+        trace_mode = False
+        use_persistent_mode = True
+    else:
+        batches_per_device = 32
+        experts = experts_per_device * dispatch_devices
+        batch = batches_per_device * dispatch_devices
+        num_iters = 20
+        warmup_iters = 5
+        trace_mode = True
+        use_persistent_mode = False
 
     run_all_to_all_dispatch_metadata_test(
         mesh_device,

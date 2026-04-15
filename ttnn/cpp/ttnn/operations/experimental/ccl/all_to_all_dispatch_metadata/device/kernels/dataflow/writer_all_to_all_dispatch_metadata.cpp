@@ -9,6 +9,26 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+
+using namespace tt::tt_fabric::linear::experimental;
+
+// Helper: create a route info with adjusted range for 2D multicast.
+// For 2D (HybridMeshPacketHeader), the actual hop count is in e/w/n/s_num_hops.
+// For 1D (LowLatencyPacketHeader), it's in start_distance_in_hops/range_hops.
+// This helper sets BOTH so it works for either header type.
+inline ccl_routing_utils::line_multicast_route_info_t adjust_mcast_range(
+    const ccl_routing_utils::line_multicast_route_info_t& base_route, uint32_t new_range, uint32_t direction) {
+    auto adjusted = base_route;
+    // 1D path: update range_hops
+    adjusted.range_hops = new_range;
+    // 2D path: update the directional hop field that matches the send direction
+    adjusted.e_num_hops = (direction == eth_chan_directions::EAST) ? new_range : 0;
+    adjusted.w_num_hops = (direction == eth_chan_directions::WEST) ? new_range : 0;
+    adjusted.n_num_hops = (direction == eth_chan_directions::NORTH) ? new_range : 0;
+    adjusted.s_num_hops = (direction == eth_chan_directions::SOUTH) ? new_range : 0;
+    return adjusted;
+}
 
 namespace detail {
 
@@ -44,206 +64,206 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
 // Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets
-template <
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    bool DoubleAntipodalAtomicInc = false,
-    typename FabricConnectionsType>
-FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
+// For a ring with even number of devices, we multicast in both directions to cover all devices
+// with just 2 packets instead of (dispatch_devices - 1) unicast packets.
+// Uses _set_state/_with_state pattern with fabric_set_line_multicast_route for 2D compatibility.
+template <uint32_t DispatchDevices, bool DoubleAntipodalAtomicInc = false, typename FabricConnectionsType>
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc(
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
-    uint64_t semaphore_noc_addr) {
-    using ttnn::operations::ccl::common::ReplicateGroup;
-    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
-
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
-    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
-    // dispatch_devices) if DoubleAntipodalAtomicInc is true
+    uint64_t semaphore_noc_addr,
+    const ccl_routing_utils::line_multicast_route_info_t& pos_route,
+    const ccl_routing_utils::line_multicast_route_info_t& neg_route,
+    uint32_t positive_direction,
+    uint32_t negative_direction) {
     constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (DispatchDevices + 1) / 2 : DispatchDevices / 2;
     constexpr uint32_t negative_range =
         DoubleAntipodalAtomicInc ? DispatchDevices - positive_range : (DispatchDevices - 1) - positive_range;
 
-    // Determine directions based on axis:
-    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
-    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
-    constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 
-    // Send multicast in positive direction (start_distance=1, range=positive_range)
+    // Send multicast in positive direction
     if constexpr (positive_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[positive_direction],
+        auto pos_adj = adjust_mcast_range(pos_route, positive_range, positive_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             packet_header_pos,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(positive_range));
+            static_cast<uint8_t>(pos_adj.start_distance_in_hops),
+            static_cast<uint8_t>(positive_range),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &fabric_connections[positive_direction], packet_header_pos, cmd_header);
     }
 
-    // Send multicast in negative direction (start_distance=1, range=negative_range)
+    // Send multicast in negative direction
     if constexpr (negative_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[negative_direction],
+        auto neg_adj = adjust_mcast_range(neg_route, negative_range, negative_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             packet_header_neg,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(negative_range));
+            static_cast<uint8_t>(neg_adj.start_distance_in_hops),
+            static_cast<uint8_t>(negative_range),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &fabric_connections[negative_direction], packet_header_neg, cmd_header);
     }
 }
 
 // Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
-// Handles payloads larger than max packet size by splitting into multiple packets
-template <
-    uint32_t FabricMaxPacketSzBytes,
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    typename FabricConnectionsType>
-FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
+// Handles payloads larger than max packet size by splitting into multiple packets.
+// Uses _set_state/_with_state pattern with fabric_set_line_multicast_route for 2D compatibility.
+template <uint32_t FabricMaxPacketSzBytes, uint32_t DispatchDevices, typename FabricConnectionsType>
+FORCE_INLINE void fabric_multicast_bidirectional_write_async(
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
     uint64_t noc_addr,
     int32_t size_bytes,
-    uint32_t alignment) {
-    using ttnn::operations::ccl::common::ReplicateGroup;
-
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
+    uint32_t alignment,
+    const ccl_routing_utils::line_multicast_route_info_t& pos_route,
+    const ccl_routing_utils::line_multicast_route_info_t& neg_route,
+    uint32_t positive_direction,
+    uint32_t negative_direction) {
     constexpr uint32_t positive_range = DispatchDevices / 2;
     constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
-
-    constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
 
     // Track the original total size for the local write at the end
     const uint32_t total_size = static_cast<uint32_t>(size_bytes);
     const uint64_t original_noc_addr = noc_addr;
     const uint32_t original_src_addr = src_addr;
 
+    // Pre-set the route and initial state for both directions
     // Send multicast packets, splitting payload if larger than max packet size
     bool negative_polarity = true;
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, static_cast<uint32_t>(size_bytes));
-
         const auto noc_command_header = tt::tt_fabric::NocUnicastCommandHeader{noc_addr};
 
-        // Send multicast in positive direction (start_distance=1, range=positive_range)
-        // IMPORTANT: Use separate packet headers for each direction to avoid race condition
-        // where the second call overwrites the header while first's DMA is still in flight
+        // For polarity alternation: when polarity changes, we swap ranges between directions
+        uint32_t pos_curr_range = negative_polarity ? positive_range : negative_range;
+        uint32_t neg_curr_range = negative_polarity ? negative_range : positive_range;
+
         if constexpr (positive_range > 0) {
-            tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+            auto pos_adj = adjust_mcast_range(pos_route, pos_curr_range, positive_direction);
+            ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
+            fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                packet_header_pos,
+                static_cast<uint8_t>(pos_adj.start_distance_in_hops),
+                static_cast<uint8_t>(pos_curr_range),
+                nullptr,
+                0);
+
+            fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                 &fabric_connections[positive_direction],
                 packet_header_pos,
                 src_addr,
-                curr_packet_size,
                 noc_command_header,
-                static_cast<uint8_t>(1),
-                negative_polarity ? static_cast<uint8_t>(positive_range) : static_cast<uint8_t>(negative_range));
+                static_cast<uint16_t>(curr_packet_size));
         }
 
-        // Send multicast in negative direction (start_distance=1, range=negative_range)
         if constexpr (negative_range > 0) {
-            tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_write(
+            auto neg_adj = adjust_mcast_range(neg_route, neg_curr_range, negative_direction);
+            ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
+            fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                packet_header_neg,
+                static_cast<uint8_t>(neg_adj.start_distance_in_hops),
+                static_cast<uint8_t>(neg_curr_range),
+                nullptr,
+                0);
+
+            fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                 &fabric_connections[negative_direction],
                 packet_header_neg,
                 src_addr,
-                curr_packet_size,
                 noc_command_header,
-                static_cast<uint8_t>(1),
-                negative_polarity ? static_cast<uint8_t>(negative_range) : static_cast<uint8_t>(positive_range));
+                static_cast<uint16_t>(curr_packet_size));
         }
 
         negative_polarity = !negative_polarity;
-        // Update addresses and remaining size for next iteration
         src_addr += curr_packet_size;
         noc_addr += curr_packet_size;
         size_bytes -= curr_packet_size;
 
-        // Wait for header DMAs to complete before modifying headers in next iteration
-        // The fabric API uses non-blocking header sends, so we need to ensure the
-        // header memory is no longer being read before we overwrite it
         noc_async_writes_flushed();
     }
 
-    // Also write to local device (use original addresses and total size)
+    // Also write to local device
     noc_async_write(original_src_addr, original_noc_addr, total_size);
     noc_async_writes_flushed();
 }
 
-// Fabric multicast metadata write helper - handles scatter writes in both directions along a 1D ring
-// Similar to fabric_multicast_bidirectional_atomic_inc_ring_1d but for scatter writes
-template <
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    typename FabricConnectionsType>
-FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
+// Fabric multicast metadata write helper - handles scatter writes in both directions
+// Uses _set_state/_with_state pattern with fabric_set_line_multicast_route for 2D compatibility.
+template <uint32_t DispatchDevices, typename FabricConnectionsType>
+FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_async(
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint32_t src_addr,
     const std::array<uint64_t, 2>& noc_addresses,
-    const std::array<uint16_t, 2>& chunk_sizes) {
-    using ttnn::operations::ccl::common::ReplicateGroup;
-
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
+    const std::array<uint16_t, 2>& chunk_sizes,
+    const ccl_routing_utils::line_multicast_route_info_t& pos_route,
+    const ccl_routing_utils::line_multicast_route_info_t& neg_route,
+    uint32_t positive_direction,
+    uint32_t negative_direction) {
     constexpr uint32_t positive_range = DispatchDevices / 2;
     constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
 
-    constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
-
-    // Use pointer-based constructor: (addresses*, chunk_sizes*, num_addresses)
     const auto scatter_cmd_header =
         tt::tt_fabric::NocUnicastScatterCommandHeader{noc_addresses.data(), chunk_sizes.data(), 2};
     const uint32_t total_payload_size = chunk_sizes[0] + chunk_sizes[1];
 
     // Send multicast scatter write in positive direction
     if constexpr (positive_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+        auto pos_adj = adjust_mcast_range(pos_route, positive_range, positive_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
+        fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::PayloadSize>(
+            packet_header_pos,
+            static_cast<uint8_t>(pos_adj.start_distance_in_hops),
+            static_cast<uint8_t>(positive_range),
+            scatter_cmd_header,
+            static_cast<uint16_t>(total_payload_size));
+
+        fabric_multicast_noc_scatter_write_with_state<
+            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+            UnicastScatterWriteUpdateMask::PayloadSize>(
             &fabric_connections[positive_direction],
             packet_header_pos,
             src_addr,
-            total_payload_size,
             scatter_cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(positive_range));
+            static_cast<uint16_t>(total_payload_size));
     }
 
     // Send multicast scatter write in negative direction
     if constexpr (negative_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_scatter_write(
+        auto neg_adj = adjust_mcast_range(neg_route, negative_range, negative_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
+        fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::PayloadSize>(
+            packet_header_neg,
+            static_cast<uint8_t>(neg_adj.start_distance_in_hops),
+            static_cast<uint8_t>(negative_range),
+            scatter_cmd_header,
+            static_cast<uint16_t>(total_payload_size));
+
+        fabric_multicast_noc_scatter_write_with_state<
+            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+            UnicastScatterWriteUpdateMask::PayloadSize>(
             &fabric_connections[negative_direction],
             packet_header_neg,
             src_addr,
-            total_payload_size,
             scatter_cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(negative_range));
+            static_cast<uint16_t>(total_payload_size));
     }
 
-    // Also write to local device - scatter means contiguous src, separate destinations
-    // First chunk: src_addr -> noc_addresses[0], chunk_sizes[0] bytes
-    // Second chunk: src_addr + chunk_sizes[0] -> noc_addresses[1], chunk_sizes[1] bytes
+    // Also write to local device
     noc_async_write(src_addr, noc_addresses[0], chunk_sizes[0]);
     noc_async_write(src_addr + chunk_sizes[0], noc_addresses[1], chunk_sizes[1]);
     noc_async_writes_flushed();
@@ -272,6 +292,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
 // ============================================================================
 template <
     uint32_t LinearizedSrcMeshCoord,
+    uint32_t SrcChipId,
     tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
@@ -286,6 +307,8 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     volatile PACKET_HEADER_TYPE* unicast_packet_header,
     const OutputAddrGenT& output_addr_gen,
     const uint16_t* expert_mapping,
+    const uint8_t* dest_chip_ids,
+    const uint8_t* dest_mesh_ids,
     uint8_t* send_preparation_buffer,
     const uint16_t* token_indices,
     uint32_t input_token_read_addr,
@@ -296,44 +319,53 @@ FORCE_INLINE bool dispatch_token_point_to_point_unicast(
     uint32_t token_start_idx,
     uint32_t alignment,
     uint32_t payload_offset = 0) {
+    using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast;
     using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast_1d;
+    using ttnn::operations::ccl::common::is_1d_topology;
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
 
     for (uint32_t k = 0; k < SelectedExpertsK; k++) {
-        // Get the expert that is chosen for the current token
         uint16_t expert_chosen = token_indices[k];
-        // Direct lookup: get target device from expert mapping
         uint16_t target_device = expert_mapping[expert_chosen];
 
-        // Check if we've already sent to this device for this token (avoid duplicate sends)
         if (send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] == 0) {
             send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
-                // If the expert lives on the current device, we dispatch the input token to it
                 noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
                 needs_barrier = true;
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
-                // If the expert lives on a remote device, we dispatch the input token to it
-                // If axis is specified then we only send to the devices that are along the axis
-                // If axis is not specified then we send to all devices
-                fabric_send_chip_unicast_noc_unicast_1d<
-                    LinearizedSrcMeshCoord,
-                    Topology,
-                    MeshRows,
-                    MeshCols,
-                    FabricMaxPacketSize>(
-                    output_addr_gen,
-                    fabric_connections,
-                    unicast_packet_header,
-                    target_device,
-                    input_token_read_addr,
-                    global_token,
-                    (int)output_page_size,
-                    alignment,
-                    payload_offset);
+                if constexpr (is_1d_topology<Topology>()) {
+                    fabric_send_chip_unicast_noc_unicast_1d<
+                        LinearizedSrcMeshCoord,
+                        Topology,
+                        MeshRows,
+                        MeshCols,
+                        FabricMaxPacketSize>(
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        target_device,
+                        input_token_read_addr,
+                        global_token,
+                        (int)output_page_size,
+                        alignment,
+                        payload_offset);
+                } else {
+                    fabric_send_chip_unicast_noc_unicast<SrcChipId, MeshRows, MeshCols, FabricMaxPacketSize>(
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        dest_chip_ids[target_device],
+                        dest_mesh_ids[target_device],
+                        input_token_read_addr,
+                        global_token,
+                        (int)output_page_size,
+                        alignment,
+                        payload_offset);
+                }
             }
         }
     }
@@ -471,6 +503,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
 // ============================================================================
 template <
     uint32_t LinearizedSrcMeshCoord,
+    uint32_t SrcChipId,
     tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
@@ -486,112 +519,133 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     const OutputAddrGenT& output_addr_gen,
     const uint16_t* expert_mapping,
+    const uint8_t* dest_chip_ids,
+    const uint8_t* dest_mesh_ids,
     const uint16_t* token_indices,
     uint32_t input_token_read_addr,
     uint64_t output_token_write_addr,
     uint32_t output_page_size,
     uint32_t global_token,
-    ttnn::operations::ccl::common::Polarity antipodal_polarity,  // Direction for antipodal tie-breaking
+    ttnn::operations::ccl::common::Polarity antipodal_polarity,
     uint32_t alignment,
     uint32_t payload_offset = 0) {
     using ttnn::operations::ccl::common::fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction;
+    using ttnn::operations::ccl::common::fabric_send_chip_unicast_noc_unicast;
     using ttnn::operations::ccl::common::get_intra_cluster_id_from_linearized_mesh_coord;
+    using ttnn::operations::ccl::common::is_1d_topology;
     using ttnn::operations::ccl::common::is_configured_target;
     using ttnn::operations::ccl::common::Polarity;
 
     bool needs_barrier = false;
-
-    // Build hop masks for both directions directly via bit manipulation
-    // OR handles deduplication: same bit set twice is still just set once
-    uint16_t pos_hop_mask = 0;  // EAST (positive direction)
-    uint16_t neg_hop_mask = 0;  // WEST (negative direction)
     bool sent_local = false;
 
     uint32_t intra_cluster_src_device_id =
         get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(LinearizedSrcMeshCoord);
 
-    for (uint32_t k = 0; k < SelectedExpertsK; k++) {
-        uint16_t expert_chosen = token_indices[k];
-        uint16_t target_device = expert_mapping[expert_chosen];
+    // For 2D topology: collect unique remote destinations and send via per-device unicast
+    // For 1D topology: build hop masks and use sparse multicast (original efficient path)
+    if constexpr (!is_1d_topology<Topology>()) {
+        // 2D path: send individual unicast to each unique destination
+        uint8_t sent_to_device[DispatchDevices] = {};
 
-        if (target_device == LinearizedSrcMeshCoord) {
-            // Local device - dispatch once
-            if (!sent_local) {
-                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-                needs_barrier = true;
-                sent_local = true;
-            }
-        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
-            // Remote device on our axis - calculate distance in both directions
-            // pos_distance: going EAST/SOUTH (ascending, with wrap)
-            // neg_distance: going WEST/NORTH (descending, with wrap)
+        for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+            uint16_t expert_chosen = token_indices[k];
+            uint16_t target_device = expert_mapping[expert_chosen];
 
-            uint32_t intra_cluster_target_device_id =
-                get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
-
-            uint32_t pos_distance =
-                (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
-            uint32_t neg_distance =
-                (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
-            // Determine shortest path direction
-            if (pos_distance < neg_distance) {
-                // Shorter via positive direction (EAST/SOUTH)
-                pos_hop_mask |= (1 << (pos_distance - 1));
-            } else if (neg_distance < pos_distance) {
-                // Shorter via negative direction (WEST/NORTH)
-                neg_hop_mask |= (1 << (neg_distance - 1));
-            } else {
-                // Antipodal tie - use provided polarity
-                if (antipodal_polarity == Polarity::POSITIVE) {
-                    pos_hop_mask |= (1 << (pos_distance - 1));
-                } else {
-                    neg_hop_mask |= (1 << (neg_distance - 1));
+            if (target_device == LinearizedSrcMeshCoord) {
+                if (!sent_local) {
+                    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+                    needs_barrier = true;
+                    sent_local = true;
+                }
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+                uint32_t intra_id =
+                    get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
+                if (!sent_to_device[intra_id]) {
+                    sent_to_device[intra_id] = 1;
+                    fabric_send_chip_unicast_noc_unicast<SrcChipId, MeshRows, MeshCols, FabricMaxPacketSize>(
+                        output_addr_gen,
+                        fabric_connections,
+                        packet_header_pos,
+                        dest_chip_ids[target_device],
+                        dest_mesh_ids[target_device],
+                        input_token_read_addr,
+                        global_token,
+                        (int)output_page_size,
+                        alignment,
+                        payload_offset);
                 }
             }
         }
-        // else: target_device is on a different axis - skip (handled by another dispatch on that axis)
-    }
+    } else {
+        // 1D path: build hop masks for sparse multicast (original efficient path)
+        uint16_t pos_hop_mask = 0;
+        uint16_t neg_hop_mask = 0;
 
-    // Derive direction constants from Axis template parameter
-    // ROWS axis (or 1xN mesh): EAST/WEST, COLS axis (or Nx1 mesh): SOUTH/NORTH
-    /*
-        constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;*/
-    constexpr bool is_row_axis = (Axis == ttnn::operations::ccl::common::ReplicateGroup::ROWS) ||
-                                 (Axis == ttnn::operations::ccl::common::ReplicateGroup::NONE && MeshRows == 1);
-    constexpr uint32_t pos_direction = is_row_axis ? eth_chan_directions::EAST : eth_chan_directions::SOUTH;
-    constexpr uint32_t neg_direction = is_row_axis ? eth_chan_directions::WEST : eth_chan_directions::NORTH;
+        for (uint32_t k = 0; k < SelectedExpertsK; k++) {
+            uint16_t expert_chosen = token_indices[k];
+            uint16_t target_device = expert_mapping[expert_chosen];
 
-    // Send in positive direction if any destinations
-    if (pos_hop_mask != 0) {
-        fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
-            output_addr_gen,
-            fabric_connections,
-            packet_header_pos,
-            pos_hop_mask,
-            pos_direction,
-            input_token_read_addr,
-            global_token,
-            (int)output_page_size,
-            alignment,
-            payload_offset);
-    }
+            if (target_device == LinearizedSrcMeshCoord) {
+                if (!sent_local) {
+                    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+                    needs_barrier = true;
+                    sent_local = true;
+                }
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
+                uint32_t intra_cluster_target_device_id =
+                    get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
 
-    // Send in negative direction if any destinations
-    if (neg_hop_mask != 0) {
-        fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
-            output_addr_gen,
-            fabric_connections,
-            packet_header_neg,
-            neg_hop_mask,
-            neg_direction,
-            input_token_read_addr,
-            global_token,
-            (int)output_page_size,
-            alignment,
-            payload_offset);
+                uint32_t pos_distance =
+                    (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
+                uint32_t neg_distance =
+                    (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
+
+                if (pos_distance < neg_distance) {
+                    pos_hop_mask |= (1 << (pos_distance - 1));
+                } else if (neg_distance < pos_distance) {
+                    neg_hop_mask |= (1 << (neg_distance - 1));
+                } else {
+                    if (antipodal_polarity == Polarity::POSITIVE) {
+                        pos_hop_mask |= (1 << (pos_distance - 1));
+                    } else {
+                        neg_hop_mask |= (1 << (neg_distance - 1));
+                    }
+                }
+            }
+        }
+
+        constexpr bool is_row_axis = (Axis == ttnn::operations::ccl::common::ReplicateGroup::ROWS) ||
+                                     (Axis == ttnn::operations::ccl::common::ReplicateGroup::NONE && MeshRows == 1);
+        constexpr uint32_t pos_direction = is_row_axis ? eth_chan_directions::EAST : eth_chan_directions::SOUTH;
+        constexpr uint32_t neg_direction = is_row_axis ? eth_chan_directions::WEST : eth_chan_directions::NORTH;
+
+        if (pos_hop_mask != 0) {
+            fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+                output_addr_gen,
+                fabric_connections,
+                packet_header_pos,
+                pos_hop_mask,
+                pos_direction,
+                input_token_read_addr,
+                global_token,
+                (int)output_page_size,
+                alignment,
+                payload_offset);
+        }
+        if (neg_hop_mask != 0) {
+            fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSize>(
+                output_addr_gen,
+                fabric_connections,
+                packet_header_neg,
+                neg_hop_mask,
+                neg_direction,
+                input_token_read_addr,
+                global_token,
+                (int)output_page_size,
+                alignment,
+                payload_offset);
+        }
     }
 
     noc_async_writes_flushed();
@@ -773,14 +827,7 @@ FORCE_INLINE bool dispatch_token_split_bandwidth(
 //   MeshRows, MeshCols - Mesh dimensions
 //   Axis - Dispatch axis (ROWS or COLS)
 // ============================================================================
-template <
-    uint32_t FabricMaxPacketSize,
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    typename FabricConnectionsType>
+template <uint32_t FabricMaxPacketSize, uint32_t DispatchDevices, typename FabricConnectionsType>
 FORCE_INLINE void dispatch_token_bidirectional_multicast(
     FabricConnectionsType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
@@ -788,21 +835,23 @@ FORCE_INLINE void dispatch_token_bidirectional_multicast(
     uint32_t input_token_read_addr,
     uint64_t output_token_write_addr,
     uint32_t input_page_size,
-    uint32_t alignment) {
-    fabric_multicast_bidirectional_write_ring_1d_async<
-        FabricMaxPacketSize,
-        LinearizedSrcMeshCoord,
-        MeshRows,
-        MeshCols,
-        Axis,
-        DispatchDevices>(
+    uint32_t alignment,
+    const ccl_routing_utils::line_multicast_route_info_t& pos_route,
+    const ccl_routing_utils::line_multicast_route_info_t& neg_route,
+    uint32_t positive_direction,
+    uint32_t negative_direction) {
+    fabric_multicast_bidirectional_write_async<FabricMaxPacketSize, DispatchDevices>(
         fabric_connections,
         packet_header_pos,
         packet_header_neg,
         input_token_read_addr,
         output_token_write_addr,
         (int32_t)input_page_size,
-        alignment);
+        alignment,
+        pos_route,
+        neg_route,
+        positive_direction,
+        negative_direction);
 }
 
 }  // namespace detail
@@ -870,9 +919,16 @@ void kernel_main() {
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto scores_out_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
 
+    // Multicast route info for 2D fabric compatibility (6 args each for positive/negative)
+    constexpr uint32_t route_info_offset = scores_out_args.next_compile_time_args_offset();
+    constexpr ccl_routing_utils::line_multicast_route_info_t pos_mcast_route =
+        ccl_routing_utils::get_line_multicast_route_info_from_args<route_info_offset>();
+    constexpr ccl_routing_utils::line_multicast_route_info_t neg_mcast_route =
+        ccl_routing_utils::get_line_multicast_route_info_from_args<route_info_offset + 6>();
+
 #ifdef USE_MUX
-    // Mux compile-time args (appended after TensorAccessorArgs when USE_MUX is defined)
-    constexpr uint32_t mux_ct_args_offset = scores_out_args.next_compile_time_args_offset();
+    // Mux compile-time args (appended after route info when USE_MUX is defined)
+    constexpr uint32_t mux_ct_args_offset = route_info_offset + 12;
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_args_offset + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_args_offset + 1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_args_offset + 2);
@@ -996,6 +1052,12 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
+    // Compute positive/negative directions for bidirectional multicast
+    // ROWS axis (axis=1): EAST/WEST, COLS axis (axis=0): SOUTH/NORTH
+    constexpr bool is_row_axis = (axis == ReplicateGroup::ROWS) || (axis == ReplicateGroup::NONE && mesh_rows == 1);
+    constexpr uint32_t positive_direction = is_row_axis ? eth_chan_directions::EAST : eth_chan_directions::SOUTH;
+    constexpr uint32_t negative_direction = is_row_axis ? eth_chan_directions::WEST : eth_chan_directions::NORTH;
+
     constexpr uint32_t dispatch_index = axis == ReplicateGroup::COLS ? row : col;
     // Based on cluster axis, we only need to dispatch to the devices that are along the axis
     // If ReplicateGroup is COLs/AXIS is 1, then we dispatch alonw the ROW, and vice versa
@@ -1055,13 +1117,15 @@ void kernel_main() {
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
-        linearized_mesh_coord,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        dispatch_devices>(
-        fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
+    detail::fabric_multicast_bidirectional_atomic_inc<dispatch_devices>(
+        fabric_connections,
+        atomic_inc_packet_header_pos,
+        atomic_inc_packet_header_neg,
+        init_noc_semaphore_addr,
+        pos_mcast_route,
+        neg_mcast_route,
+        positive_direction,
+        negative_direction);
     noc_async_writes_flushed();
 
     // Wait for all devices to complete initialization synchronization
@@ -1110,6 +1174,8 @@ void kernel_main() {
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
+        if (local_token == token_start_idx) {
+        }
 
         // In payload split mode: reader already reads only this worker's portion into CB
         // In non-split mode: reader reads full page, payload_offset=0
@@ -1120,24 +1186,23 @@ void kernel_main() {
 
         if constexpr (dispatch_algorithm == DispatchAlgorithm::BROADCAST) {
             // Broadcast token to all devices via bidirectional multicast
-            detail::dispatch_token_bidirectional_multicast<
-                fabric_max_packet_size,
-                linearized_mesh_coord,
-                mesh_rows,
-                mesh_cols,
-                axis,
-                dispatch_devices>(
+            detail::dispatch_token_bidirectional_multicast<fabric_max_packet_size, dispatch_devices>(
                 fabric_connections,
                 unicast_packet_header_pos,
                 unicast_packet_header_neg,
                 payload_read_addr,
                 payload_write_addr,
                 payload_size,
-                alignment);
+                alignment,
+                pos_mcast_route,
+                neg_mcast_route,
+                positive_direction,
+                negative_direction);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_UNICAST) {
             // Send token only to devices that need it based on expert selection
             needs_barrier |= detail::dispatch_token_point_to_point_unicast<
                 linearized_mesh_coord,
+                src_chip_id,
                 topology,
                 mesh_rows,
                 mesh_cols,
@@ -1149,6 +1214,8 @@ void kernel_main() {
                 unicast_packet_header_neg,
                 output_addr_gen,
                 expert_mapping,
+                dest_chip_ids,
+                dest_mesh_ids,
                 send_preparation_buffer,
                 token_indices,
                 payload_read_addr,
@@ -1185,10 +1252,11 @@ void kernel_main() {
                 alignment,
                 payload_offset);
         } else if constexpr (dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_SHORTEST_PATH) {
-            // Collect unique destinations and send via bidirectional sparse multicast
-            // Uses shortest path routing with antipodal tie-breaking
+            // Bidirectional sparse multicast with shortest path routing
+            // For 2D topology: falls back to per-destination unicast internally
             needs_barrier |= detail::dispatch_token_sparse_multicast_bidirectional<
                 linearized_mesh_coord,
+                src_chip_id,
                 topology,
                 mesh_rows,
                 mesh_cols,
@@ -1201,6 +1269,8 @@ void kernel_main() {
                 unicast_packet_header_neg,
                 output_addr_gen,
                 expert_mapping,
+                dest_chip_ids,
+                dest_mesh_ids,
                 token_indices,
                 payload_read_addr,
                 payload_write_addr,
@@ -1290,32 +1360,29 @@ void kernel_main() {
 
         cb_wait_front(metadata_buffer_id, tokens_per_device);
         uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
-        detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
-            linearized_mesh_coord,
-            mesh_rows,
-            mesh_cols,
-            axis,
-            dispatch_devices>(
+        detail::fabric_multicast_bidirectional_scatter_write_async<dispatch_devices>(
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
             base_metadata_addr,
             {noc_core_offset_md_write_addr, noc_core_offset_scores_write_addr},
-            {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)});
+            {static_cast<uint16_t>(metadata_size_per_core), static_cast<uint16_t>(metadata_size_per_core)},
+            pos_mcast_route,
+            neg_mcast_route,
+            positive_direction,
+            negative_direction);
         cb_pop_front(metadata_buffer_id, tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
-        detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
-            linearized_mesh_coord,
-            mesh_rows,
-            mesh_cols,
-            axis,
-            dispatch_devices,
-            true>(
+        detail::fabric_multicast_bidirectional_atomic_inc<dispatch_devices, true>(
             fabric_connections,
             atomic_inc_packet_header_pos,
             atomic_inc_packet_header_neg,
-            global_noc_semaphore_address);
+            global_noc_semaphore_address,
+            pos_mcast_route,
+            neg_mcast_route,
+            positive_direction,
+            negative_direction);
     }
 
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);

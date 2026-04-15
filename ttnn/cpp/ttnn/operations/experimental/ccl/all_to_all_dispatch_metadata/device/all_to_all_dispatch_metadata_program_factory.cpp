@@ -558,6 +558,79 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
 
+    // ========================================================================
+    // Multicast route info for 2D fabric compatibility
+    // ========================================================================
+    // Determine positive/negative neighbor coordinates based on dispatch axis.
+    // For axis=1 (ROWS): neighbors = [East, West], positive = East (idx 0)
+    // For axis=0 (COLS): neighbors = [North, South], positive = South (idx 1)
+    // Positive/negative ranges split the ring for bidirectional multicast.
+    {
+        uint32_t positive_range = dispatch_devices / 2;
+        uint32_t negative_range = (dispatch_devices - 1) - positive_range;
+
+        std::optional<ttnn::MeshCoordinate> positive_neighbor, negative_neighbor;
+        if (operation_attributes.axis.has_value()) {
+            uint32_t ax = operation_attributes.axis.value();
+            if (ax == 1) {
+                // ROWS axis: neighbors = [East, West]
+                if (neighbors.size() >= 1) {
+                    positive_neighbor = neighbors[0];  // East
+                }
+                if (neighbors.size() >= 2) {
+                    negative_neighbor = neighbors[1];  // West
+                }
+            } else {
+                // COLS axis: neighbors = [North, South]
+                if (neighbors.size() >= 2) {
+                    positive_neighbor = neighbors[1];  // South
+                }
+                if (neighbors.size() >= 1) {
+                    negative_neighbor = neighbors[0];  // North
+                }
+            }
+        } else {
+            // No axis specified - use East/West (horizontal)
+            if (neighbors.size() >= 1) {
+                positive_neighbor = neighbors[0];
+            }
+            if (neighbors.size() >= 2) {
+                negative_neighbor = neighbors[1];
+            }
+        }
+
+        auto [pos_mcast_args, neg_mcast_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, positive_neighbor, negative_neighbor, positive_range, negative_range, mesh_device);
+
+        // Append positive multicast route info (6 args: dst_mesh_id, dst_chip_id, e, w, n, s)
+        for (auto v : pos_mcast_args) {
+            reader_compile_time_args.push_back(v);
+        }
+        // Append negative multicast route info (6 args)
+        for (auto v : neg_mcast_args) {
+            reader_compile_time_args.push_back(v);
+        }
+
+        log_debug(
+            tt::LogOp,
+            "pos_mcast_args: [{},{},{},{},{},{}]",
+            pos_mcast_args[0],
+            pos_mcast_args[1],
+            pos_mcast_args[2],
+            pos_mcast_args[3],
+            pos_mcast_args[4],
+            pos_mcast_args[5]);
+        log_debug(
+            tt::LogOp,
+            "neg_mcast_args: [{},{},{},{},{},{}]",
+            neg_mcast_args[0],
+            neg_mcast_args[1],
+            neg_mcast_args[2],
+            neg_mcast_args[3],
+            neg_mcast_args[4],
+            neg_mcast_args[5]);
+    }
+
     const auto& writer_compile_time_args = reader_compile_time_args;
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(

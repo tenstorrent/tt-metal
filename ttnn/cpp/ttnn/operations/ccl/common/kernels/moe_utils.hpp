@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -782,9 +783,26 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
 
+// Helper: create a mcast route info with adjusted range for the given direction.
+// Sets both range_hops (1D) and the matching e/w/n/s_num_hops (2D).
+inline ccl_routing_utils::line_multicast_route_info_t make_mcast_route_for_direction(
+    uint32_t range, uint32_t direction, uint16_t dst_mesh_id = 0, uint16_t dst_chip_id = 0) {
+    ccl_routing_utils::line_multicast_route_info_t info = {};
+    info.start_distance_in_hops = 1;
+    info.range_hops = range;
+    info.dst_mesh_id = dst_mesh_id;
+    info.dst_chip_id = dst_chip_id;
+    info.e_num_hops = (direction == eth_chan_directions::EAST) ? range : 0;
+    info.w_num_hops = (direction == eth_chan_directions::WEST) ? range : 0;
+    info.n_num_hops = (direction == eth_chan_directions::NORTH) ? range : 0;
+    info.s_num_hops = (direction == eth_chan_directions::SOUTH) ? range : 0;
+    return info;
+}
+
 // Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets
+// For a ring with even number of devices, we multicast in both directions to cover all devices
+// with just 2 packets instead of (dispatch_devices - 1) unicast packets.
+// Uses _set_state/_with_state + fabric_set_line_multicast_route for 1D/2D compatibility.
 template <
     uint32_t LinearizedSrcMeshCoord,
     uint32_t MeshRows,
@@ -798,48 +816,45 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint64_t semaphore_noc_addr) {
     using ttnn::operations::ccl::common::ReplicateGroup;
+    using namespace tt::tt_fabric::linear::experimental;
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 
-    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
-    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
-    // dispatch_devices=MeshCols
     constexpr uint32_t dispatch_devices =
         Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
 
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
-    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
-    // dispatch_devices) if DoubleAntipodalAtomicInc is true
     constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2;
     constexpr uint32_t negative_range =
         DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range;
 
-    // Determine directions based on axis:
-    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
-    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
     constexpr uint32_t positive_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
     constexpr uint32_t negative_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
 
-    // Send multicast in positive direction (start_distance=1, range=positive_range)
     if constexpr (positive_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[positive_direction],
+        auto pos_route = make_mcast_route_for_direction(positive_range, positive_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_route);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             packet_header_pos,
-            cmd_header,
             static_cast<uint8_t>(1),
-            static_cast<uint8_t>(positive_range));
+            static_cast<uint8_t>(positive_range),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &fabric_connections[positive_direction], packet_header_pos, cmd_header);
     }
 
-    // Send multicast in negative direction (start_distance=1, range=negative_range)
     if constexpr (negative_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[negative_direction],
+        auto neg_route = make_mcast_route_for_direction(negative_range, negative_direction);
+        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_route);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             packet_header_neg,
-            cmd_header,
             static_cast<uint8_t>(1),
-            static_cast<uint8_t>(negative_range));
+            static_cast<uint8_t>(negative_range),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &fabric_connections[negative_direction], packet_header_neg, cmd_header);
     }
 }
 

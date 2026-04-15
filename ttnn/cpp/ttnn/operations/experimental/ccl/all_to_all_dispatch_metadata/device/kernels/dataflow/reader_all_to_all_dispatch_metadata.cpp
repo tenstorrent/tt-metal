@@ -142,8 +142,6 @@ void kernel_main() {
         cb_push_back(metadata_buffer_id, tokens_per_device);
 
         // Wait for all other devices to finish dispatching their input tokens and metadata.
-        // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
-        // so we no longer need to copy from the intermediate buffer to the final output here.
         noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
         noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     }

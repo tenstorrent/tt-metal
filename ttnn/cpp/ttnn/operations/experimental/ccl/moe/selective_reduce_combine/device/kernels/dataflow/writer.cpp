@@ -92,7 +92,8 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t num_local_experts = experts / num_devices;
+    constexpr uint32_t cluster_devices = get_named_compile_time_arg_val("cluster_devices");
+    constexpr uint32_t num_local_experts = experts / cluster_devices;
     constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
 
@@ -219,7 +220,7 @@ void kernel_main() {
                     get_noc_addr(output_page_idx, output_addrgen, dest_token_segment_offset_bytes);
                 noc_async_write(src_data_l1_addr, output_noc_addr, source_token_segment_size_bytes);
                 noc_async_writes_flushed();
-            } else {
+            } else if constexpr (is_1d_topology<topology>()) {
                 fabric_send_chip_unicast_noc_unicast_1d<
                     linearized_mesh_coord,
                     topology,
@@ -230,6 +231,18 @@ void kernel_main() {
                     fabric_connections,
                     packet_headers[0],
                     dest_device_idx,
+                    src_data_l1_addr,
+                    output_page_idx,
+                    source_token_segment_size_bytes,
+                    alignment,
+                    dest_token_segment_offset_bytes);
+            } else {
+                fabric_send_chip_unicast_noc_unicast<src_chip_id, mesh_rows, mesh_cols, fabric_max_packet_size_bytes>(
+                    output_addrgen,
+                    fabric_connections,
+                    packet_headers[0],
+                    dest_chip_ids[dest_device_idx],
+                    dest_mesh_ids[dest_device_idx],
                     src_data_l1_addr,
                     output_page_idx,
                     source_token_segment_size_bytes,
