@@ -17,3 +17,4 @@
 {"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-15T13:05:21+00:00"}
 {"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-15T13:05:21+00:00"}
 {"event":"phase_complete","phase":4,"phase_name":"Testing","status":"partial_pass","tests_passed":5,"tests_total":6,"max_ulp_fp32":3,"ts":"2026-04-15T14:15:00+00:00"}
+{"event":"pipeline_complete","op_name":"softcap","final_status":"PARTIAL_PASS","total_iterations":12,"phases_completed":[1,2,3,4],"test_results":"5/6 pass (3 bf16 + 2 fp32), 1 fp32-cap10 at 3 ULP","ts":"2026-04-15T14:15:48+00:00"}
