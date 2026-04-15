@@ -15,9 +15,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    MAX_PAYLOAD_SIZE,
     create_fabric_router_config,
     extract_mesh_config,
+    get_max_payload_size,
 )
 
 
@@ -54,7 +54,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -65,7 +65,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -76,7 +76,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -87,7 +87,7 @@ def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.T
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,

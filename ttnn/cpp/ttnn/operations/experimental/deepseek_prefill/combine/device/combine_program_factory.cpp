@@ -148,11 +148,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     constexpr uint32_t MAX_WORKER_CORES = 4;
     uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
-        effective_num_links <= MAX_WORKER_CORES,
-        "effective_num_links {} exceeds MAX_WORKER_CORES {} (kernel barrier array limit)",
-        effective_num_links,
-        MAX_WORKER_CORES);
-    TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
         subdevice_cores.size(),
@@ -176,7 +171,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
 
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 8;  // matches BH DRAM bank count for full bandwidth utilization
 
     // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(

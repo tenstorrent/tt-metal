@@ -179,7 +179,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         mesh_coordinate[1],
         sender_cores);
 
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 8;  // matches BH DRAM bank count for full bandwidth utilization
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // c_0: input scratch (reader-only, batched DRAM reads)

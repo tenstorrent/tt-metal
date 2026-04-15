@@ -19,7 +19,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    MAX_PAYLOAD_SIZE,
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
@@ -28,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -54,7 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -65,7 +65,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -76,7 +76,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -87,7 +87,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -98,7 +98,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -109,7 +109,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -120,7 +120,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -131,7 +131,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -142,7 +142,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -153,7 +153,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -164,7 +164,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -175,7 +175,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -186,7 +186,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
