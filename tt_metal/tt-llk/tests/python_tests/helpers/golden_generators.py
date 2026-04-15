@@ -2030,25 +2030,38 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         # Final FTZ pass: hardware always flushes subnormals to zero.
         # Do this after all quantization so it covers every output format.
-        FTZ_THRESHOLD = 1e-37
-        result_f32 = result.float()
-        result = torch.where(
-            result_f32.abs() < FTZ_THRESHOLD,
-            torch.zeros_like(result_f32),
-            result_f32,
-        ).to(result.dtype)
+        # Skip for integer formats — they have no subnormals and the float32
+        # round-trip would silently lose precision for large values.
+        if not data_format.is_integer():
+            FTZ_THRESHOLD = 1e-37
+            result_f32 = result.float()
+            result = torch.where(
+                result_f32.abs() < FTZ_THRESHOLD,
+                torch.zeros_like(result_f32),
+                result_f32,
+            ).to(result.dtype)
 
         return result
 
     # Operation methods
+    @staticmethod
+    def _wide_dtype(t):
+        """Pick a lossless wide type: int64 for integer tensors, float32 otherwise."""
+        if t.dtype in (torch.int8, torch.int16, torch.int32, torch.int64):
+            return torch.int64
+        return torch.float32
+
     def _add(self, t1, t2):
-        return (t1.to(torch.float32) + t2.to(torch.float32)).to(t1.dtype)
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) + t2.to(wide)).to(t1.dtype)
 
     def _sub(self, t1, t2):
-        return (t1.to(torch.float32) - t2.to(torch.float32)).to(t1.dtype)
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) - t2.to(wide)).to(t1.dtype)
 
     def _mul(self, t1, t2):
-        return (t1.to(torch.float32) * t2.to(torch.float32)).to(t1.dtype)
+        wide = self._wide_dtype(t1)
+        return (t1.to(wide) * t2.to(wide)).to(t1.dtype)
 
 
 @register_golden
