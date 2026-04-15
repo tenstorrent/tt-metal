@@ -943,9 +943,10 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
         ttnn.ShardSpec(core_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
     )
 
+    shard_dim = 1
     torch_tensor = torch.arange(shard_height * total_width, dtype=torch.int32).reshape(shard_height, total_width)
 
-    indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+    indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
 
     ttnn_tensor = ttnn.from_torch(
         torch_tensor,
@@ -960,7 +961,8 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
     assert ttnn_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     assert ttnn_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
-    result = ttnn.to_torch(ttnn_tensor)
+    indices_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)
+    result = ttnn.to_torch(ttnn_tensor, mesh_composer=indices_mesh_composer)
     torch.testing.assert_close(torch_tensor, result.to(torch.int32))
 
 
@@ -1091,7 +1093,7 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
         placed on dispatch cores!
 
     On WH B0 80 with fast dispatch (row mode), the compute grid is (8, 8) and
-    dispatch cores occupy y=9 (last row of the 8×10 tensix grid).  This test
+    dispatch cores occupy y=9 (last row of the 8x10 tensix grid).  This test
     constructs a shard grid that spans both compute cores (y=0) and a row
     beyond the compute grid (y=grid.y) and verifies that from_torch succeeds.
     """
@@ -1120,22 +1122,16 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
         ttnn.BufferType.L1,
         ttnn.ShardSpec(core_grid, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR),
     )
-
     torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
 
-    try:
-        result = ttnn.from_torch(
-            torch_tensor,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=sharded_mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
-    except RuntimeError as e:
-        if "No core coordinate" in str(e) or "out of range" in str(e).lower():
-            pytest.skip(f"Row y={dispatch_y} does not exist on this device")
-        raise
+    result = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
 
     assert result.layout == ttnn.TILE_LAYOUT
     assert result.dtype == ttnn.bfloat16

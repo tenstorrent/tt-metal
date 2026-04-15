@@ -18,6 +18,28 @@ using namespace tt::tt_metal;
 namespace {
 auto get_datatype_tile_size(DataType dtype) { return tt::tile_size(datatype_to_dataformat_converter(dtype)); }
 
+TensorLayout compute_input_tensor_layout(
+    DataType src_dtype,
+    const ttnn::Shape& tensor_shape,
+    const MemoryConfig& memory_config,
+    const Layout& layout,
+    const std::optional<Tile>& optional_tile) {
+    auto default_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
+
+    // Check if we can create tensor layout with the given memory config and layout.
+    if (!can_shard_align(memory_config, layout, optional_tile.value_or(Tile{}))) {
+        return default_tensor_layout;
+    }
+
+    TensorLayout src_tensor_layout = TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
+    // Check if we can create tensor spec with the given tensor shape and tensor layout.
+    if (!can_shape_fits_shard_grid(src_tensor_layout, tensor_shape)) {
+        return default_tensor_layout;
+    }
+    return src_tensor_layout;
+}
+
 // Check if typecast and layout operations can be safely executed on the device
 // for particular data type.
 bool can_exec_ops_on_device(DataType type) {
@@ -97,6 +119,7 @@ bool can_construct_on_single_device(
 //   target RM,   same dtype:  RM(src)  (no conversion needed)
 bool has_sufficient_device_memory(
     ttnn::distributed::MeshDevice* device,
+    const TensorLayout& src_tensor_layout,
     const ttnn::Shape& tensor_shape,
     DataType src_dtype,
     DataType dst_dtype,
@@ -115,7 +138,7 @@ bool has_sufficient_device_memory(
     auto num_banks = device->allocator()->get_num_banks(buffer_type);
     auto bank_size = device->allocator()->get_bank_size(buffer_type);
 
-    TensorSpec src_rm_spec(tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+    TensorSpec src_rm_spec(tensor_shape, src_tensor_layout);
     auto src_rm_per_bank = src_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
 
     size_t peak_per_bank = src_rm_per_bank;
@@ -207,18 +230,28 @@ Tensor create_tt_tensor_from_host_data(
 
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
 
         if (mesh_mapper != nullptr) {
-            const auto shard_shape = estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
-            const bool construct_on_mesh_device =
-                construct_on_device &&
-                has_sufficient_device_memory(
-                    device, shard_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
+            const auto device_shard_shape =
+                estimate_per_device_shard_shape(tensor_shape, mesh_mapper->config(), device);
+
+            auto src_tensor_layout =
+                compute_input_tensor_layout(src_dtype, device_shard_shape, memory_config, layout, optional_tile);
+
+            const bool construct_on_mesh_device = construct_on_device && has_sufficient_device_memory(
+                                                                             device,
+                                                                             src_tensor_layout,
+                                                                             device_shard_shape,
+                                                                             src_dtype,
+                                                                             dst_dtype,
+                                                                             layout,
+                                                                             memory_config,
+                                                                             optional_tile);
+
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -229,6 +262,9 @@ Tensor create_tt_tensor_from_host_data(
                 cq_id,
                 static_cast<T>(pad_value));
         }
+
+        auto src_tensor_layout =
+            compute_input_tensor_layout(src_dtype, tensor_shape, memory_config, layout, optional_tile);
 
         // TODO: #https://github.com/tenstorrent/tt-metal/issues/40850
         // For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
@@ -245,11 +281,11 @@ Tensor create_tt_tensor_from_host_data(
         // This requires enough memory for both input and output to coexist during tilize/typecast.
         // Example: src_dtype = FLOAT32, dst_dtype = BFLOAT16.
         // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
-        const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
-                                !is_data_transformation_required &&
-                                can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config) &&
-                                has_sufficient_device_memory(
-                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
+        const bool can_borrow =
+            src_dtype == convert_to_data_type<T>() && construct_on_device && !is_data_transformation_required &&
+            can_construct_on_single_device(tensor_shape, src_tensor_layout, memory_config) &&
+            has_sufficient_device_memory(
+                device, src_tensor_layout, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
 
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
@@ -335,7 +371,6 @@ Tensor convert_python_tensor_to_tt_tensor(
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }
-
     GraphTracker::instance().track_function_start(
         "ttnn::convert_python_tensor_to_tt_tensor",
         dst_dtype,
@@ -411,12 +446,13 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {
             output =
-                ttnn::to_layout(output, target, std::nullopt, std::nullopt, std::nullopt, pad_value.value_or(0.0f));
+                ttnn::to_layout(output, target, std::nullopt, memory_config, std::nullopt, pad_value.value_or(0.0f));
         }
     };
 
     if (device) {
         output = output.to_device(device.value(), memory_config, cq_id);
+
         if (output.dtype() != dst_dtype) {
             // Need to perform final data conversion on device, typecast requires TILE layout.
             set_layout(Layout::TILE);

@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
-    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -52,13 +51,14 @@ void kernel_main() {
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
     const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
 #endif  // FUSE_TERNARY
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<22>();
-    const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
+    const auto in0_reader = TensorAccessor(in0_args, in0_addr);
 
     // Always create tuple of output accessors (size = N_chunks)
     constexpr uint32_t out_tensor_args_cta_offset = in0_args.next_compile_time_args_offset();
@@ -69,7 +69,7 @@ void kernel_main() {
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
 
 #ifdef FUSE_TERNARY
@@ -106,8 +106,8 @@ void kernel_main() {
     constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
     constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
 
-    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr, ternary_a_tile_size);
-    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr, ternary_b_tile_size);
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 
 #endif  // FUSE_TERNARY
 
@@ -156,7 +156,7 @@ void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
-    const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+    const auto in3_reader = TensorAccessor(in3_args, in3_addr);
 #endif
 #endif
 
@@ -347,6 +347,7 @@ void kernel_main() {
                     cb_id_ternary_b,
                     ternary_a_tile_size,
                     ternary_b_tile_size,
+                    broadcast_ternary_b,
                     m_tile,
                     m_tile_end,
                     n_tile,

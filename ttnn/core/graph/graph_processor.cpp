@@ -50,7 +50,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kAddress,
         ttnn::graph::kTensorId,
         ttnn::graph::kDeviceId,
-        ttnn::graph::kBufferTypeValue,
+        ttnn::graph::kBufferType,
         ttnn::graph::kPageSize,
         ttnn::graph::kNumCores,
         ttnn::graph::kMaxSizePerBank,
@@ -254,8 +254,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         {kSize, std::to_string(buffer->size())},
         {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
-        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
@@ -303,8 +302,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kSize, std::to_string(buffer->size())},
         {kAddress, std::to_string(buffer->address())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
-        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kPageSize, std::to_string(buffer->page_size())},
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
@@ -588,8 +586,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     if (buffer != nullptr) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
-        params[kBufferType] = fmt::format("{}", buffer->buffer_type());
-        params[kBufferTypeValue] = std::to_string(static_cast<int>(buffer->buffer_type()));
+        params[kBufferType] = std::to_string(static_cast<int>(buffer->buffer_type()));
     }
 
     if (!device_tensors_json.empty()) {
@@ -631,8 +628,7 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(buffer->size())},
         {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kExactBufferType, std::string(enchantum::to_string(buffer->buffer_type()))},
-        {kBufferTypeValue, std::to_string(static_cast<int>(buffer->buffer_type()))},
+        {kBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
         {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
         {kDeviceId, std::to_string(buffer->device()->id())}};
 

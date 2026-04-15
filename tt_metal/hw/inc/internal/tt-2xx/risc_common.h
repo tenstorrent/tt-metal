@@ -105,7 +105,7 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
 }
 
 // This definition of reg_read conflicts with the one in
-// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
 // kernels bring into the global namespace using "using namespace ckernel".
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
@@ -429,8 +429,9 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Flush i$ on ethernet riscs
-inline __attribute__((always_inline)) void flush_erisc_icache() {
+// Flush i$ by executing enough NOPs to evict all cache lines.
+// Required on ERISC and DRISC cores which lack MMIO-based cache flush registers.
+inline __attribute__((always_inline)) void manually_flush_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {

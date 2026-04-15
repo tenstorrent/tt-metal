@@ -1775,10 +1775,10 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_subcoregrids<"hardmish">(
         mod,
         &ttnn::hardmish,
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2.8, 0), 5)}}{{5}})doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \times \frac{{\min(\max(\mathrm{{input\_tensor}}_i + 2, 0), 2)}}{{2}})doc",
+        "[Supports finite inputs; for non-finite values, -inf yields NaN due to the formula's -inf * 0 term.]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
+        R"doc(Computes the Hard Mish activation function. Hard Mish is a computationally efficient approximation of the Mish activation function.)doc");
     bind_unary_operation_subcoregrids<"gez">(
         mod,
         &ttnn::gez,
@@ -1994,7 +1994,7 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_with_fast_and_approximate_mode<"exp", &ttnn::exp>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"erfc", &ttnn::erfc>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_subcoregrids<"erfc">(mod, &ttnn::erfc, "", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
         mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");

@@ -98,23 +98,12 @@ def _remove_stale_database_if_needed(db_path: Path) -> None:
         db_path.unlink(missing_ok=True)
 
 
-_BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
-
-
 def _int_param(params, key):
     """Return an int from params[key], or None if missing."""
     v = params.get(key)
     if v is None:
         return None
     return v if isinstance(v, int) else int(v)
-
-
-def _strip_enum_prefix(value):
-    """Strip namespace prefix from enum string: 'BufferType::L1' -> 'L1'."""
-    if value is None:
-        return None
-    s = str(value)
-    return s.split("::")[-1] if "::" in s else s
 
 
 def _tid_int(tid):
@@ -901,6 +890,10 @@ def import_graph(
                     if "input_tensors" in nd_copy:
                         nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
                     subgraph.append(nd_copy)
+
+            for snode in subgraph:
+                if "counter" in snode:
+                    snode["id"] = snode["counter"]
             captured_graph_batch.append((operation_id, json.dumps(subgraph), r))
             current_op_nodes = []
 
@@ -946,10 +939,7 @@ def import_graph(
                     layout = layout.replace("::", ".")
                 device_id = _int_param(params, "device_id")
                 address = _int_param(params, "address")
-                buffer_type = _int_param(params, "buffer_type_value")
-                if buffer_type is None:
-                    bt_name = _strip_enum_prefix(params.get("buffer_type"))
-                    buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
+                buffer_type = _int_param(params, "buffer_type") or 0
                 tensors_batch.append(
                     (
                         tensor_id,
@@ -978,10 +968,7 @@ def import_graph(
             size = _int_param(params, "size") or 0
             page_size = _int_param(params, "page_size") or 0
             num_cores = _int_param(params, "num_cores") or 0
-            buffer_type = _int_param(params, "buffer_type_value")
-            if buffer_type is None:
-                bt_name = _strip_enum_prefix(params.get("exact_buffer_type") or params.get("type", "DRAM"))
-                buffer_type = _BUFFER_TYPE_MAP.get(bt_name, 0)
+            buffer_type = _int_param(params, "buffer_type") or 0
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
@@ -1035,10 +1022,16 @@ def import_graph(
                 for buf in active_buffers:
                     buffers_batch.append((operation_id, *buf, r))
 
+                node_copy = dict(node)
+                node_copy["counter"] = 1
+                node_copy["id"] = 1
+                if "connections" in node_copy:
+                    node_copy["connections"] = [2]
                 capture_start = {
                     "arguments": [],
                     "connections": [1],
                     "counter": 0,
+                    "id": 0,
                     "input_tensors": [],
                     "node_type": "capture_start",
                     "params": {},
@@ -1047,13 +1040,15 @@ def import_graph(
                 capture_end = {
                     "arguments": [],
                     "connections": [],
-                    "counter": 0,
+                    "counter": 2,
+                    "id": 2,
                     "input_tensors": [],
                     "node_type": "capture_end",
                     "params": {},
                     "stacking_level": 0,
                 }
-                captured_graph_batch.append((operation_id, json.dumps([capture_start, node, capture_end]), r))
+                dealloc_subgraph = [capture_start, node_copy, capture_end]
+                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph)), r)
 
                 operation_counter += 1
             else:
@@ -1130,10 +1125,7 @@ def import_graph(
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
-                btv = _int_param(p, "buffer_type_value")
-                if btv is None:
-                    bt_name = _strip_enum_prefix(p.get("buffer_type"))
-                    btv = _BUFFER_TYPE_MAP.get(bt_name, 0) if bt_name else 0
+                btv = _int_param(p, "buffer_type") or 0
                 tensors_batch.append(
                     (
                         mtid,
@@ -1415,6 +1407,10 @@ def import_report(
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
+                for node in report["graph"]:
+                    if "counter" in node:
+                        node["id"] = node["counter"]
+
                 python_io = report.get("python_io")
                 if python_io is None:
                     sidecar_path = rpath.with_suffix(".python_io.json")
