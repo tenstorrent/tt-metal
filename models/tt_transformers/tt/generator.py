@@ -972,6 +972,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        slot_remap=None,
         **kwargs,
     ):
         mode_switched = False
@@ -1043,6 +1044,11 @@ class Generator(WarmupForwardMixin):
                     prompt_tokens=model_prompt,
                     output_tokens=model_output,
                 )
+                # Apply slot remap from condense before advancing seeds.
+                if slot_remap is not None:
+                    sm_bs = sampling_module.seed_manager.max_batch_size
+                    rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+                    sampling_module.seed_manager.apply_slot_remap(rank_remap)
                 sampling_module.seed_manager.get_new_values()
 
         decode_kwargs = {
