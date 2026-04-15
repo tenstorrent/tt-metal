@@ -43,12 +43,7 @@ class FuserConfig(TestConfig):
         global_config: GlobalConfig,
         operand_registry: OperandRegistry,
     ):
-        profiler_build = (
-            ProfilerBuild.Yes if global_config.profiler_enabled else ProfilerBuild.No
-        )
-        super().__init__(
-            test_name="", profiler_build=profiler_build, skip_build_header=True
-        )
+        super().__init__(test_name="", skip_build_header=True)
 
         self.pipeline = pipeline
         self.global_config = global_config
@@ -115,6 +110,7 @@ class FuserConfig(TestConfig):
         from .fused_generator import FUSED_TESTS_DIR
 
         self.global_config.profiler_enabled = True
+        self.profiler_build = ProfilerBuild.Yes
 
         run_types = [
             PerfRunType.L1_TO_L1,
