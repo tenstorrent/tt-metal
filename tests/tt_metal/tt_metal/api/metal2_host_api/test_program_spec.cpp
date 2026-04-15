@@ -1574,7 +1574,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsDispatchCoreFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("dispatch core reserved for firmware")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("reserved for dispatch firmware")));
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
