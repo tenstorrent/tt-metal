@@ -600,3 +600,27 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     npu_result = ttnn.to_torch(output_tensor)
     expected = torch_input.int()
     assert torch.equal(npu_result, expected)
+
+
+def test_typecast_rm_chunked_program_cache(device):
+    """Regression: program cache hit on ROW_MAJOR typecast must not hang when num_rows % num_cores != 0."""
+    torch.manual_seed(0)
+
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    shape = [num_cores + 1, 64]
+
+    torch_input = (torch.rand(shape) * 100).to(torch.bfloat16)
+    expected = torch_input.to(torch.uint8)
+
+    for i in range(2):
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output_tensor = ttnn.typecast(input_tensor, ttnn.uint8)
+        result = ttnn.to_torch(output_tensor)
+        assert torch.equal(result, expected), f"typecast correctness check failed on call {i + 1}"
