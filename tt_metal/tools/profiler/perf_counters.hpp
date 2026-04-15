@@ -408,13 +408,9 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
         case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
         case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
-#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_2: num_counters = NUM_L1_2_COUNTERS; break;
         case PerfCounterGroup::L1_3: num_counters = NUM_L1_3_COUNTERS; break;
-#endif
-#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_4: num_counters = NUM_L1_4_COUNTERS; break;
-#endif
         default: {
             ASSERT(false);
             break;
@@ -432,13 +428,9 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
         case PerfCounterGroup::L1_0: return l1_0_counters.data();
         case PerfCounterGroup::L1_1: return l1_1_counters.data();
         case PerfCounterGroup::INSTRN: return instrn_counters.data();
-#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_2: return l1_2_counters.data();
         case PerfCounterGroup::L1_3: return l1_3_counters.data();
-#endif
-#if defined(ARCH_BLACKHOLE)
         case PerfCounterGroup::L1_4: return l1_4_counters.data();
-#endif
         default: {
             ASSERT(false);
             return fpu_counters.data();
@@ -450,13 +442,7 @@ void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     volatile tt_reg_ptr uint32_t* mux_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
     uint32_t mux_val = *mux_reg;
-    // Blackhole: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
-    // Wormhole:  1-bit L1 mux at MUX_CTRL[4], values 0-1
-#if defined(ARCH_BLACKHOLE)
-    constexpr uint32_t L1_MUX_MASK = 0x7 << 4;  // 3 bits [6:4]
-#else
-    constexpr uint32_t L1_MUX_MASK = 0x1 << 4;  // 1 bit [4]
-#endif
+    // L1_MUX_MASK defined in hw_counters.h (arch-specific width)
     uint32_t mux_sel = 0;
     if (counter_group == PerfCounterGroup::L1_1) {
         mux_sel = 1;
@@ -537,7 +523,6 @@ void start_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     start_single_group(PerfCounterGroup::INSTRN);
 #endif
-#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     start_single_group(PerfCounterGroup::L1_2);
 #endif
@@ -546,7 +531,6 @@ void start_perf_counter() {
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     start_single_group(PerfCounterGroup::L1_4);
-#endif
 #endif
 }
 
@@ -572,7 +556,6 @@ void stop_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     stop_single_group(PerfCounterGroup::INSTRN);
 #endif
-#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     stop_single_group(PerfCounterGroup::L1_2);
 #endif
@@ -581,7 +564,6 @@ void stop_perf_counter() {
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     stop_single_group(PerfCounterGroup::L1_4);
-#endif
 #endif
 };
 
@@ -681,7 +663,6 @@ void read_perf_counters() {
     perf_counter_flush();
     read_single_group(PerfCounterGroup::INSTRN);
 #endif
-#if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_2);
@@ -694,7 +675,6 @@ void read_perf_counters() {
     perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_4);
 #endif
-#endif  // ARCH_BLACKHOLE
 };
 
 // TRISC1: RAII wrapper that starts counters in constructor and stops in destructor.

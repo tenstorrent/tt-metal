@@ -107,6 +107,18 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
+// WH: 1-bit L1 mux at MUX_CTRL[4], values 0-1
+constexpr uint32_t L1_MUX_MASK = 0x1 << 4;
+
+// WH does not have L1 banks 2-4 (BH-only, extra mux positions).
+// Empty arrays so perf_counters.hpp is arch-agnostic.
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_2_counters = {};
+constexpr size_t NUM_L1_2_COUNTERS = 0;
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_3_counters = {};
+constexpr size_t NUM_L1_3_COUNTERS = 0;
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_4_counters = {};
+constexpr size_t NUM_L1_4_COUNTERS = 0;
+
 // WH INSTRN_THREAD: 82 counters
 // Sel 27-38: shared stall conditions BROADCAST from thread 0 to all 3 slots (read slot 0 only)
 // Sel 39-65: per-thread stall reasons (9 types x 3 threads)

@@ -179,6 +179,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
      {PerfCounterType::L1_4_MISC_PORT_7_GRANT, 263}}};
 constexpr size_t NUM_L1_4_COUNTERS = 16;
 
+// BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
+constexpr uint32_t L1_MUX_MASK = 0x7 << 4;
+
 // BH INSTRN_THREAD: 82 counters
 // Sel 27-30: shared stall conditions (1 slot each on BH)
 // Sel 31-57: per-thread stall reasons (9 types x 3 threads)
