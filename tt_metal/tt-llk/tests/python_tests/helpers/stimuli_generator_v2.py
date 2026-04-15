@@ -195,10 +195,13 @@ class StimuliSpec:
         torch RNG state.  When an external generator is supplied to
         :func:`generate_face_v2` the *seed* field is ignored so the caller
         controls state across faces.
-    face_specs : list[StimuliSpec], optional
-        Per-face overrides.  Face *i* is generated with ``face_specs[i]``
-        when ``i < len(face_specs)``; any remaining faces fall back to this
-        spec.
+    face_specs : list[StimuliSpec | None], optional
+        Per-face overrides.  ``face_specs`` itself may be ``None``
+        (no overrides at all).  Individual entries may also be ``None``,
+        meaning "use the outer/base spec for this face."  Face *i* is
+        generated with ``face_specs[i]`` when that entry is a
+        :class:`StimuliSpec`; a ``None`` entry or an index beyond the
+        list length falls back to the outer spec.
     masked_faces : set[int], optional
         Set of 0-based face indices whose output should be zeroed.
         Masking is applied *after* face generation (including any
@@ -216,7 +219,7 @@ class StimuliSpec:
     mean: float = 0.0
     std: float = 1.0
     seed: Optional[int] = None
-    face_specs: Optional[List["StimuliSpec"]] = None
+    face_specs: Optional[List[Optional["StimuliSpec"]]] = None
     masked_faces: Optional[Set[int]] = None
 
     # ── convenience constructors ──────────────────────────────────────────────
@@ -1104,8 +1107,10 @@ def _generate_source_tensor_v2(
     face receives different values while remaining reproducible.
 
     Per-face overrides in ``spec.face_specs`` are applied: face *i* is
-    generated with ``spec.face_specs[i]`` when that entry exists, inheriting
-    the shared generator so random state is never reset mid-operand.
+    generated with ``spec.face_specs[i]`` when that entry is a non-``None``
+    :class:`StimuliSpec`; ``None`` entries (or indices beyond the list)
+    fall back to the outer *spec*.  The shared generator is inherited so
+    random state is never reset mid-operand.
 
     BFP4_b post-quantisation (``bfp4b_to_float16b``) is applied after all
     faces are concatenated to simulate the hardware pack/unpack round-trip,
