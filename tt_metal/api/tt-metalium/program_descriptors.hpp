@@ -30,6 +30,7 @@ namespace tt::tt_metal {
 
 struct Tile;
 class Buffer;
+class Program;
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
@@ -148,14 +149,41 @@ struct ProgramDescriptor {
  */
 ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
+/**
+ * Apply a descriptor's runtime arguments to a cached Program.
+ *
+ * Copies all per-core runtime args, common runtime args, and dynamic circular
+ * buffer addresses from the descriptor into the Program.  Kernel handles are
+ * the descriptor kernel indices (0, 1, 2, ...) which match the sequential
+ * assignment made when the Program was originally built from the same
+ * descriptor structure.
+ */
+void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& desc);
+
 }  // namespace tt::tt_metal
 
-// Hash support for TileDescriptor (needed for reflection system)
 namespace std {
+
+// Hash support for TileDescriptor (needed for reflection system)
 template <>
 struct hash<tt::tt_metal::TileDescriptor> {
     std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept;
 };
+
+/**
+ * Hash support for ProgramDescriptor.
+ *
+ * Hashes kernel paths, core ranges, compile args, defines, CB configs, and semaphores.
+ * Runtime arg VALUES are excluded (only their count is hashed for structural matching).
+ * If custom_program_hash is set, returns that value directly (allows override).
+ *
+ * Works with ttsl::hash::hash_combine and standard unordered containers.
+ */
+template <>
+struct hash<tt::tt_metal::ProgramDescriptor> {
+    std::size_t operator()(const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept;
+};
+
 }  // namespace std
 
 // Formatter support for TileDescriptor (needed for reflection/logging)

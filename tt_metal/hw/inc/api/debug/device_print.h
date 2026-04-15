@@ -1104,7 +1104,6 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
     helpers::static_string<result_len> result;
 
-    constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
 
     std::size_t type_index = 0;
@@ -1128,7 +1127,14 @@ constexpr auto update_format_string(const char (&format)[N]) {
             result.push_back('{');
 
             // Output the index (updated with reordered index)
-            result.push_back_uint32(arg_reorder[arg_index]);
+            auto reordered_index = arg_reorder[arg_index];
+            for (size_t j = 0; j < arg_reorder.size(); j++) {
+                if (arg_reorder[j] == arg_index) {
+                    reordered_index = j;
+                    break;
+                }
+            }
+            result.push_back_uint32(reordered_index);
 
             // Add comma and type character (enum types emit extended type info)
             result.push_back(',');

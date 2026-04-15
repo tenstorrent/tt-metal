@@ -51,6 +51,7 @@ private:
     std::vector<Semaphore>& semaphores();
     std::vector<uint32_t> get_program_config_sizes();
     bool kernel_binary_always_stored_in_ringbuffer();
+    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
