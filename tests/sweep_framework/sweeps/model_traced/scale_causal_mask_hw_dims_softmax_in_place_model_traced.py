@@ -10,6 +10,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
+from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -138,8 +139,8 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Create input tensor with interleaved→sharded fallback
-    input_is_sharded = hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded()
+    # Sanitize traced memory config against the actual device
+    safe_a_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -148,10 +149,11 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                input_a_memory_config,
+                safe_a_mem,
                 input_a_tensor_placement,
             )
-        elif input_is_sharded:
+        elif safe_a_mem != ttnn.DRAM_MEMORY_CONFIG and hasattr(safe_a_mem, "is_sharded") and safe_a_mem.is_sharded():
+            # For sharded configs that passed validation, create via interleaved→sharded
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,
                 dtype=input_a_dtype,
@@ -159,17 +161,14 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            try:
-                input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
-            except Exception:
-                pass  # Stay on DRAM if shard spec doesn't fit device
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, safe_a_mem)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=safe_a_mem,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)
@@ -200,62 +199,22 @@ def run(
         else:
             mask_tensor = ttnn.from_torch(torch_mask, dtype=input_b_dtype, layout=mask_layout)
 
-    try:
-        start_time = start_measuring_time()
-        if mask_tensor is not None:
-            output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                input_tensor_a,
-                scale,
-                mask_tensor,
-                **op_kwargs,
-            )
-        else:
-            output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                input_tensor_a,
-                scale,
-                **op_kwargs,
-            )
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-        e2e_perf = stop_measuring_time(start_time)
-    except Exception as e:
-        err = str(e)
-        # Recoverable errors from traced sharded memory configs:
-        # - "single_block_size_limit must be at least 1": tilize work splitting fails
-        #   for certain shard specs when converting interleaved→sharded
-        # - L1 CB clash variants
-        # Retry with DRAM interleaved input and without program_config.
-        recoverable = (
-            "single_block_size_limit" in err
-            or ("circular buffers" in err and "clash with L1 buffers" in err)
-            or "Statically allocated circular buffers" in err
+    start_time = start_measuring_time()
+    if mask_tensor is not None:
+        output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
+            input_tensor_a,
+            scale,
+            mask_tensor,
+            **op_kwargs,
         )
-        if recoverable:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "program_config"}
-            start_time = start_measuring_time()
-            if mask_tensor is not None:
-                output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                    input_tensor_a,
-                    scale,
-                    mask_tensor,
-                    **fallback_kwargs,
-                )
-            else:
-                output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                    input_tensor_a,
-                    scale,
-                    **fallback_kwargs,
-                )
-            output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-            e2e_perf = stop_measuring_time(start_time)
-        else:
-            raise
+    else:
+        output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
+            input_tensor_a,
+            scale,
+            **op_kwargs,
+        )
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output.shape:

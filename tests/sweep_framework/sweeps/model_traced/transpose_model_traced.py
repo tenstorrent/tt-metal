@@ -15,6 +15,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
+from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config, sanitize_output_memory_config
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
 
@@ -106,6 +107,22 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Sanitize traced memory configs against the actual device
+    safe_input_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape, input_a_layout)
+
+    # For the output memory config, transpose swaps dimensions — the output shard spec
+    # may require more shards than the device has cores. Validate it separately.
+    # Compute expected output shape after transpose for validation.
+    output_shape = list(shape)
+    if 0 <= dim0 < len(output_shape) and 0 <= dim1 < len(output_shape):
+        output_shape[dim0], output_shape[dim1] = output_shape[dim1], output_shape[dim0]
+    output_shape = tuple(output_shape)
+
+    if "memory_config" in op_kwargs and not is_host:
+        op_kwargs["memory_config"] = sanitize_output_memory_config(
+            op_kwargs["memory_config"], device, output_shape, input_a_layout
+        )
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -113,7 +130,7 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                input_a_memory_config,
+                safe_input_mem,
                 input_a_tensor_placement,
             )
         else:
@@ -122,60 +139,19 @@ def run(
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=safe_input_mem,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    try:
-        start_time = start_measuring_time()
-        output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-        e2e_perf = stop_measuring_time(start_time)
-    except Exception as e:
-        err = str(e)
-        # Recoverable errors from traced sharded memory configs:
-        # - "Number of shards along height N must not exceed number of cores M":
-        #   transposing dims changes the shard grid requirement beyond available cores
-        # - L1 CB clash variants
-        # Retry with DRAM interleaved input and no output memory_config override.
-        recoverable = (
-            "must not exceed number of cores" in err
-            or ("circular buffers" in err and "clash with L1 buffers" in err)
-            or "Statically allocated circular buffers" in err
-        )
-        if recoverable:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
-            start_time = start_measuring_time()
-            output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **fallback_kwargs)
-            output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-            e2e_perf = stop_measuring_time(start_time)
-        else:
-            raise
+    start_time = start_measuring_time()
+    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    e2e_perf = stop_measuring_time(start_time)
 
-    # Handle shape mismatch from traced configs where transpose output shape
-    # differs from expected (e.g. sharded config produces different padding).
+    # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:
-        # Try slicing to match expected shape
-        try:
-            output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
-        except (IndexError, RuntimeError):
-            # If shapes are fundamentally incompatible, return with a message
-            return [
-                (
-                    False,
-                    f"Shape mismatch: expected {list(torch_output_tensor.shape)} "
-                    f"got {list(output_tensor.shape)}",
-                ),
-                stop_measuring_time(start_time),
-            ]
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

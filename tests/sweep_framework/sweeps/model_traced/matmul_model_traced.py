@@ -15,6 +15,10 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
+from tests.sweep_framework.sweep_utils.traced_config_utils import (
+    sanitize_memory_config,
+    tile_align_matmul_shapes,
+)
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -122,32 +126,8 @@ def run(
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a
 
-    # Tile layout pads last two dims to multiples of 32.  When A uses TILE and B
-    # uses ROW_MAJOR (or vice-versa), the inner matmul dimension will mismatch
-    # because one side is padded and the other is not.  Align the torch shapes so
-    # that the inner dimension (A.width / B.height) is the same after tile padding.
-    def _tile_align(dim):
-        return ((dim + 31) // 32) * 32
-
-    a_is_tile = input_a_layout == ttnn.TILE_LAYOUT
-    b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
-
-    # When either input uses TILE_LAYOUT, ttnn pads the last two dims to multiples
-    # of 32.  If the inner matmul dimension (A.width == B.height) is not already
-    # tile-aligned, the padded side will be larger than the unpadded side, causing
-    # "The width of the first tensor must be equal to the height of the second
-    # tensor" assertion.  Align *both* inner dims to the tile boundary regardless
-    # of which side is tiled — this covers mixed-layout cases as well as cases
-    # where both are tiled but the raw dim is not a multiple of 32.
-    if len(shape_a) >= 2 and len(shape_b) >= 2:
-        inner_a = shape_a[-1]  # A's width
-        inner_b = shape_b[-2]  # B's height
-        if a_is_tile or b_is_tile:
-            aligned = _tile_align(max(inner_a, inner_b))
-            if inner_a != aligned:
-                shape_a = tuple(list(shape_a[:-1]) + [aligned])
-            if inner_b != aligned:
-                shape_b = tuple(list(shape_b[:-2]) + [aligned, shape_b[-1]])
+    # Align inner matmul dimensions when tile layout pads to multiples of 32
+    shape_a, shape_b = tile_align_matmul_shapes(shape_a, shape_b, input_a_layout, input_b_layout)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -179,143 +159,53 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Create tensors with the traced memory configs
-    # If direct creation fails, try creating interleaved first then converting to sharded
-    # This matches how models typically create sharded tensors
-    try:
-        if not is_host:
-            if is_mesh_device and input_a_tensor_placement:
-                input_tensor_a = create_tensor_on_mesh(
-                    torch_input_tensor_a,
-                    device,
-                    input_a_dtype,
-                    input_a_layout,
-                    input_a_memory_config,
-                    input_a_tensor_placement,
-                )
-            else:
-                input_tensor_a = ttnn.from_torch(
-                    torch_input_tensor_a,
-                    dtype=input_a_dtype,
-                    layout=input_a_layout,
-                    device=device,
-                    memory_config=input_a_memory_config,
-                )
-        else:
-            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
-    except RuntimeError:
-        # If direct creation fails, try interleaved->sharded conversion
-        input_tensor_a_interleaved = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if hasattr(input_a_memory_config, "shard_spec") and input_a_memory_config.shard_spec is not None:
-            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a_interleaved, input_a_memory_config)
-        else:
-            input_tensor_a = input_tensor_a_interleaved
+    # Sanitize traced memory configs against the actual device
+    safe_a_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
+    safe_b_mem = input_b_memory_config if is_host else sanitize_memory_config(input_b_memory_config, device, shape_b, input_b_layout)
 
-    # Create input_b tensor.
     # When a program_config is present (e.g. MatmulMultiCoreReuseProgramConfig), the
     # kernel may expect input_b in its traced memory layout (including sharded).
     # Only force input_b to interleaved when there is NO program_config.
     input_b_is_sharded = (
-        hasattr(input_b_memory_config, "shard_spec")
-        and input_b_memory_config.shard_spec is not None
-        and input_b_memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        hasattr(safe_b_mem, "shard_spec")
+        and safe_b_mem.shard_spec is not None
+        and safe_b_mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     )
     has_program_config = "program_config" in op_kwargs
 
     if input_b_is_sharded and not has_program_config:
-        # No program_config: matmul's default path requires input_b to be INTERLEAVED
-        input_tensor_b_interleaved = ttnn.from_torch(
-            torch_input_tensor_b,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        input_tensor_b = input_tensor_b_interleaved
-    else:
-        try:
-            if not is_host:
-                if is_mesh_device and input_b_tensor_placement:
-                    input_tensor_b = create_tensor_on_mesh(
-                        torch_input_tensor_b,
-                        device,
-                        input_b_dtype,
-                        input_b_layout,
-                        input_b_memory_config,
-                        input_b_tensor_placement,
-                    )
-                else:
-                    input_tensor_b = ttnn.from_torch(
-                        torch_input_tensor_b,
-                        dtype=input_b_dtype,
-                        layout=input_b_layout,
-                        device=device,
-                        memory_config=input_b_memory_config,
-                    )
-            else:
-                input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
-        except RuntimeError:
-            # If direct creation fails, try interleaved->sharded conversion
-            input_tensor_b_interleaved = ttnn.from_torch(
-                torch_input_tensor_b,
-                dtype=input_b_dtype,
-                layout=input_b_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            if hasattr(input_b_memory_config, "shard_spec") and input_b_memory_config.shard_spec is not None:
-                input_tensor_b = ttnn.interleaved_to_sharded(input_tensor_b_interleaved, input_b_memory_config)
-            else:
-                input_tensor_b = input_tensor_b_interleaved
+        safe_b_mem = ttnn.DRAM_MEMORY_CONFIG
 
-    try:
-        start_time = start_measuring_time()
-        output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-        e2e_perf = stop_measuring_time(start_time)
-    except Exception as e:
-        err = str(e)
-        # Recoverable errors from traced sharded memory configs:
-        # - L1 CB clash: sharded address conflicts with kernel circular buffer region
-        # - "No solution found for single_block_size": matmul program config solver
-        #   cannot tile the problem for the traced shard spec
-        # - "Statically allocated circular buffers": same as L1 clash via MeshWorkload path
-        # Retry with DRAM interleaved inputs and no program_config.
-        recoverable = (
-            ("circular buffers" in err and "clash with L1 buffers" in err)
-            or "Statically allocated circular buffers" in err
-            or "No solution found for single_block_size" in err
-        )
-        if recoverable:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Create tensor A
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a, device, input_a_dtype, input_a_layout, safe_a_mem, input_a_tensor_placement,
             )
-            input_tensor_b = ttnn.from_torch(
-                torch_input_tensor_b,
-                dtype=input_b_dtype,
-                layout=input_b_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            # Strip program_config from op_kwargs since it may reference the sharded layout
-            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "program_config"}
-            fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-            start_time = start_measuring_time()
-            output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **fallback_kwargs)
-            output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-            e2e_perf = stop_measuring_time(start_time)
         else:
-            raise
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=safe_a_mem,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Create tensor B
+    if not is_host:
+        if is_mesh_device and input_b_tensor_placement:
+            input_tensor_b = create_tensor_on_mesh(
+                torch_input_tensor_b, device, input_b_dtype, input_b_layout, safe_b_mem, input_b_tensor_placement,
+            )
+        else:
+            input_tensor_b = ttnn.from_torch(
+                torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout, device=device, memory_config=safe_b_mem,
+            )
+    else:
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
+
+    start_time = start_measuring_time()
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:

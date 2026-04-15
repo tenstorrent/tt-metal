@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
+from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -118,6 +119,12 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Sanitize traced memory config against the actual device to avoid
+    # L1 CB clash and shard grid incompatibility errors at runtime.
+    safe_input_a_memory_config = (
+        input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
+    )
+
     # Create tensor A
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -126,7 +133,7 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                input_a_memory_config,
+                safe_input_a_memory_config,
                 input_a_tensor_placement,
             )
         else:
@@ -135,41 +142,16 @@ def run(
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=safe_input_a_memory_config,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    try:
-        start_time = start_measuring_time()
-        # multiply_ is in-place scalar multiplication
-        ttnn.multiply_(input_tensor_a, scalar_value, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
-        e2e_perf = stop_measuring_time(start_time)
-    except Exception as e:
-        err = str(e)
-        # Recoverable errors from traced sharded memory configs:
-        # - L1 CB clash: sharded address conflicts with kernel circular buffer region
-        # - MeshWorkloadImpl compile failures with the same L1 clash on multi-device
-        # Retry with DRAM interleaved memory config as a safe fallback.
-        recoverable = (
-            ("circular buffers" in err and "clash with L1 buffers" in err)
-            or "Statically allocated circular buffers" in err
-        )
-        if recoverable:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            start_time = start_measuring_time()
-            ttnn.multiply_(input_tensor_a, scalar_value)
-            output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
-            e2e_perf = stop_measuring_time(start_time)
-        else:
-            raise
+    start_time = start_measuring_time()
+    # multiply_ is in-place scalar multiplication
+    ttnn.multiply_(input_tensor_a, scalar_value, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
+    e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:
