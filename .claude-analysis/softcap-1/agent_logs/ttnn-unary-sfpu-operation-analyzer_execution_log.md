@@ -115,3 +115,49 @@ Unlike HARDSHRINK (which allocates CB c_1 and packs runtime args), SOFTSHRINK ha
 6. Read shared dispatch infrastructure (params, init, macros)
 7. Wrote analysis documenting nuked state with expected patterns
 8. Committed analysis and breadcrumbs
+
+---
+
+## Session Summary (power)
+- **Operation**: power
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS (documented missing implementation)
+- **Output File**: `.claude-analysis/softcap-1/power_analysis.md`
+
+## Key Findings (power)
+
+### Complete Absence of SFPU Kernel Chain
+The `power` operation's entire device-side SFPU kernel chain is absent from this codebase:
+- **LLK dispatch header**: `llk_math_eltwise_unary_sfpu_power.h` -- included by `llk_math_unary_sfpu_api.h` but DOES NOT EXIST on disk
+- **Core SFPU kernel**: `ckernel_sfpu_power.h` -- DOES NOT EXIST
+- **Split API header**: `power.h` -- DOES NOT EXIST in `eltwise_unary/` directory
+- **Host dispatch**: POWER has no case in any `unary_op_utils.cpp` switch statement
+
+### Binary Power Also Stubbed
+The binary power function `_calculate_sfpu_binary_power_()` in `ckernel_sfpu_binary.h` returns `0.0f` unconditionally. Comment states: "POW implementations removed -- depend on exp/log/recip primitives. Generator must implement from SFPI instructions."
+
+### Dispatch Failure Path
+When `ttnn::power(tensor, scalar)` is called:
+1. `UNARY_OP_SCALAR_VARIANT` creates `EltwiseUnaryWithParam{POWER, param}` with non-empty params
+2. `get_op_init_and_func<float>()` sees non-empty params, calls `get_op_init_and_func_parameterized()`
+3. `is_parametrized_type(POWER)` returns false
+4. **TT_FATAL** at line 35-37
+
+### Mathematical Identity
+`x^p = exp(p * ln(x))` would require SFPLOAD, SFPSTORE, SFPMAD (polynomial eval for log/exp), SFPEXEXP, SFPEXMAN, SFPSETEXP, SFPDIVP2, and CC instructions for edge cases.
+
+### Moreh Composite Reference
+`moreh_common.hpp::power_tile_to_cb()` implements power as: `x^p = x^(int_part) * exp(log(x) * frac_part)`, but also depends on the MISSING `power_iterative_tile()`.
+
+## Timeline (power)
+1. Read `unary_op_utils.cpp` -- POWER has no case in any switch statement
+2. Read `unary_op_utils.hpp` -- `is_parametrized_type(POWER)` returns false
+3. Read `compute_kernel_api.h` -- `power_tile()` declared, calls missing LLK function
+4. Searched all include paths for `llk_math_eltwise_unary_sfpu_power.h` -- not found in 8 directories
+5. Searched tt_llk submodule (WH, BH, Quasar) -- no `ckernel_sfpu_power.h`
+6. Found binary power stub returning 0.0f in `ckernel_sfpu_binary.h`
+7. Read `sfpu_split_includes.h` -- no power include guard
+8. Read `eltwise_sfpu.cpp` -- uses split API, not old monolithic API
+9. Read `moreh_common.hpp` -- composite power implementation reference
+10. Verified all 13 existing file paths and confirmed all 5 expected-missing files
+11. Wrote analysis documenting the missing state with implementation requirements
