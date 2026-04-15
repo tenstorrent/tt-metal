@@ -46,7 +46,7 @@ on:
 
   schedule:
     # Run daily at 3 AM UTC
-    - cron: "0 3 * * *"
+    - cron: "0 3 * * 1-5"
 
 permissions:
   contents: write
