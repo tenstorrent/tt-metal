@@ -118,7 +118,13 @@ def float_to_bfp8_block(block):
     bfp8_mantissas = []
     for i in range(len(block)):
         exponent_delta = shared_exponent - exponents[i]
-        mantissa = mantissas_explicit[i] >> exponent_delta
+        if exponent_delta > 0:
+            # Round-to-nearest, ties away from zero (per ISA spec for BFP8 packing)
+            guard_bit = (mantissas_explicit[i] >> (exponent_delta - 1)) & 1
+            mantissa = (mantissas_explicit[i] >> exponent_delta) + guard_bit
+        else:
+            mantissa = mantissas_explicit[i]
+        mantissa = mantissa & 0x7F
         mantissa = (signs[i] << 7) | mantissa
         bfp8_mantissas.append(mantissa)
 
@@ -171,31 +177,45 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     return exponents + mantissas
 
 
+def truncate_bfp8_to_bfp4(bfp8_mantissas):
+    """Truncate BFP8 mantissas to BFP4 format.
+
+    BFP8 mantissas are 8 bits: 1 sign bit + 7 magnitude bits.
+    BFP4 mantissas are 4 bits: 1 sign bit + 3 magnitude bits.
+
+    Truncation: keep the top 3 magnitude bits, drop the last 4 bits.
+    This matches hardware behavior which uses simple truncation.
+
+    Args:
+        bfp8_mantissas: List of 8-bit BFP8 mantissa values
+
+    Returns:
+        List of 4-bit BFP4 mantissa values (as integers 0-15)
+    """
+    bfp4_mantissas = []
+    for bfp8 in bfp8_mantissas:
+        sign = (bfp8 >> 7) & 0x1
+        # Extract 7-bit magnitude and truncate to top 3 bits
+        magnitude = (bfp8 >> 4) & 0x7
+        bfp4 = (sign << 3) | magnitude
+        bfp4_mantissas.append(bfp4)
+    return bfp4_mantissas
+
+
 def float_to_bfp4_block(block):
-    n = len(block)
+    """Pack a 16-element block to BFP4_b format.
 
-    raw_bytes = struct.pack(f"<{n}f", *(float(v) for v in block))
-    all_bits = struct.unpack(f"<{n}I", raw_bytes)
+    Per hardware spec (WormholeB0 Packers/FormatConversion.md):
+      Step 1: Convert to BFP8 using float_to_bfp8_block (round-to-nearest,
+              one shared 8-bit exponent per 16 datums).
+              BFP8 has 1 sign bit + 7 magnitude bits.
+      Step 2: Truncate BFP8 → BFP4 (keep top 3 of the 7 magnitude bits).
+    """
+    # Step 1: Convert to BFP8 first
+    shared_exponent, bfp8_mantissas = float_to_bfp8_block(block)
 
-    signs = [0] * n
-    exponents = [0] * n
-    mantissas = [0] * n
-    shared_exponent = 0
-
-    for i, bits in enumerate(all_bits):
-        if bits & 0x7FFFFFFF:  # nonzero magnitude (handles -0.0 too)
-            signs[i] = bits >> 31
-            exp = (bits >> 23) & 0xFF
-            exponents[i] = exp
-            mantissas[i] = 0x800000 | (bits & 0x7FFFFF)
-            if exp > shared_exponent:
-                shared_exponent = exp
-
-    bfp4_mantissas = [0] * n
-    for i in range(n):
-        if mantissas[i]:
-            shifted = mantissas[i] >> (shared_exponent - exponents[i])
-            bfp4_mantissas[i] = (signs[i] << 3) | ((shifted >> 21) & 0x7)
+    # Step 2: Truncate BFP8 mantissas to BFP4
+    bfp4_mantissas = truncate_bfp8_to_bfp4(bfp8_mantissas)
 
     return shared_exponent, bfp4_mantissas
 

@@ -125,6 +125,7 @@ def test_reduce(
         tile_cnt_A,
         reduce_to_one=is_reduce_to_one,
         tile_shape=tile_shape,
+        input_format=formats.input_format,
     )
 
     dest_acc = (
