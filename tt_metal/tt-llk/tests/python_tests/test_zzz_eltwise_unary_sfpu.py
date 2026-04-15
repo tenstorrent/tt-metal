@@ -84,45 +84,9 @@ FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
-    ]
-)
-
-FORMATS_INCLUDE_BFP4_B = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
         DataFormat.Bfp4_b,
     ]
 )
-
-MATHOPS_INCLUDE_BFP4_B = [
-    MathOperation.Abs,
-    MathOperation.Atanh,
-    MathOperation.Asinh,
-    MathOperation.Acosh,
-    MathOperation.Cos,
-    MathOperation.Log,
-    # MathOperation.Log1p,
-    # MathOperation.Reciprocal,
-    # MathOperation.Sin,
-    # MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Tanh,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Gelu,
-    MathOperation.Neg,
-    MathOperation.Fill,
-    MathOperation.Elu,
-    # MathOperation.Exp,
-    # MathOperation.Exp2,
-    # MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-]
 
 FLOAT_TEST_PARAMS = list(
     chain(
@@ -167,6 +131,7 @@ def test_eltwise_unary_sfpu_float(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    workers_tensix_coordinates: str,
 ):
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.Acosh,
@@ -212,6 +177,16 @@ def test_eltwise_unary_sfpu_float(
             DataFormat.Float32, DataFormat.Float16
         ):
             pytest.skip(reason="This combination is not supported on BH architecture")
+
+    bfp4_b_involved = (
+        formats.input_format == DataFormat.Bfp4_b
+        or formats.output_format == DataFormat.Bfp4_b
+    )
+    if bfp4_b_involved and (
+        formats.input_format == DataFormat.Float16
+        or formats.output_format == DataFormat.Float16
+    ):
+        pytest.skip(reason="Bfp4_b is not supported with Float16 format")
 
     if (
         approx_mode == ApproximationMode.Yes
@@ -233,116 +208,7 @@ def test_eltwise_unary_sfpu_float(
         mathop,
         fast_mode,
         input_dimensions,
-    )
-
-
-FLOAT_TEST_PARAMS_BFP4_B = list(
-    chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [
-                    op
-                    for op in MATHOPS_INCLUDE_BFP4_B
-                    if op not in SUPPORTED_FAST_MODE_OPS
-                ],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
-)
-
-
-# Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
-@skip_for_coverage
-@pytest.mark.nightly
-@pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS_BFP4_B,
-)
-@pytest.mark.parametrize(
-    "input_dimensions",
-    [[64, 64], [128, 256]],
-)
-def test_eltwise_unary_sfpu_float_bfp4_b(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.Acosh,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Neg,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-        MathOperation.Tanh,
-    ]:
-        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
-        pytest.skip(
-            reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
-        )
-
-    if (
-        formats.input_format != DataFormat.Bfp4_b
-        and formats.input_format_B != DataFormat.Bfp4_b
-    ):
-        pytest.skip(reason="Not a Bfp4_b test")
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
-        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
-        pytest.skip(
-            reason="Compilation error when this mathop gets compiled with coverage"
-        )
-
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
-            pytest.skip(reason="This combination is not supported on BH architecture")
-
-    eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        dest_acc,
-        approx_mode,
-        mathop,
-        fast_mode,
-        input_dimensions,
+        workers_tensix_coordinates,
     )
 
 
@@ -364,6 +230,7 @@ def test_eltwise_unary_sfpu_int(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    workers_tensix_coordinates: str,
 ):
     if formats.input_format == DataFormat.Int32:
         pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
@@ -376,6 +243,7 @@ def test_eltwise_unary_sfpu_int(
         mathop,
         fast_mode,
         input_dimensions,
+        workers_tensix_coordinates,
     )
 
 
@@ -387,6 +255,7 @@ def eltwise_unary_sfpu(
     mathop,
     fast_mode: FastMode,
     input_dimensions: list[int],
+    workers_tensix_coordinates,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -406,6 +275,8 @@ def eltwise_unary_sfpu(
         dest_acc,
         formats.input_format,
         input_dimensions,
+        approx_mode=approx_mode,
+        fast_mode=fast_mode,
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -449,7 +320,7 @@ def eltwise_unary_sfpu(
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     # res_from_L1 = res_from_L1[:1024]
     # golden_tensor = golden_tensor[:1024]
@@ -467,7 +338,10 @@ def eltwise_unary_sfpu(
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
 @pytest.mark.parametrize("clamp_negative", [True, False])
-def test_exponential_clamp_negative(clamp_negative: bool):
+def test_exponential_clamp_negative(
+    clamp_negative: bool,
+    workers_tensix_coordinates: str,
+):
     torch.manual_seed(0)
     input_dimensions = [32, 32]
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -495,6 +369,8 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         dest_acc,
         formats.input_format,
         input_dimensions,
+        approx_mode=ApproximationMode.Yes,
+        fast_mode=FastMode.Yes,
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -535,7 +411,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = configuration.run(workers_tensix_coordinates).result
 
     assert len(res_from_L1) == len(
         golden_tensor
