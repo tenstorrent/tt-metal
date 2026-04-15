@@ -118,9 +118,9 @@ BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory:
     std::vector<uint32_t> reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines =
         bcast_op_utils::get_defines(BcastOpDim::HW, operation_attributes.math_op);
-    bcast_compute_defines["cb_in0"] = std::to_string(src0_cb_index);
-    bcast_compute_defines["cb_in1"] = std::to_string(src1_cb_index);
-    bcast_compute_defines["cb_out"] = std::to_string(output_cb_index);
+    bcast_compute_defines["cb_id_in0"] = std::to_string(src0_cb_index);
+    bcast_compute_defines["cb_id_in1"] = std::to_string(src1_cb_index);
+    bcast_compute_defines["cb_id_out"] = std::to_string(output_cb_index);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
         bcast_compute_defines["BCAST_SCALAR"] = "1";
