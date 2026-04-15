@@ -1742,6 +1742,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+        TT_FATAL(
+            !endpoints.empty(),
+            "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
+            "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
         RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
 
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;

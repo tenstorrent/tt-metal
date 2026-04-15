@@ -4,6 +4,7 @@
 
 #include "jit_build_utils.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -154,7 +155,8 @@ std::vector<tt::tt_metal::jit_server::GeneratedFile> read_directory_files(
         if (!entry.is_regular_file()) {
             continue;
         }
-        if (std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
+        if (!extensions.empty() &&
+            std::find(extensions.begin(), extensions.end(), entry.path().extension().string()) == extensions.end()) {
             continue;
         }
         files.push_back({entry.path().filename().string(), read_file_bytes(entry.path().string())});

@@ -64,11 +64,20 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
     // This kernel is new — assign endpoint and pipeline the send.
     const std::size_t ep_idx = hash % endpoints_.size();
 
-    ensure_session(ep_idx);
-    ensure_firmware_uploaded(ep_idx);
+    try {
+        ensure_session(ep_idx);
+        ensure_firmware_uploaded(ep_idx);
 
-    sessions_[ep_idx]->send(descriptor.request);
-    pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
+        sessions_[ep_idx]->send(descriptor.request);
+        pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
+    } catch (...) {
+        new_promise->set_exception(std::current_exception());
+        {
+            std::lock_guard lock(s_dedup_mutex_);
+            s_dedup_cache_.erase(hash);
+        }
+        throw;
+    }
 }
 
 void RemoteCompileCoordinator::finish() {
@@ -79,43 +88,56 @@ void RemoteCompileCoordinator::finish() {
             continue;
         }
 
-        TT_FATAL(
-            sessions_[ep_idx] != nullptr,
-            "Internal error: missing transport session for endpoint {}",
-            endpoints_[ep_idx]);
-
-        auto responses = sessions_[ep_idx]->wait_all();
-        TT_FATAL(
-            responses.size() == pending.size(),
-            "Response count mismatch for endpoint {}: expected {} got {}",
-            endpoints_[ep_idx],
-            pending.size(),
-            responses.size());
-
-        for (std::size_t i = 0; i < pending.size(); ++i) {
-            auto& resp = responses[i];
-            auto& pend = pending[i];
+        try {
             TT_FATAL(
-                resp.success,
-                "Remote JIT compile failed for kernel {} (endpoint {}): {}",
-                pend.descriptor.request.kernel_name,
+                sessions_[ep_idx] != nullptr,
+                "Internal error: missing transport session for endpoint {}",
+                endpoints_[ep_idx]);
+
+            auto responses = sessions_[ep_idx]->wait_all();
+            TT_FATAL(
+                responses.size() == pending.size(),
+                "Response count mismatch for endpoint {}: expected {} got {}",
                 endpoints_[ep_idx],
-                resp.error_message);
-            TT_FATAL(
-                resp.elf_blobs.size() == pend.descriptor.expected_elf_paths.size(),
-                "Expected {} ELF blobs but got {} for kernel {}",
-                pend.descriptor.expected_elf_paths.size(),
-                resp.elf_blobs.size(),
-                pend.descriptor.request.kernel_name);
+                pending.size(),
+                responses.size());
 
-            for (std::size_t j = 0; j < pend.descriptor.expected_elf_paths.size(); ++j) {
-                write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
+            for (std::size_t i = 0; i < pending.size(); ++i) {
+                auto& resp = responses[i];
+                auto& pend = pending[i];
+                TT_FATAL(
+                    resp.success,
+                    "Remote JIT compile failed for kernel {} (endpoint {}): {}",
+                    pend.descriptor.request.kernel_name,
+                    endpoints_[ep_idx],
+                    resp.error_message);
+                TT_FATAL(
+                    resp.elf_blobs.size() == pend.descriptor.expected_elf_paths.size(),
+                    "Expected {} ELF blobs but got {} for kernel {}",
+                    pend.descriptor.expected_elf_paths.size(),
+                    resp.elf_blobs.size(),
+                    pend.descriptor.request.kernel_name);
+
+                for (std::size_t j = 0; j < pend.descriptor.expected_elf_paths.size(); ++j) {
+                    write_elf_blob(pend.descriptor.expected_elf_paths[j], resp.elf_blobs[j]);
+                }
+
+                fs::create_directories(pend.descriptor.output_dir);
+                std::ofstream marker(pend.descriptor.output_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+
+                pend.dedup_promise->set_value();
+                pend.dedup_promise.reset();
             }
-
-            fs::create_directories(pend.descriptor.output_dir);
-            std::ofstream marker(pend.descriptor.output_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-
-            pend.dedup_promise->set_value();
+        } catch (...) {
+            auto ex = std::current_exception();
+            std::lock_guard lock(s_dedup_mutex_);
+            for (auto& pend : pending) {
+                if (pend.dedup_promise) {
+                    pend.dedup_promise->set_exception(ex);
+                    s_dedup_cache_.erase(pend.descriptor.kernel_hash);
+                }
+            }
+            throw;
         }
     }
 
