@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
         r, sfpi::vConst1, sfpi::vConst1, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
 #else
     // BF16: degree 5 sufficient
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f);
 #endif
 
     // Scale by 2^k via exponent manipulation
