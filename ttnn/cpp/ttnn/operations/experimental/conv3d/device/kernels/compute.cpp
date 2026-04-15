@@ -163,6 +163,7 @@ void kernel_main() {
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
+    constexpr uint32_t batch_tiles = subblock_h * matmul_K_t;
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
@@ -199,59 +200,55 @@ void kernel_main() {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                            // Fused tilize+matmul: process one M tile-row at a time.
-                            // Tilize TILE_HEIGHT RM patches -> K_t tiles, matmul immediately,
-                            // pop K_t tiles and reuse CB for next tile-row.
-                            // Saves (M_t-1)*K_t tiles of L1 in cb_vol2col_tiled.
+                            // Fused tilize+matmul: tilize subblock_h rows, then
+                            // matmul the batch. Repeat matmul_M_t/subblock_h times.
+                            // Saves (M_t - subblock_h) * K_t tiles of L1 vs full M_t*K_t.
                             {
-                                constexpr uint32_t row_tiles = matmul_K_t;
                                 uint32_t patches_left = num_patches;
-                                for (uint32_t m = 0; m < matmul_M_t; m++) {
-                                    const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
-                                                                          ? tt::constants::TILE_HEIGHT
-                                                                          : patches_left;
-
-                                    // Tilize one tile-row
-                                    if constexpr (use_fp32_partials) {
-                                        pack_reconfig_data_format(cb_vol2col_tiled);
-                                        reconfig_data_format_srca(cb_vol2col_rm);
+                                for (uint32_t m_start = 0; m_start < matmul_M_t; m_start += subblock_h) {
+                                    // Phase 1: tilize subblock_h rows into cb_vol2col_tiled
+                                    for (uint32_t m = 0; m < subblock_h; m++) {
+                                        const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
+                                                                              ? tt::constants::TILE_HEIGHT
+                                                                              : patches_left;
+                                        if constexpr (use_fp32_partials) {
+                                            pack_reconfig_data_format(cb_vol2col_tiled);
+                                            reconfig_data_format_srca(cb_vol2col_rm);
+                                        }
+                                        compute_kernel_lib::tilize<
+                                            matmul_K_t,
+                                            cb_vol2col_rm,
+                                            cb_vol2col_tiled,
+                                            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                                            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                                            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
+                                                NoReconfigure>(1, patches_this_row);
+                                        patches_left -= patches_this_row;
                                     }
-                                    compute_kernel_lib::tilize<
-                                        matmul_K_t,
-                                        cb_vol2col_rm,
-                                        cb_vol2col_tiled,
-                                        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                                        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                                        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
-                                            NoReconfigure>(1, patches_this_row);
 
                                     if constexpr (use_fp32_partials) {
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     }
 
-                                    // Wait for weights — deferred from upfront to here so
-                                    // the tilize above overlaps with BRISC's weight DRAM read.
-                                    // First call stalls; subsequent calls are instant.
+                                    // Wait for weights — deferred so tilize overlaps with BRISC's DRAM read.
                                     cb_wait_front(cb_weight_tiled, weight_tiles);
 
-                                    // Matmul one tile-row: 1 x K_t @ K_t x N_t -> 1 x N_t
-                                    cb_wait_front(cb_vol2col_tiled, row_tiles);
+                                    // Phase 2: matmul the batch
+                                    cb_wait_front(cb_vol2col_tiled, batch_tiles);
                                     matmul_blocks(
                                         cb_vol2col_tiled,
                                         cb_weight_tiled,
                                         cb_matmul_interm_tiled,
-                                        1,  // M = 1 tile-row
+                                        subblock_h,
                                         matmul_N_t,
                                         matmul_K_t,
-                                        in0_num_subblocks,  // 1
+                                        in0_num_subblocks,
                                         in1_num_subblocks,
                                         in0_block_w,
-                                        subblock_h,  // 1
+                                        subblock_h,
                                         subblock_w,
                                         false /* transpose */);
-                                    cb_pop_front(cb_vol2col_tiled, row_tiles);
-
-                                    patches_left -= patches_this_row;
+                                    cb_pop_front(cb_vol2col_tiled, batch_tiles);
                                 }
                             }
 
