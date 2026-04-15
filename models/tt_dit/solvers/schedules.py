@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import torch
+
 
 class Schedule(NamedTuple):
     sigmas: list[float]
@@ -23,7 +25,7 @@ def linear(num_steps: int, *, sigma_small: float | None = None) -> Schedule:
     if sigma_small is None:
         sigma_small = 1 / num_steps
 
-    sigmas = [1.0 - i * (1.0 - sigma_small) / (num_steps - 1) for i in range(num_steps)]
+    sigmas = torch.linspace(1.0, sigma_small, num_steps, dtype=torch.float64).tolist()
     sigmas.append(0.0)
     alphas = [1 - s for s in sigmas]
     return Schedule(sigmas, alphas)
