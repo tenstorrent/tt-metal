@@ -23,22 +23,26 @@ constexpr uint32_t largest_divisor(uint32_t n, uint32_t max_val) {
 
 // Find best in0_block_w: largest divisor of K_tiles that keeps total CB usage within L1.
 // Total CB per core (double-buffered):
-//   in0 CB: per_core_M * in0_block_w * 2 * in0_tile_bytes  (bfloat8_b ~ 1088B)
-//   in1 CB: per_core_N * in0_block_w * 2 * in1_tile_bytes  (bfloat4_b ~ 576B)
+//   in0 CB: per_core_M * in0_block_w * 2 * In0TileBytes
+//   in1 CB: per_core_N * in0_block_w * 2 * In1TileBytes
 //   out + partials: per_core_M * per_core_N * 2 * out_tile_bytes (fixed, not block_w dependent)
 // We budget ~1.2MB for in0+in1 CBs, leaving ~300KB for out/partials/overhead.
 constexpr uint32_t L1_CB_BUDGET_BYTES = 1200 * 1024;  // 1.2 MB
-constexpr uint32_t IN0_TILE_BYTES = 1088;             // bfloat8_b tile
-constexpr uint32_t IN1_TILE_BYTES = 576;              // bfloat4_b tile
 
+// Tile sizes per data type (bytes)
+constexpr uint32_t BFLOAT16_TILE_BYTES = 2048;   // 1024 * 2
+constexpr uint32_t BFLOAT8_B_TILE_BYTES = 1088;  // 256 * 4 + 16 * 4
+constexpr uint32_t BFLOAT4_B_TILE_BYTES = 576;   // 128 * 4 + 16 * 4
+
+template <uint32_t In0TileBytes, uint32_t In1TileBytes>
 [[maybe_unused]] constexpr uint32_t best_in0_block_w(uint32_t K_tiles, uint32_t per_core_M, uint32_t per_core_N) {
     uint32_t best = 1;
     for (uint32_t d = 1; d <= K_tiles; ++d) {
         if (K_tiles % d != 0) {
             continue;
         }
-        uint32_t in0_bytes = per_core_M * d * 2 * IN0_TILE_BYTES;
-        uint32_t in1_bytes = per_core_N * d * 2 * IN1_TILE_BYTES;
+        uint32_t in0_bytes = per_core_M * d * 2 * In0TileBytes;
+        uint32_t in1_bytes = per_core_N * d * 2 * In1TileBytes;
         if (in0_bytes + in1_bytes <= L1_CB_BUDGET_BYTES) {
             best = d;
         }
@@ -94,6 +98,10 @@ ttnn::Tensor routed_expert_ffn_default(
         /*optional_output_tensor=*/std::move(output));
 }
 
+// Template parameters: IN0/IN1 tile bytes.
+// Gate/up matmuls use In0TileBytes for x and In1TileBytes for weights.
+// Down matmul uses In0TileBytes for activated (same dtype as matmul output) and In1TileBytes for down_proj.
+template <uint32_t In0TileBytes, uint32_t In1TileBytes>
 ttnn::Tensor routed_expert_ffn_optim(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -124,9 +132,8 @@ ttnn::Tensor routed_expert_ffn_optim(
     const uint32_t gate_up_per_core_M = tt::div_up(M_tiles, gate_up_grid_y);
     const uint32_t gate_up_per_core_N = tt::div_up(N_gate_tiles, GRID_X);
 
-    // in0_block_w: test with smaller value to check if parameter is honored
     (void)K_gate_tiles;
-    const uint32_t gate_up_in0_bw = 16;  // optimized: smaller blocks pipeline better with DRAM reads
+    const uint32_t gate_up_in0_bw = 16;  // empirically optimal: smaller blocks pipeline better with DRAM reads
 
     // subblock: sharded output constraint requires out_subblock_w==per_core_N or out_subblock_h==1
     // Use subblock(1, per_core_N) to satisfy constraint
@@ -158,9 +165,9 @@ ttnn::Tensor routed_expert_ffn_optim(
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
     // gate matmul:
-    //   x_l1:      (M, K_gate)   [M_tiles x K_gate_tiles] bfloat8_b DRAM
-    //   gate_proj:  (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] bfloat4_b DRAM
-    //   -> gate_result: (M, N_gate)  [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
+    //   x_l1:      (M, K_gate)      [M_tiles x K_gate_tiles] DRAM
+    //   gate_proj:  (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] DRAM
+    //   -> gate_result: (M, N_gate)  [M_tiles x N_gate_tiles] block-sharded L1
     // + SiLU applied as separate post-op
     auto gate_result = ttnn::matmul(
         /*input_tensor_a=*/x_l1,
@@ -174,9 +181,9 @@ ttnn::Tensor routed_expert_ffn_optim(
         /*compute_kernel_config=*/compute_kernel_config);
 
     // up matmul:
-    //   x_l1:     (M, K_gate)   [M_tiles x K_gate_tiles] bfloat8_b DRAM
-    //   up_proj:   (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] bfloat4_b DRAM
-    //   -> up_result: (M, N_gate)  [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
+    //   x_l1:     (M, K_gate)      [M_tiles x K_gate_tiles] DRAM
+    //   up_proj:   (K_gate, N_gate) [K_gate_tiles x N_gate_tiles] DRAM
+    //   -> up_result: (M, N_gate)  [M_tiles x N_gate_tiles] block-sharded L1
     auto up_result = ttnn::matmul(
         /*input_tensor_a=*/x_l1,
         /*input_tensor_b=*/up_proj,
@@ -189,9 +196,9 @@ ttnn::Tensor routed_expert_ffn_optim(
         /*compute_kernel_config=*/compute_kernel_config);
 
     // multiply:
-    //   gate_result: (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
-    //   up_result:   (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b block-sharded L1
-    //   -> activated: (M, N_gate) [M_tiles x N_gate_tiles] bfloat8_b L1 interleaved
+    //   gate_result: (M, N_gate) [M_tiles x N_gate_tiles] block-sharded L1
+    //   up_result:   (M, N_gate) [M_tiles x N_gate_tiles] block-sharded L1
+    //   -> activated: (M, N_gate) [M_tiles x N_gate_tiles] L1 interleaved
     // Write multiply output directly to L1 interleaved, eliminating the separate reshard op
     auto activated = ttnn::multiply(
         /*lhs=*/gate_result,
@@ -208,7 +215,8 @@ ttnn::Tensor routed_expert_ffn_optim(
     const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
-    const uint32_t down_in0_bw = best_in0_block_w(K_down_tiles, down_per_core_M, down_per_core_N);
+    const uint32_t down_in0_bw =
+        best_in0_block_w<In0TileBytes, In1TileBytes>(K_down_tiles, down_per_core_M, down_per_core_N);
 
     // subblock_w: largest divisor of per_core_N that fits in dest (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
@@ -231,9 +239,9 @@ ttnn::Tensor routed_expert_ffn_optim(
     auto& activated_reshard = activated;
 
     // down matmul:
-    //   activated_reshard: (M, K_down)   [M_tiles x K_down_tiles] bfloat8_b L1 interleaved
-    //   down_proj:         (K_down, N_down) [K_down_tiles x N_down_tiles] bfloat4_b DRAM
-    //   -> output:         (M, N_down)   [M_tiles x N_down_tiles] bfloat8_b DRAM
+    //   activated_reshard: (M, K_down)      [M_tiles x K_down_tiles] L1 interleaved
+    //   down_proj:         (K_down, N_down) [K_down_tiles x N_down_tiles] DRAM
+    //   -> output:         (M, N_down)      [M_tiles x N_down_tiles] DRAM
     return ttnn::matmul(
         /*input_tensor_a=*/activated_reshard,
         /*input_tensor_b=*/down_proj,
@@ -268,13 +276,17 @@ ttnn::Tensor routed_expert_ffn(
             /*output=*/std::move(output));
     }
 
-    return routed_expert_ffn_optim(
-        /*x=*/x,
-        /*gate_proj=*/gate_proj,
-        /*up_proj=*/up_proj,
-        /*down_proj=*/down_proj,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*output=*/std::move(output));
+    TT_FATAL(
+        x.dtype() == DataType::BFLOAT16 || x.dtype() == DataType::BFLOAT8_B,
+        "routed_expert_ffn: x must be BFLOAT16 or BFLOAT8_B, got {}",
+        x.dtype());
+
+    if (x.dtype() == DataType::BFLOAT16) {
+        return routed_expert_ffn_optim<BFLOAT16_TILE_BYTES, BFLOAT8_B_TILE_BYTES>(
+            x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+    }
+    return routed_expert_ffn_optim<BFLOAT8_B_TILE_BYTES, BFLOAT4_B_TILE_BYTES>(
+        x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
