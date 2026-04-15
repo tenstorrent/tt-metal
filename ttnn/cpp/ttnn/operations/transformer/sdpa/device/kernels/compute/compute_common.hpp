@@ -2179,7 +2179,8 @@ void sdpa_standard(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
-    const uint32_t cb_out) {
+    const uint32_t cb_out,
+    const LightweightMaskContext& lw_mask = {}) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2252,7 +2253,7 @@ void sdpa_standard(
         0,  // cb_lse_out (not used)
         0,  // cb_prev_out (not used)
         cb_out,
-        {},  // lw_mask (not used)
+        lw_mask,
         is_causal);
 }
 
