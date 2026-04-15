@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 import torch
 
@@ -22,9 +23,16 @@ import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.cache.types import FusionGroupSpec
 from models.demos.deepseek_v3_b1.weights.prepare import (
+    _GATE_BIAS_SENDER_CORE_GRID,
     _MTP_LAYER_IDX,
+    DOWN_PROJ_SINGLE_DEVICE_SPEC,
+    GATE_UP_SPEC,
+    KV_B12_SPEC,
     NUM_ROUTED_EXPERTS,
+    O_PROJ_GATE_MM_NORMS_SPEC,
+    Q_AB_KV_A_SPEC,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
@@ -33,15 +41,18 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     OverlappedTensor,
-    prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
+    prepare_gate_bias_weight,
+    prepare_gate_up_weights,
+    prepare_kv_b12_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_o_proj_norms_weights,
     prepare_q_ab_kv_a_weights,
     prepare_routed_expert_weights,
-    prepare_shared_expert_weights,
+    prepare_shared_down_proj_weight,
 )
 
 
@@ -164,6 +175,29 @@ class PhaseTracker:
         return now - self._start_s, list(self._phases)
 
 
+class DispatchMode(Enum):
+    FAST = "fast"
+    SLOW = "slow"
+
+
+@dataclass
+class WeightWorkItem:
+    name: str
+    dispatch_mode: DispatchMode
+    prepare_fn: Callable[[], Any]
+    result: Any = field(default=None, init=False)
+
+    @property
+    def phase_name(self) -> str:
+        prefix = "fd" if self.dispatch_mode == DispatchMode.FAST else "sd"
+        return f"{prefix}:{self.name}"
+
+    def execute(self, tracker: PhaseTracker | None = None) -> None:
+        if tracker is not None:
+            tracker.phase(self.phase_name)
+        self.result = self.prepare_fn()
+
+
 class WeightProvider(Protocol):
     """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
 
@@ -189,6 +223,25 @@ class WeightProvider(Protocol):
 def _layer_key(layer_id: int, suffix: str) -> str:
     """State dict key under model.layers.{layer_id}."""
     return f"model.layers.{layer_id}.{suffix}"
+
+
+def _core_range_set_uses_final_column(crs: ttnn.CoreRangeSet, grid_width: int = 13) -> bool:
+    final_col = grid_width - 1
+    for core_range in crs.ranges():
+        if core_range.end.x >= final_col:
+            return True
+    return False
+
+
+def _classify_fusion_group(spec: FusionGroupSpec) -> DispatchMode:
+    for region in spec.regions:
+        if _core_range_set_uses_final_column(region.core_range_set):
+            return DispatchMode.SLOW
+    return DispatchMode.FAST
+
+
+def _classify_core_range_set(crs: ttnn.CoreRangeSet) -> DispatchMode:
+    return DispatchMode.SLOW if _core_range_set_uses_final_column(crs) else DispatchMode.FAST
 
 
 def _build_synthetic_moe_state_dict(
@@ -378,158 +431,295 @@ class CacheWeightProvider(PerformanceTrackingWeightProvider):
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         tracker = self.create_tracker()
-        tracker.phase("prepare_embedding_weights")
-        result = prepare_embedding_weights(self._state_dict, device, cache_config=self._cache_config(device))
+        tracker.phase("setup")
+        cache_config = self._cache_config(device)
+        work_item = WeightWorkItem(
+            name="embedding",
+            dispatch_mode=DispatchMode.FAST,
+            prepare_fn=lambda: prepare_embedding_weights(self._state_dict, device, cache_config=cache_config),
+        )
+        tracker.phase("fast_dispatch_enable")
+        with ttnn.device.setup_fast_dispatch(device):
+            work_item.execute(tracker)
+        tracker.phase("fast_dispatch_disable")
+        ttnn.enable_asynchronous_slow_dispatch(device)
+        result = work_item.result
+        assert isinstance(result, DeepSeekV3EmbeddingLayerWeights)
         total_s, phases = tracker.finish()
         self.record(method="load_embedding", layer_id=None, total_s=total_s, phases=phases)
         return result
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         tracker = self.create_tracker()
-        tracker.phase("prepare_lm_head_weights")
-        result = prepare_lm_head_weights(self._state_dict, device, cache_config=self._cache_config(device))
+        tracker.phase("setup")
+        cache_config = self._cache_config(device)
+        work_item = WeightWorkItem(
+            name="lm_head",
+            dispatch_mode=DispatchMode.FAST,
+            prepare_fn=lambda: prepare_lm_head_weights(self._state_dict, device, cache_config=cache_config),
+        )
+        tracker.phase("fast_dispatch_enable")
+        with ttnn.device.setup_fast_dispatch(device):
+            work_item.execute(tracker)
+        tracker.phase("fast_dispatch_disable")
+        ttnn.enable_asynchronous_slow_dispatch(device)
+        result = work_item.result
+        assert isinstance(result, DeepSeekV3LMHeadWeights)
         total_s, phases = tracker.finish()
         self.record(method="load_lm_head", layer_id=None, total_s=total_s, phases=phases)
         return result
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        """Load MoE layer from tensor cache; FD-safe weights use fast dispatch, rest uses slow dispatch."""
         tracker = self.create_tracker()
         tracker.phase("setup")
         cache_config = self._cache_config(device)
-        tracker.phase("fast_dispatch_init")
-        with ttnn.device.setup_fast_dispatch(device):
-            tracker.phase("prepare_routed_expert_weights")
-            routed = prepare_routed_expert_weights(
-                device,
-                self._state_dict,
-                layer_id,
-                is_moe=True,
-                num_routed_experts=NUM_ROUTED_EXPERTS,
-                move_to_device=True,
-                cache_config=cache_config,
-            )
-            tracker.phase("prepare_q_ab_kv_a_weights")
-            q_ab = prepare_q_ab_kv_a_weights(
-                device,
-                self._state_dict,
-                layer_id,
-                move_to_device=True,
-                cache_config=cache_config,
-            )
-            tracker.phase("fast_dispatch_teardown")
+        tracker.phase("classify")
+        work_items: list[WeightWorkItem] = [
+            WeightWorkItem(
+                name="routed_experts",
+                dispatch_mode=DispatchMode.FAST,  # Always use fast dispatch for DRAM tensors
+                prepare_fn=lambda: prepare_routed_expert_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=True,
+                    num_routed_experts=NUM_ROUTED_EXPERTS,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="q_ab_kv_a",
+                dispatch_mode=_classify_fusion_group(Q_AB_KV_A_SPEC),
+                prepare_fn=lambda: prepare_q_ab_kv_a_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="kv_b12",
+                dispatch_mode=_classify_fusion_group(KV_B12_SPEC),
+                prepare_fn=lambda: prepare_kv_b12_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="o_proj_gate_mm_norms",
+                dispatch_mode=_classify_fusion_group(O_PROJ_GATE_MM_NORMS_SPEC),
+                prepare_fn=lambda: prepare_o_proj_norms_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=True,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="gate_bias",
+                dispatch_mode=_classify_core_range_set(_GATE_BIAS_SENDER_CORE_GRID),
+                prepare_fn=lambda: prepare_gate_bias_weight(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="gate_up",
+                dispatch_mode=_classify_fusion_group(GATE_UP_SPEC),
+                prepare_fn=lambda: prepare_gate_up_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=True,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="shared_down_proj",
+                dispatch_mode=_classify_core_range_set(DOWN_PROJ_SINGLE_DEVICE_SPEC.build_matmul_core_grid()),
+                prepare_fn=lambda: prepare_shared_down_proj_weight(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=True,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+        ]
+        fd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.FAST]
+        sd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.SLOW]
 
-        tracker.phase("prepare_attention_weights")
-        attn = prepare_attention_weights(
-            device,
-            self._state_dict,
-            layer_id,
-            is_moe=True,
-            move_to_device=True,
-            cache_config=cache_config,
-            preloaded_q_ab=q_ab,
-        )
-        tracker.phase("prepare_shared_expert_weights")
-        shared = prepare_shared_expert_weights(
-            device,
-            self._state_dict,
-            layer_id,
-            is_moe=True,
-            move_to_device=True,
-            cache_config=cache_config,
-        )
+        tracker.phase("fast_dispatch_enable")
+        with ttnn.device.setup_fast_dispatch(device):
+            for item in fd_queue:
+                item.execute(tracker)
+        tracker.phase("fast_dispatch_disable")
+
+        for item in sd_queue:
+            item.execute(tracker)
+
+        tracker.phase("assemble")
+        results = {item.name: item.result for item in work_items}
+        routed = results["routed_experts"]
+        q_ab = results["q_ab_kv_a"]
+        kv_views = results["kv_b12"]
+        o_views = results["o_proj_gate_mm_norms"]
+        gate_bias_tt = results["gate_bias"]
+        gu_views = results["gate_up"]
+        shared_down_proj = results["shared_down_proj"]
+
         total_s, phases = tracker.finish()
         self.record(method="load_moe_layer", layer_id=layer_id, total_s=total_s, phases=phases)
-        assert isinstance(attn.gate_mm, OverlappedTensor)
-        assert attn.gate_bias is not None
+
         assert isinstance(routed, MoERoutedExpertWeights)
+        assert isinstance(o_views["gate_mm"], OverlappedTensor)
+        assert isinstance(gate_bias_tt, ttnn.Tensor)
+
         return DeepSeekV3MoELayerWeights(
-            q_a_proj=attn.q_a_proj,
-            q_b_proj=attn.q_b_proj,
-            kv_a_proj=attn.kv_a_proj,
-            o_proj=attn.o_proj,
-            gate_mm=attn.gate_mm,
-            attn_norm=attn.attn_norm,
-            q_norm=attn.q_norm,
-            kv_norm=attn.kv_norm,
-            ffn_norm=attn.ffn_norm,
-            gate_bias=attn.gate_bias,
-            kv_b1_proj=attn.kv_b1_proj,
-            kv_b2_proj=attn.kv_b2_proj,
-            shared_gate_proj=shared.shared_gate_proj,
-            shared_up_proj=shared.shared_up_proj,
-            shared_down_proj=shared.shared_down_proj,
+            q_a_proj=q_ab["q_a_proj"],
+            q_b_proj=q_ab["q_b_proj"],
+            kv_a_proj=q_ab["kv_a_proj"],
+            o_proj=o_views["o_proj"],
+            gate_mm=o_views["gate_mm"],
+            attn_norm=o_views["attn_norm"],
+            q_norm=o_views["q_norm"],
+            kv_norm=o_views["kv_norm"],
+            ffn_norm=o_views["ffn_norm"],
+            gate_bias=gate_bias_tt,
+            kv_b1_proj=kv_views["kv_b1_proj"],
+            kv_b2_proj=kv_views["kv_b2_proj"],
+            shared_gate_proj=gu_views["shared_gate_proj"],
+            shared_up_proj=gu_views["shared_up_proj"],
+            shared_down_proj=shared_down_proj,
             routed_gate_proj=routed.routed_gate_proj,
             routed_up_proj=routed.routed_up_proj,
             routed_down_proj=routed.routed_down_proj,
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        """Load dense layer; FD-safe weights (routed experts, q_ab_kv_a) use fast dispatch."""
         tracker = self.create_tracker()
         tracker.phase("setup")
         cache_config = self._cache_config(device)
-
-        tracker.phase("fast_dispatch_init")
+        tracker.phase("classify")
+        work_items: list[WeightWorkItem] = [
+            WeightWorkItem(
+                name="routed_experts",
+                dispatch_mode=DispatchMode.FAST,
+                prepare_fn=lambda: prepare_routed_expert_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=False,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="q_ab_kv_a",
+                dispatch_mode=_classify_fusion_group(Q_AB_KV_A_SPEC),
+                prepare_fn=lambda: prepare_q_ab_kv_a_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="kv_b12",
+                dispatch_mode=_classify_fusion_group(KV_B12_SPEC),
+                prepare_fn=lambda: prepare_kv_b12_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="o_proj_gate_mm_norms",
+                dispatch_mode=_classify_fusion_group(O_PROJ_GATE_MM_NORMS_SPEC),
+                prepare_fn=lambda: prepare_o_proj_norms_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=False,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="gate_up",
+                dispatch_mode=_classify_fusion_group(GATE_UP_SPEC),
+                prepare_fn=lambda: prepare_gate_up_weights(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=False,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+            WeightWorkItem(
+                name="shared_down_proj",
+                dispatch_mode=_classify_core_range_set(DOWN_PROJ_SINGLE_DEVICE_SPEC.build_matmul_core_grid()),
+                prepare_fn=lambda: prepare_shared_down_proj_weight(
+                    device,
+                    self._state_dict,
+                    layer_id,
+                    is_moe=False,
+                    move_to_device=True,
+                    cache_config=cache_config,
+                ),
+            ),
+        ]
+        fd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.FAST]
+        sd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.SLOW]
+        tracker.phase("fast_dispatch_enable")
         with ttnn.device.setup_fast_dispatch(device):
-            tracker.phase("prepare_routed_expert_weights")
-            routed = prepare_routed_expert_weights(
-                device,
-                self._state_dict,
-                layer_id,
-                is_moe=False,
-                move_to_device=True,
-                cache_config=cache_config,
-            )
-            tracker.phase("prepare_q_ab_kv_a_weights")
-            q_ab = prepare_q_ab_kv_a_weights(
-                device,
-                self._state_dict,
-                layer_id,
-                move_to_device=True,
-                cache_config=cache_config,
-            )
-            tracker.phase("fast_dispatch_teardown")
-
+            for item in fd_queue:
+                item.execute(tracker)
+        tracker.phase("fast_dispatch_disable")
         ttnn.enable_asynchronous_slow_dispatch(device)
-
-        tracker.phase("prepare_attention_weights")
-        attn = prepare_attention_weights(
-            device,
-            self._state_dict,
-            layer_id,
-            is_moe=False,
-            move_to_device=True,
-            cache_config=cache_config,
-            preloaded_q_ab=q_ab,
-        )
-        tracker.phase("prepare_shared_expert_weights")
-        shared = prepare_shared_expert_weights(
-            device,
-            self._state_dict,
-            layer_id,
-            is_moe=False,
-            move_to_device=True,
-            cache_config=cache_config,
-        )
-
+        for item in sd_queue:
+            item.execute(tracker)
+        tracker.phase("assemble")
+        results = {item.name: item.result for item in work_items}
+        routed = results["routed_experts"]
+        q_ab = results["q_ab_kv_a"]
+        kv_views = results["kv_b12"]
+        o_views = results["o_proj_gate_mm_norms"]
+        gu_views = results["gate_up"]
+        shared_down_proj = results["shared_down_proj"]
         assert isinstance(routed, DenseRoutedExpertWeights)
         total_s, phases = tracker.finish()
         self.record(method="load_dense_layer", layer_id=layer_id, total_s=total_s, phases=phases)
         return DeepSeekV3DenseLayerWeights(
-            q_a_proj=attn.q_a_proj,
-            q_b_proj=attn.q_b_proj,
-            kv_a_proj=attn.kv_a_proj,
-            o_proj=attn.o_proj,
-            attn_norm=attn.attn_norm,
-            q_norm=attn.q_norm,
-            kv_norm=attn.kv_norm,
-            ffn_norm=attn.ffn_norm,
-            kv_b1_proj=attn.kv_b1_proj,
-            kv_b2_proj=attn.kv_b2_proj,
-            shared_gate_proj=shared.shared_gate_proj,
-            shared_up_proj=shared.shared_up_proj,
-            shared_down_proj=shared.shared_down_proj,
+            q_a_proj=q_ab["q_a_proj"],
+            q_b_proj=q_ab["q_b_proj"],
+            kv_a_proj=q_ab["kv_a_proj"],
+            o_proj=o_views["o_proj"],
+            attn_norm=o_views["attn_norm"],
+            q_norm=o_views["q_norm"],
+            kv_norm=o_views["kv_norm"],
+            ffn_norm=o_views["ffn_norm"],
+            kv_b1_proj=kv_views["kv_b1_proj"],
+            kv_b2_proj=kv_views["kv_b2_proj"],
+            shared_gate_proj=gu_views["shared_gate_proj"],
+            shared_up_proj=gu_views["shared_up_proj"],
+            shared_down_proj=shared_down_proj,
             routed_gate_proj=routed.routed_gate_proj,
             routed_up_proj=routed.routed_up_proj,
             routed_down_proj=routed.routed_down_proj,
