@@ -90,11 +90,6 @@ ALWI void matmul_blocks_absolute(
     const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
     const uint32_t row_group_tiles = out_subblock_h * in1_per_core_w;
 
-    PACK(DPRINT << "mba: sbh=" << out_subblock_h << " sbw=" << out_subblock_w
-         << " bw=" << block_w << " m=" << in0_num_subblocks << " n=" << in1_num_subblocks
-         << " k=" << num_k_blocks << " rg=" << row_group_tiles
-         << " l1=" << (uint32_t)packer_l1_acc << ENDL());
-
     // Pack target: last K-block goes to partials (for bias) or out
     const uint32_t pack_target = pack_last_to_interm ? cfg.partials_cb_id : cfg.out_cb_id;
 
