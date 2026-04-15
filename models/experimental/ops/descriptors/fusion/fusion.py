@@ -35,11 +35,15 @@ visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
 **Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` dispatch
 via :func:`_container_run` which does a ``_BUILD_CACHE`` lookup + direct
 ``patchable_generic_op`` dispatch without constructing or retaining a
-``FusedOp``. No tensor references are held between calls.
+``FusedOp``. After dispatch, branch ops' output tensor slots are released
+(via :meth:`LazyOutputList.release`) so that persistent containers do not
+pin L1 device memory across forward passes. The retained ``_alloc_fn``
+re-allocates fresh outputs on the next call.
 """
 
 import os
-from dataclasses import dataclass
+
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import ttnn
@@ -87,6 +91,15 @@ class _CacheEntry:
     # pointers, runtime args, common args) to an IO tensor index.  Computed once
     # at build time via compute_address_slots, passed to patchable_generic_op.
     address_slots: Any = None
+    # result_reorder[j] = index into the outputs list (output_sources order)
+    # for default_results[j].  Used on the hot path to reorder the ephemeral
+    # outputs from output_sources order to the return order callers expect.
+    # Stored as a list (not tuple) for zero-conversion C++ consumption.
+    result_reorder: List[int] = field(default_factory=list)
+    # Cached output TensorSpecs (output_sources order) and shared_output_map
+    # for the allocating patchable_generic_op overload.  Populated on the cold path.
+    output_specs: Optional[List] = None
+    shared_output_map: List = field(default_factory=list)
 
 
 def _flatten_ops(items) -> List[OpDescriptor]:
@@ -417,7 +430,34 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
     Fast path: if ``_BUILD_CACHE`` has an entry, go straight from cache to
     ``patchable_generic_op`` — no ``build()``, no ``FusedOp``, no redundant IO
     iteration.  Falls back to ``build()`` + ``launch()`` on cache miss.
+
+    Output tensors are **ephemeral**: allocated fresh each call from cached
+    ``TensorSpec`` metadata (~3 µs via ``allocate_tensor_on_device``) and
+    returned to the caller.  Branch ops never own output tensors after the
+    cold path — zero L1 pinning between calls.
     """
+    # Fast path: reuse cached entry + ops_inputs from a previous run.
+    # ops_inputs is [op.input_tensors for op in ops] — a list of references
+    # to each op's mutable input_tensors list.  update() mutates those lists
+    # in place, so the references stay correct across calls.
+    cached = getattr(container, "_cached_run", None)
+    if cached is not None:
+        entry, ops_inputs = cached
+        outputs = ttnn._ttnn.operations.experimental.patchable_generic_op(
+            ops_inputs,
+            entry.output_specs,
+            entry.shared_output_map,
+            entry.result_reorder,
+            entry.cached_descriptor,
+            entry.address_slots,
+        )
+
+        if results is not None:
+            default_results = container._default_results
+            requested_ids = {id(d) for d in results}
+            return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
+        return outputs
+
     cache_device = device
     if cache_device is None:
         try:
@@ -428,34 +468,75 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
-        # Hot path: one dedup pass → dispatch.  No build(), no FusedOp.
-        seen: Set[int] = set()
-        inputs: List = []
-        for op in ops:
-            for t in op.input_tensors:
-                tid = id(t)
-                if tid not in seen:
-                    inputs.append(t)
-                    seen.add(tid)
-        if entry.output_sources:
-            outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
-        else:
-            outputs = list(ops[-1].output_tensors) if ops else []
-        io_tensors = inputs + outputs
-        ttnn._ttnn.operations.experimental.patchable_generic_op(
-            io_tensors, entry.cached_descriptor, entry.address_slots
+        assert (
+            entry.output_specs is not None
+        ), "Hot-path cache hit but output_specs not cached — cold path failed to populate specs"
+        ops_inputs = [op.input_tensors for op in ops]
+        outputs = ttnn._ttnn.operations.experimental.patchable_generic_op(
+            ops_inputs,
+            entry.output_specs,
+            entry.shared_output_map,
+            entry.result_reorder,
+            entry.cached_descriptor,
+            entry.address_slots,
         )
+
+        container._cached_run = (entry, ops_inputs)
+
+        if results is not None:
+            default_results = (
+                _default_results_parallel_branches(container._items)
+                if surface_prefix == "P"
+                else _default_results(container._items)
+            )
+            requested_ids = {id(d) for d in results}
+            return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
+        return outputs
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
         fused.launch()
+        entry = _BUILD_CACHE.get(cache_key)
 
     if results is None:
         if surface_prefix == "P":
             results = _default_results_parallel_branches(container._items)
         else:
             results = _default_results(container._items)
-    return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
+
+    ret = [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
+
+    # Cache output specs in **output_sources order** (matching io_tensors /
+    # address_slots) and compute the reorder mapping to default_results order.
+    if entry is not None and entry.output_specs is None:
+        if entry.output_sources and ret and ret[0] is not None:
+            src_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+            if src_outputs and src_outputs[0] is not None:
+                entry.output_specs = [t.spec for t in src_outputs]
+                # Build shared_output_map for shared output buffers.
+                seen_srcs_cold: Dict[Tuple[int, int], int] = {}
+                dedup_cold: List[int] = []
+                for i, src in enumerate(entry.output_sources):
+                    if src in seen_srcs_cold:
+                        dedup_cold.append(seen_srcs_cold[src])
+                    else:
+                        seen_srcs_cold[src] = i
+                        dedup_cold.append(i)
+                if any(d != i for i, d in enumerate(dedup_cold)):
+                    entry.shared_output_map = dedup_cold
+                # Build reorder: result_reorder[j] = output_sources index
+                # whose tensor matches default_results[j].
+                src_id_to_idx = {}
+                for src_i, (pi, ti) in enumerate(entry.output_sources):
+                    src_id_to_idx[id(ops[pi])] = src_i
+                entry.result_reorder = list(src_id_to_idx[id(desc)] for desc in results if id(desc) in src_id_to_idx)
+        elif ret and ret[0] is not None:
+            entry.output_specs = [t.spec for t in ret if t is not None]
+
+    if entry is not None and entry.output_specs is not None:
+        container._cached_run = (entry, [op.input_tensors for op in ops])
+
+    return ret
 
 
 # =============================================================================
@@ -519,23 +600,22 @@ class FusedOp:
         return self.op.output_tensors
 
     def launch(self, *branch_ops_override: Any):
-        """Enqueue via ``patchable_generic_op`` using merged IO; return outputs.
+        """Dispatch via ``patchable_generic_op`` with separate inputs/outputs.
 
-        With no positional arguments, merged IO is copied from the branch ops
-        captured at ``build()`` (so in-place updates to branch tensor lists are
-        visible before dispatch). With one or more positional arguments, those ops
-        are passed to :meth:`refresh_merged_io` instead.
-
-        On program cache hits, the device program factory patches only runtime-arg
-        and CB slots that hold ``io_tensors`` buffer addresses when those addresses
-        change (see ``PatchableGenericMeshProgramFactory``).
+        With no positional arguments, merged IO is refreshed from the branch
+        ops captured at ``build()`` before dispatch. With positional arguments,
+        those ops are passed to :meth:`refresh_merged_io` instead.
         """
         if branch_ops_override:
             self.refresh_merged_io(list(branch_ops_override))
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
-        io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor, self._address_slots)
+        ttnn._ttnn.operations.experimental.patchable_generic_op(
+            list(self.input_tensors),
+            list(self.output_tensors),
+            self.descriptor,
+            self._address_slots,
+        )
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:
@@ -693,6 +773,7 @@ class Sequential:
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results(all_items)
+        self._cached_run = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -700,6 +781,7 @@ class Sequential:
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
+        self._cached_run = None
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
@@ -765,7 +847,8 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
+        if self._cached_run is None:
+            _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
@@ -821,6 +904,7 @@ class Parallel:
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(all_items)
+        self._cached_run = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -828,6 +912,7 @@ class Parallel:
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
+        self._cached_run = None
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
@@ -894,7 +979,8 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
+        if self._cached_run is None:
+            _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
