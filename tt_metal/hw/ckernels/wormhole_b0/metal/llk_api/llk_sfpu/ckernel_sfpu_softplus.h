@@ -20,8 +20,8 @@ namespace ckernel::sfpu {
 //   softplus(t) = t + f(t)   for t >= 0
 //   softplus(t) = f(-t)      for t < 0
 //
-// BF16: single degree-8 polynomial for f(a) on [0, 5] + exp_21f tail
-// FP32: same polynomial + 4-term Taylor tail (exp_accurate based)
+// BF16: degree-8 polynomial for f(a) on [0, 5] + inline exp tail
+// FP32: same polynomial + inline exp + 3-term Taylor correction
 // ======================================================================
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
@@ -36,6 +36,48 @@ constexpr float SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
 constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
 constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
 constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
+
+// ======================================================================
+// Lightweight inline exp(x) for negative x (tail region).
+// Adapted from gelu's x_times_exp_negative_tail (ckernel_sfpu_gelu.h).
+// Uses Cody-Waite range reduction + Taylor polynomial.
+// BF16: degree 5 (~15 ops), FP32: degree 7 (~19 ops).
+// ======================================================================
+sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
+    constexpr float INV_LN2 = 1.4426950408889634f;
+    constexpr float LN2_HI = -0.6931152343750000f;
+    constexpr float LN2_LO = -3.19461832987e-05f;
+
+    // Range reduction: x = k*ln(2) + r
+    sfpi::vFloat z = x * INV_LN2;
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+
+    // Cody-Waite: r = x - k*ln(2) in extended precision
+    sfpi::vFloat r = k * LN2_HI + x;
+    r = k * LN2_LO + r;
+
+    // exp(r) via Taylor polynomial, |r| < 0.5
+#ifdef INP_FLOAT32
+    // FP32: degree 7 for < 1 ULP
+    sfpi::vFloat poly = PolynomialEvaluator::eval(
+        r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
+#else
+    // BF16: degree 5 sufficient
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f);
+#endif
+
+    // Scale by 2^k via exponent manipulation
+    sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt new_exp = p_exp + k_int;
+
+    // FTZ: if exponent underflows, result is 0
+    sfpi::vFloat result = sfpi::vConst0;
+    v_if(new_exp > 0) { result = sfpi::setexp(poly, new_exp); }
+    v_endif;
+
+    return result;
+}
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
@@ -63,14 +105,12 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
 #ifdef INP_FLOAT32
-            // FP32: 3-term Taylor series ln(1+e) = e - e²/2 + e³/3
-            // Fixes the 48K ULP discontinuity at the polynomial-to-exp boundary.
-            // 3 terms give ~1 ULP error at a=5 (the boundary).
-            sfpi::vFloat e = _sfpu_exp_accurate_<true>(neg_a);
+            // FP32: inline Cody-Waite exp + 3-term Taylor ln(1+e) = e - e²/2 + e³/3
+            sfpi::vFloat e = softplus_exp_negative(neg_a);
             sfpi::vFloat e2 = e * e;
             residual = e - e2 * 0.5f + e2 * e * 0.333333343f;
 #else
-            // BF16: exp(-a) alone is sufficient (boundary rounds to same bf16)
+            // BF16: exp_21f is faster than inline Cody-Waite (~8 vs ~15 ops)
             residual = _sfpu_exp_21f_bf16_<false>(neg_a);
 #endif
         }
