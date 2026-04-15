@@ -659,7 +659,7 @@ class Flux1Pipeline:
                     torch_latents.permute(0, 2, 3, 1),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self.vae_device,
+                    device=self.vae_device if not traced else None,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
                 )
                 tt_decoded_output = self._vae_decoder(tt_latents)
