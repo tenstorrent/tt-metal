@@ -1447,6 +1447,15 @@ void MeshDeviceImpl::quiesce_internal() {
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
     }
+
+    // Reset fabric MUX worker cores so stale router state from the previous
+    // iteration doesn't cause data-mismatch / NOC hangs on the next dispatch.
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->quiesce_and_restart_fabric_workers();
+        }
+    }
 }
 
 void MeshDeviceImpl::quiesce_devices() {

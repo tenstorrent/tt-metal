@@ -143,6 +143,9 @@ public:
 
     bool compile_fabric();
     void configure_fabric();
+    // Terminate fabric MUX tensix worker cores and re-launch them fresh.
+    // Called during quiesce to ensure MUX channel state is reset between iterations.
+    void quiesce_and_restart_fabric_workers();
     // Puts device into reset
     bool close() override;
 

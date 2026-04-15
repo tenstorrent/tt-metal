@@ -9,6 +9,7 @@
 
 #include <core_descriptor.hpp>
 #include <host_api.hpp>
+#include <chrono>
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -55,6 +56,12 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "fabric/fabric_tensix_builder_impl.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_host_utils.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -410,6 +417,111 @@ void Device::configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+}
+
+void Device::quiesce_and_restart_fabric_workers() {
+    auto fabric_config = MetalContext::instance().get_fabric_config();
+    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        return;
+    }
+
+    auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
+    if (tensix_config_mode == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        return;
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+
+    if (builder_ctx.get_num_fabric_initialized_routers(this->id()) == 0) {
+        return;
+    }
+
+    const auto& tensix_config = builder_ctx.get_tensix_config();
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+
+    // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+        auto [term_addr, term_signal] = tensix_config.get_termination_address_and_signal(core_id);
+        std::vector<uint32_t> term_buf(1, term_signal);
+        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+        detail::WriteToDeviceL1(this, mux_core, term_addr, term_buf, CoreType::WORKER);
+    }
+
+    env_impl.get_cluster().l1_barrier(this->id());
+
+    // Phase 2: Poll each MUX core until its status is TERMINATED
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+        auto config = tensix_config.get_config(core_id);
+        uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+
+        std::vector<uint32_t> status_buf(1, 0);
+        auto start = std::chrono::steady_clock::now();
+        constexpr uint32_t timeout_ms = 5000;
+        while (true) {
+            detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+            if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                break;
+            }
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+            if (elapsed > timeout_ms) {
+                TT_THROW(
+                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
+                    "Device {} eth_chan {} — status 0x{:08x}",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            }
+        }
+    }
+
+    // Phase 3: Re-configure and re-launch the fabric workers
+    // Reset termination signals, clear channel state, and re-send launch messages
+    // for WORKER cores in the fabric program.
+    if (fabric_program_ == nullptr) {
+        return;
+    }
+
+    tt::tt_fabric::configure_fabric_cores(this);
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+
+    env_impl.get_cluster().l1_barrier(this->id());
+
+    // Re-launch only worker cores from the fabric program
+    std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
+    const auto& hal = env_impl.get_hal();
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        CoreType core_type = hal.get_core_type(pct_idx);
+        if (core_type != CoreType::WORKER) {
+            continue;
+        }
+        for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+        }
+    }
+
+    log_info(tt::LogMetal, "Fabric MUX workers restarted on Device {}", this->id_);
 }
 
 bool Device::initialize(
