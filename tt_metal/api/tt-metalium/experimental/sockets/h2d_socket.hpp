@@ -125,6 +125,27 @@ public:
 
     void write(void* data, uint32_t num_pages);
 
+    /**
+     * @brief Non-blocking check for available FIFO space.
+     *
+     * Returns true if the FIFO has room for at least one page write without
+     * blocking. Mirrors D2HSocket::has_data() but checks free space instead
+     * of received data. Accounts for FIFO wrap-around overhead.
+     *
+     * @return true if write() for one page would not block on reserve_bytes().
+     */
+    bool has_slot();
+
+    /**
+     * @brief Returns the number of free slots in the H2D FIFO.
+     *
+     * Non-blocking snapshot of how many pages can be written without blocking.
+     * Useful for diagnosing whether the host is keeping up with device consumption.
+     *
+     * @return Number of free page slots (approximate due to wrap-around overhead).
+     */
+    uint32_t num_free_slots();
+
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
     std::vector<MeshCoreCoord> get_active_cores() const;

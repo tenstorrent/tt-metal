@@ -235,6 +235,15 @@ bool D2HSocket::has_data() {
     return bytes_recv >= num_bytes;
 }
 
+uint32_t D2HSocket::num_data_slots() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking data slots.");
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    bytes_sent_ = bytes_sent_value;
+    uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
+    return bytes_recv / page_size_;
+}
+
 void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;

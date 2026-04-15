@@ -161,6 +161,17 @@ public:
     bool has_data();
 
     /**
+     * @brief Returns the number of slots with data in the D2H FIFO.
+     *
+     * Non-blocking snapshot of how many pages are available to read.
+     * Useful for diagnosing whether the device is producing faster than
+     * the host can consume.
+     *
+     * @return Number of page slots with data (approximate due to wrap-around overhead).
+     */
+    uint32_t num_data_slots();
+
+    /**
      * @brief Reads data pages from the socket FIFO.
      *
      * Blocks until the requested number of pages are available in the FIFO.

@@ -261,6 +261,25 @@ H2DSocket::~H2DSocket() noexcept {
     }
 }
 
+bool H2DSocket::has_slot() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for slot.");
+    uint32_t num_bytes = page_size_;
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    return bytes_free >= num_bytes;
+}
+
+uint32_t H2DSocket::num_free_slots() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking free slots.");
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    return bytes_free / page_size_;
+}
+
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
