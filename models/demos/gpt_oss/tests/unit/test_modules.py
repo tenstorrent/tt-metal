@@ -373,24 +373,14 @@ def run_fused_throughput_experts_component(
         mesh_mapper=mesh_mapper_tokens,
     )
 
-    # Indices/scores must be HEIGHT_SHARDED L1 (all_to_all_dispatch_metadata requirement)
-    num_cores_y = min(8, tokens_per_device)
-    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
-    input_shard_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
-            [1, num_experts_per_tok],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
+    # Use DRAM INTERLEAVED for indices/scores (matches real router output format).
+    # fused_decode_forward handles the conversion to the format dispatch needs.
     tt_indices = ttnn.from_torch(
         indices_torch.reshape(num_tokens, 1, 1, num_experts_per_tok).to(torch.int16),
         dtype=ttnn.uint16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=input_shard_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper_tokens,
     )
     tt_scores = ttnn.from_torch(
@@ -398,7 +388,7 @@ def run_fused_throughput_experts_component(
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=input_shard_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper_tokens,
     )
 
@@ -882,7 +872,7 @@ def test_decoder(
         )
 
         # Compare outputs
-        pcc_threshold = (pcc_thresholds["decoder"],)
+        pcc_threshold = pcc_thresholds["decoder"]
         mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
         tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[
             ..., : batch_size * seq_len, : config.hidden_size
