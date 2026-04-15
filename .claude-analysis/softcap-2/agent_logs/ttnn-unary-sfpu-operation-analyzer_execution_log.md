@@ -95,3 +95,53 @@ xIELU: piecewise function with beta=0.5, eps=-1e-6:
 - **Status**: FAILED (no SFPU kernel exists to analyze)
 - **Output**: `.claude-analysis/softcap-2/xielu_analysis.md` (documents unimplemented status)
 - **Breadcrumbs**: 6 events logged
+
+---
+
+## Session Info (tanhshrink)
+- **Operation**: tanhshrink
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-15
+- **Output file**: `.claude-analysis/softcap-2/tanhshrink_analysis.md`
+
+## Execution Timeline (tanhshrink)
+
+### 1. Initialization
+- Read reference files: `sfpu-hardware-model.md`, `diagram-templates.md`, `sfpu-operation-analyzer.md` logging spec, `common.md`
+- Initialized breadcrumbs at `.claude-analysis/softcap-2/agent_logs/`
+
+### 2. Dispatch Tracing
+- Read `unary_op_types.hpp`: Confirmed `TANHSHRINK` enum exists at line 111
+- Read `unary_op_utils.cpp`: `get_op_init_and_func_default()` has NO case for TANHSHRINK -- falls to `default: TT_THROW("unexpected op type")`
+- Read `unary_op_utils.hpp`: `is_parametrized_type()` does not include TANHSHRINK
+- Read `unary.hpp`: `REGISTER_UNARY_OPERATION(tanhshrink, TANHSHRINK)` creates C++ inline function at line 158
+- Read `unary.cpp`: `unary_impl()` dispatches through `prim::unary()` standard path
+- Read `unary_device_operation.cpp`: Standard `UnaryProgramFactory` selected for non-sharded inputs
+- Read `unary_program_factory.cpp`: Calls `utils::get_block_defines()` which leads to TT_THROW
+- `get_compute_kernel_path()` returns default `eltwise_sfpu.cpp` but is unreachable
+- `get_op_approx_mode()` returns `false` (default)
+
+### 3. Kernel Source Search
+- Searched entire codebase for `ckernel_sfpu_tanhshrink` -- **zero matches**
+- Searched for `tanhshrink_tile` or `tanh_shrink_tile` -- **zero matches**
+- Searched `tt_metal/` for `tanhshrink` -- **zero matches**
+- Searched nanobind files for `tanhshrink` -- only backward op `tanhshrink_bw` is bound
+
+### 4. Composite/Alternative Path Check
+- Read `unary_composite_op.cpp`: Only comment at line 501 (`// tanhshrink(x) = x - tanh(x)`) -- no active code
+- Read `unary_composite.hpp`: No `tanhshrink` function declared
+- Backward op uses host-level composition: `ttnn::square(ttnn::tanh(input)) * grad`
+
+### 5. Conclusion
+**TANHSHRINK has no SFPU kernel implementation.** It is a type-system stub:
+- `UnaryOpType::TANHSHRINK` enum entry exists
+- `REGISTER_UNARY_OPERATION` macro creates C++ inline function
+- BUT: No dispatch case in `get_op_init_and_func_default()`, no tile-level API, no LLK function, no ckernel SFPU implementation, no nanobind forward binding
+- Was previously a composite op (`x - tanh(x)`) that was removed during refactoring
+
+Attempting to call `ttnn.tanhshrink()` at runtime would throw `TT_THROW("unexpected op type TANHSHRINK")`.
+
+## Final Status (tanhshrink)
+- **Status**: SUCCESS (analysis complete -- documented that no SFPU kernel exists)
+- **Output**: `.claude-analysis/softcap-2/tanhshrink_analysis.md`
+- **Breadcrumbs**: 6 events logged (start, dispatch_traced, kernel_source_read, instruction_analysis_complete, analysis_written, complete)
