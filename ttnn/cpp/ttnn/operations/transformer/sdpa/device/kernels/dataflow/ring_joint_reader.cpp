@@ -241,6 +241,8 @@ void kernel_main() {
     constexpr bool c_skip_k_dram = true;
     constexpr bool c_skip_v_dram = true;
 
+    constexpr bool c_skip_v_fwd = true;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -328,9 +330,9 @@ void kernel_main() {
             // V chain forwarding conditions (head-level, existing logic)
             const uint32_t q_iter_local = q_iter;
             const bool should_forward_v = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                          (q_iter_local < next_core_q_chunks);
+                                          (q_iter_local < next_core_q_chunks) && !c_skip_v_fwd;
             const bool should_receive_v =
-                is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+                is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head) && !c_skip_v_fwd;
 
             // K chain forwarding conditions (batch-level, for MLA mode)
             // K chain is active when k_is_chain_participant is true (NHK < NH case)
