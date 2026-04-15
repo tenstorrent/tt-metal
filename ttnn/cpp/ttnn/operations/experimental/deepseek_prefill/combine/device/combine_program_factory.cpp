@@ -284,6 +284,15 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         detail::create_tensor_cb(
             program,
             sender_core_grid,
+            output_tensor,
+            /*buffering_factor=*/rw_buffering,
+            /*cb_id=*/tt::CBIndex::c_4,
+            "output_for_writer");
+    }
+
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
             dispatched_buffer,
             /*buffering_factor=*/rw_buffering,
             /*cb_id=*/tt::CBIndex::c_4,

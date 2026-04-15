@@ -219,7 +219,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 32;
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
