@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     create_hf_model,
     download_infinitebench_subset,
     extract_tt_state_dict,
+    get_4d_causal_mask,
     load_and_compute_layer_by_layer,
     load_reference_cache,
     save_reference_cache,
@@ -466,7 +467,7 @@ def test_prefill_transformer(
 
 
 def test_tokenize_prompt_to_isl(tokenizer):
-    max_isl = 32
+    max_isl = 10
     input_ids, attention_mask, tokens = tokenize_prompt_to_isl(
         tokenizer, max_isl=max_isl, prompt_text="This is a test prompt.", debug=True
     )
@@ -476,6 +477,10 @@ def test_tokenize_prompt_to_isl(tokenizer):
     logger.debug(f"Tokens: {tokens}")
 
     assert input_ids.shape == (1, max_isl), f"Expected input_ids shape (1, {max_isl}), got {input_ids.shape}"
+
+    torch.set_printoptions(threshold=float("inf"), edgeitems=3, precision=2, linewidth=200)
+    logger.debug(f"4D Causal Attention Mask shape:\n{get_4d_causal_mask(attention_mask, ignore_padding=True)}")
+    logger.debug(f"4D Causal Attention Mask Paddshape:\n{get_4d_causal_mask(attention_mask, ignore_padding=False)}")
 
 
 def test_tokenize_prompt_to_chat_template(tokenizer):
@@ -491,3 +496,74 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
     logger.debug(f"Tokens: {tokens}")
 
     assert input_ids.shape == (1, max_isl), f"Expected input_ids shape (1, {max_isl}), got {input_ids.shape}"
+
+
+@pytest.mark.parametrize(
+    "input_source",
+    ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
+)
+@pytest.mark.parametrize("isl_total", [1024])
+@pytest.mark.timeout(0)
+def test_first_token_from_reference(input_source, config_only, isl_total, weight_cache_path, model_path):
+    mesh_shape = (8, 4)
+    pcc_validation = True
+    use_pretrained = True
+    return_kv_cache = True
+    num_layers = DeepSeekV3Config.NUM_LAYERS
+    n_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
+
+    torch.manual_seed(42)
+
+    config = config_only
+    config.max_seq_len = isl_total
+
+    weight_type = "pretrained" if use_pretrained else "random"
+
+    rows, cols = mesh_shape
+    effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+    effective_cache_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        f"isl_total={isl_total},  "
+        f"num_layers={num_layers},"
+        f"input_source={input_source}, pcc_validation={pcc_validation}, "
+        f"weights={weight_type}"
+    )
+
+    # --- Cache-aware loading strategy ---
+
+    from models.demos.deepseek_v3_d_p.utils.cache_utils import check_reference_cache_exists
+
+    # Check cache states
+    profiler.start("cache_check")
+    logger.info("Check reference cache...")
+    cache_key = f"{weight_type}_{input_source}_isl{isl_total}_layers{num_layers}_experts{n_routed_experts}"
+    ref_cache_exists = check_reference_cache_exists(cache_key) if pcc_validation else False
+    profiler.end("cache_check")
+
+    profiler.start("loading_ref")
+    logger.info("Loading reference from cache...")
+    ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
+    profiler.end("loading_ref")
+
+    logger.info(f"Number of reference snapshots: {len(ref_snapshots)}")
+    assert len(ref_snapshots) == DeepSeekV3Config.NUM_LAYERS + 2  # token embedding + final RMS norm
+    logger.success("Reference cache loaded successfully.")
+
+    for ref_host in ref_snapshots:
+        logger.info(ref_host.shape)
+
+    from pathlib import Path
+
+    from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
+
+    lazy_sd = LazyStateDict(Path(model_path))
+
+    norm_sd = sub_state_dict(lazy_sd, "model.lm_head.")
+    print(norm_sd.keys())
+    norm_dequant = dequantize_state_dict(norm_sd, config)
+    lm_head_weight = norm_sd.weight
+    # logger.info(f"✓ Found lm_head in {shard_file}")
+    # logger.info(f"LM head weight shape: {lm_head_weight.shape}")

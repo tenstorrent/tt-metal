@@ -267,6 +267,29 @@ def create_hf_model_with_weights(config, num_layers, hf_sd):
     return result
 
 
+def get_4d_causal_mask(attention_mask, ignore_padding=False):
+    "Get 4D causal attention mask for prefill. If ignore_padding=True, returns a purely causal mask that does not account for padding tokens."
+
+    if ignore_padding:
+        # torch.where(torch.tril(torch.ones(5,5)) == 1, 0, -1e38)
+        # tensor([[ 0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38, -1.0000e+38],
+        #         [ 0.0000e+00,  0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38],
+        #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00, -1.0000e+38, -1.0000e+38],
+        #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00, -1.0000e+38],
+        #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00]])
+        return torch.where(torch.tril(torch.ones(attention_mask.shape[-1], attention_mask.shape[-1])) == 1, 0, -1e38)
+    else:
+        from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+
+        attention_mask_4d = _prepare_4d_causal_attention_mask(
+            attention_mask,
+            (1, attention_mask.shape[-1]),
+            inputs_embeds=torch.zeros_like(attention_mask, dtype=torch.bfloat16),
+            past_key_values_length=0,
+        )
+        return attention_mask_4d
+
+
 def load_and_compute_layer_by_layer(
     model_path: Path,
     config,
@@ -288,6 +311,7 @@ def load_and_compute_layer_by_layer(
     routed_expert_weights_dtype=ttnn.bfloat4_b,
     shared_expert_activations_dtype=ttnn.bfloat16,
     shared_expert_weights_dtype=ttnn.bfloat8_b,
+    ignore_padding=True,
 ) -> LayerByLayerResult:
     """
     Process layers one-at-a-time: load → compute reference → build cache → clear → next.
@@ -376,34 +400,7 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-    from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-
-    attention_mask = _prepare_4d_causal_attention_mask(
-        attention_mask,
-        (1, seq_len),
-        inputs_embeds=h_ref,
-        past_key_values_length=0,
-    )
-
-    #   # Get 2D mask from tokenizer (if available)
-    #   # OR create proper 4D causal mask directly
-
-    #   # Option 1: Manual conversion (if you have 2D mask)
-    #   if attention_mask_2d is not None and len(attention_mask_2d.shape) == 2:
-    #       attention_mask = _prepare_4d_causal_attention_mask(
-    #           attention_mask_2d,
-    #           (batch_size, seq_len),
-    #           inputs_embeds=h_ref,  # from line 376
-    #           past_key_values_length=0,
-    #       )
-    #   else:
-    #       # Option 2: Create causal mask directly
-    #       attention_mask = _prepare_4d_causal_attention_mask(
-    #           None,
-    #           (1, seq_len),
-    #           inputs_embeds=h_ref,
-    #           past_key_values_length=0,
-    #       )
+    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=ignore_padding)
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
