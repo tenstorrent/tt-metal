@@ -42,12 +42,14 @@ def pytest_collection_modifyitems(config, items):
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
     """
-    num_devices = ttnn.get_num_devices()
 
     for item in items:
         marker = item.get_closest_marker("requires_mesh_topology")
         if not marker:
             continue
+
+        # this opens a device
+        num_devices = ttnn.get_num_devices()
 
         # Extract marker arguments
         mesh_shape = marker.kwargs.get("mesh_shape") or (marker.args[0] if marker.args else None)
