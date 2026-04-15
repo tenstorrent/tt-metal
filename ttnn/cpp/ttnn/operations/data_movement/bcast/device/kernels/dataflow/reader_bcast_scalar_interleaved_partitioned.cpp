@@ -28,11 +28,11 @@ void kernel_main() {
 
     // single-tile ublocks
 
-    experimental::Noc noc;
     experimental::CircularBuffer cb0(cb_id_in0);
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    experimental::Noc noc;
+    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
 #else
     cb0.reserve_back(num_tiles);
     cb0.push_back(num_tiles);
