@@ -9,16 +9,12 @@
 
 /**
  * @file matmul_helpers_compute.hpp
- * @brief Runtime-config matmul compute helpers for SDPA and dynamic patterns
+ * @brief Runtime-config matmul compute helpers for SDPA
  *
- * Complements the compile-time matmul_block_helpers.hpp with runtime-configurable
- * matmul operations using MatmulConfig and MatmulMode.
- *
- * Use matmul_block_helpers.hpp for standard blocked matmul kernels (compile-time
- * CB params, full K-loop automation). Use this file for:
- *   - SDPA kernels that need absolute-offset packing
- *   - Kernels that need runtime CB selection
- *   - Building blocks for custom matmul patterns (detail:: namespace)
+ * Provides DST+CB-managed matmul helpers using runtime MatmulConfig for
+ * patterns that don't fit the compile-time template params of
+ * matmul_block_helpers.hpp. All helpers in this file serve SDPA compute
+ * kernels (compute_common.hpp, compute_streaming.hpp).
  *
  * ## MatmulMode
  *
@@ -126,11 +122,15 @@ ALWI void matmul_accumulate_no_mop(
 }  // namespace detail
 
 // =============================================================================
-// DST-managed helpers
+// SDPA Helpers
 // =============================================================================
+//
+// Each helper fully manages the DST lifecycle (acquire/commit/wait/release)
+// and the relevant CB operations (wait/reserve/pack/push/pop) so that SDPA
+// kernel code never touches DST or CB primitives directly for matmul.
 
 /**
- * @brief Single matmul + PostComputeFn + pack to output CB.
+ * @brief Single-tile matmul with fused PostComputeFn, used by SDPA normalize_row.
  *
  * Full lifecycle: init_short + reconfig + wait(in0,1) + wait(in1,1) +
  * reserve(out_cb,1) → acquire → matmul → post_compute(1) → commit →
@@ -144,9 +144,9 @@ ALWI void matmul_single_and_pack(
     const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t out_cb, PostComputeFn post_compute = {});
 
 /**
- * @brief SDPA reduce subblock inplace.
+ * @brief Inplace reduce via matmul, used by SDPA matmul_reduce.
  *
- * Full lifecycle: init_short + reconfig + input CB waits +
+ * Full lifecycle: init_short + reconfig + wait(in1,1) + wait(out_cb, total) +
  * per-subblock (acquire → matmul(0,0,0) → commit → pop(out,n) →
  *               wait → pack(n) → release → push(n))
  *
@@ -157,12 +157,8 @@ template <MatmulMode mode>
 ALWI void matmul_reduce_subblock_inplace(
     const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles, uint32_t total_in0_tiles);
 
-// =============================================================================
-// SDPA Helpers: Absolute-offset packing patterns
-// =============================================================================
-
 /**
- * @brief Matmul one subblock and pack at absolute offsets in output CB.
+ * @brief Subblock matmul with absolute-offset packing, used by SDPA streaming QK*V.
  *
  * Sequence: acquire → accumulate(inner_dim) → commit → wait →
  *           pack_tile<true> at row-major offsets → post_pack() → release
@@ -183,7 +179,7 @@ ALWI void matmul_and_pack_absolute(
     PostPackFn post_pack = {});
 
 /**
- * @brief Full blocked matmul with absolute-offset packing and CB management.
+ * @brief Full blocked matmul with absolute-offset packing, used by SDPA Q*K and QK*V.
  *
  * Manages: init_short, reconfig, DST lifecycle, CB lifecycle, double subblock loop.
  * Caller must: produce in0/in1 tiles, pop in0 after return.
