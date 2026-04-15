@@ -573,28 +573,42 @@ jobs:
       test_splits: 1
       pytest_markers: "quasar"
 
-  # LLK Slow Dispatch Unit Tests (PR gate - runs when LLK engine, tests, or perf code changed)
-  llk-sd-unit-tests:
+  # LLK Slow Dispatch Unit Tests — split by arch so wormhole-only / blackhole-only changes do not
+  # schedule the other arch (common / shared test-infra / LLK CI still run both, like llk-test-*).
+  llk-sd-unit-tests-wormhole:
     needs: [ build, find-changed-files ]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true')
+      }}
+    secrets: inherit
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      test-group-name: llk
+      enable-llk-asserts: true
+
+  llk-sd-unit-tests-blackhole:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true')
       }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - { arch: wormhole_b0, runner-label: N150 }
-          - { arch: blackhole, runner-label: P150 }
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      arch: blackhole
+      runner-label: P150
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
@@ -626,7 +640,8 @@ jobs:
       - llk-test-wormhole
       - llk-test-blackhole
       - llk-build-quasar
-      - llk-sd-unit-tests
+      - llk-sd-unit-tests-wormhole
+      - llk-sd-unit-tests-blackhole
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -638,6 +653,6 @@ jobs:
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,
             llk-test-wormhole, llk-test-blackhole, llk-build-quasar,
-            llk-sd-unit-tests
+            llk-sd-unit-tests-wormhole, llk-sd-unit-tests-blackhole
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
