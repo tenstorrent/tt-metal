@@ -12,23 +12,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
-
-// Helper: create a route info with adjusted range for 2D multicast.
-// For 2D (HybridMeshPacketHeader), the actual hop count is in e/w/n/s_num_hops.
-// For 1D (LowLatencyPacketHeader), it's in start_distance_in_hops/range_hops.
-// This helper sets BOTH so it works for either header type.
-inline ccl_routing_utils::line_multicast_route_info_t adjust_mcast_range(
-    const ccl_routing_utils::line_multicast_route_info_t& base_route, uint32_t new_range, uint32_t direction) {
-    auto adjusted = base_route;
-    // 1D path: update range_hops
-    adjusted.range_hops = new_range;
-    // 2D path: update the directional hop field that matches the send direction
-    adjusted.e_num_hops = (direction == eth_chan_directions::EAST) ? new_range : 0;
-    adjusted.w_num_hops = (direction == eth_chan_directions::WEST) ? new_range : 0;
-    adjusted.n_num_hops = (direction == eth_chan_directions::NORTH) ? new_range : 0;
-    adjusted.s_num_hops = (direction == eth_chan_directions::SOUTH) ? new_range : 0;
-    return adjusted;
-}
+using namespace ttnn::operations::ccl::common;
 
 namespace detail {
 
@@ -63,10 +47,7 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
-// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets.
-// Uses _set_state/_with_state pattern with fabric_set_line_multicast_route for 2D compatibility.
+// Bidirectional fabric multicast atomic increment using 2D-compatible helpers from moe_utils.hpp
 template <uint32_t DispatchDevices, bool DoubleAntipodalAtomicInc = false, typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc(
     FabricConnectionsType& fabric_connections,
@@ -83,34 +64,23 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc(
 
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 
-    // Send multicast in positive direction
     if constexpr (positive_range > 0) {
-        auto pos_adj = adjust_mcast_range(pos_route, positive_range, positive_direction);
-        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        fabric_multicast_atomic_inc_2d(
+            fabric_connections[positive_direction],
             packet_header_pos,
-            static_cast<uint8_t>(pos_adj.start_distance_in_hops),
-            static_cast<uint8_t>(positive_range),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &fabric_connections[positive_direction], packet_header_pos, cmd_header);
+            cmd_header,
+            pos_route,
+            positive_range,
+            positive_direction);
     }
-
-    // Send multicast in negative direction
     if constexpr (negative_range > 0) {
-        auto neg_adj = adjust_mcast_range(neg_route, negative_range, negative_direction);
-        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
-        fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        fabric_multicast_atomic_inc_2d(
+            fabric_connections[negative_direction],
             packet_header_neg,
-            static_cast<uint8_t>(neg_adj.start_distance_in_hops),
-            static_cast<uint8_t>(negative_range),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
-
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            &fabric_connections[negative_direction], packet_header_neg, cmd_header);
+            cmd_header,
+            neg_route,
+            negative_range,
+            negative_direction);
     }
 }
 
@@ -150,41 +120,27 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_async(
         uint32_t neg_curr_range = negative_polarity ? negative_range : positive_range;
 
         if constexpr (positive_range > 0) {
-            auto pos_adj = adjust_mcast_range(pos_route, pos_curr_range, positive_direction);
-            ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
-            fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-                packet_header_pos,
-                static_cast<uint8_t>(pos_adj.start_distance_in_hops),
-                static_cast<uint8_t>(pos_curr_range),
-                nullptr,
-                0);
-
-            fabric_multicast_noc_unicast_write_with_state<
-                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                &fabric_connections[positive_direction],
+            fabric_multicast_write_2d(
+                fabric_connections[positive_direction],
                 packet_header_pos,
                 src_addr,
+                static_cast<uint16_t>(curr_packet_size),
                 noc_command_header,
-                static_cast<uint16_t>(curr_packet_size));
+                pos_route,
+                pos_curr_range,
+                positive_direction);
         }
 
         if constexpr (negative_range > 0) {
-            auto neg_adj = adjust_mcast_range(neg_route, neg_curr_range, negative_direction);
-            ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
-            fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-                packet_header_neg,
-                static_cast<uint8_t>(neg_adj.start_distance_in_hops),
-                static_cast<uint8_t>(neg_curr_range),
-                nullptr,
-                0);
-
-            fabric_multicast_noc_unicast_write_with_state<
-                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                &fabric_connections[negative_direction],
+            fabric_multicast_write_2d(
+                fabric_connections[negative_direction],
                 packet_header_neg,
                 src_addr,
+                static_cast<uint16_t>(curr_packet_size),
                 noc_command_header,
-                static_cast<uint16_t>(curr_packet_size));
+                neg_route,
+                neg_curr_range,
+                negative_direction);
         }
 
         negative_polarity = !negative_polarity;
@@ -223,44 +179,28 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_async(
 
     // Send multicast scatter write in positive direction
     if constexpr (positive_range > 0) {
-        auto pos_adj = adjust_mcast_range(pos_route, positive_range, positive_direction);
-        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_pos, pos_adj);
-        fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::PayloadSize>(
-            packet_header_pos,
-            static_cast<uint8_t>(pos_adj.start_distance_in_hops),
-            static_cast<uint8_t>(positive_range),
-            scatter_cmd_header,
-            static_cast<uint16_t>(total_payload_size));
-
-        fabric_multicast_noc_scatter_write_with_state<
-            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-            UnicastScatterWriteUpdateMask::PayloadSize>(
-            &fabric_connections[positive_direction],
+        fabric_multicast_scatter_write_2d(
+            fabric_connections[positive_direction],
             packet_header_pos,
             src_addr,
+            static_cast<uint16_t>(total_payload_size),
             scatter_cmd_header,
-            static_cast<uint16_t>(total_payload_size));
+            pos_route,
+            positive_range,
+            positive_direction);
     }
 
     // Send multicast scatter write in negative direction
     if constexpr (negative_range > 0) {
-        auto neg_adj = adjust_mcast_range(neg_route, negative_range, negative_direction);
-        ccl_routing_utils::fabric_set_line_multicast_route(packet_header_neg, neg_adj);
-        fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::PayloadSize>(
-            packet_header_neg,
-            static_cast<uint8_t>(neg_adj.start_distance_in_hops),
-            static_cast<uint8_t>(negative_range),
-            scatter_cmd_header,
-            static_cast<uint16_t>(total_payload_size));
-
-        fabric_multicast_noc_scatter_write_with_state<
-            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-            UnicastScatterWriteUpdateMask::PayloadSize>(
-            &fabric_connections[negative_direction],
+        fabric_multicast_scatter_write_2d(
+            fabric_connections[negative_direction],
             packet_header_neg,
             src_addr,
+            static_cast<uint16_t>(total_payload_size),
             scatter_cmd_header,
-            static_cast<uint16_t>(total_payload_size));
+            neg_route,
+            negative_range,
+            negative_direction);
     }
 
     // Also write to local device
