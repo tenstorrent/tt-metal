@@ -83,11 +83,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     // This may miss some cases because block_ct_dim should be used instead of 1.
     // That value is not available at this point in time and upstream team is okay
     // with this and does not want to plumb through the value.
-    LLK_ASSERT(
-        get_local_cb_interface(operandA_id).fifo_rd_ptr +
-                (row_start_index + 1) * get_local_cb_interface(operandA_id).fifo_page_size <=
-            get_local_cb_interface(operandA_id).fifo_limit,
-        "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT(cb_access_within_bounds(operandA_id, row_start_index, 1), "Indexed tile read exceeds CB boundary");
 
     _llk_unpack_AB_reduce_block_max_row_runtime_(address_a, base_address_b, respect_trigger);
 }
