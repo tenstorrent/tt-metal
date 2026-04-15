@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from argparse import ArgumentParser, Namespace
 import csv
-import os
 import random
 from dataclasses import dataclass, replace
 from datetime import datetime
