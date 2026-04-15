@@ -7,11 +7,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/trigonometry.h"
-#include "api/compute/mul_int_sfpu.h"
-#include "api/compute/eltwise_unary/rpow.h"
-#include "api/compute/eltwise_unary/rdiv.h"
-#include "api/compute/eltwise_unary/fill.h"
+// Headers for base LLK ops (trigonometry, rpow, rdiv, fill) are included
+// via compute_kernel_api.h when SFPU_OP_COMPUTE_KERNEL_API_INCLUDE is defined.
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);

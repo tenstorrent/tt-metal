@@ -43,12 +43,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::SOFTCAP: {
             float cap = param0;
             float inv_cap = 1.0f / cap;
-            // Encode as BFloat16 for SFPU s2vFloat16b: upper 16 bits of float32
-            auto cap_bf16 = std::bit_cast<uint32_t>(cap) >> 16;
-            auto inv_cap_bf16 = std::bit_cast<uint32_t>(inv_cap) >> 16;
+            // Encode as raw float32 bit patterns.
+            // The SFPU kernel decodes them back to float via union reinterpret.
+            auto cap_u32 = std::bit_cast<uint32_t>(cap);
+            auto inv_cap_u32 = std::bit_cast<uint32_t>(inv_cap);
             return {
                 fmt::format("softcap_tile_init();"),
-                fmt::format("softcap_tile({}, 0x{:x}U, 0x{:x}U);", idst, inv_cap_bf16, cap_bf16)};
+                fmt::format("softcap_tile({}, 0x{:08x}U, 0x{:08x}U);", idst, inv_cap_u32, cap_u32)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
@@ -177,7 +178,6 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, [[maybe_unused]] std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::SOFTCAP: return "eltwise_sfpu_softcap.cpp";
         default: return "eltwise_sfpu.cpp";
     }
 }

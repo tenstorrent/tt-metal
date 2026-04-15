@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,4 +11,40 @@ enum class SfpuType {
     atanh,
     sinh,
     softcap,
+    // Base LLK compatibility -- needed by ckernel_sfpu_comp.h and ckernel_sfpu_isinf_isnan.h
+    equal_zero = 100,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_equal_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    unary_ne,
+    unary_eq,
+    unary_gt,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    topk_local_sort,
+    typecast,
+    unary_max,
+    unary_min,
+    unary_max_int32,
+    unary_min_int32,
+    unary_max_uint32,
+    unary_min_uint32,
+    signbit,
+    isinf,
+    isposinf,
+    isneginf,
+    isnan,
+    isfinite,
+    max,
+    min,
+    max_int32,
+    max_uint32,
+    min_int32,
+    min_uint32,
+    mul_int32,
+    mul_uint16,
+    where,
 };
