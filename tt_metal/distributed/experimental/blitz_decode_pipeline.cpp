@@ -129,6 +129,38 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
         .entry_node_coord = fn_to_coord(hops[num_meshes - 1].second),
         .exit_node_coord = fn_to_coord(loopback_exit_fn)});
 
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        auto s_mesh_id = tt::tt_fabric::MeshId{static_cast<uint32_t>(s.stage_index)};
+        auto entry_chip = mesh_graph.coordinate_to_chip(s_mesh_id, s.entry_node_coord);
+        auto exit_chip = mesh_graph.coordinate_to_chip(s_mesh_id, s.exit_node_coord);
+        tt::tt_fabric::FabricNodeId entry_fn(s_mesh_id, entry_chip);
+        tt::tt_fabric::FabricNodeId exit_fn_node(s_mesh_id, exit_chip);
+
+        auto entry_tray = topology_mapper.get_tray_id_for_fabric_node_id(entry_fn);
+        auto entry_asic_loc = topology_mapper.get_asic_location_for_fabric_node_id(entry_fn);
+        auto entry_hostname = topology_mapper.get_hostname_for_fabric_node_id(entry_fn);
+
+        auto exit_tray = topology_mapper.get_tray_id_for_fabric_node_id(exit_fn_node);
+        auto exit_asic_loc = topology_mapper.get_asic_location_for_fabric_node_id(exit_fn_node);
+        auto exit_hostname = topology_mapper.get_hostname_for_fabric_node_id(exit_fn_node);
+
+        fmt::print(
+            "BlitzPipeline stage [{}]: "
+            "entry={{fn={}, tray={}, asic_loc={}, host={}}} "
+            "exit={{fn={}, tray={}, asic_loc={}, host={}}}\n",
+            i,
+            entry_fn,
+            *entry_tray,
+            *entry_asic_loc,
+            entry_hostname,
+            exit_fn_node,
+            *exit_tray,
+            *exit_asic_loc,
+            exit_hostname);
+    }
+
     return stages;
 }
 
@@ -182,6 +214,7 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
     // 3. Consecutive stages are physically connected via inter-mesh links:
     //    stage[i].exit on mesh_i must be an exit node to the mesh of stage[i+1],
     //    and stage[i+1].entry must be the peer on the other side of that cable.
+    const auto& topology_mapper = control_plane.get_topology_mapper();
     for (std::size_t i = 0; i < stages.size() - 1; i++) {
         const auto& curr = stages[i];
         const auto& next = stages[i + 1];
@@ -197,6 +230,21 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
         auto entry_chip_id = mesh_graph.coordinate_to_chip(next_mesh_id, next.entry_node_coord);
         tt::tt_fabric::FabricNodeId exit_fn(curr_mesh_id, exit_chip_id);
         tt::tt_fabric::FabricNodeId entry_fn(next_mesh_id, entry_chip_id);
+
+        fmt::print(
+            "ValidatePipeline stages [{}]->[{}]: "
+            "exit={{fn={}, tray={}, asic_loc={}, host={}}} "
+            "entry={{fn={}, tray={}, asic_loc={}, host={}}}\n",
+            i,
+            i + 1,
+            exit_fn,
+            *topology_mapper.get_tray_id_for_fabric_node_id(exit_fn),
+            *topology_mapper.get_asic_location_for_fabric_node_id(exit_fn),
+            topology_mapper.get_hostname_for_fabric_node_id(exit_fn),
+            entry_fn,
+            *topology_mapper.get_tray_id_for_fabric_node_id(entry_fn),
+            *topology_mapper.get_asic_location_for_fabric_node_id(entry_fn),
+            topology_mapper.get_hostname_for_fabric_node_id(entry_fn));
 
         auto pairs =
             control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
