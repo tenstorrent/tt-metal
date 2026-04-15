@@ -8,6 +8,7 @@ import os
 
 import librosa
 import numpy as np
+import pyworld as pw
 import torch
 import torch.nn.functional as F
 from pysptk import sptk
@@ -126,6 +127,12 @@ class Pipeline:
         version: str = "v1",
         num: str = "48k",
         config: Config | None = None,
+        speaker_id: int = 0,
+        f0_up_key: int = 0,
+        f0_method: str = "rapt",
+        index_rate: float = 0.75,
+        rms_mix_rate: float = 0.25,
+        protect: float = 0.33,
     ):
         hubert_cfg_path, hubert_path = _get_hubert_paths()
         if not os.path.exists(hubert_path):
@@ -134,6 +141,12 @@ class Pipeline:
         self.if_f0 = if_f0
         self.version = version
         self.num = num
+        self.f0_up_key = f0_up_key
+        self.f0_method = f0_method
+        self.index_rate = index_rate
+        self.rms_mix_rate = rms_mix_rate
+        self.protect = protect
+        self.speaker_id = speaker_id
 
         self.synthesizer, data_cfg = _load_synthesizer(self.config, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
@@ -177,11 +190,27 @@ class Pipeline:
                 otype="f0",
             )
             f0 = torch.from_numpy(f0)
-            pad_size = (num_frames - len(f0) + 1) // 2
-            if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
-                f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
+        elif self.f0_method == "dio":
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
+            frame_period = self.window / self.sr * 1000.0
+            dio_threshold = 0.444
+            allowed_range = 0.02 + dio_threshold * (0.2 - 0.02)
+            f0, t = pw.dio(
+                audio_np,
+                self.sr,
+                f0_floor=f0_min,
+                f0_ceil=f0_max,
+                frame_period=frame_period,
+                allowed_range=allowed_range,
+            )
+            f0 = pw.stonemask(audio_np, f0, t, self.sr)
+            f0 = torch.from_numpy(f0.astype(np.float32))
         else:
             raise ValueError(f"Unsupported f0_method: {self.f0_method}")
+
+        pad_size = (num_frames - len(f0) + 1) // 2
+        if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
+            f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
 
         f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()
@@ -200,13 +229,10 @@ class Pipeline:
     def _vc(
         self,
         audio,
-        speaker_id,
         pitch,
         pitchf,
         index,
         big_npy,
-        index_rate,
-        protect,
     ):
         assert audio.dim() == 1, audio.dim()
         audio = audio.view(1, -1).to(torch.float32).to(self.device)
@@ -217,7 +243,7 @@ class Pipeline:
             )
             feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
 
-        if protect < 0.5 and pitch is not None and pitchf is not None:
+        if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = feats.clone()
         if index is not None and big_npy is not None and index_rate != 0:
             index_features = feats[0].cpu().numpy()
@@ -229,21 +255,22 @@ class Pipeline:
             feats = index_features * index_rate + (1 - index_rate) * feats
 
         feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
-        if protect < 0.5 and pitch is not None and pitchf is not None:
+        if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = F.interpolate(protected_features.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
         num_frames = feats.shape[1]
 
         if pitch is not None and pitchf is not None:
             pitch = pitch[:, :num_frames]
             pitchf = pitchf[:, :num_frames]
-        if protect < 0.5 and pitch is not None and pitchf is not None:
+        if self.protect < 0.5 and pitch is not None and pitchf is not None:
             pitchff = pitchf.clone()
             pitchff[pitchf > 0] = 1
-            pitchff[pitchf < 1] = protect
+            pitchff[pitchf < 1] = self.protect
             pitchff = pitchff.unsqueeze(-1)
             feats = feats * pitchff + protected_features * (1 - pitchff)
             feats = feats.to(protected_features.dtype)
 
+        speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
         with torch.no_grad():
             hasp = pitch is not None and pitchf is not None
             arg = (feats, pitch, pitchf, speaker_id) if hasp else (feats, speaker_id)
@@ -253,11 +280,6 @@ class Pipeline:
     def _run_pipeline(
         self,
         audio,
-        speaker_id,
-        file_index,
-        index_rate,
-        rms_mix_rate,
-        protect,
     ):
         # if (
         #     file_index
@@ -303,7 +325,6 @@ class Pipeline:
             idx_list.append((s // self.window, (t + self.t_pad2) // self.window))
             s = t
         idx_list.append((s // self.window, p_len))
-        speaker_id = torch.tensor(speaker_id, device=self.device).unsqueeze(0).long()
         pitch, pitchf = None, None
         if self.if_f0:
             pitch, pitchf = self._get_f0(
@@ -317,18 +338,15 @@ class Pipeline:
             audio_output.append(
                 self._vc(
                     audio_padded[idx_s * self.window : (idx_e + self.t_pad2 // self.window) * self.window],
-                    speaker_id,
                     pitch_slice,
                     pitchf_slice,
                     index,
                     big_npy,
-                    index_rate,
-                    protect,
                 )[self.t_pad_tgt : -self.t_pad_tgt]
             )
         audio_output = torch.cat(audio_output)
-        if rms_mix_rate != 1:
-            audio_output = _change_rms(audio, 16000, audio_output, self.tgt_sr, rms_mix_rate)
+        if self.rms_mix_rate != 1:
+            audio_output = _change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
         if audio_max > 1:
@@ -340,13 +358,6 @@ class Pipeline:
     def infer(
         self,
         audio_path: str,
-        speaker_id: int,
-        f0_up_key: int = 0,
-        f0_method: str = "rapt",
-        index_file: str | None = None,
-        index_rate: float = 0.75,
-        rms_mix_rate: float = 0.25,
-        protect: float = 0.33,
     ):
         if not os.path.exists(audio_path):
             raise FileNotFoundError("input_audio_path not found.")
@@ -356,16 +367,8 @@ class Pipeline:
         if audio_max > 1:
             audio /= audio_max
 
-        self.f0_up_key = f0_up_key
-        self.f0_method = f0_method
-
         result = self._run_pipeline(
             audio,
-            speaker_id,
-            index_file,
-            index_rate,
-            rms_mix_rate,
-            protect,
         )
 
         return result

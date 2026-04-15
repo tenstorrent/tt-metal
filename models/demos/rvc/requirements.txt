@@ -4,4 +4,5 @@ torchcrepe>=0.0.22,<0.1.0
 av==16.0.0
 speechbrain
 torchaudio
+pyworld
 pysptk

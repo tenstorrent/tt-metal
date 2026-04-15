@@ -9,6 +9,7 @@ import math
 import os
 
 import numpy as np
+import pyworld as pw
 import torch
 import torch.nn.functional as F
 from pysptk import sptk
@@ -289,11 +290,27 @@ class Pipeline:
                 otype="f0",
             )
             f0 = torch.from_numpy(f0)
-            pad_size = (num_frames - len(f0) + 1) // 2
-            if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
-                f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
+        elif self.f0_method == "dio":
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
+            frame_period = self.window / self.sr * 1000.0
+            dio_threshold = 0.444
+            allowed_range = 0.02 + dio_threshold * (0.2 - 0.02)
+            f0, t = pw.dio(
+                audio_np,
+                self.sr,
+                f0_floor=f0_min,
+                f0_ceil=f0_max,
+                frame_period=frame_period,
+                allowed_range=allowed_range,
+            )
+            f0 = pw.stonemask(audio_np, f0, t, self.sr)
+            f0 = torch.from_numpy(f0.astype(np.float32))
         else:
             raise ValueError(f"Unsupported f0_method: {self.f0_method}")
+
+        pad_size = (num_frames - len(f0) + 1) // 2
+        if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
+            f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
 
         f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()

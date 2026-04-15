@@ -43,17 +43,7 @@ def test_pipeline_real_file_usage(device) -> None:
     torch_pipe = TorchPipeline(if_f0=True, version="v1", num="48k")
     tt_pipe = TTPipeline(tt_device=device, if_f0=True, version="v1", num="48k")
 
-    # Keep infer invocation aligned with models/demos/rvc/scripts/infer.py.
-    common_kwargs = dict(
-        speaker_id=0,
-        f0_up_key=0,
-        f0_method="rapt",
-        index_rate=0.75,
-        rms_mix_rate=0.25,
-        protect=0.33,
-    )
-
-    torch_out = np.asarray(torch_pipe.infer(str(input_path), **common_kwargs))
+    torch_out = np.asarray(torch_pipe.infer(str(input_path)))
     tt_out = np.asarray(tt_pipe.infer(str(input_path)))
 
     # assert torch_out.size > 0
