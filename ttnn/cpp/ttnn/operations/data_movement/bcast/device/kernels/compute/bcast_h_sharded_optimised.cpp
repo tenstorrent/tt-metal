@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -16,12 +17,16 @@ void kernel_main() {
 
     init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
-    cb_wait_front(tt::CBIndex::c_0, Wt * Ht);
-    cb_reserve_back(tt::CBIndex::c_16, Wt * Ht);
+    experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);
+    experimental::CircularBuffer cb_in1(tt::CBIndex::c_1);
+    experimental::CircularBuffer cb_out(tt::CBIndex::c_16);
+
+    cb_in0.wait_front(Wt * Ht);
+    cb_out.reserve_back(Wt * Ht);
     uint32_t b_offset = 0;
     for (uint32_t bn = 0; bn < batch_b; bn++) {
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_wait_front(tt::CBIndex::c_1, onetile);
+            cb_in1.wait_front(onetile);
             for (uint32_t ht = 0; ht < Ht_per_batch_b; ht += h_blk) {
                 acquire_dst();
                 for (uint32_t htr = 0; htr < h_blk; htr++) {
@@ -31,10 +36,10 @@ void kernel_main() {
                 }
                 release_dst();
             }
-            cb_pop_front(tt::CBIndex::c_1, onetile);
+            cb_in1.pop_front(onetile);
         }
         b_offset += Ht_per_batch_b * Wt;
     }
-    cb_pop_front(tt::CBIndex::c_0, Wt * Ht);
-    cb_push_back(tt::CBIndex::c_16, Wt * Ht);
+    cb_in0.pop_front(Wt * Ht);
+    cb_out.push_back(Wt * Ht);
 }

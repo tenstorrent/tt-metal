@@ -9,6 +9,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_binary.h"
 
+#include "experimental/circular_buffer.h"
 #include "sort_common.hpp"
 
 /*
@@ -92,6 +93,10 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
+    experimental::CircularBuffer cb_input_transposed(input_tensor_transposed_cb_index);
+    experimental::CircularBuffer cb_index_transposed(index_tensor_transposed_cb_index);
+    experimental::CircularBuffer cb_sync(synchronization_cb_index);
+
     ckernel::topk_tile_init();
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
 
@@ -109,8 +114,8 @@ void kernel_main() {
             /*end_phase(log2(K))=*/5);
 
         // Wait for bitonic sequence of Wt tiles
-        cb_wait_front(input_tensor_transposed_cb_index, Wt);
-        cb_wait_front(index_tensor_transposed_cb_index, Wt);
+        cb_input_transposed.wait_front(Wt);
+        cb_index_transposed.wait_front(Wt);
 
         // Sort and merge step of bitonic merge sort
         uint32_t stages = 0;
@@ -118,8 +123,8 @@ void kernel_main() {
             stages++;
         }
 
-        cb_reserve_back(synchronization_cb_index, one_tile);
-        cb_push_back(synchronization_cb_index, one_tile);
+        cb_sync.reserve_back(one_tile);
+        cb_sync.push_back(one_tile);
 
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
@@ -138,9 +143,9 @@ void kernel_main() {
 
                         tile_regs_acquire();
 
-                        cb_wait_front(synchronization_cb_index, one_tile);
-                        cb_pop_front(synchronization_cb_index, one_tile);
-                        cb_reserve_back(synchronization_cb_index, one_tile);
+                        cb_sync.wait_front(one_tile);
+                        cb_sync.pop_front(one_tile);
+                        cb_sync.reserve_back(one_tile);
 
                         copy_tile_to_dst_init_short_with_dt(
                             input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
@@ -184,7 +189,7 @@ void kernel_main() {
                         pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
                         pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
 
-                        cb_push_back(synchronization_cb_index, one_tile);
+                        cb_sync.push_back(one_tile);
 
                         tile_regs_release();
                     }
@@ -192,17 +197,17 @@ void kernel_main() {
             }
         }
 
-        cb_wait_front(synchronization_cb_index, one_tile);
-        cb_pop_front(synchronization_cb_index, one_tile);
+        cb_sync.wait_front(one_tile);
+        cb_sync.pop_front(one_tile);
 
-        cb_reserve_back(input_tensor_transposed_cb_index, Wt);
-        cb_reserve_back(index_tensor_transposed_cb_index, Wt);
+        cb_input_transposed.reserve_back(Wt);
+        cb_index_transposed.reserve_back(Wt);
 
-        cb_pop_front(input_tensor_transposed_cb_index, Wt);
-        cb_pop_front(index_tensor_transposed_cb_index, Wt);
+        cb_input_transposed.pop_front(Wt);
+        cb_index_transposed.pop_front(Wt);
 
-        cb_push_back(input_tensor_transposed_cb_index, Wt);
-        cb_push_back(index_tensor_transposed_cb_index, Wt);
+        cb_input_transposed.push_back(Wt);
+        cb_index_transposed.push_back(Wt);
 
         // Values tensor
         transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, Wt);

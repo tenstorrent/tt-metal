@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/binary_max_min.h"
 
+#include "experimental/circular_buffer.h"
 #include "sort_common.hpp"
 
 #include <cstdint>
@@ -52,6 +53,13 @@ void kernel_main() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
 
+    experimental::CircularBuffer cb_input_transposed(input_tensor_transposed_cb_index);
+    experimental::CircularBuffer cb_index_transposed(index_tensor_transposed_cb_index);
+    experimental::CircularBuffer cb_value_intermediate(value_tensor_intermediate_cb_index);
+    experimental::CircularBuffer cb_index_intermediate(index_tensor_intermediate_cb_index);
+    experimental::CircularBuffer cb_value_peer(value_tensor_peer_cb_index);
+    experimental::CircularBuffer cb_index_peer(index_tensor_peer_cb_index);
+
     // LLK setup
     ckernel::topk_tile_init();
     transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
@@ -73,8 +81,8 @@ void kernel_main() {
         global_old_cb = index_tensor_cb_index;
 
         // Wait for bitonic sequence of Wt tiles
-        cb_wait_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
-        cb_wait_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_input_transposed.wait_front(number_of_tiles_per_core);
+        cb_index_transposed.wait_front(number_of_tiles_per_core);
 
         // Sort and merge step of bitonic merge sort
         const uint32_t stages = ilog2(Wt);
@@ -157,39 +165,39 @@ void kernel_main() {
                         constexpr uint32_t FIRST_TILE = 0;
 
                         if ((i & 1) == 0) {  // i % 2
-                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                            cb_value_intermediate.reserve_back(one_tile);
+                            cb_index_intermediate.reserve_back(one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
                                 index_tensor_transposed_cb_index,
                                 tile_id,
                                 index_tensor_intermediate_cb_index);
-                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                            cb_index_intermediate.push_back(one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
                                 input_tensor_transposed_cb_index,
                                 tile_id,
                                 value_tensor_intermediate_cb_index);
-                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_value_intermediate.push_back(one_tile);
 
-                            cb_reserve_back(value_tensor_intermediate_cb_index, one_tile);
-                            cb_reserve_back(index_tensor_intermediate_cb_index, one_tile);
+                            cb_value_intermediate.reserve_back(one_tile);
+                            cb_index_intermediate.reserve_back(one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
                                 index_tensor_transposed_cb_index,
                                 tile_id + 1,
                                 index_tensor_intermediate_cb_index);
-                            cb_push_back(index_tensor_intermediate_cb_index, one_tile);
+                            cb_index_intermediate.push_back(one_tile);
 
                             copy_tile_between_cbs(
                                 global_old_cb,
                                 input_tensor_transposed_cb_index,
                                 tile_id + 1,
                                 value_tensor_intermediate_cb_index);
-                            cb_push_back(value_tensor_intermediate_cb_index, one_tile);
+                            cb_value_intermediate.push_back(one_tile);
                             sync_packer_unpacker(packer_unpacker_sync_cb_index);
                         }
 
@@ -204,22 +212,22 @@ void kernel_main() {
                         copy_tile_to_dst_init_with_cb_update(input_tensor_transposed_cb_index, global_old_cb);
                         copy_tile(input_tensor_transposed_cb_index, tile_id, input_dest_start);
 
-                        cb_wait_front(index_tensor_peer_cb_index, one_tile);
+                        cb_index_peer.wait_front(one_tile);
 
                         // Load new index tile for sorting
                         copy_tile_to_dst_init_with_cb_update(index_tensor_peer_cb_index, global_old_cb);
                         copy_tile(index_tensor_peer_cb_index, FIRST_TILE, index_dest_end);
 
-                        cb_pop_front(index_tensor_peer_cb_index, one_tile);
+                        cb_index_peer.pop_front(one_tile);
 
                         // Read other tile from writer
-                        cb_wait_front(value_tensor_peer_cb_index, one_tile);
+                        cb_value_peer.wait_front(one_tile);
 
                         // Load new value tile for sorting
                         copy_tile_to_dst_init_with_cb_update(value_tensor_peer_cb_index, global_old_cb);
                         copy_tile(value_tensor_peer_cb_index, FIRST_TILE, input_dest_end);
 
-                        cb_pop_front(value_tensor_peer_cb_index, one_tile);
+                        cb_value_peer.pop_front(one_tile);
 
                         ckernel::topk_merge(0, m_iter, 32);
 
@@ -251,14 +259,14 @@ void kernel_main() {
             }  // sub loop
         }  // stages loop
 
-        cb_reserve_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
-        cb_reserve_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_input_transposed.reserve_back(number_of_tiles_per_core);
+        cb_index_transposed.reserve_back(number_of_tiles_per_core);
 
-        cb_pop_front(input_tensor_transposed_cb_index, number_of_tiles_per_core);
-        cb_pop_front(index_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_input_transposed.pop_front(number_of_tiles_per_core);
+        cb_index_transposed.pop_front(number_of_tiles_per_core);
 
-        cb_push_back(input_tensor_transposed_cb_index, number_of_tiles_per_core);
-        cb_push_back(index_tensor_transposed_cb_index, number_of_tiles_per_core);
+        cb_input_transposed.push_back(number_of_tiles_per_core);
+        cb_index_transposed.push_back(number_of_tiles_per_core);
 
         // Values tensor
         transpose_and_pack(input_tensor_transposed_cb_index, value_tensor_cb_index, number_of_tiles_per_core);

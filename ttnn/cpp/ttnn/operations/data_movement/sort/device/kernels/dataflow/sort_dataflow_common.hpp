@@ -5,17 +5,20 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 template <typename T = uint16_t>
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // Constants
     constexpr uint32_t one_tile = 1;
 
+    experimental::CircularBuffer cb(cb_id);
+
     // Reserve space
-    cb_reserve_back(cb_id, one_tile);
+    cb.reserve_back(one_tile);
 
     // Writer config
-    const uint32_t writer_addr = get_write_ptr(cb_id);
+    const uint32_t writer_addr = cb.get_write_ptr();
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(writer_addr);
     const uint32_t w = wt << 5;  // wt * 2^(5)
 
@@ -41,5 +44,5 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     }  // i loop
 
     // Push the tile
-    cb_push_back(cb_id, one_tile);
+    cb.push_back(one_tile);
 }

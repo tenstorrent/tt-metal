@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "experimental/circular_buffer.h"
+
 /**
  * @brief Sorts Wt tiles from row-major order into a bitonic sequence using local sorting and transposition.
  *
@@ -34,15 +36,20 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
     const bool switch_dir,
     const bool ascending,
     const int end_phase) {
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
+    experimental::CircularBuffer cb_input(input_cb_index);
+    experimental::CircularBuffer cb_index(index_cb_index);
+    experimental::CircularBuffer cb_input_transposed(input_transposed_cb_index);
+    experimental::CircularBuffer cb_index_transposed(index_transposed_cb_index);
+
+    cb_input_transposed.reserve_back(Wt);
+    cb_index_transposed.reserve_back(Wt);
 
     bool ascending_local = ascending;
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
 
-        cb_wait_front(input_cb_index, 2);
-        cb_wait_front(index_cb_index, 2);
+        cb_input.wait_front(2);
+        cb_index.wait_front(2);
 
         // topk_local_sort sorts by columns - transpose input tiles for sorting
         reconfig_data_format_srca(input_cb_index);
@@ -70,8 +77,8 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         pack_reconfig_data_format(index_transposed_cb_index);
         pack_tile(2, index_transposed_cb_index);
         pack_tile(3, index_transposed_cb_index);
-        cb_pop_front(input_cb_index, 2);
-        cb_pop_front(index_cb_index, 2);
+        cb_input.pop_front(2);
+        cb_index.pop_front(2);
 
         tile_regs_release();
 
@@ -79,8 +86,8 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         ascending_local = switch_dir ? !ascending_local : ascending_local;
     }
 
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
+    cb_input_transposed.push_back(Wt);
+    cb_index_transposed.push_back(Wt);
 }
 
 /**
@@ -106,30 +113,33 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Wt) {
     constexpr uint32_t one_tile = 1;
 
+    experimental::CircularBuffer cb_transposed(transposed_cb_index);
+    experimental::CircularBuffer cb_dest(dest_cb_index);
+
     // Transpose from sorting by column to right structure
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
     pack_reconfig_data_format(dest_cb_index);
 
-    cb_wait_front(transposed_cb_index, Wt);
+    cb_transposed.wait_front(Wt);
 
     for (uint32_t i = 0; i < Wt; ++i) {
         tile_regs_acquire();
 
-        cb_reserve_back(dest_cb_index, one_tile);
+        cb_dest.reserve_back(one_tile);
         transpose_wh_tile(transposed_cb_index, i, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
         pack_tile(0, dest_cb_index);
-        cb_push_back(dest_cb_index, one_tile);
+        cb_dest.push_back(one_tile);
 
         tile_regs_release();
     }
 
-    cb_wait_front(transposed_cb_index, Wt);
-    cb_pop_front(transposed_cb_index, Wt);
+    cb_transposed.wait_front(Wt);
+    cb_transposed.pop_front(Wt);
 }
 
 /**
@@ -177,6 +187,8 @@ FORCE_INLINE
 void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     constexpr uint32_t ONE_TILE = 1;
 
+    experimental::CircularBuffer cb_sync(packer_unpacker_sync_cb_index);
+
     // This double sequence forces both the packer and the unpacker to wait for the other.
     // If we had a single sequence:
     //
@@ -195,17 +207,17 @@ void sync_packer_unpacker(uint32_t packer_unpacker_sync_cb_index) {
     // - if unpacker is first and CB is full, then it will pop a tile and continue until second sequence where it
     // will wait because CB will be empty (it will wait for packer to push tile).
 
-    cb_reserve_back(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_push_back(packer_unpacker_sync_cb_index, ONE_TILE);
+    cb_sync.reserve_back(ONE_TILE);
+    cb_sync.push_back(ONE_TILE);
 
-    cb_wait_front(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_pop_front(packer_unpacker_sync_cb_index, ONE_TILE);
+    cb_sync.wait_front(ONE_TILE);
+    cb_sync.pop_front(ONE_TILE);
 
-    cb_reserve_back(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_push_back(packer_unpacker_sync_cb_index, ONE_TILE);
+    cb_sync.reserve_back(ONE_TILE);
+    cb_sync.push_back(ONE_TILE);
 
-    cb_wait_front(packer_unpacker_sync_cb_index, ONE_TILE);
-    cb_pop_front(packer_unpacker_sync_cb_index, ONE_TILE);
+    cb_sync.wait_front(ONE_TILE);
+    cb_sync.pop_front(ONE_TILE);
 }
 
 /**

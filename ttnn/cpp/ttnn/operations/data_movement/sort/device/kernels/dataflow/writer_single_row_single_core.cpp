@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 #include "sort_dataflow_common.hpp"
 
@@ -38,6 +41,9 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
     const auto interleaved_accessor0 = TensorAccessor(value_tensor_args, value_tensor_buffer_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_value(value_tensor_cb_index);
+
     // Move data from L1 to DRAMs
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate
@@ -55,11 +61,10 @@ void kernel_main() {
 
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_wait_front(value_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
-            noc_async_write_tile(h * Wt + w, interleaved_accessor0, l1_write_addr_val);
-            noc_async_write_barrier();
-            cb_pop_front(value_tensor_cb_index, one_tile);
+            cb_value.wait_front(one_tile);
+            noc.async_write(cb_value, interleaved_accessor0, value_tensor_tile_size_bytes, {}, {.page_id = h * Wt + w});
+            noc.async_write_barrier();
+            cb_value.pop_front(one_tile);
         }  // Wt loop
     }  // core_loop_count loop
 }
