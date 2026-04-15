@@ -154,7 +154,7 @@ const jit_server::UploadFirmwareRequest& RemoteCompileCoordinator::get_firmware_
             artifact.target_name = fw_state.get_target_name();
             artifact.file_name = fs::path(fw_path).filename().string();
             artifact.is_kernel_object = fw_state.get_firmware_is_kernel_object();
-            artifact.data = jit_build::utils::read_file_bytes(fw_path);
+            artifact.data = tt::jit_build::utils::read_file_bytes(fw_path);
             req.artifacts.push_back(std::move(artifact));
         }
         it = s_fw_cache_.emplace(build_key_, std::move(req)).first;
@@ -202,7 +202,7 @@ void RemoteCompileCoordinator::ensure_firmware_uploaded(std::size_t endpoint_ind
 
 void RemoteCompileCoordinator::write_elf_blob(const std::string& path, const jit_server::ElfBlob& blob) {
     fs::create_directories(fs::path(path).parent_path());
-    jit_build::utils::FileRenamer tmp(path);
+    tt::jit_build::utils::FileRenamer tmp(path);
     std::ofstream elf_file(tmp.path(), std::ios::binary);
     TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
     elf_file.write(reinterpret_cast<const char*>(blob.data.data()), static_cast<std::streamsize>(blob.data.size()));
