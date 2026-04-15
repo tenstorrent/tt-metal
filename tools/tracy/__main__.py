@@ -290,7 +290,9 @@ def main():
                     declared_arch = str(device.arch()).split(".")[-1]
                     ttnn.close_device(device)
                 except Exception:
-                    pass
+                    # Runtime arch detection is best-effort; fall back to
+                    # treating arch as undeclared (will error below)
+                    logger.debug("Failed to detect device arch via ttnn")
             is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
             if not is_blackhole:
                 arch_desc = declared_arch if declared_arch is not None else "undeclared"
