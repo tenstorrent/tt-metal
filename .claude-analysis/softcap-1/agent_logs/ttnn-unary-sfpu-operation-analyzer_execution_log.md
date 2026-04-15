@@ -140,3 +140,60 @@ Analyzed the SFPU kernel implementation for the `swish` unary operation. The ker
 
 ### Output
 - Analysis file: `.claude-analysis/softcap-1/swish_analysis.md`
+
+---
+
+## Operation: hardtanh
+## Date: 2026-04-15
+
+### Summary
+Analyzed the SFPU kernel implementation for the `hardtanh` unary operation. The operation has a core SFPU kernel (`_calculate_hardtanh_`) in the tt_llk layer but its dispatch chain through the Metal compute API is incomplete -- no API header, no LLK dispatch, no SfpuType in production Metal. The kernel implements piecewise clamping using 3 additions and 2 conditional zeroing blocks with SFPI abstractions.
+
+### Key Findings
+- **Compute kernel**: `eltwise_sfpu.cpp` (default, via `get_compute_kernel_path()`)
+- **SFPU_OP_CHAIN_0**: NOT WIRED -- `get_op_init_and_func_parameterized()` has no HARDTANH case, would throw at runtime
+- **Approximation mode**: `false` from `get_op_approx_mode()` (default case); kernel does not use APPROXIMATION_MODE in any `if constexpr` branch
+- **Core SFPU function**: `_calculate_hardtanh_<false, 8>()` in `ckernel_sfpu_hardtanh.h`
+- **Kernel style**: SFPI abstractions (Style A)
+- **WH/BH parity**: Identical implementations on both platforms
+- **Dispatch chain status**: INCOMPLETE -- UnaryOpType::HARDTANH enum exists, is_parametrized_type returns true, but no API header, no LLK dispatch, no SfpuType::hardtanh in production Metal
+- **SFPU instructions**: SFPLOADI (parameter loading and conditional zeros), SFPLOAD, SFPSTORE, SFPMAD (3 additions via FMA), SFPSETCC (LT0 and GTE0), SFPENCC, SFPPUSHC, SFPPOPC
+- **Algorithm concern**: Parameter comments in the kernel suggest all three params are negated, which produces incorrect results upon mathematical trace-through. The kernel likely requires param2 = max_val (positive) for correctness.
+- **Address mode**: Would use ADDR_MOD_7 (dest.incr=0, standard for generic SFPU ops)
+
+### Files Read
+1. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+2. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp`
+3. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp`
+4. `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp`
+5. `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
+6. `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+7. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_hardtanh.h`
+8. `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_hardtanh.h`
+9. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_clamp.h` (reference)
+10. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+11. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+12. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+13. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h`
+14. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h`
+15. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu_types.h`
+16. `tt_metal/third_party/tt_llk/tests/helpers/include/llk_sfpu_types.h`
+17. `tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h`
+18. `tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h`
+19. `tt_metal/hw/inc/api/compute/eltwise_unary/activations.h`
+20. `tt_metal/hw/inc/api/compute/eltwise_unary/swish.h` (reference)
+21. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_swish.h` (reference)
+22. `runtime/sfpi/include/sfpi_fp16.h`
+23. `.claude/references/sfpu-hardware-model.md`
+24. `.claude/references/logging/sfpu-operation-analyzer.md`
+
+### Verification Results
+- `_calculate_hardtanh_`: VERIFIED in both WH and BH tt_llk trees
+- All file paths in abstraction layers table: VERIFIED (existing files exist, missing files confirmed absent)
+- `SfpuType::hardtanh`: VERIFIED absent from production Metal `llk_sfpu_types.h` (both WH and BH)
+- `SfpuType::hardtanh`: VERIFIED present in test helpers `llk_sfpu_types.h`
+- SFPU instructions: VERIFIED via SFPI-to-instruction mappings (no raw TTI instructions in kernel)
+- No `hardtanh_tile` function found in production codebase: VERIFIED via grep
+
+### Output
+- Analysis file: `.claude-analysis/softcap-1/hardtanh_analysis.md`
