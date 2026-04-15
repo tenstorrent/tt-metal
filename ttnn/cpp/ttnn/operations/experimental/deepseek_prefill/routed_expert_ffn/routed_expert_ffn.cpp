@@ -34,7 +34,10 @@ uint32_t best_in0_block_w(
     tt::tt_metal::DataType output_dtype) {
     using namespace ttnn::operations::matmul::utilities;
 
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    // get_estimated_size_of_cbs is an estimate that doesn't account for CB alignment
+    // overhead and other internal allocations. Apply a 10% safety margin (same approach
+    // as softmax op) so the chosen block width fits on all platforms.
+    uint32_t max_l1_space = static_cast<uint32_t>(get_max_l1_space(input_tensor_a) * 0.9);
     uint32_t interm_tile_size = estimate_interm_tile_size(compute_kernel_config, output_dtype);
 
     uint32_t best = 1;
