@@ -127,7 +127,7 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_24;
     constexpr auto cb_tilize = tt::CBIndex::c_25;
     constexpr auto cb_out_idx =
-        (Ht > 8) ? tt::CBIndex::c_27 : tt::CBIndex::c_16;  // temporary fix until pack_untilze is fully fixed
+        (Ht > 8) ? tt::CBIndex::c_27 : tt::CBIndex::c_16;  // temporary fix until pack_untilize is fully fixed
 #else
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_tilize = tt::CBIndex::c_24;
