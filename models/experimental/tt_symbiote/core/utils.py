@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -60,22 +60,26 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
     ttnn_output_tensors = []
     if isinstance(torch_output, TorchTTNNTensor):
         torch_output_tensors.append(torch_output.to_torch)
+    elif isinstance(torch_output, torch.Tensor):
+        torch_output_tensors.append(torch_output)
     elif isinstance(torch_output, (list, tuple)):
         for item in torch_output:
             if isinstance(item, TorchTTNNTensor):
                 torch_output_tensors.append(item.to_torch)
+            elif isinstance(item, torch.Tensor):
+                torch_output_tensors.append(item)
     if isinstance(ttnn_output, TorchTTNNTensor):
         ttnn_output.elem = None
         ttnn_output_tensors.append(ttnn_output.to_torch)
-        assert isinstance(torch_output, TorchTTNNTensor), "Mismatched output types between TTNN and Torch."
+        if not isinstance(torch_output, TorchTTNNTensor):
+            print("Mismatched output types between TTNN and Torch.")
     elif isinstance(ttnn_output, (list, tuple)):
         assert isinstance(torch_output, (list, tuple)), "Mismatched output types between TTNN and Torch."
         assert len(ttnn_output) == len(torch_output), "Mismatched output lengths between TTNN and Torch."
         for index, item in enumerate(ttnn_output):
             if isinstance(item, TorchTTNNTensor):
-                assert isinstance(
-                    torch_output[index], TorchTTNNTensor
-                ), "Mismatched output types between TTNN and Torch."
+                if not isinstance(torch_output[index], TorchTTNNTensor):
+                    print("Mismatched output types between TTNN and Torch.")
                 item.elem = None
                 ttnn_output_tensors.append(item.to_torch)
 
@@ -87,7 +91,12 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
-        if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
+        if (
+            pcc < 0.999
+            or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1)
+            or pcc.isnan().any()
+            or diff.isnan().any()
+        ):
             passed = False
             print(
                 f"Warning: High discrepancy detected in operation {func_name}. "
@@ -115,3 +124,54 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
     if tensor.layout != ttnn.TILE_LAYOUT:
         return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return tensor
+
+
+def optimized_tree_map_with_only_dict_list(*args, **kwargs):
+    # don't use pytorch
+    from collections.abc import Mapping, Sequence
+
+    func = args[0]
+    data_structures = args[1:]
+    if all(isinstance(ds, Mapping) for ds in data_structures):
+        keys = data_structures[0].keys()
+        if not all(ds.keys() == keys for ds in data_structures):
+            raise ValueError("All dicts must have the same keys")
+        return {
+            key: optimized_tree_map_with_only_dict_list(func, *(ds[key] for ds in data_structures), **kwargs)
+            for key in keys
+        }
+    elif all(isinstance(ds, Sequence) and not isinstance(ds, str) for ds in data_structures):
+        if not all(len(ds) == len(data_structures[0]) for ds in data_structures):
+            raise ValueError("All lists must have the same length")
+        return [
+            optimized_tree_map_with_only_dict_list(func, *(ds[i] for ds in data_structures), **kwargs)
+            for i in range(len(data_structures[0]))
+        ]
+    return func(*data_structures, **kwargs)
+
+
+def tree_map(*args, **kwargs):
+    import time
+    from models.experimental.tt_symbiote.core.run_config import DispatchManager
+
+    start_time = time.time()
+    result = optimized_tree_map_with_only_dict_list(*args, **kwargs)
+    end_time = time.time()
+    DispatchManager.record_timing(
+        "TorchModules",
+        (
+            ""
+            if DispatchManager.current_module_name is None
+            else DispatchManager.current_module_name + f".{args[0].__name__}"
+        ),
+        args[0].__name__,
+        {},
+        end_time - start_time,
+    )
+    return result
+
+
+def wrap_from_torch(data_structure):
+    from models.experimental.tt_symbiote.core.run_config import wrap_from_torch as wrap_from_torch_impl
+
+    return tree_map(wrap_from_torch_impl, data_structure)

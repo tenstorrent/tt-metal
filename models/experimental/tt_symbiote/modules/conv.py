@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.activation import TTNNReLU
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
@@ -29,6 +30,8 @@ def get_shape_from_module_name(module_name, model_config):
     if model_config is None or not isinstance(model_config, dict) or module_name not in model_config:
         return None
     config = model_config[module_name]
+    if config.get("reshape_output", False):
+        return None
     return config.get("input_shapes", None)
 
 
@@ -131,6 +134,7 @@ class NHWCConvBNActivationPytorch(nn.Module):
         return x
 
 
+@trace_enabled
 class TTNNConv2dNHWC(TTNNModule):
     """TTNN-accelerated Conv layer."""
 
@@ -161,7 +165,7 @@ class TTNNConv2dNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -265,7 +269,7 @@ class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dBNNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -318,7 +322,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, activation, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
-        new_conv = TTNNConv2dBNActivationNHWC(
+        new_conv = cls(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
             kernel_size=conv.kernel_size,
@@ -355,25 +359,44 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         batch_size, input_height, input_width, _ = input_tensor.shape
-        config = Conv2dConfiguration(
-            input_height=input_height,
-            input_width=input_width,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            batch_size=batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            groups=self.groups,
-            dilation=self.dilation,
-            weight=self.tt_weight,
-            bias=self.tt_bias,
-            slice_strategy=self.slice_config,
-            activation=ttnn.UnaryOpType.RELU,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
+        hash = (
+            input_height,
+            input_width,
+            self.in_channels,
+            self.out_channels,
+            batch_size,
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            self.groups,
+            self.dilation,
+            self.tt_weight,
+            self.tt_bias,
+            self.slice_config,
         )
-        layer = TtConv2d(config, input_tensor.device())
+        if hash in TTNNConv2dNHWC.CACHED_TTCNN:
+            layer = TTNNConv2dNHWC.CACHED_TTCNN[hash]
+        else:
+            config = Conv2dConfiguration(
+                input_height=input_height,
+                input_width=input_width,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                batch_size=batch_size,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                groups=self.groups,
+                dilation=self.dilation,
+                weight=self.tt_weight,
+                bias=self.tt_bias,
+                slice_strategy=self.slice_config,
+                activation=ttnn.UnaryOpType.RELU,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                fp32_dest_acc_en=True,
+            )
+            layer = TtConv2d(config, input_tensor.device())
+            TTNNConv2dNHWC.CACHED_TTCNN[hash] = layer
         if reshape_output:
             out, h_w = layer(input_tensor, return_output_dim=reshape_output)
             out = self.reshape(out, [batch_size, h_w[0], h_w[1], -1])
@@ -409,7 +432,7 @@ class TTNNBottleneck(TTNNModule):
     @classmethod
     def from_torch(cls, bottleneck: "torchvision.models.resnet.Bottleneck") -> "TTNNBottleneck":
         """Create TTNNBottleneck from PyTorch Bottleneck layer."""
-        new_bottleneck = TTNNBottleneck(
+        new_bottleneck = cls(
             downsample=bottleneck.downsample,
         )
         new_bottleneck._fallback_torch_layer = bottleneck
@@ -433,7 +456,7 @@ class TTNNBottleneck(TTNNModule):
 
             identity = self.downsample(TorchTTNNTensor(identity, dtype=torch.bfloat16))
             if identity.to_ttnn.device() != out.to_ttnn.device():
-                identity = ttnn.to_device(identity.to_ttnn, out.to_ttnn.device())
+                identity = ttnn.to_device(identity.to_ttnn, out.device())
 
             identity = self.permute(identity, perm=[0, 2, 3, 1])
         out = out + identity
@@ -479,7 +502,7 @@ class TTNNPatchEmbedding(TTNNModule):
     @classmethod
     def from_torch(cls, patch_embedding: "ViTPatchEmbeddings") -> "TTNNPatchEmbedding":
         """Create TTNNPatchEmbedding from PyTorch Conv2d layer."""
-        new_patch_embedding = TTNNPatchEmbedding(
+        new_patch_embedding = cls(
             img_size=patch_embedding.projection.kernel_size[0] * patch_embedding.projection.stride[0],
             patch_size=patch_embedding.projection.kernel_size[0],
             in_channels=patch_embedding.projection.in_channels,
@@ -572,7 +595,7 @@ class TTNNViTEmbeddings(TTNNModule):
     @classmethod
     def from_torch(cls, patch_embeddings: "ViTPatchEmbeddings", cls_token, position_embeddings) -> "TTNNViTEmbeddings":
         """Create TTNNViTEmbeddings from PyTorch ViTEmbeddings layer."""
-        new_embeddings = TTNNViTEmbeddings()
+        new_embeddings = cls()
         new_embeddings.patch_embeddings = TTNNPatchEmbedding.from_torch(patch_embeddings)
         new_embeddings.cls_token = ttnn.from_torch(cls_token, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         new_embeddings.position_embeddings = ttnn.from_torch(
@@ -592,7 +615,6 @@ class TTNNViTEmbeddings(TTNNModule):
         patch_embedding_output = self.patch_embeddings(pixel_values, **kwargs)
         batch = pixel_values.shape[0]
         # expand the cls token to the batch size
-        patch_embedding_output = patch_embedding_output.to_ttnn
         if patch_embedding_output.layout != ttnn.TILE_LAYOUT:
             patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
         # add the [CLS] token to the embedded patch tokens
@@ -629,7 +651,7 @@ class TTNNMaxPool2dNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, maxpool: nn.MaxPool2d, slice_config=None) -> "TTNNMaxPool2dNHWC":
         """Create TTNNMaxPool2dNHWC from PyTorch MaxPool2d layer."""
-        new_maxpool = TTNNMaxPool2dNHWC(
+        new_maxpool = cls(
             kernel_size=maxpool.kernel_size,
             stride=maxpool.stride,
             padding=maxpool.padding,
@@ -694,7 +716,7 @@ class TTNNUpsampleNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, upsample: nn.Upsample) -> "TTNNUpsampleNHWC":
         """Create TTNNUpsampleNHWC from PyTorch Upsample layer."""
-        new_upsample = TTNNUpsampleNHWC(
+        new_upsample = cls(
             scale_factor=upsample.scale_factor,
             mode=upsample.mode,
         )
@@ -717,3 +739,28 @@ class TTNNUpsampleNHWC(TTNNModule):
             mode=self.mode,
         )
         return input_tensor
+
+
+class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
+    """TTNN-accelerated Conv InputMultipleOf16 layer."""
+
+    @classmethod
+    def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNConv2dNHWCInputMultipleOf16":
+        """Create TTNNConv2dNHWCInputMultipleOf16 from PyTorch Conv2d layer."""
+        if conv.in_channels > 16 or conv.in_channels % 16 == 0:
+            return TTNNConv2dNHWC.from_torch(conv, slice_config)
+        new_conv = cls(
+            in_channels=16,
+            out_channels=conv.out_channels,
+            kernel_size=conv.kernel_size,
+            stride=conv.stride,
+            padding=conv.padding,
+            dilation=conv.dilation,
+            groups=conv.groups,
+            slice_config=slice_config,
+        )
+        conv.weight = nn.Parameter(
+            torch.nn.functional.pad(conv.weight, (0, 0, 0, 0, 0, (16 - conv.in_channels % 16) % 16))
+        )
+        new_conv._fallback_torch_layer = NHWCConvPytorch(conv)
+        return new_conv

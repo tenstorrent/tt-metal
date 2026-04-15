@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,20 +6,35 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from torch.utils._pytree import tree_map
+from models.experimental.tt_symbiote.core.utils import tree_map
 from tracy import signpost
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
+from models.tt_transformers.tt.ccl import TT_CCL
+
+
+@dataclass
+class CCLManagerConfig:
+    """Configuration for CCLManager."""
+
+    mesh_device: Any
+    num_links: Optional[int] = None
+    topology: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.num_links is None:
+            self.num_links = 1
+        if self.topology is None:
+            self.topology = ttnn.Topology.Linear
 
 
 @dataclass
@@ -27,6 +42,59 @@ class DistributedTensorConfig:
     """Configuration for distributed tensor operations."""
 
     mesh_mapper: Any
+    mesh_composer: Any
+    logical_shape_fn: Optional[Any] = None
+
+    def get_logical_shape(self, sharded_shape):
+        if self.logical_shape_fn is not None:
+            return self.logical_shape_fn(sharded_shape)
+        return sharded_shape
+
+
+def logical_shape_for_batch_channel_sharding(mesh_shape):
+    def _logical_shape(shape):
+        shape = list(shape)
+        logical_shape = [shape[0] * mesh_shape[0]] + shape[1:-1] + [shape[-1] * mesh_shape[1]]
+        return tuple(logical_shape)
+
+    return _logical_shape
+
+
+@dataclass
+class DistributedConfig:
+    """Configuration for distributed operations."""
+
+    mesh_device: Any
+    tensor_config: Optional[DistributedTensorConfig] = None
+    ccl_manager: Optional[Any] = None
+
+    def __post_init__(self):
+        if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
+            self.tensor_config = DistributedTensorConfig(
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
+            )
+        if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
+            self.ccl_manager = TT_CCL(self.mesh_device)
+
+    def get_tensor_config_for_tensor(self, module_name, tensor):
+        if tensor is not None:
+            if (
+                len(tensor.shape) < 2
+                or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
+                or tensor.shape[0] % self.mesh_device.shape[0] != 0
+            ):
+                print(
+                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                )
+                return DistributedTensorConfig(
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    mesh_composer=ttnn.create_mesh_composer(
+                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
+                    ),
+                )
+        return self.tensor_config
 
 
 @contextlib.contextmanager
@@ -74,6 +142,10 @@ def copy_to_torch(func):
         res = e
         if isinstance(e, TorchTTNNTensor):
             res = TorchTTNNTensor(e.to_torch.clone())
+            res.ttnn_tensor = None
+        elif isinstance(e, ttnn.Tensor):
+            res = TorchTTNNTensor(e).to_torch
+            res.ttnn_tensor = None
         elif isinstance(e, torch.Tensor):
             res = e.clone()
         return res
@@ -107,6 +179,7 @@ class DispatchManager:
     timings: Dict[str, Any] = {}
     _modules_in_progress: List[str] = []
     current_module_name: Optional[str] = None
+    ENABLED = True
 
     @staticmethod
     def set_current_module_name(module_name: Optional[str]) -> None:
@@ -125,8 +198,6 @@ class DispatchManager:
     def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
         from models.experimental.tt_symbiote.core.dispatcher import dispatch_to_ttnn
 
-        if get_tensor_run_implementation().verbose:
-            print(f"Dispatching {func.name()} to TTNN backend.")
         begin = time.time()
         res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
         end = time.time()
@@ -142,12 +213,10 @@ class DispatchManager:
             {},
             end - begin,
         )
-        if get_tensor_run_implementation().verbose:
-            print(f"Finished {func.name()} on TTNN backend.")
         return res
 
     @staticmethod
-    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
+    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs, wrap=True):
         from models.experimental.tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
 
         # no_dispatch is only needed if you use enable_python_mode.
@@ -172,11 +241,17 @@ class DispatchManager:
                 {},
                 end - begin,
             )
-            rs = tree_map(wrap_from_torch, func_res)
+            rs = tree_map(wrap_from_torch, func_res) if wrap else func_res
         return rs
 
     @staticmethod
+    def DisableTiming():
+        DispatchManager.ENABLED = False
+
+    @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
+        if not DispatchManager.ENABLED:
+            return
         if backend not in DispatchManager.timings:
             DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
@@ -233,6 +308,24 @@ class DispatchManager:
 
         # Display or save
         pivot_table.to_csv(file_name.replace(".csv", "_pivot.csv"))
+        if "TorchModules" in pivot_table.columns:
+            func_times = df.pivot_table(
+                index=["func_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
+            )
+            module_times = func_times[func_times["TorchModules"] != 0]["TorchModules"].sort_values(ascending=False)
+            print(
+                "Top 30 Modules by total duration (s):\n\n\n",
+                module_times.head(30),
+            )
+        if "Torch" in pivot_table.columns:
+            func_times = df.pivot_table(
+                index=["func_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
+            )
+            module_times = func_times[func_times["Torch"] != 0]["Torch"].sort_values(ascending=False)
+            print(
+                "Top 30 Torch Functions by total duration (s):\n\n\n",
+                module_times.head(30),
+            )
         print(f"Saved timing stats to {os.path.abspath(file_name)}")
         print(f"Saved pivot table to {os.path.abspath(file_name.replace('.csv', '_pivot.csv'))}")
 
@@ -254,10 +347,25 @@ def to_ttnn_wrap(e):
     return e
 
 
+def to_ttnn_wrap_keep_torch(e):
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if isinstance(e, TorchTTNNTensor):
+        e.to_ttnn
+        return e
+    return e
+
+
 def set_device_wrap(device):
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
     def _set_device_wrap(e):
         if isinstance(e, ttnn.Tensor) and device is not None and e.device() != device:
             e = ttnn.to_device(e, device)
+        elif isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and e.ttnn_tensor.device() != device:
+            e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
+        if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+            assert e.ttnn_tensor.device() is not None
         return e
 
     return _set_device_wrap
@@ -299,11 +407,57 @@ def compose_transforms(*transforms):
             result = transform(result)
         return result
 
+    _composed.__name__ = "_".join([t.__name__ for t in transforms])
     return _composed
+
+
+def fast_unwrap_to_device(device):
+    """Lightweight transform: extract ttnn.Tensor and ensure on-device. No TorchTTNNTensor wrapping."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    def _transform(e):
+        if isinstance(e, TorchTTNNTensor):
+            t = e.ttnn_tensor if e.ttnn_tensor is not None else e.to_ttnn
+            if device is not None and t.device() != device:
+                t = ttnn.to_device(t, device)
+            return t
+        elif isinstance(e, ttnn.Tensor):
+            if device is not None and e.device() != device:
+                e = ttnn.to_device(e, device)
+            return e
+        return e
+
+    return _transform
+
+
+def post_process_ttnn_module_output(self, result):
+    result = tree_map(wrap_to_torch_ttnn_tensor, result)
+    if self.device_state is not None:
+        result = self.set_output_tensors_config(result)
+    return result
+
+
+def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, module_name=None):
+    from models.experimental.tt_symbiote.utils.device_management import DeviceInit
+
+    state = None
+    if mesh_device is not None:
+        assert (
+            DeviceInit.DEVICE_TO_STATE_DICT.get(mesh_device) is not None
+        ), f"Device {mesh_device} not found in DeviceInit.DEVICE_TO_STATE_DICT, cannot set distributed config for mesh device."
+        state = DeviceInit.DEVICE_TO_STATE_DICT[mesh_device]
+    elif DeviceInit.DEVICE_TO_STATE_DICT is not None and len(DeviceInit.DEVICE_TO_STATE_DICT) >= 1:
+        state = next(iter(DeviceInit.DEVICE_TO_STATE_DICT.values()))
+    if state is None:
+        return None
+    if torch_tensor is not None:
+        return state.get_tensor_config_for_tensor(module_name, torch_tensor)
+    return state.tensor_config
 
 
 class NormalRun:
     verbose = False
+    signpost_mode = None
 
     def __new__(cls, *args, **kwargs):
         raise TypeError("This class cannot be instantiated")
@@ -343,6 +497,10 @@ class NormalRun:
         # ...the real tensor is held as an element on the tensor.
         r.ttnn_tensor = ttnn_tensor  # Initialize ttnn_tensor
         r.elem = elem if not delete_elem else None
+        distributed_tensor_config = get_default_distributed_tensor_config(
+            torch_tensor=elem, module_name=DispatchManager.current_module_name
+        )
+        r.set_distributed_tensor_config(distributed_tensor_config)
         assert isinstance(r.elem, torch.Tensor) or isinstance(
             ttnn_tensor, ttnn.Tensor
         ), f"elem must be a torch.Tensor (or None when ttnn.Tensor is defined), but got {type(r.elem)}"
@@ -361,22 +519,39 @@ class NormalRun:
         """Dispatch torch operations to TTNN when possible."""
         from models.experimental.tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
 
-        if can_dispatch_to_ttnn(func.name(), args, kwargs):
+        begin = time.time()
+        can_to_ttnn = can_dispatch_to_ttnn(func.name(), args, kwargs)
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN",
+            (
+                ""
+                if DispatchManager.current_module_name is None
+                else DispatchManager.current_module_name + f".can_dispatch_to_ttnn"
+            ),
+            "can_dispatch_to_ttnn",
+            {},
+            end - begin,
+        )
+        if can_to_ttnn:
             rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
         else:
             rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
+
         return rs
 
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
-        begin = time.time()
+        if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
+            return self.elem
 
         def _to_torch(self):
-            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
-            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
+            is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
+                result = ttnn.to_torch(
+                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
+                ).to(self.device, self.dtype)
             else:
                 result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
             return result
@@ -388,45 +563,14 @@ class NormalRun:
         if result.device.type == "meta" and self.ttnn_tensor is not None:
             result = _to_torch(self)
         self.elem = result if self.elem is None else self.elem
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + ".ttnn_to_torch"
-            ),
-            "ttnn_to_torch",
-            {},
-            end - begin,
-        )
         return self.elem
 
     @staticmethod
     def to_ttnn(self):
         """Convert to TTNN tensor, creating if necessary."""
-        begin = time.time()
         if self.ttnn_tensor is not None:
-            end = time.time()
-            DispatchManager.record_timing(
-                "TTNN",
-                (
-                    ""
-                    if DispatchManager.current_module_name is None
-                    else DispatchManager.current_module_name + ".torch_to_ttnn_no_conversion"
-                ),
-                "torch_to_ttnn_no_conversion",
-                {},
-                end - begin,
-            )
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        # convert elem to ttnn tensor here
-        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
-        if self.ttnn_distributed_config is None and is_mesh_device:
-            self.__dict__["distributed_config"] = DistributedTensorConfig(
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
-            )
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
@@ -436,20 +580,10 @@ class NormalRun:
         self.ttnn_tensor = ttnn.from_torch(
             self.elem.cpu(),
             dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+            mesh_mapper=self.ttnn_distributed_tensor_config.mesh_mapper
+            if self.ttnn_distributed_tensor_config
+            else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
-        )
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + ".torch_to_ttnn"
-            ),
-            "torch_to_ttnn",
-            {},
-            end - begin,
         )
         return self.ttnn_tensor
 
@@ -457,9 +591,16 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            transform = fast_unwrap_to_device(self.device)
+        else:
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
-        func_kwargs = tree_map(transform, kwds)
+        # TODO: fix kwds not being passed correctly
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         begin = time.time()
         self.preprocess_weights()
         end = time.time()
@@ -473,10 +614,13 @@ class NormalRun:
         DispatchManager.record_timing(
             "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
         )
-        signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
         begin = time.time()
-        result = self.forward(*func_args, **func_kwargs)
-        result = tree_map(wrap_to_torch_ttnn_tensor, result)
+        if bypass:
+            result = self.forward(*func_args, **func_kwargs)
+        else:
+            result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
@@ -485,65 +629,11 @@ class NormalRun:
 
 class LightweightRun(NormalRun):
     @staticmethod
-    def to_torch(self):
-        """Convert to PyTorch tensor."""
+    def torch_dispatch(cls, func, types, args=(), kwargs=None):
+        """Dispatch torch operations to TTNN when possible."""
 
-        def _to_torch(self):
-            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
-            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
-            if is_mesh_device:
-                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
-            else:
-                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-            return result
-
-        result = self.elem
-        if self.ttnn_tensor is not None and self.elem is None:
-            result = _to_torch(self)
-        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = _to_torch(self)
-        self.elem = result if self.elem is None else self.elem
-        return self.elem
-
-    @staticmethod
-    def to_ttnn(self):
-        """Convert to TTNN tensor, creating if necessary."""
-        if self.ttnn_tensor is not None:
-            return self.ttnn_tensor
-        assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        # convert elem to ttnn tensor here
-        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
-        if self.ttnn_distributed_config is None and is_mesh_device:
-            self.__dict__["distributed_config"] = DistributedTensorConfig(
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
-            )
-        if self.elem.device.type == "meta":
-            raise RuntimeError(
-                "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
-            )
-        if self.elem.dtype not in TORCH_TO_TTNN:
-            raise RuntimeError(f"Unsupported dtype {self.elem.dtype} for conversion to TTNN tensor.")
-        self.ttnn_tensor = ttnn.from_torch(
-            self.elem.cpu(),
-            dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
-            layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
-        )
-        return self.ttnn_tensor
-
-    @staticmethod
-    def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        assert self.device is not None, "Device must be set for TTNN module execution."
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
-        func_kwargs = tree_map(transform, kwds)
-        self.preprocess_weights()
-        self.move_weights_to_device()
-        result = self.forward(*func_args, **func_kwargs)
-        result = tree_map(wrap_to_torch_ttnn_tensor, result)
-        return result
+        rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs, wrap=False)
+        return rs
 
 
 class NormalRunWithFallback(NormalRun):
@@ -567,14 +657,20 @@ class NormalRunWithFallback(NormalRun):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         result = None
         if self.device is not None:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            bypass = getattr(self, "_bypass_tensor_wrapping", False)
+            if bypass:
+                transform = fast_unwrap_to_device(self.device)
+            else:
+                transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
             func_args = tree_map(transform, args)
             func_kwargs = tree_map(transform, kwds)
             self.preprocess_weights()
             self.move_weights_to_device()
             try:
-                result = self.forward(*func_args, **func_kwargs)
-                result = tree_map(wrap_to_torch_ttnn_tensor, result)
+                if bypass:
+                    result = self.forward(*func_args, **func_kwargs)
+                else:
+                    result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             except Exception as e:
                 print(f"Error {e} in {self.__class__.__name__} forward, falling back to torch")
                 assert (
@@ -624,7 +720,7 @@ class SELRun(NormalRun):
             func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
             # Compare outputs
@@ -670,7 +766,7 @@ class DPLRun(NormalRun):
             func_kwargs = tree_map(transform, func_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(
                 tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
@@ -727,7 +823,7 @@ class DPLRunNoErrorProp(NormalRun):
             func_kwargs = tree_map(transform, ttnn_no_error_prop_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = tree_map(wrap_to_torch_ttnn_tensor, self.forward(*func_args, **func_kwargs))
+            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             # Compare inputs
             compare_fn_outputs(
                 tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
@@ -760,6 +856,438 @@ class CPU(NormalRun):
         return result
 
 
+# --- Trace Infrastructure ---
+
+
+def _compute_tensor_signature(tensor) -> Tuple:
+    """Compute hashable signature from tensor properties."""
+    if isinstance(tensor, ttnn.Tensor):
+        return (tuple(tensor.shape), tensor.dtype, tensor.layout)
+    if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
+        t = tensor.ttnn_tensor
+        return (tuple(t.shape), t.dtype, t.layout)
+    if isinstance(tensor, torch.Tensor):
+        return (tuple(tensor.shape), tensor.dtype)
+    return ()
+
+
+def _compute_args_signature(args) -> Tuple:
+    """Compute signature for all tensor args."""
+    sigs = []
+    for arg in args:
+        sig = _compute_tensor_signature(arg)
+        if sig:
+            sigs.append(sig)
+    return tuple(sigs)
+
+
+@dataclass(slots=True)
+class TraceEntry:
+    """Single trace cache entry."""
+
+    trace_id: int
+    trace_inputs: List[Any]
+    trace_kwargs: Dict[str, Any]  # Pre-allocated kwarg tensor buffers
+    trace_output: Any
+    device: Any
+
+
+# Registry of trace-enabled classes
+_TRACE_ENABLED_CLASSES: Set[Type] = set()
+_TRACE_DISABLED_CLASSES: Set[Type] = set()
+_TRACE_RUNNING = False
+
+
+def trace_enabled(cls: Type) -> Type:
+    """
+    Decorator to mark a TTNNModule subclass as trace-enabled.
+
+    Usage:
+        @trace_enabled
+        class MyModule(TTNNModule):
+            ...
+    """
+    _TRACE_ENABLED_CLASSES.add(cls)
+    return cls
+
+
+def trace_disabled(cls: Type) -> Type:
+    """
+    Decorator to mark a TTNNModule subclass as trace-disabled, even if its parent class is trace-enabled.
+    """
+    _TRACE_DISABLED_CLASSES.add(cls)
+    return cls
+
+
+def is_trace_enabled(module) -> bool:
+    """Check if module's class is trace-enabled."""
+    return isinstance(module, tuple(_TRACE_ENABLED_CLASSES)) and not isinstance(module, tuple(_TRACE_DISABLED_CLASSES))
+
+
+class TracedRun(LightweightRun):
+    """
+    Traced execution mode with automatic caching.
+    Only traces modules decorated with @trace_enabled.
+
+    Per-(module, cache_key) three-phase lifecycle:
+      1. **Warm-up** (first encounter): Normal forward execution, no trace
+         capture. Primes JIT, CCL, and device memory allocator.
+      2. **Capture** (second encounter): ``_capture_trace`` records the op
+         sequence into a DRAM buffer. The system is already in steady state.
+      3. **Replay** (third encounter onward): ``execute_trace`` replays the
+         clean trace with near-zero host dispatch overhead.
+    """
+
+    _device: Any = None
+    _cq_id: int = 0
+    _input_memory_config: Any = None
+    _trace_cache: Dict[Tuple, TraceEntry] = {}
+    _warmup_keys: Set[Tuple] = set()  # keys that have completed warm-up (run 1)
+
+    @classmethod
+    def configure(
+        cls,
+        device=None,
+        cq_id: int = 0,
+        input_memory_config=None,
+    ) -> None:
+        """Configure traced run mode."""
+        cls._device = device
+        cls._cq_id = cq_id
+        cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+        cls._trace_cache = {}
+        cls._warmup_keys = set()
+
+    @classmethod
+    def cache_size(cls) -> int:
+        return len(cls._trace_cache)
+
+    @classmethod
+    def cached_keys(cls) -> List[Tuple]:
+        return list(cls._trace_cache.keys())
+
+    @classmethod
+    def release_all(cls) -> None:
+        """Release all cached traces."""
+        for entry in cls._trace_cache.values():
+            ttnn.release_trace(entry.device, entry.trace_id)
+        cls._trace_cache.clear()
+
+    @classmethod
+    def release(cls, module_name: str) -> int:
+        """Release all traces for a specific module. Returns count released."""
+        to_remove = [k for k in cls._trace_cache if k[0] == module_name]
+        for key in to_remove:
+            entry = cls._trace_cache.pop(key)
+            ttnn.release_trace(entry.device, entry.trace_id)
+        return len(to_remove)
+
+    @staticmethod
+    def _make_cache_key(module_name: str, args) -> Tuple:
+        """Create cache key from module name and input signatures."""
+        return (module_name, _compute_args_signature(args))
+
+    @staticmethod
+    def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
+        """Copy new inputs to trace input buffers."""
+        trace_idx = 0
+        for arg in new_args:
+            if trace_idx >= len(trace_inputs):
+                break
+            trace_input = trace_inputs[trace_idx]
+            if trace_input is None:
+                trace_idx += 1
+                continue
+
+            if isinstance(arg, ttnn.Tensor):
+                ttnn.copy(arg, trace_input)
+                trace_idx += 1
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                ttnn.copy(arg.ttnn_tensor, trace_input)
+                trace_idx += 1
+
+    @staticmethod
+    def _copy_one_to_trace_buffer(new_val, trace_buf) -> None:
+        """Copy a single value into its pre-allocated trace buffer."""
+        if isinstance(new_val, ttnn.Tensor):
+            ttnn.copy(new_val, trace_buf)
+        elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
+            ttnn.copy(new_val.ttnn_tensor, trace_buf)
+
+    @staticmethod
+    def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
+        """Copy new kwargs to trace kwarg buffers.
+
+        Handles both scalar tensors and list/tuple of tensors (e.g.
+        position_embeddings = [cos, sin]).
+        """
+        for key, trace_buf in trace_kwargs.items():
+            if trace_buf is None:
+                continue
+            new_val = new_kwargs.get(key)
+            if new_val is None:
+                continue
+            if isinstance(trace_buf, (list, tuple)):
+                # List/tuple of trace buffers — copy element-wise
+                for tb, nv in zip(trace_buf, new_val):
+                    if tb is not None:
+                        TracedRun._copy_one_to_trace_buffer(nv, tb)
+            else:
+                TracedRun._copy_one_to_trace_buffer(new_val, trace_buf)
+
+    @staticmethod
+    def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
+        """Capture trace for module."""
+        from loguru import logger
+
+        device = module.device
+        cq_id = TracedRun._cq_id
+        mem_config = TracedRun._input_memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        logger.debug(f"Capturing trace for {module.module_name}")
+
+        # Allocate persistent input buffers
+        trace_inputs = []
+        trace_func_args = []
+
+        for arg_idx, arg in enumerate(func_args):
+            if isinstance(arg, ttnn.Tensor):
+                host_tensor = arg.cpu() if arg.storage_type() != ttnn.StorageType.HOST else arg
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                trace_func_args.append(trace_input)
+            elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
+                t = arg.ttnn_tensor
+                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+                trace_input = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_inputs.append(trace_input)
+                # Clone the wrapper and set trace input
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                new_arg = TorchTTNNTensor(trace_input)
+                trace_func_args.append(new_arg)
+            else:
+                trace_inputs.append(None)
+                trace_func_args.append(arg)
+
+        # Pre-allocate persistent keyword argument buffers
+        trace_func_kwargs = {}
+        trace_kwargs_map = {}  # key -> trace buffer (or list of trace buffers)
+
+        def _alloc_kwarg_tensor(t):
+            """Pre-allocate a single device buffer for a kwarg tensor."""
+            host = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+            return ttnn.to_device(host, device, memory_config=mem_config)
+
+        for key, val in func_kwargs.items():
+            if isinstance(val, ttnn.Tensor):
+                trace_kwarg = _alloc_kwarg_tensor(val)
+                trace_kwargs_map[key] = trace_kwarg
+                trace_func_kwargs[key] = trace_kwarg
+            elif hasattr(val, "ttnn_tensor") and val.ttnn_tensor is not None:
+                trace_kwarg = _alloc_kwarg_tensor(val.ttnn_tensor)
+                trace_kwargs_map[key] = trace_kwarg
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                trace_func_kwargs[key] = TorchTTNNTensor(trace_kwarg)
+            elif isinstance(val, (list, tuple)):
+                # Handle list/tuple of tensors (e.g. position_embeddings = [cos, sin])
+                bufs = []
+                func_vals = []
+                has_tensors = False
+                for elem in val:
+                    if isinstance(elem, ttnn.Tensor):
+                        tb = _alloc_kwarg_tensor(elem)
+                        bufs.append(tb)
+                        func_vals.append(tb)
+                        has_tensors = True
+                    elif hasattr(elem, "ttnn_tensor") and elem.ttnn_tensor is not None:
+                        tb = _alloc_kwarg_tensor(elem.ttnn_tensor)
+                        bufs.append(tb)
+                        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                        func_vals.append(TorchTTNNTensor(tb))
+                        has_tensors = True
+                    else:
+                        bufs.append(None)
+                        func_vals.append(elem)
+                if has_tensors:
+                    trace_kwargs_map[key] = bufs
+                    trace_func_kwargs[key] = type(val)(func_vals)
+                else:
+                    trace_func_kwargs[key] = val
+            else:
+                trace_func_kwargs[key] = val
+
+        # Warm-up — run forward once to populate caches and prime ops.
+        # The warm-up output is discarded; we only keep the trace-capture output.
+        module.forward(*func_args, **func_kwargs)
+        # Synchronize device to ensure all warm-up ops (including CCL) complete
+        # before starting trace capture. Without this, in-flight CCL ops can
+        # cause "Writes/Reads are not supported during trace capture" errors.
+        ttnn.synchronize_device(device)
+
+        # DEBUG: Monkey-patch ttnn.from_torch to detect writes during trace capture
+        import traceback as _tb
+
+        _orig_from_torch = ttnn.from_torch
+        _orig_to_device = ttnn.to_device
+
+        def _debug_from_torch(*a, **kw):
+            logger.critical(f"TRACE-WRITE-DETECT: ttnn.from_torch called during trace capture for {module.module_name}")
+            logger.critical(f"  args[0] type={type(a[0]) if a else 'N/A'}, kwargs keys={list(kw.keys())}")
+            logger.critical(f"  device kwarg={kw.get('device', 'NOT SET')}")
+            _tb.print_stack()
+            return _orig_from_torch(*a, **kw)
+
+        def _debug_to_device(*a, **kw):
+            # Only flag if source is a HOST tensor
+            if len(a) >= 1 and isinstance(a[0], ttnn.Tensor) and a[0].storage_type() == ttnn.StorageType.HOST:
+                logger.critical(
+                    f"TRACE-WRITE-DETECT: ttnn.to_device(HOST tensor) during trace for {module.module_name}"
+                )
+                _tb.print_stack()
+            return _orig_to_device(*a, **kw)
+
+        ttnn.from_torch = _debug_from_torch
+        ttnn.to_device = _debug_to_device
+
+        # Capture — the output from THIS forward is the trace_output whose
+        # device buffer will be rewritten by every subsequent execute_trace.
+        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+        trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
+        ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+
+        # Restore original functions
+        ttnn.from_torch = _orig_from_torch
+        ttnn.to_device = _orig_to_device
+        ttnn.synchronize_device(device)
+
+        entry = TraceEntry(
+            trace_id=trace_id,
+            trace_inputs=trace_inputs,
+            trace_kwargs=trace_kwargs_map,
+            trace_output=trace_output,
+            device=device,
+        )
+        TracedRun._trace_cache[cache_key] = entry
+        logger.debug(f"Trace cached id={trace_id}, total={TracedRun.cache_size()}")
+        return entry
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        assert self.device is not None, "Device must be set for TTNN module execution."
+        # Transform inputs
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            transform = fast_unwrap_to_device(self.device)
+        else:
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
+
+        begin = time.time()
+        self.preprocess_weights()
+        end = time.time()
+        DispatchManager.set_current_module_name(self.module_name)
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
+        )
+        begin = time.time()
+        self.move_weights_to_device()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
+        )
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+
+        begin = time.time()
+        # Check if this module is trace-enabled
+        global _TRACE_RUNNING
+        if not is_trace_enabled(self) or _TRACE_RUNNING:
+            if _TRACE_RUNNING:
+                print(
+                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
+                )
+            else:
+                print(
+                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
+                )
+            # Fall back to normal execution
+            result = self.forward(*func_args, **func_kwargs)
+            end = time.time()
+            DispatchManager.record_timing(
+                "TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin
+            )
+            DispatchManager.set_current_module_name(None)
+            if bypass:
+                return result
+            return post_process_ttnn_module_output(self, result)
+
+        # Traced execution path — per-(module, cache_key) lifecycle:
+        #   1st encounter: warm-up forward (no trace capture)
+        #   2nd encounter: _capture_trace (clean capture)
+        #   3rd+ encounter: execute_trace (replay)
+        cache_key = TracedRun._make_cache_key(self.module_name, func_args)
+
+        if cache_key in TracedRun._trace_cache:
+            # === RUN 3+: REPLAY ===
+            entry = TracedRun._trace_cache[cache_key]
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+            TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
+            # Update module-owned trace-stable buffers BEFORE executing trace.
+            # This handles tensors like cache_position whose trace kwarg buffer
+            # can be overwritten by another layer's trace intermediates (buffer
+            # aliasing in TTNN's trace allocator). The module copies these values
+            # to its own persistent buffers that are not subject to aliasing.
+            if hasattr(self, "update_trace_stable_buffers"):
+                self.update_trace_stable_buffers(func_kwargs)
+            ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
+            result = entry.trace_output
+        elif cache_key in TracedRun._warmup_keys:
+            # === RUN 2: CAPTURE (system already warmed up for this key) ===
+            _TRACE_RUNNING = True
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
+            begin2 = time.time()
+            entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
+            end2 = time.time()
+            DispatchManager.record_timing(
+                "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
+            )
+            result = entry.trace_output
+            _TRACE_RUNNING = False
+        else:
+            # === RUN 1: WARM-UP (normal forward, no trace) ===
+            TracedRun._warmup_keys.add(cache_key)
+            _TRACE_RUNNING = True
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
+            result = self.forward(*func_args, **func_kwargs)
+            _TRACE_RUNNING = False
+        end = time.time()
+        DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
+        DispatchManager.set_current_module_name(None)
+        if bypass:
+            return result
+        return post_process_ttnn_module_output(self, result)
+
+
+def disable_trace(fn):
+    def new_fn(*args, **kwargs):
+        global _TRACE_RUNNING
+        was_tracing = _TRACE_RUNNING
+        _TRACE_RUNNING = True
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _TRACE_RUNNING = was_tracing
+
+    return new_fn
+
+
 # Add at module level
 _RUN_MODE_REGISTRY = {
     "LIGHTWEIGHT": LightweightRun,
@@ -769,6 +1297,7 @@ _RUN_MODE_REGISTRY = {
     "DPL": DPLRun,
     "DPL_NO_ERROR_PROP": DPLRunNoErrorProp,
     "CPU": CPU,
+    "TRACED": TracedRun,
 }
 
 _current_run_mode = None  # Default
@@ -798,16 +1327,27 @@ def get_tensor_run_implementation():
     global _current_run_mode
     global _RUN_MODE_REGISTRY
     env_mode = os.environ.get("TT_SYMBIOTE_RUN_MODE", _current_run_mode)
+    signpost_mode = os.environ.get("TT_SYMBIOTE_SIGNPOST_MODE", None)
     if env_mode is None and _current_run_mode is None:
         _current_run_mode = "NORMAL"
     if env_mode != _current_run_mode and _current_run_mode is not None and env_mode is not None:
         print(
             f"Warning: Run mode from environment variable '{env_mode}' overrides the previously set run mode '{_current_run_mode}'."
         )
-    if env_mode is not None:
+
+    if env_mode is None:
+        result = _RUN_MODE_REGISTRY[_current_run_mode]
+    else:
         if env_mode not in _RUN_MODE_REGISTRY:
             raise ValueError(
                 f"Invalid run mode '{env_mode}' from environment variable. Valid modes: {list(_RUN_MODE_REGISTRY.keys())}"
             )
-        return _RUN_MODE_REGISTRY[env_mode]
-    return _RUN_MODE_REGISTRY[_current_run_mode]
+        result = _RUN_MODE_REGISTRY[env_mode]
+    result.signpost_mode = signpost_mode
+    if issubclass(result, LightweightRun):
+        from models.experimental.tt_symbiote.core.dispatchers import get_active_dispatcher, cpu_dispatcher
+
+        assert (
+            get_active_dispatcher() == cpu_dispatcher
+        ), f"CPU dispatcher needs to be active to run {result.__name__} run mode. `export TT_SYMBIOTE_DISPATCHER=CPU`"
+    return result

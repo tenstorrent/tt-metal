@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ def initialize_module(
         if isinstance(new_module, TTNNModule):
             if old_module in module_names:
                 new_module._unique_name = module_names[old_module]
+                new_module.override_children_module_names()
             new_module.set_model_config(model_config)
         return new_module
     return None
@@ -99,7 +100,7 @@ def register_module_replacement_dict_with_module_names(
                 setattr(model, attr_name, type(value)(ls_value))
     elif isinstance(model, TTNNModule):
         for attr_name in dir(model):
-            if attr_name.startswith("_"):
+            if attr_name.startswith("_") or attr_name in ["torch_layer"]:
                 continue
             try:
                 value = getattr(model, attr_name)
