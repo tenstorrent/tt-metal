@@ -558,7 +558,7 @@ class MotifPipeline:
                 )
 
                 with self.encoder_reshape(self.encoder_device):
-                    tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
+                    tt_latents = tensor.from_torch(torch_latents, device=self.vae_device, on_host=traced)
                     tt_decoded_output = self._vae_decoder(tt_latents)
                     decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
