@@ -38,7 +38,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeMLP,
     Qwen3OmniMoeCode2WavMlp,
     Qwen3OmniMoeTalkerCodePredictorAttention,
-    # SnakeBeta,
+    SnakeBeta,
 )
 from qwen_omni_utils import process_mm_info
 
@@ -53,14 +53,15 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
+from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
 from models.experimental.tt_symbiote.modules.activation import (
     TTNNGelu,
-    # TTNNQwen3OmniMoeCausalConvNet,
-    # TTNNQwen3OmniMoeCausalTransConvNet,
-    # TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
-    # TTNNQwen3OmniMoeConvNeXtBlock,
+    TTNNQwen3OmniMoeCausalConvNet,
+    TTNNQwen3OmniMoeCausalTransConvNet,
+    TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    TTNNQwen3OmniMoeConvNeXtBlock,
     TTNNSilu,
-    # TTNNSnakeBeta,
+    TTNNSnakeBeta,
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
@@ -73,16 +74,17 @@ from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
     replace_thinker_lm_head_with_ttnn,
 )
 
-# from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
-#    TTNNQwen3OmniMoeRotaryEmbedding,
-#    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
-#    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
-#    TTNNQwen3OmniMoeVisionRotaryEmbedding,
-# )
+from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
+    TTNNQwen3OmniMoeRotaryEmbedding,
+    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    TTNNQwen3OmniMoeVisionRotaryEmbedding,
+)
 from models.experimental.tt_symbiote.modules.conv import (
-    # TTNNConv1d,
+    TTNNConv1d,
     TTNNConv3d,
     TTNNQwenOmniConv2dNHWC,
+    TTNNConvTranspose1d,
 )
 from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
 from models.experimental.tt_symbiote.modules.qwen_omni_audio_encoder import TTNNQwen3OmniMoeAudioEncoder
@@ -102,7 +104,7 @@ _QWEN_OMNI_ACTIVATION_NN_TO_TTNN = {
     SiLUActivation: TTNNSilu,
     GELUActivation: TTNNGelu,
     GELUTanh: TTNNGelu,
-    # SnakeBeta: TTNNSnakeBeta,
+    SnakeBeta: TTNNSnakeBeta,
 }
 
 # HF ``nn.LayerNorm`` (audio encoder, vision merger/blocks, code2wav ConvNeXt). ``TTNNQwenLayerNorm.from_torch``
@@ -116,9 +118,10 @@ _QWEN_OMNI_LAYERNORM_NN_TO_TTNN = {
 _QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv2d: TTNNQwenOmniConv2dNHWC,
     torch.nn.Conv3d: TTNNConv3d,
-    # torch.nn.Conv1d: TTNNConv1d,
-    # torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
+    torch.nn.Conv1d: TTNNConv1d,
+    torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
+
 
 def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
     """Wall time for thinker-only generation with a single new token (no talker / code2wav).
@@ -219,22 +222,22 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeAudioEncoder: TTNNQwen3OmniMoeAudioEncoder,
     Qwen3OmniMoeAudioEncoderLayer: TTNNQwen3OmniMoeAudioEncoderLayer,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
-    # Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
-    # Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
+    Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
     **_QWEN_OMNI_CONV_NN_TO_TTNN,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
-    # Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
-    # Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
-    # Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
+    Qwen3OmniMoeCausalConvNet: TTNNQwen3OmniMoeCausalConvNet,
+    Qwen3OmniMoeConvNeXtBlock: TTNNQwen3OmniMoeConvNeXtBlock,
+    Qwen3OmniMoeCausalTransConvNet: TTNNQwen3OmniMoeCausalTransConvNet,
     Qwen3OmniMoeCode2WavRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeCode2WavMlp: TTNNGlm4MoeMLP,
-    # Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    Qwen3OmniMoeCode2WavDecoderResidualUnit: TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
     # ``code2wav.pre_transformer.rotary_emb`` (same HF class as code_predictor 1D RoPE)
-    # Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
     **_QWEN_OMNI_CONV_NN_TO_TTNN,
@@ -247,7 +250,7 @@ NN_TO_TTNN_TALKER = {
     Qwen3OmniMoeTalkerCodePredictorAttention: TTNNQwen3Attention,
     Qwen3OmniMoeTalkerResizeMLP: TTNNQwen3OmniTalkerResizeMLP,
     Qwen3OmniMoeRMSNorm: TTNNDistributedRMSNorm,
-    # Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+    Qwen3OmniMoeTalkerRotaryEmbedding: TTNNQwen3OmniMoeTalkerRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
 }
@@ -255,7 +258,8 @@ NN_TO_TTNN_TALKER = {
 # Code predictor shares most talker mappings plus ``Qwen3OmniMoeRotaryEmbedding`` (not MRoPE).
 NN_TO_TTNN_CODE_PREDICTOR = {
     **NN_TO_TTNN_TALKER,
-    # Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    Qwen3OmniMoeRotaryEmbedding: TTNNQwen3OmniMoeRotaryEmbedding,
+    torch.nn.Embedding: TTNNQwen3OmniMoeCodecPredictorEmbedding,
 }
 
 MODEL_NAME = "Qwen/Qwen3-Omni-30B-A3B-Instruct"

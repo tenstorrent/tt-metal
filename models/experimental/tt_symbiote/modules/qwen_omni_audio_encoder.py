@@ -13,8 +13,9 @@ from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import _get_feat_extract_output_lengths
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_enabled, DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 from models.experimental.tt_symbiote.modules.conv import TTNNQwenOmniConv2dNHWC
 from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
@@ -32,6 +33,16 @@ def _to_torch_tensor(x, mesh_device=None):
     if isinstance(x, ttnn.Tensor):
         return _ttnn_mesh_to_torch_one_replica(x, mesh_device)
     return x
+
+
+def _audio_tower_output_replicate_config(mesh_device):
+    """Ragged audio token projections are not 2D-mesh shardable; replicate like ``DistributedConfig`` fallback."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return None
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
 
 
 def _gelu_after_conv(x):
@@ -106,6 +117,18 @@ class TTNNQwen3OmniMoeAudioEncoder(TTNNModule):
             layer.deallocate_weights()
         super().deallocate_weights_impl()
 
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _audio_tower_output_replicate_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
     def _act_ttnn(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self._activation_kind == "silu":
             return ttnn.silu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -125,6 +148,15 @@ class TTNNQwen3OmniMoeAudioEncoder(TTNNModule):
         aftercnn_lens=None,
         **kwargs,
     ):
+        # Symbiote may wrap lengths/features as TTNN tensors; HF length math uses Python ``%`` on torch only.
+        input_features = _to_torch_tensor(input_features, self.device)
+        if feature_lens is not None:
+            feature_lens = _to_torch_tensor(feature_lens, self.device)
+            if isinstance(feature_lens, torch.Tensor):
+                feature_lens = feature_lens.reshape(-1).long()
+                if isinstance(input_features, torch.Tensor):
+                    feature_lens = feature_lens.to(device=input_features.device)
+
         aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
         chunk_num = torch.ceil(feature_lens / (self.n_window * 2)).long()
 
