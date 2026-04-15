@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // Runtime args
@@ -38,9 +41,13 @@ void kernel_main() {
     const auto index_tensor_addr_gen =
         TensorAccessor(index_tensor_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
-    // Semaphore setup
+    // Semaphore setup (legacy NOC - uses x,y addressing)
     const uint64_t coordinator_core_addr = get_noc_addr(
         coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, cores_to_coordinator_semaphore_id);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_input_out(input_tensor_output_cb_index);
+    experimental::CircularBuffer cb_index_out(index_tensor_output_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value
@@ -68,38 +75,46 @@ void kernel_main() {
                             const uint32_t right_tile_id = j;
 
                             // Save index data
-                            cb_wait_front(index_tensor_output_cb_index, one_tile);
-                            const uint32_t l1_write_addr_index_output_tensor_cb_i =
-                                get_read_ptr(index_tensor_output_cb_index);
-                            noc_async_write_tile(
-                                h * Wt + left_tile_id, index_tensor_addr_gen, l1_write_addr_index_output_tensor_cb_i);
-                            noc_async_write_barrier();
-                            cb_pop_front(index_tensor_output_cb_index, one_tile);
+                            cb_index_out.wait_front(one_tile);
+                            noc.async_write(
+                                cb_index_out,
+                                index_tensor_addr_gen,
+                                index_tensor_output_tile_size_bytes,
+                                {},
+                                {.page_id = h * Wt + left_tile_id});
+                            noc.async_write_barrier();
+                            cb_index_out.pop_front(one_tile);
 
-                            cb_wait_front(index_tensor_output_cb_index, one_tile);
-                            const uint32_t l1_write_addr_index_output_tensor_cb_j =
-                                get_read_ptr(index_tensor_output_cb_index);
-                            noc_async_write_tile(
-                                h * Wt + right_tile_id, index_tensor_addr_gen, l1_write_addr_index_output_tensor_cb_j);
-                            noc_async_write_barrier();
-                            cb_pop_front(index_tensor_output_cb_index, one_tile);
+                            cb_index_out.wait_front(one_tile);
+                            noc.async_write(
+                                cb_index_out,
+                                index_tensor_addr_gen,
+                                index_tensor_output_tile_size_bytes,
+                                {},
+                                {.page_id = h * Wt + right_tile_id});
+                            noc.async_write_barrier();
+                            cb_index_out.pop_front(one_tile);
 
                             // Save output data
-                            cb_wait_front(input_tensor_output_cb_index, one_tile);
-                            const uint32_t l1_write_addr_output_tensor_cb_i =
-                                get_read_ptr(input_tensor_output_cb_index);
-                            noc_async_write_tile(
-                                h * Wt + left_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_i);
-                            noc_async_write_barrier();
-                            cb_pop_front(input_tensor_output_cb_index, one_tile);
+                            cb_input_out.wait_front(one_tile);
+                            noc.async_write(
+                                cb_input_out,
+                                input_tensor_addr_gen,
+                                input_tensor_tile_size_bytes,
+                                {},
+                                {.page_id = h * Wt + left_tile_id});
+                            noc.async_write_barrier();
+                            cb_input_out.pop_front(one_tile);
 
-                            cb_wait_front(input_tensor_output_cb_index, one_tile);
-                            const uint32_t l1_write_addr_output_tensor_cb_j =
-                                get_read_ptr(input_tensor_output_cb_index);
-                            noc_async_write_tile(
-                                h * Wt + right_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_j);
-                            noc_async_write_barrier();
-                            cb_pop_front(input_tensor_output_cb_index, one_tile);
+                            cb_input_out.wait_front(one_tile);
+                            noc.async_write(
+                                cb_input_out,
+                                input_tensor_addr_gen,
+                                input_tensor_tile_size_bytes,
+                                {},
+                                {.page_id = h * Wt + right_tile_id});
+                            noc.async_write_barrier();
+                            cb_input_out.pop_front(one_tile);
 
                             // Signalize readiness to the coordinator
                             noc_semaphore_inc(coordinator_core_addr, 1);

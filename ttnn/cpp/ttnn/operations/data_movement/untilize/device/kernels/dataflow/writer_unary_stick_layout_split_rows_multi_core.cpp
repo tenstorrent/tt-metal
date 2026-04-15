@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -28,15 +29,12 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
 
-    auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
-        cb_wait_front(cb_id_out0, num_tiles_per_input_block);
+    experimental::CircularBuffer cb_out(cb_id_out0);
 
-        // Base address of the row of elements we are going to be writing.
-        // If the input is unevenly sharded width wise and we are processing a block in the
-        // last shard width wise, we will not be writing the entire row of elements as the
-        // last x elements will be garbage. Tracking the base address of the row allows us to
-        // easily increment the current_read_addr to the next row of elements.
-        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+    auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
+        cb_out.wait_front(num_tiles_per_input_block);
+
+        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
 
         // Process each row of elements in the input block
         for (uint32_t j = 0; j < tile_height; ++j) {
@@ -98,7 +96,7 @@ void kernel_main() {
         }
 
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+        cb_out.pop_front(num_tiles_per_input_block);
     };
 
     // Each input block processed separately

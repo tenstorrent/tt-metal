@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <array>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -35,19 +36,16 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     const auto accessor_src = TensorAccessor(src0_args, src0_addr, input_single_tile_size);
 
+    experimental::CircularBuffer cb_out(cb_id_out0);
+
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
                                             uint32_t num_rows_to_write) {
-        cb_wait_front(cb_id_out0, num_tiles_per_input_block);
+        cb_out.wait_front(num_tiles_per_input_block);
 
-        // Base address of the row of elements we are going to be writing.
-        // If the input is unevenly sharded width wise and we are processing a block in the
-        // last shard width wise, we will not be writing the entire row of elements as the
-        // last x elements will be garbage. Tracking the base address of the row allows us to
-        // easily increment the current_read_addr to the next row of elements.
-        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
 
         // Process each row of elements in the input block
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
@@ -108,7 +106,7 @@ void kernel_main() {
         }
 
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_input_block);
+        cb_out.pop_front(num_tiles_per_input_block);
     };
 
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {

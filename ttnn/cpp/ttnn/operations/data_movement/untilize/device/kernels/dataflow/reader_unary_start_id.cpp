@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -20,15 +23,14 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in(cb_id_in0);
+
     uint32_t end_page_id = start_page_id + num_tiles;
     for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
-        cb_reserve_back(cb_id_in0, 1);
-
-        uint64_t noc_read_addr = s.get_noc_addr(page_id);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read(noc_read_addr, l1_write_addr, tile_bytes);
-
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        cb_in.reserve_back(1);
+        noc.async_read(s, cb_in, tile_bytes, {.page_id = page_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in.push_back(1);
     }
 }

@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
@@ -23,12 +24,14 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
 
+    experimental::CircularBuffer cb_out(cb_id_out0);
+
     uint64_t base_dst_noc_addr[tile_height];
 
     auto write_tiles_in_current_block = [&]() {
-        cb_wait_front(cb_id_out0, num_tiles_per_output_block);
+        cb_out.wait_front(num_tiles_per_output_block);
 
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t l = 0; l < tile_height; ++l) {
             uint64_t dst_noc_addr = base_dst_noc_addr[l];
             noc_async_write(l1_read_addr, dst_noc_addr, output_single_block_width_size);
@@ -37,7 +40,7 @@ void kernel_main() {
         }
 
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_output_block);
+        cb_out.pop_front(num_tiles_per_output_block);
     };
 
     // Each row of tiles processed separately
