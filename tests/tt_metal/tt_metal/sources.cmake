@@ -12,6 +12,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_datacopy.cpp
     test_datacopy_bfp8b.cpp
     test_datacopy_output_in_l1.cpp
+    test_dm_hello_world.cpp
     test_dm_loopback.cpp
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
