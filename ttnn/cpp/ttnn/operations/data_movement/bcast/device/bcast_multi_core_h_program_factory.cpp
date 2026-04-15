@@ -108,9 +108,9 @@ BcastMultiCoreHProgramFactory::cached_program_t BcastMultiCoreHProgramFactory::c
 
     std::map<std::string, std::string> bcast_defines =
         bcast_op_utils::get_defines(BcastOpDim::H, operation_attributes.math_op);
-    bcast_defines["cb_in0"] = std::to_string(src0_cb_index);
-    bcast_defines["cb_in1"] = std::to_string(src1_cb_index);
-    bcast_defines["cb_out"] = std::to_string(output_cb_index);
+    bcast_defines["cb_id_in0"] = std::to_string(src0_cb_index);
+    bcast_defines["cb_id_in1"] = std::to_string(src1_cb_index);
+    bcast_defines["cb_id_out"] = std::to_string(output_cb_index);
     const KernelHandle bcast_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",

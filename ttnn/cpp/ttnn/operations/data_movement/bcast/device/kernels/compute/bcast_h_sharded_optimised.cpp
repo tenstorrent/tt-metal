@@ -15,9 +15,9 @@ void kernel_main() {
     uint32_t batch_b = get_arg_val<uint32_t>(4);
     uint32_t Ht_per_batch_b = get_arg_val<uint32_t>(5);
 
-    experimental::CircularBuffer cb_src0(static_cast<tt::CBIndex>(cb_in0));
-    experimental::CircularBuffer cb_src1(static_cast<tt::CBIndex>(cb_in1));
-    experimental::CircularBuffer cb_dst(static_cast<tt::CBIndex>(cb_out));
+    experimental::CircularBuffer cb_src0(static_cast<tt::CBIndex>(cb_id_in0));
+    experimental::CircularBuffer cb_src1(static_cast<tt::CBIndex>(cb_id_in1));
+    experimental::CircularBuffer cb_dst(static_cast<tt::CBIndex>(cb_id_out));
 
     init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_src0.get_cb_id(), cb_src1.get_cb_id(), cb_dst.get_cb_id());
 
