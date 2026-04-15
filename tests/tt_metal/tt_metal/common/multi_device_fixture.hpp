@@ -169,9 +169,16 @@ protected:
         if (!mesh_device_) {
             return;
         }
-        log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->quiesce_devices()");
-        mesh_device_->quiesce_devices();
-        log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->quiesce_devices() returned, calling mesh_device_->close()");
+        // Skip quiesce on remote-only MeshDevices (no local devices on this host).
+        // quiesce_internal() calls get_active_sub_device_manager_id() which requires
+        // sub_device_manager_tracker_ — null on remote-only devices — and would throw.
+        if (!mesh_device_->is_remote_only()) {
+            log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->quiesce_devices()");
+            mesh_device_->quiesce_devices();
+            log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->quiesce_devices() returned, calling mesh_device_->close()");
+        } else {
+            log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() skipping quiesce_devices() (remote-only mesh)");
+        }
         mesh_device_->close();
         log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->close() returned, calling mesh_device_.reset()");
         mesh_device_.reset();
