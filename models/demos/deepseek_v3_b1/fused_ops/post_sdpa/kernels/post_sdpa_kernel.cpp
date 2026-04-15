@@ -120,10 +120,14 @@ void kernel_main() {
 
     // Mcast3 receiver args
     using Mcast3CTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast3_dst_cb"),
-        get_named_compile_time_arg_val("mcast3_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs mcast3_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast3_dst_cb"),
+                get_named_compile_time_arg_val("mcast3_dst_num_pages"),
+            },
     };
 
     // Matmul5 CTArgs
@@ -212,18 +216,22 @@ void kernel_main() {
 
     constexpr uint32_t mcast3_src_cb = get_named_compile_time_arg_val("mcast3_src_cb");
     constexpr uint32_t mcast3_dst_cb = get_named_compile_time_arg_val("mcast3_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast3_args{
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast3_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast3_data_size_bytes"),
-        mcast3_src_cb,
-        get_named_compile_time_arg_val("mcast3_src_num_pages"),
-        get_read_ptr(mcast3_src_cb),
-        get_write_ptr(mcast3_dst_cb),  // CB 4 address (now allocated on gather core too)
+    deepseek_b1_ops::Mcast::DMArgs mcast3_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast3_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast3_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast3_data_size_bytes"),
+                mcast3_src_cb,
+                get_named_compile_time_arg_val("mcast3_src_num_pages"),
+                get_read_ptr(mcast3_src_cb),
+                get_write_ptr(mcast3_dst_cb),  // CB 4 address (now allocated on gather core too)
+            },
+        .receiver = {},
     };
 
     // Gather3 receiver args
