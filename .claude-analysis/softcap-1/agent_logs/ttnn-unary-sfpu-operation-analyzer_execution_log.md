@@ -157,3 +157,52 @@
 - WH and BH implementations are identical
 - **Missing dependency**: `_float_to_int32_positive_()` is called but not defined anywhere in the codebase, which would cause a compilation error
 - Each iteration processes 32 elements, 8 iterations per face, 4 faces per tile = 1024 elements
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (hardtanh)
+
+## Session Summary
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Operation**: hardtanh
+- **Final Status**: SUCCESS
+- **Output File**: `.claude-analysis/softcap-1/hardtanh_analysis.md`
+
+## Analysis Steps
+
+### 1. Dispatch Tracing
+- Read `unary_op_utils.hpp` and `.cpp` for HARDTANH dispatch configuration
+- Compute kernel: `eltwise_sfpu.cpp` (default case in `get_compute_kernel_path`)
+- Approx mode: `false` (default case in `get_op_approx_mode`)
+- **Dispatch chain INCOMPLETE**: HARDTANH is in `is_parametrized_type()` but has no case in `get_op_init_and_func_parameterized()` -- would throw at runtime
+- No `hardtanh_tile()` API header exists
+- No `SfpuType::hardtanh` in the production `llk_sfpu_types.h`
+- Core SFPU kernel `_calculate_hardtanh_` exists at tt_llk level
+
+### 2. Abstraction Layer Tracing
+- API header: Does not exist
+- LLK dispatch: Does not exist
+- Core SFPU: `ckernel_sfpu_hardtanh.h` (identical on WH and BH)
+  - SFPI-style kernel with shifted-addition clamping algorithm
+- Params dispatch: Generic `llk_math_eltwise_unary_sfpu_params.h` (WH and BH)
+
+### 3. SFPU Kernel Analysis
+- **Algorithm**: `hardtanh(x) = clamp(x, low, high)` implemented via shifted-addition clamping
+  - Three adds with two conditional-zero steps reconstruct the clamped value
+  - Takes 3 pre-computed FP16_B parameters
+- **SFPI-style kernel**: Uses `vFloat`, `dst_reg`, `v_if`/`v_endif`
+- **Instructions emitted** (via SFPI compiler): SFPLOAD, SFPLOADI, SFPMAD (3 per iter), SFPSETCC (2 per iter), SFPENCC (4 per iter), SFPPUSHC/SFPPOPC (2 pairs per iter), SFPMOV (2 per iter), SFPSTORE
+- **APPROXIMATION_MODE**: Accepted but unused (no branching)
+- **ADDR_MOD_7**: dest.incr=0 on both WH and BH
+
+### 4. Verification
+- `_calculate_hardtanh_` verified: 2 matches (WH and BH)
+- All file paths verified to exist
+- Algorithm correctness verified via algebraic trace (param comments appear incorrect; p2 must be positive for correctness)
+
+## Key Findings
+- HARDTANH has a core SFPU kernel but the full dispatch chain is not wired in this worktree
+- The kernel uses an elegant shifted-addition clamping technique that avoids explicit comparisons against threshold values
+- WH and BH implementations are byte-for-byte identical
+- The source code comment `param2 = -(pos_threshold)` is inconsistent with the algorithm producing correct results; the actual encoding likely has param2 = pos_threshold (positive)
+- APPROXIMATION_MODE template parameter is accepted but has zero effect on execution
