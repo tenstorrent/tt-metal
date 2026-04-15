@@ -298,6 +298,98 @@ def _to_torch_zero_copy(t: ttnn.Tensor) -> torch.Tensor:
         return ttnn.to_torch(t)
 
 
+def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
+    """Return the mesh axis that spans multiple hosts (0 or 1).
+
+    In a 2D mesh, one axis typically spans hosts (inter-host) while the other
+    is fully local to each host (intra-host).  Finds a local coordinate first,
+    then checks whether varying each axis stays local.
+    """
+    from ttnn._ttnn.multi_device import MeshCoordinate
+
+    # Find any coordinate that is local to this host.
+    ref_r, ref_c = 0, 0
+    for r in range(mesh_shape[0]):
+        for c in range(mesh_shape[1]):
+            if view.is_local(MeshCoordinate(r, c)):
+                ref_r, ref_c = r, c
+                break
+        else:
+            continue
+        break
+
+    # Check axis 0: vary row while keeping the local column fixed.
+    if mesh_shape[0] > 1:
+        if not all(view.is_local(MeshCoordinate(r, ref_c)) for r in range(mesh_shape[0])):
+            return 0
+    # Check axis 1: vary column while keeping the local row fixed.
+    if mesh_shape[1] > 1:
+        if not all(view.is_local(MeshCoordinate(ref_r, c)) for c in range(mesh_shape[1])):
+            return 1
+    # Both axes are fully local — shouldn't happen in a true distributed env.
+    return 0
+
+
+def _reassemble_2d(
+    mesh_coords: list,
+    shards: list[torch.Tensor],
+    shard_shape: list[int],
+    mesh_shape: tuple[int, ...],
+    concat_dims: list[int | None],
+    permute: tuple[int, ...] | None = None,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Reassemble per-device shards into a single tensor for a 2D mesh.
+
+    For the common case where both axes are concatenated, writes each shard
+    directly into a pre-allocated output buffer.  When *permute* and/or *dtype*
+    are given the permutation and type conversion are fused into the scatter
+    write, halving total memory traffic.
+    """
+    d0, d1 = concat_dims
+
+    if d0 is not None and d1 is not None:
+        s0, s1 = shard_shape[d0], shard_shape[d1]
+        full_shape = list(shard_shape)
+        full_shape[d0] *= mesh_shape[0]
+        full_shape[d1] *= mesh_shape[1]
+        ndim = len(full_shape)
+
+        if permute is not None:
+            out_shape = [full_shape[p] for p in permute]
+            out_dtype = dtype if dtype is not None else shards[0].dtype
+            perm_list = list(permute)
+            d0_out = perm_list.index(d0)
+            d1_out = perm_list.index(d1)
+
+            out = torch.empty(out_shape, dtype=out_dtype)
+            for coord, shard in zip(mesh_coords, shards):
+                r, c = int(coord[0]), int(coord[1])
+                slices = [slice(None)] * ndim
+                slices[d0_out] = slice(r * s0, (r + 1) * s0)
+                slices[d1_out] = slice(c * s1, (c + 1) * s1)
+                out[tuple(slices)] = shard.permute(*permute).contiguous()
+            return out
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        out = torch.empty(full_shape, dtype=out_dtype)
+        for coord, shard in zip(mesh_coords, shards):
+            r, c = int(coord[0]), int(coord[1])
+            slices = [slice(None)] * ndim
+            slices[d0] = slice(r * s0, (r + 1) * s0)
+            slices[d1] = slice(c * s1, (c + 1) * s1)
+            out[tuple(slices)] = shard
+        return out
+
+    if d0 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
+        return torch.cat([s for _, s in by_pos], dim=d0)
+    if d1 is not None:
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
+        return torch.cat([s for _, s in by_pos], dim=d1)
+    return shards[0]
+
+
 def fast_device_to_host(
     tt_tensor: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,
