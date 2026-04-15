@@ -40,6 +40,12 @@ def pytest_collection_modifyitems(config, items):
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
     """
+    # Only query devices if any test has the requires_mesh_topology marker.
+    # This avoids opening the device driver when running perf tests (which spawn
+    # a subprocess that needs exclusive device access).
+    if not any(item.get_closest_marker("requires_mesh_topology") for item in items):
+        return
+
     num_devices = ttnn.get_num_devices()
 
     for item in items:
