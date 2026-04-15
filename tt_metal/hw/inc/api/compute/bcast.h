@@ -53,8 +53,8 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)));
+    UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, bcast_type>(dst_tile_index, icb)));
 #endif
 }
 
