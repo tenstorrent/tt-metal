@@ -89,6 +89,8 @@ def get_python_cmd():
     if os.path.exists(python_env_path):
         return python_env_path
 
+    if sys.executable:
+        return sys.executable
     # Docker and CI jobs rely on the container's default Python.
     return "python3"
 
