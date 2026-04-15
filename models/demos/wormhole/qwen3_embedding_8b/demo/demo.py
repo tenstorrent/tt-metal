@@ -29,6 +29,11 @@ Short ISL: ``prefill_forward_text`` pads each prompt to ``get_padded_prefill_len
 So ``max_seq_len`` must be at least that padded length, not the raw token count.
 
 Batch 25: ``page_max_num_blocks`` must be divisible by 25 (page table reshape in ``prepare_embedding_model``).
+
+Short-seq tuning (Qwen3-Embedding checkpoints only, via ``ModelArgs`` in ``model_config``): registered
+``Qwen3-Embedding-4B`` / ``0.6B`` prefill chunk sizes and N150 trace buckets (128–1024), N150
+``prefill_len_cutoff`` 512 for chunked MLP, and reduced prefill warmup when ``max_seq_len`` ≤ 512.
+Other model families are unchanged.
 """
 
 import json

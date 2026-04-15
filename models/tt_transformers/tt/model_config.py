@@ -594,6 +594,10 @@ class ModelArgs:
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
             self.prefill_len_cutoff = 512
+        elif self.base_model_name.startswith("Qwen3-Embedding") and self.device_name == "N150":
+            # Chunked MLP prefill at 512 on Wormhole N150 (embedding-only; improves mid-length prefill vs 1024 cutoff)
+            logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
+            self.prefill_len_cutoff = 512
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
@@ -1119,6 +1123,9 @@ class ModelArgs:
                     to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                     break
         if self.base_model_name == "Mistral-Small-3.1-24B":
+            to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
+        # Short-seq embedding benchmarks: avoid warming 1024+ when the model is capped at ≤512 (faster compile)
+        if self.base_model_name.startswith("Qwen3-Embedding") and self.max_seq_len <= 512:
             to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
         return to_warmup_seq_lens
 
@@ -2331,6 +2338,9 @@ class ModelArgs:
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                # Smaller Qwen3 embedding checkpoints (same prefill tiling as 8B; avoids unknown-model fallback)
+                "Qwen3-Embedding-4B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-0.6B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
@@ -2387,6 +2397,21 @@ class ModelArgs:
             },
             "Qwen3-Embedding-8B": {
                 "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            # Trace capture at common short-seq buckets (batch 1 / 25 demos); does not alter non-embedding models
+            "Qwen3-Embedding-4B": {
+                "N150": [128, 256, 512, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
+                "T3K": [128, 1024, 2048, 4096, 8192],
+                "TG": [128, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-0.6B": {
+                "N150": [128, 256, 512, 1024],
                 "N300": [128, 1024, 2048, 4096, 8192],
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
