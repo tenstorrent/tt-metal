@@ -479,6 +479,78 @@ def test_conv3d_float32(device):
     )
 
 
+def test_conv3d_qwen_patch_embed_l1_overflow(device):
+    """Reproduce tt-xla#3983: Conv3d with Qwen2.5-VL patch embed parameters overflows L1.
+
+    Without custom blocking, the static CB allocation for Conv3d with out_channels=1280
+    and kernel=(2,14,14) grows to ~1,738,528 B, exceeding the 1,499,136 B L1 limit.
+    This test uses default auto-blocking (no config) to replicate the exact failure path.
+    """
+    torch.manual_seed(42)
+
+    N, C, D, H, W = 1024, 3, 2, 14, 14
+    out_channels = 1280
+    kernel_size = (2, 14, 14)
+    stride = (2, 14, 14)
+    padding = (0, 0, 0)
+    groups = 1
+
+    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+
+    conv3d_module = nn.Conv3d(
+        C,
+        out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        bias=False,
+        padding_mode="zeros",
+    )
+
+    # Prepare input for TTNN (NCDHW -> NDHWC, pad channels to alignment)
+    tt_input = prepare_input_tensor(input_tensor, C, device)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    # Prepare weights — use default C_in_block=0 (auto) to trigger the overflow
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+
+    # No bias (matching the Qwen2.5-VL model exactly)
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=None,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode="zeros",
+        groups=groups,
+        compute_kernel_config=kernel_config,
+    )
+
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2], 1)
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    gt_output = conv3d_module(input_tensor)
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d torch vs ttnn (qwen patch embed): {pcc_message}")
+    assert pcc_passed, pcc_message
+
+
 @pytest.mark.parametrize(
     "C_in_block",
     [32, 64],
