@@ -4,15 +4,38 @@
 
 #include "simple_trace_allocator.hpp"
 
+#include <atomic>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <set>
+#include <string>
+#include <string_view>
 #include <tuple>
 
 #include "hal/generated/dev_msgs.hpp"
+#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
+
+namespace {
+
+std::string_view core_type_name(HalProgrammableCoreType core_type) {
+    switch (core_type) {
+        case HalProgrammableCoreType::TENSIX: return "TENSIX";
+        case HalProgrammableCoreType::ACTIVE_ETH: return "ACTIVE_ETH";
+        case HalProgrammableCoreType::IDLE_ETH: return "IDLE_ETH";
+        case HalProgrammableCoreType::DRAM: return "DRAM";
+        case HalProgrammableCoreType::COUNT: return "COUNT";
+    }
+    return "UNKNOWN";
+}
+
+}  // namespace
 
 std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator::RegionAllocator::allocate_region(
     uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id) {
@@ -309,6 +332,108 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             subdevice_launch_window.pop_front();
         }
     }
+}
+
+void dump_trace_allocation_info(
+    const Hal& hal,
+    const std::vector<SimpleTraceAllocator::RingbufferConfig>& ringbuffer_configs,
+    const std::vector<TraceNode*>& trace_nodes) {
+    static std::atomic<uint32_t> dump_idx = 0;
+
+    nlohmann::json trace_alloc_info;
+    trace_alloc_info["schema_version"] = 1;
+    trace_alloc_info["ringbuffer_configs"] = nlohmann::json::array();
+    trace_alloc_info["core_types"] = nlohmann::json::array();
+    trace_alloc_info["trace_nodes"] = nlohmann::json::array();
+    trace_alloc_info["results"] = nlohmann::json::array();
+
+    for (const auto& ringbuffer_config : ringbuffer_configs) {
+        trace_alloc_info["ringbuffer_configs"].push_back(
+            {{"start", ringbuffer_config.start}, {"size", ringbuffer_config.size}});
+    }
+
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); ++index) {
+        auto core_type = hal.get_programmable_core_type(index);
+        bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
+        bool has_separate_binary_offset = core_type == HalProgrammableCoreType::TENSIX;
+        bool skip = !hal.has_programmable_core_type(core_type) || core_type == HalProgrammableCoreType::IDLE_ETH;
+        trace_alloc_info["core_types"].push_back(
+            {{"index", index},
+             {"core_type", core_type_name(core_type)},
+             {"binary_in_config", binary_in_config},
+             {"has_separate_binary_offset", has_separate_binary_offset},
+             {"skip", skip}});
+    }
+
+    for (const auto* trace_node : trace_nodes) {
+        auto& program = *trace_node->program;
+        nlohmann::json trace_node_info{
+            {"program_id", program.get_id()},
+            {"sub_device_id", static_cast<uint32_t>(*trace_node->sub_device_id)},
+            {"num_workers", trace_node->num_workers},
+            {"per_core_type", nlohmann::json::array()}};
+        nlohmann::json result_info{
+            {"send_binary", trace_node->dispatch_metadata.send_binary},
+            {"sync_count", trace_node->dispatch_metadata.sync_count},
+            {"stall_first", static_cast<bool>(trace_node->dispatch_metadata.stall_first)},
+            {"stall_before_program", static_cast<bool>(trace_node->dispatch_metadata.stall_before_program)},
+            {"nonbinary_addrs", nlohmann::json::array()},
+            {"binary_addrs", nlohmann::json::array()}};
+
+        for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); ++index) {
+            auto core_type = hal.get_programmable_core_type(index);
+            const auto& program_config = program.get_program_config(index);
+            bool binary_in_config = hal.get_core_kernel_stored_in_config_buffer(core_type);
+            bool has_separate_binary_offset = core_type == HalProgrammableCoreType::TENSIX;
+            uint32_t nonbinary_size =
+                (has_separate_binary_offset && binary_in_config) ? program_config.kernel_text_offset
+                                                                 : program.get_program_config_sizes()[index];
+            uint32_t binary_size = program_config.kernel_text_size;
+            bool has_kernel_groups = !program.get_kernel_groups(index).empty();
+
+            trace_node_info["per_core_type"].push_back(
+                {{"index", index},
+                 {"nonbinary_size", nonbinary_size},
+                 {"binary_size", binary_size},
+                 {"has_kernel_groups", has_kernel_groups}});
+
+            uint32_t nonbinary_addr = 0;
+            uint32_t binary_addr = 0;
+            if (index < trace_node->dispatch_metadata.nonbinary_kernel_config_addrs.size()) {
+                nonbinary_addr = trace_node->dispatch_metadata.nonbinary_kernel_config_addrs[index].addr;
+            }
+            if (index < trace_node->dispatch_metadata.binary_kernel_config_addrs.size()) {
+                binary_addr = trace_node->dispatch_metadata.binary_kernel_config_addrs[index].addr;
+            }
+            result_info["nonbinary_addrs"].push_back(nonbinary_addr);
+            result_info["binary_addrs"].push_back(binary_addr);
+        }
+
+        trace_alloc_info["trace_nodes"].push_back(std::move(trace_node_info));
+        trace_alloc_info["results"].push_back(std::move(result_info));
+    }
+
+    const auto output_dir =
+        std::filesystem::path(MetalContext::instance().rtoptions().get_logs_dir()) / "generated" / "trace_alloc";
+    std::error_code error_code;
+    std::filesystem::create_directories(output_dir, error_code);
+    if (error_code) {
+        log_warning(
+            tt::LogMetal,
+            "Failed to create trace allocation dump directory '{}': {}",
+            output_dir.string(),
+            error_code.message());
+        return;
+    }
+
+    const auto output_path =
+        output_dir / ("trace_alloc_" + std::to_string(dump_idx.fetch_add(1, std::memory_order_relaxed)) + ".json");
+    std::ofstream output_file(output_path);
+    if (!output_file.is_open()) {
+        log_warning(tt::LogMetal, "Failed to open trace allocation dump file '{}'", output_path.string());
+        return;
+    }
+    output_file << trace_alloc_info.dump(2);
 }
 
 }  // namespace tt::tt_metal

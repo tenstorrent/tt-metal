@@ -636,6 +636,7 @@ jobs:
           # Replace spaces with underscores
           SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
           echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
+          echo "trace-alloc-name=trace-alloc-info_${SAFE_NAME}" >> $GITHUB_OUTPUT
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -643,6 +644,15 @@ jobs:
         with:
           path: docker-job/output/
           prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
+
+      - name: Upload trace allocation info
+        timeout-minutes: 10
+        if: ${{ !cancelled() && contains(matrix.test-group.model, 'llama') }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ steps.set-artifact-prefix.outputs.trace-alloc-name }}
+          path: /work/generated/trace_alloc/
+          if-no-files-found: ignore
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

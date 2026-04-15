@@ -171,6 +171,11 @@ jobs:
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
           echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+      - name: Set trace alloc artifact name
+        if: ${{ !cancelled() && contains(matrix.test-group.model, 'llama') }}
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          echo "TRACE_ALLOC_ARTIFACT_NAME=trace-alloc-info-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
       - name: Upload device perf report
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
@@ -178,6 +183,14 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+      - name: Upload trace allocation info
+        timeout-minutes: 5
+        if: ${{ !cancelled() && contains(matrix.test-group.model, 'llama') }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.TRACE_ALLOC_ARTIFACT_NAME }}
+          path: /work/generated/trace_alloc/
+          if-no-files-found: ignore
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

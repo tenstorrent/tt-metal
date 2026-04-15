@@ -1206,6 +1206,7 @@ void FDMeshCommandQueue::record_end() {
         }
         SimpleTraceAllocator allocator{ringbuffer_configs};
         allocator.allocate_trace_programs(hal, trace_nodes);
+        dump_trace_allocation_info(hal, ringbuffer_configs, trace_nodes);
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher
         // cache manager to give each range a clean slate.
