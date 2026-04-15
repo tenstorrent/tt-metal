@@ -51,6 +51,8 @@ using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
 constexpr size_t L1_TO_LOCAL_MEM_DUMP_SIZE = 32;
 std::array<uint32_t, L1_TO_LOCAL_MEM_DUMP_SIZE> L1_values = {};
+
+size_t max_packet_size_bytes = 0;
 // bool first_worker_connection = false;
 // size_t last_worker_connection_value = 0;
 /*
@@ -597,6 +599,10 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+
+    if (payload_size_bytes > max_packet_size_bytes) {
+        max_packet_size_bytes = payload_size_bytes;
+    }
 
     auto const dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
@@ -1963,6 +1969,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             progress = true;
+            const size_t full_packet_bytes =
+                reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header)->get_payload_size_including_header();
+            if (full_packet_bytes > max_packet_size_bytes) {
+                max_packet_size_bytes = full_packet_bytes;
+            }
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
@@ -2857,6 +2868,9 @@ __attribute__((optimize("Os"))) void teardown(
         edm_to_downstream_noc> receiver_channel_1_trid_tracker
 #endif
 ) {
+    ASSERT(max_packet_size_bytes != 0);
+    ASSERT(max_packet_size_bytes >= 1024);
+
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
