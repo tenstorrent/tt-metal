@@ -40,8 +40,8 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix raw counters | 155 (5 RTL-dead filtered) | 207 (14 dead filtered) |
-| Derived metrics | 59 | 59 |
+| Tensix raw counters | 181 (0 dead) | 230 (12 empirically-dead filtered) |
+| Derived metrics | 68+ | 68+ |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 5 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH), `MATH_INSTRN_NOT_BLOCKED_SRC` (grant sel 256 = `hf_cycles==2'b11`, always 0 since fidelity off), and `INSTRN_2_HF_CYCLES` (grant sel 257 = `hf_cycles==2'b01`, always 0). The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
