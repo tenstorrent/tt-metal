@@ -13,9 +13,32 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32_t gather_dim) {
+    const auto padded_shape = input_tensor.padded_shape();
+    std::vector<uint32_t> page_extents(padded_shape.begin(), padded_shape.end());
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        TT_FATAL(page_extents.size() >= 2, "Broadcast all-gather requires rank >= 2 for tile layout");
+        page_extents[page_extents.size() - 2] =
+            tt::div_up(page_extents[page_extents.size() - 2], tt::constants::TILE_HEIGHT);
+        page_extents[page_extents.size() - 1] =
+            tt::div_up(page_extents[page_extents.size() - 1], tt::constants::TILE_WIDTH);
+    }
+
+    return std::all_of(
+        page_extents.begin(), page_extents.begin() + gather_dim, [](const auto& extent) { return extent == 1; });
+}
+
+}  // namespace
 
 AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attributes) {
     // Check for minimal sharded case
@@ -167,6 +190,16 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGatherAsync requires tensor of rank 2 or greater");
     } else {
         TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
+    }
+
+    if (version == AllGatherAsyncVersion::VIA_BROADCAST) {
+        TT_FATAL(
+            via_broadcast_has_contiguous_output_slice(input_tensor, args.dim),
+            "Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are "
+            "singleton. Got dim {} with padded shape {} and layout {}",
+            args.dim,
+            input_tensor.padded_shape(),
+            input_tensor.layout());
     }
 }
 
