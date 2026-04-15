@@ -673,35 +673,35 @@ void kernel_main() {
     constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
     if constexpr (Core::is_reduce_worker_core) {
         moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs{
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),                  // fc_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),                  // fc_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),                  // is_type_a
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),                  // r1_slot_offset
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),                  // r1_slot_bit
-            get_semaphore(get_arg_val<uint32_t>(reduce_brisc_arg_start + 5)),   // r1_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),                  // r2_slot_offset
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),                  // r2_slot_bit
-            get_semaphore(get_arg_val<uint32_t>(reduce_brisc_arg_start + 8)),   // r2_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),                  // r1_dst_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),                 // r1_dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),                 // r2_dst_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),                 // r2_dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),                 // r3_dst_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),                 // r3_dst_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),                 // output_base_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),                 // r3_slot_offset
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),                 // r3_slot_bit
-            get_semaphore(get_arg_val<uint32_t>(reduce_brisc_arg_start + 18)),  // r3_sem_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 19),                 // socket_config_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 20),                 // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),                 // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 22),                 // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 23),                 // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 24),                 // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 25),                 // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),                 // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),                 // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),                 // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),   // fc_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),   // fc_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),   // is_type_a
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),   // r1_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),   // r1_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),   // r1_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // r2_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // r2_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // r2_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // r1_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // r1_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // r2_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // r2_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // r3_dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // r3_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // r3_slot_offset
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // r3_slot_bit
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // r3_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 19),  // socket_config_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 20),  // agg_sem_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 21),  // agg_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 22),  // agg_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 23),  // persistent_enable
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 24),  // persistent_dst_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 25),  // persistent_dst_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 26),  // persistent_dst_mesh_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 27),  // persistent_dst_chip_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 28),  // persistent_dst_sem_addr
         };
     }
 #endif

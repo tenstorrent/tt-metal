@@ -129,7 +129,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 1
 
     torch_embedding = torch.arange(vocab_size * K, dtype=torch.float32).reshape(1, 1, vocab_size, K).to(torch.bfloat16)
 
@@ -160,7 +160,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     if is_stage0:
         # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
         # Stage 0 must match so all processes participate.
-        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
 
         embedding_tensor = ttnn.from_torch(
             torch_embedding,
@@ -272,6 +272,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     )
 
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    needs_device_tensors = not is_stage0
     r = create_routed_expert_tensors(
         mesh_device,
         use_hardcoded_expert_index=True,
@@ -280,6 +281,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         skip_attention_weights=True,
+        create_device_tensors=needs_device_tensors,
     )
     mcast_grid = moe_worker_core_grid
     s = create_shared_expert_tensors(
@@ -291,6 +293,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        create_device_tensors=needs_device_tensors,
     )
     logger.info(f"[rank={my_mesh_id}] MoE tensors created")
 
@@ -543,7 +546,7 @@ def test_persistent_moe_15_stages(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 1
 
     torch.manual_seed(42)
     print("Create torch embedding")
@@ -575,7 +578,7 @@ def test_persistent_moe_15_stages(
         if is_stage0:
             # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
             # Stage 0 must match so all processes participate.
-            ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+            ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
 
             print("Write embedding to tensor")
             embedding_tensor = ttnn.from_torch(
@@ -950,7 +953,7 @@ def test_persistent_moe_multi_token(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_size = embedding_size_bytes * 1
 
     torch.manual_seed(42)
     print("Create torch embedding")
@@ -981,7 +984,7 @@ def test_persistent_moe_multi_token(
         if is_stage0:
             # PipelineBlock.__init__ calls generate_blitz_decode_pipeline (collective).
             # Stage 0 must match so all processes participate.
-            ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+            ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
 
             print("Write embedding to tensor")
             embedding_tensor = ttnn.from_torch(

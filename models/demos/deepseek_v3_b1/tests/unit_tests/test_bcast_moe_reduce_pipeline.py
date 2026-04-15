@@ -85,7 +85,7 @@ def build_worker_grid_excluding_cores(device_grid_size, excluded_cores):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
         }
     ],
@@ -129,7 +129,8 @@ def test_bcast_moe_reduce_pipeline(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_factor = 1
+    embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
 
     torch_embedding = torch.arange(vocab_size * K, dtype=torch.float32).reshape(1, 1, vocab_size, K).to(torch.bfloat16)
 
@@ -173,7 +174,7 @@ def test_bcast_moe_reduce_pipeline(
         # Stages 1-15 call generate_blitz_decode_pipeline inside PipelineBlock.__init__,
         # which is a collective requiring all processes. Stage 0 must participate too.
         print(f"[TEST] stage0: calling generate_blitz_decode_pipeline (collective)...", flush=True)
-        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
         d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in device_coords]
@@ -326,6 +327,7 @@ def test_bcast_moe_reduce_pipeline(
         logger.info(f"[rank={my_mesh_id}] creating routed expert tensors")
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         logger.info(f"[rank={my_mesh_id}] mesh_mapper created")
+        needs_device_tensors = is_stage1
         r = create_routed_expert_tensors(
             mesh_device,
             use_hardcoded_expert_index=True,
@@ -334,6 +336,7 @@ def test_bcast_moe_reduce_pipeline(
             is_moe=True,
             layer_idx=ROUTED_EXPERT_LAYER_IDX,
             skip_attention_weights=True,
+            create_device_tensors=needs_device_tensors,
         )
         logger.info(f"[rank={my_mesh_id}] routed expert tensors created")
         mcast_grid = moe_worker_core_grid
@@ -346,6 +349,7 @@ def test_bcast_moe_reduce_pipeline(
             state_dict=state_dict,
             is_moe=True,
             layer_idx=ROUTED_EXPERT_LAYER_IDX,
+            create_device_tensors=needs_device_tensors,
         )
         logger.info(f"[rank={my_mesh_id}] MoE tensors created")
 
@@ -718,7 +722,8 @@ def test_persistent_mode_pipeline(
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
-    embedding_fifo_size = embedding_size_bytes * 2
+    embedding_fifo_factor = 1
+    embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
 
     torch.manual_seed(42)
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)

@@ -117,7 +117,7 @@ void kernel_main() {
                 page_size);
             socket_pop_pages(receiver_socket, 1);
             noc_async_writes_flushed();
-            DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ") iter=" << d2h_iter
+            DPRINT << "d2h_send: core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0]
                    << " after noc write, about to notify upstream sender" << ENDL();
 
             if constexpr (use_fabric) {

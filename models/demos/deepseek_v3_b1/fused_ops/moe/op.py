@@ -63,7 +63,12 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    NUM_SEMAPHORES = 19
+    REDUCE_FC_FWD_R1 = 19
+    REDUCE_FC_FWD_R2 = 20
+    REDUCE_FC_BWD_R1 = 21
+    REDUCE_FC_BWD_R2 = 22
+    REDUCE_FC_R3_FWD = 23
+    NUM_SEMAPHORES = 24
 
 
 @dataclass
@@ -4269,26 +4274,20 @@ class MoeOp:
                     )
                     break
 
-        # Forwarder bitmask semaphore IDs (program-local on FC cores).
-        # FC cores are physically separate from MoE worker cores so they have
-        # their own semaphore namespace — use small sequential IDs (matching
-        # the standalone reduce_to_all_b1 op) to stay within the hardware
-        # limit of 16 semaphores per core.
-        fwd_r1_sem_id = 0
-        fwd_r2_sem_id = 1
-        bwd_r1_sem_id = 2
-        bwd_r2_sem_id = 3
-        r3_fwd_sem_id = 4
-
-        # Add program-local semaphore descriptors for FC bitmask semaphores
-        self.device_sem_descs.extend(
-            [
-                ttnn.SemaphoreDescriptor(id=fwd_r1_sem_id, core_ranges=fabric_core_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=fwd_r2_sem_id, core_ranges=fabric_core_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=bwd_r1_sem_id, core_ranges=fabric_core_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=bwd_r2_sem_id, core_ranges=fabric_core_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=r3_fwd_sem_id, core_ranges=fabric_core_set, initial_value=0),
-            ]
+        # FC bitmask semaphore L1 addresses (global semaphores).
+        # In the fused kernel, FC and worker cores belong to different kernel
+        # groups so their program-local sem_l1_base values differ.  Workers
+        # must write to the *FC's* semaphore address, which they can only know
+        # if the address is the same on every core — i.e. a global semaphore.
+        fwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R1]
+        fwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R2]
+        bwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R1]
+        bwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R2]
+        r3_fwd_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_R3_FWD]
+        print(
+            f"[MoE reduce] global sem addrs: fwd_r1=0x{fwd_r1_sem_addr:x} fwd_r2=0x{fwd_r2_sem_addr:x} "
+            f"bwd_r1=0x{bwd_r1_sem_addr:x} bwd_r2=0x{bwd_r2_sem_addr:x} r3=0x{r3_fwd_sem_addr:x}",
+            flush=True,
         )
 
         slots_per_direction = rp["slots_per_direction"]
@@ -4322,8 +4321,8 @@ class MoeOp:
                     self.r1_count = 0
                     self.r2_count = 0
 
-            fwd_cfg = DirCfg(fwd_r1_sem_id, fwd_r2_sem_id, 0)
-            bwd_cfg = DirCfg(bwd_r1_sem_id, bwd_r2_sem_id, ncrisc_buf_offset)
+            fwd_cfg = DirCfg(fwd_r1_sem_addr, fwd_r2_sem_addr, 0)
+            bwd_cfg = DirCfg(bwd_r1_sem_addr, bwd_r2_sem_addr, ncrisc_buf_offset)
 
             for worker_idx, core in enumerate(col_cores):
                 is_type_a = ((row + worker_idx) % 2) == 0
@@ -4371,10 +4370,10 @@ class MoeOp:
                     1 if is_type_a else 0,  # 2
                     r1_slot_offset,  # 3
                     r1_slot_bit,  # 4
-                    r1_sem,  # 5 (sem ID)
+                    r1_sem,  # 5 (L1 addr)
                     r2_slot_offset,  # 6
                     r2_slot_bit,  # 7
-                    r2_sem,  # 8 (sem ID)
+                    r2_sem,  # 8 (L1 addr)
                     r1_recv_l1,  # 9
                     rp["sem_round1_addr"],  # 10
                     r2_recv_l1,  # 11
@@ -4384,7 +4383,7 @@ class MoeOp:
                     out_tensor.buffer_address(),  # 15
                     r3_slot_off,  # 16
                     r3_slot_b,  # 17
-                    r3_fwd_sem_id,  # 18 (sem ID)
+                    r3_fwd_sem_addr,  # 18 (L1 addr)
                     socket_config_addr,  # 19
                     worker_agg_sem_addr,  # 20
                     worker_agg_noc_x,  # 21
@@ -4415,9 +4414,9 @@ class MoeOp:
                     )
                 )
             else:
-                reduce_brisc_per_core_args.append((fc, [fwd_r1_sem_id, fwd_r2_sem_id, r3_fwd_sem_id]))
+                reduce_brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
             # FC NCRISC: BWD forwarding (R1+R2)
-            reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_id, bwd_r2_sem_id]))
+            reduce_ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
 
         self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
             brisc_args=reduce_brisc_per_core_args,

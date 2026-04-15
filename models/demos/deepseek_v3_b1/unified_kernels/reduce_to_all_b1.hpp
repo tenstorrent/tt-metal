@@ -296,8 +296,8 @@ struct ReduceToAllB1 {
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-                const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
                 auto bwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -307,7 +307,8 @@ struct ReduceToAllB1 {
 
                 bwd_sender.open();
                 DPRINT << "BWD edm=(" << (uint32_t)bwd_sender.edm_noc_x << "," << (uint32_t)bwd_sender.edm_noc_y
-                       << ")\n";
+                       << ") nb=" << (uint32_t)bwd_sender.num_buffers_per_channel
+                       << " spc=" << (bwd_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -403,9 +404,9 @@ struct ReduceToAllB1 {
                 const uint32_t r3_base = buf_base + CTArgs::r3_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-                const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-                const uint32_t r3_sem_addr_val = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                const uint32_t r3_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
 
                 auto fwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -415,9 +416,9 @@ struct ReduceToAllB1 {
                 volatile tt_l1_ptr uint32_t* r3_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r3_sem_addr_val);
 
                 fwd_sender.open();
-                DPRINT << "FC pb=0x" << HEX() << buf_base << " r3s=0x" << r3_sem_addr_val << DEC() << "\n";
                 DPRINT << "FWD edm=(" << (uint32_t)fwd_sender.edm_noc_x << "," << (uint32_t)fwd_sender.edm_noc_y
-                       << ")\n";
+                       << ") nb=" << (uint32_t)fwd_sender.num_buffers_per_channel
+                       << " spc=" << (fwd_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
                 {
                     uint32_t r1_sent = 0;
                     uint32_t r2_sent = 0;
@@ -442,32 +443,15 @@ struct ReduceToAllB1 {
                 auto r3_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
                 r3_sender.open();
-                {
-                    invalidate_l1_cache();
-                    DPRINT << "R3 edm=(" << (uint32_t)r3_sender.edm_noc_x << "," << (uint32_t)r3_sender.edm_noc_y
-                           << ") nb=" << (uint32_t)r3_sender.num_buffers_per_channel << " sem0=0x" << HEX() << *r3_sem
-                           << DEC() << " spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
-                }
+                DPRINT << "R3O edm=(" << (uint32_t)r3_sender.edm_noc_x << "," << (uint32_t)r3_sender.edm_noc_y
+                       << ") spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << " sem=0x" << HEX() << *r3_sem
+                       << DEC() << "\n";
                 {
                     uint32_t r3_sent = 0;
                     uint32_t r3_spin = 0;
                     do {
                         invalidate_l1_cache();
-                        uint32_t sv = *r3_sem;
-                        uint32_t pending = sv & ~r3_sent;
-                        while (pending != 0) {
-                            uint32_t slot = __builtin_ctz(pending);
-                            uint32_t slot_addr = r3_base + slot * CTArgs::slot_size_bytes;
-                            auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
-                            uint32_t pkt_bytes = hdr->get_payload_size_including_header();
-                            DPRINT << "R3s " << slot << " " << pkt_bytes
-                                   << " spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << "\n";
-                            r3_sender.wait_for_empty_write_slot();
-                            r3_sender.send_payload_flush_non_blocking_from_address(slot_addr, pkt_bytes);
-                            DPRINT << "R3d " << slot << "\n";
-                            r3_sent |= (1u << slot);
-                            pending &= ~(1u << slot);
-                        }
+                        r3_sent = process_ready_slots(r3_sem, r3_sent, r3_base, r3_sender);
                         r3_spin++;
                         if ((r3_spin & 0xFFFFFFF) == 0) {
                             invalidate_l1_cache();
@@ -505,6 +489,9 @@ struct ReduceToAllB1 {
             PacketHeaderPool::reset();
             auto* packet_header = PacketHeaderPool::allocate_header(1);
 
+            DPRINT << "W fc=(" << args.fc_noc_x << "," << args.fc_noc_y << ") r1s=0x" << HEX() << args.r1_sem_addr
+                   << " r2s=0x" << args.r2_sem_addr << " r3s=0x" << args.r3_sem_addr << DEC() << " a=" << args.is_type_a
+                   << "\n";
             DPRINT << "WR1\n";
             {
                 uint32_t data_addr = local_data_addr;
@@ -634,7 +621,6 @@ struct ReduceToAllB1 {
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
             DPRINT << "WDN\n";
-
             // Note: do NOT cb_pop_front(local_cb) here — TRISC is the
             // sole consumer and already pops it after computing R1_sum.
 
