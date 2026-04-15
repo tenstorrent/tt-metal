@@ -460,7 +460,6 @@ class TestLaunchInPlaceBranchIo:
 
         n = 12
         min_pcc = 1.0
-        fused_ids = []
         for i in range(n):
             if i > 0:
                 torch.manual_seed(200 + i * 7)
@@ -474,7 +473,6 @@ class TestLaunchInPlaceBranchIo:
                 )
 
             q_out, kv_out = p.run(results=[q0, kv0])
-            fused_ids.append(id(p._run_fused))
             ttnn.synchronize_device(device)
 
             # Goldens from current activations + gammas on the branches (same tensors fused op reads).
@@ -493,11 +491,6 @@ class TestLaunchInPlaceBranchIo:
             min_pcc = min(min_pcc, pcc_q, pcc_kv)
 
         assert min_pcc >= 0.98
-        # First call: _run_fused is None (cold start). Second call caches the FusedOp.
-        # All subsequent calls reuse the same FusedOp.
-        unique = set(fused_ids)
-        assert len(unique) <= 2, f"run() should converge to one FusedOp, got {len(unique)} distinct ids"
-        assert fused_ids[-1] == fused_ids[-2], "last two calls should share the same FusedOp"
 
 
 # ===========================================================================
@@ -644,61 +637,49 @@ class TestNamedKwargs:
             Sequential(q=q2, branches=inner)  # "q" collides
 
 
-class TestPersistentInvalidation:
-    """Test _run_fused invalidation after add() or invalidate_run()."""
+class TestTopologyInvalidation:
+    """Test invalidation after add() or invalidate_run()."""
 
-    def test_invalidate_run_resets_persistent(self, device):
-        """invalidate_run() clears _run_fused so next run() does a fresh build."""
+    def test_invalidate_run_resets_topology(self, device):
+        """invalidate_run() resets cached topology so next run() does a fresh build."""
         q, kv, torches = _make_branches(device, seed=42)
         p = Parallel(q=q, kv=kv)
 
-        # Run twice to enter persistent mode
         p.run()
         p.run()
-        assert p._run_fused is not None, "Should have cached FusedOp after 2nd run"
 
-        # Invalidate
         p.invalidate_run()
-        assert p._run_fused is None, "invalidate_run should clear _run_fused"
-        assert p._run_called is False, "invalidate_run should reset _run_called"
 
-        # Next run should work (fresh cold build)
         [out_q, out_kv] = p.run()
         torch_q_in, torch_q_w, torch_kv_in, torch_kv_w = torches
         ok_q, _ = comp_pcc(torch_rms_norm(torch_q_in.float(), torch_q_w.float()), ttnn.to_torch(out_q), pcc=0.98)
         ok_kv, _ = comp_pcc(torch_rms_norm(torch_kv_in.float(), torch_kv_w.float()), ttnn.to_torch(out_kv), pcc=0.98)
         assert ok_q and ok_kv, "PCC should pass after invalidate + fresh run"
 
-    def test_add_invalidates_persistent(self, device):
-        """add() clears _run_fused so the topology change is picked up."""
+    def test_add_invalidates_topology(self, device):
+        """add() resets cached topology so the shape change is picked up."""
         q, kv, _ = _make_branches(device, seed=42)
         q2, _, _ = _make_branches(device, seed=99)
 
-        # Start with just q, kv
         s = Sequential(q)
         s.run()
         s.run()
-        assert s._run_fused is not None
 
-        # add() should invalidate
+        old_ops = list(s._cached_ops)
         s.add(kv)
-        assert s._run_fused is None
+        assert s._cached_ops != old_ops, "add() should reset _cached_ops"
 
 
 class TestPersistentWithResults:
-    """Test persistent mode with explicit results kwarg."""
+    """Test run() with explicit results kwarg."""
 
-    def test_persistent_parallel_explicit_results(self, device):
-        """run(results=[specific_desc]) works in persistent mode."""
+    def test_parallel_explicit_results(self, device):
+        """run(results=[specific_desc]) returns only the requested branch output."""
         q, kv, torches = _make_branches(device, seed=42)
         p = Parallel(q=q, kv=kv)
 
-        # Run enough times to enter persistent mode
-        p.run()
-        p.run()
         p.run()
 
-        # Now use explicit results — request only Q output
         [out_q] = p.run(results=[q])
         torch_q_in, torch_q_w, _, _ = torches
         ok, _ = comp_pcc(torch_rms_norm(torch_q_in.float(), torch_q_w.float()), ttnn.to_torch(out_q), pcc=0.98)
