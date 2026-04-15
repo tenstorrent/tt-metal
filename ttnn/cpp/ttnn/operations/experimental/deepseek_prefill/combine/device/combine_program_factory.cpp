@@ -144,7 +144,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    // Maximum worker cores: one per fabric link direction.
+    // Maximum worker cores: one per fabric link.
     constexpr uint32_t MAX_WORKER_CORES = 4;
     uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(

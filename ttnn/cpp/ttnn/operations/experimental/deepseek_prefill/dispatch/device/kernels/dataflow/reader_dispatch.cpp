@@ -155,7 +155,11 @@ void kernel_main() {
     noc_async_read_barrier();
     int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
 
-    // Set up batched scratch buffers
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the L1-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
     cb_reserve_back(cb_weights_id, read_batch_size);
