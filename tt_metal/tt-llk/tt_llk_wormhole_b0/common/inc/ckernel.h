@@ -658,24 +658,27 @@ constexpr std::uint32_t get_dest_max_tiles()
  * It reads the actual W-stride that the packer is configured with, so it works correctly
  * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
  *
- * The dest physical size in stride-address-units is constant regardless of ACCUM_MODE
- * because FP32 halves the row count but doubles the datum size, which cancels out
- * against the doubled x_stride already baked into the configured W-stride.
+ * Byte capacity of the dest sync region (DEST_REGISTER_{HALF,FULL}_SIZE_BYTES) is constant
+ * regardless of ACCUM_MODE because FP32 halves the row count but doubles the datum size,
+ * which cancels out against the doubled x_stride already baked into the configured W-stride.
+ * W-stride from the packer config is in the same byte-oriented addressing units.
  */
 template <DstSync SYNC_MODE, bool ACCUM_MODE>
 inline std::uint32_t get_pack_dest_max_tiles()
 {
-    constexpr std::uint32_t DEST_PHYSICAL_SIZE = (SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE : DEST_REGISTER_FULL_SIZE) * FACE_C_DIM * 2;
+    constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;
 
     const std::uint32_t w_stride =
         (cfg_read(PCK0_ADDR_CTRL_ZW_REG_0_Wstride_ADDR32) & PCK0_ADDR_CTRL_ZW_REG_0_Wstride_MASK) >> PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT;
 
+    // Reject invalid stride: __builtin_ctz(0) is undefined. Reject non-power-of-two strides because
+    // dest_sync_region_size_bytes >> __builtin_ctz(w_stride) is only equivalent to dividing by w_stride when w_stride is a power of two.
     if ((w_stride == 0U) || ((w_stride & (w_stride - 1U)) != 0U))
     {
         return 0U;
     }
 
-    return DEST_PHYSICAL_SIZE >> __builtin_ctz(w_stride);
+    return dest_sync_region_size_bytes >> __builtin_ctz(w_stride);
 }
 
 /**
