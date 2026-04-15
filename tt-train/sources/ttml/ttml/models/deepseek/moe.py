@@ -24,7 +24,6 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
-import numpy as np
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
@@ -57,8 +56,8 @@ class MoE(AbstractModuleBase):
     def __init__(self, config) -> None:
         super().__init__()
 
-        # ttnn.topk returns indices as bf16 which represents integers exactly up to 256.
-        # Beyond that, ttnn.eq(topk_indices, float(expert_idx)) may match wrong experts.
+        # We need to cast topk output to bf16 for some ops that come next
+        # and bf16 represents integers exactly up to 256.
         if config.n_routed_experts > 256:
             raise ValueError(
                 f"n_routed_experts={config.n_routed_experts} exceeds 256, the maximum "
@@ -98,15 +97,21 @@ class MoE(AbstractModuleBase):
             self.shared_experts = None
 
         # Load balancing bias buffer (on device, TILE layout)
-        bias_np = np.zeros((1, 1, 1, config.n_routed_experts), dtype=np.float32)
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        shape = [1, 1, 1, config.n_routed_experts]
         self._expert_bias = Buffer(
-            ttml.autograd.Tensor.from_numpy(bias_np, ttnn.Layout.TILE, new_type=ttnn.bfloat16)
+            ttml.autograd.create_tensor(
+                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
+            )
         )
 
         # On-device accumulator for token counts per expert [1, 1, 1, num_experts]
         # Each forward adds to this; update_expert_bias reads and resets it.
-        counts_np = np.zeros((1, 1, 1, config.n_routed_experts), dtype=np.float32)
-        self._token_counts = Buffer(ttml.autograd.Tensor.from_numpy(counts_np, ttnn.Layout.TILE))
+        self._token_counts = Buffer(
+            ttml.autograd.create_tensor(
+                ttnn.zeros(shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE)
+            )
+        )
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         B, _, S, dim = list(x.get_value().shape)

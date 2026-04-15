@@ -74,7 +74,6 @@ def get_device_peak_tflops_bf16() -> float:
     grid_size = device.compute_with_storage_grid_size()
     num_cores = grid_size.x * grid_size.y
 
-    tflops_per_core = 0.0
     if is_wormhole_b0(device):
         tflops_per_core = 1.0
     elif is_blackhole(device):

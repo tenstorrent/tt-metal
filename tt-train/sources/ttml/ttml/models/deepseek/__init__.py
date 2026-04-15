@@ -4,7 +4,7 @@
 
 """Nano DeepSeek-V3 model package.
 
-Implements the DeepSeek-V3 architecture (671B total / 37B active) at nano scale:
+Implements the DeepSeek-V3 architecture:
   - Multi-head Latent Attention (MLA) with low-rank Q/KV compression
   - DeepSeek-style Mixture of Experts (MoE) with group routing
   - SwiGLU activation in all feed-forward layers
