@@ -222,3 +222,77 @@ def test_interleaved_to_dram_sharded_via_to_memory_layout(
     ttnn_output_tensor = ttnn.to_memory_config(ttnn_input_tensor, output_mem_config)
 
     assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "tensor_shape, nd_shard_shape, shard_grid",
+    [
+        # HEIGHT_SHARDED equivalent: shard covers full width, 4 shards along height
+        [
+            [1, 1, 128, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ],
+        # WIDTH_SHARDED equivalent: shard covers full height, 4 shards along width
+        [
+            [1, 1, 64, 256],
+            [1, 1, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ],
+        # BLOCK_SHARDED equivalent: shard splits both dims, 2x2 grid
+        [
+            [1, 1, 128, 128],
+            [1, 1, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        # 3D ND shard folding into HEIGHT_SHARDED: batch dim folds into shard height
+        [
+            [4, 32, 64],
+            [2, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ],
+    ],
+)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_interleaved_to_sharded_nd_with_equivalent_2d(
+    device, layout, tensor_shape, nd_shard_shape, shard_grid, shard_orientation
+):
+    nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, shard_grid, orientation=shard_orientation)
+    output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
+    ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
+
+    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, nd_shard_shape, shard_grid",
+    [
+        # Sharding across non-adjacent dims: volume mismatch prevents 2D flattening
+        [
+            [6, 32, 64],
+            [3, 32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ],
+        # Sharding batch and spatial with non-trivial batch shard: can't fold to 2D
+        [
+            [4, 3, 32, 64],
+            [2, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+        ],
+    ],
+)
+def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_shape, shard_grid):
+    nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
+
+    with pytest.raises(RuntimeError):
+        ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
