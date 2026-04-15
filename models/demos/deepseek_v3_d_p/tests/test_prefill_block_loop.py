@@ -545,6 +545,8 @@ def test_prefill_block_loop(
     axes[0, 0].set_title("Hidden State PCC")
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].set_xlim(1, num_iters)
+    axes[0, 0].set_ylim(top=1.0)
+    axes[0, 0].ticklabel_format(useOffset=False, style="plain", axis="y")
 
     # KVPE cache PCC (KV nope + PE rope)
     axes[0, 1].plot(
@@ -559,6 +561,8 @@ def test_prefill_block_loop(
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].set_xlim(1, num_iters)
+    axes[0, 1].set_ylim(top=1.0)
+    axes[0, 1].ticklabel_format(useOffset=False, style="plain", axis="y")
 
     # Norm plot (H1: residual growth)
     axes[1, 0].plot(
