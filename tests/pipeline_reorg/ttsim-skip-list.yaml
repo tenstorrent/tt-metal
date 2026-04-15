@@ -24,6 +24,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
