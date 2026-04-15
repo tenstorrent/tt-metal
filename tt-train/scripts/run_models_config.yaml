@@ -72,14 +72,14 @@ models:
 
 # TinyLlama3
   - name: "TinyLlama Shakespeare"
-    filename: "tinyLlama_shakespeare"
+    filename: "tinyllama_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
       - "--track_memory"
 
   - name: "TinyLlama Shakespeare Muon"
-    filename: "tinyLlama_shakespeare_muon"
+    filename: "tinyllama_shakespeare_muon"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_muon.yaml"
