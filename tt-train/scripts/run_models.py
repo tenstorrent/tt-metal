@@ -54,14 +54,14 @@ def run_and_save_log(args: list[str], log_path: Path):
         return proc.returncode
 
 
-def process_binary_path(path: str) -> List:
+def process_binary_path(path: str) -> List[str]:
     """Process binary path if necessary and return a list compatible with Python subprocess"""
     pathlib_path = Path(path)
     # Sanity check for file existence
     if not pathlib_path.is_file():
         raise Exception(f"binary path not found on filesystem: {path}")
 
-    # If suffix contains .py, then prepend python3 binary
+    # If suffix contains .py, then prepend python binary
     ext = pathlib_path.suffix
     if ext == ".py":
         # Call Python in unbuffered mode so both Python and C++ streams are in the intended order

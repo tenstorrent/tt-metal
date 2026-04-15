@@ -5,8 +5,8 @@
 # Field descriptions (per model entry):
 #   name:     Display name of model
 #   filename: Prefix for output files. Unique identifier. Changing this might affect dashboard.
-#   binary:   Name of folder/binary under build directory
-#   args:     List of args passed to model binary
+#   binary:   Absolute path to the executable or Python script to run
+#   args:     List of arguments passed to the configured executable or script
 
 models:
 # CPP Models
@@ -34,7 +34,7 @@ models:
       - "--track_memory"
 
   - name: "NanoGPT Shakespeare DDP N300"
-    filename: "nanogpt_shakespeare_python_dpp_n300"
+    filename: "nanogpt_shakespeare_python_ddp_n300"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_ddp_n300.yaml"
