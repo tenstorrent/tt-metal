@@ -79,13 +79,12 @@ def test_run_prefetcher_post_commit(
         ),
     ],
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 23887872}],
-    indirect=True,
-)
+# Note: the `@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)`
+# decorator that previously appeared here was removed when the fixture was switched from the generic
+# `mesh_device` to `prefetcher_multi_device_mesh`. The custom trace_region_size is now set directly
+# inside `prefetcher_multi_device_mesh` in conftest.py, so the indirect parametrize is redundant.
 def test_run_prefetcher_post_commit_multi_device(
-    mesh_device,
+    prefetcher_multi_device_mesh,
     num_tensors,
     input_shapes,
     num_layers,
@@ -93,11 +92,11 @@ def test_run_prefetcher_post_commit_multi_device(
     dtypes,
     function_level_defaults,
 ):
-    if mesh_device.get_num_devices() <= 1:
+    if prefetcher_multi_device_mesh.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
     run_prefetcher_mm(
-        mesh_device,
+        prefetcher_multi_device_mesh,
         num_tensors,
         input_shapes,
         num_layers,

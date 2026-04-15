@@ -47,17 +47,8 @@ using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshShape;
 
-// Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
-class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
-protected:
-    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
-    void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
+// Name kept for TEST_F stability; mesh is 1×4 + 2 CQ + FABRIC_1D (see MultiCQMeshDevice1x4Fabric1DSharedFixture).
+using MultiCQFabricMeshDevice2x4Fixture = tt::tt_metal::MultiCQMeshDevice1x4Fabric1DSharedFixture;
 
 // TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {

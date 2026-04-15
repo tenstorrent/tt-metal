@@ -50,13 +50,16 @@ PREFETCHER_NOC1_GRID = [
         (4, 8192, ttnn.CoreGrid(x=2, y=8), None),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [(8, 4)],
     indirect=True,
 )
 def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_core_grid, output_core_grid):
+    # Note: dispatch_core_axis=COL is applied automatically by the session-scoped mesh_device
+    # fixture in tests/ttnn/distributed/conftest.py. The @pytest.mark.parametrize("device_params", ...)
+    # decorator was removed because session-scoped fixtures cannot depend on the function-scoped
+    # device_params fixture. The conftest handles this for all tests in this directory.
     torch.manual_seed(1234)
 
     num_cores = input_core_grid.num_cores

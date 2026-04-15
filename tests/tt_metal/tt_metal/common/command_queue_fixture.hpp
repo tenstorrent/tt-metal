@@ -218,7 +218,11 @@ protected:
         if (slow_dispatch) {
             return;
         }
-        create_shared_devices();
+        try {
+            create_shared_devices();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Failed to create shared devices: {}", e.what());
+        }
     }
 
     static void TearDownTestSuite() { destroy_shared_devices(); }
@@ -311,6 +315,15 @@ private:
     }
 
     static void destroy_shared_devices() {
+        // Close devices before clearing the maps: shared_devices_ holds shared_ptr aliases
+        // into shared_reserved_devices_.  Clearing shared_devices_ first could drop the
+        // last reference and destroy a MeshDevice before close() is called on it, which
+        // skips the driver-level teardown and leaks hardware state.  Closing via
+        // shared_reserved_devices_ (which always holds the owning references) while both
+        // maps are still live ensures close() runs on a valid object every time.
+        for (auto& [id, device] : shared_reserved_devices_) {
+            device->close();
+        }
         shared_devices_.clear();
         shared_reserved_devices_.clear();
         devices_valid_ = false;

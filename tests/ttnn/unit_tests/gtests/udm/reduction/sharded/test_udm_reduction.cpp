@@ -473,7 +473,8 @@ void run_width_reduction_test(
  *   - Sender gathers reduced results from all cores
  *   - Sender distributes complete result to all cores (TODO: use mcast when available)
  */
-using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMFixture;
+// Shared fixture: single device open per suite, recover after failure — avoids per-test FABRIC_2D+UDM reinit.
+using MeshDevice1x4Fabric2DUDMFixture = tt::tt_metal::MeshDevice1x4Fabric2DUDMSharedFixture;
 
 TEST_F(MeshDevice1x4Fabric2DUDMFixture, TestWidthReduction2D_Small) {
     // Small 2D tensor: (8, 16) tiles = (256, 512) elements

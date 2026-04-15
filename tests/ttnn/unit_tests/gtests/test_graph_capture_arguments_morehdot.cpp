@@ -24,7 +24,7 @@
 namespace ttnn::graph::arguments::test {
 namespace {
 
-using TestGraphCaptureArgumentsMorehDot = TTNNFixtureWithDevice;
+using TestGraphCaptureArgumentsMorehDot = TTNNUnitMeshCQSharedFixture;
 
 TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     TensorSpec tensor_spec(

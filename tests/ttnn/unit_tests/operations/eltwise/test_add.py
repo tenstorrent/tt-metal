@@ -502,6 +502,7 @@ def test_01_volume_tensors(device, data, memory_config):
 
 
 @skip_for_slow_dispatch()
+@pytest.mark.requires_fresh_device
 @pytest.mark.parametrize("input_a_sharded", [True, False])
 @pytest.mark.parametrize("input_b_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])

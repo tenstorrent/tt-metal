@@ -35,7 +35,7 @@ struct CreateTensorParams {
 
 }  // namespace
 
-class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithSuiteDevice<CreateTensorWithLayoutTest>,
+class CreateTensorWithLayoutTest : public ttnn::TTNNUnitMeshCQSharedFixture,
                                    public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorWithLayoutTest, Tile) {

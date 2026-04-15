@@ -30,7 +30,7 @@ struct Add1DTensorAndScalarParam {
     uint32_t w;
 };
 
-class Add1DTensorAndScalarFixture : public TTNNFixtureWithSuiteDevice<Add1DTensorAndScalarFixture>,
+class Add1DTensorAndScalarFixture : public TTNNUnitMeshCQSharedFixture,
                                     public testing::WithParamInterface<Add1DTensorAndScalarParam> {};
 
 TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {

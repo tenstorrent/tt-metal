@@ -24,7 +24,7 @@
 namespace ttnn::graph::arguments::test {
 namespace {
 
-using TestGraphCaptureArgumentsTranspose = TTNNFixtureWithDevice;
+using TestGraphCaptureArgumentsTranspose = TTNNUnitMeshCQSharedFixture;
 
 TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     TensorSpec tensor_spec(
