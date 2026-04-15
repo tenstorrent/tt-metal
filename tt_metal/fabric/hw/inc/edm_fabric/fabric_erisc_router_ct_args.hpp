@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/wan_debug_register_msgs.h"
 #include "api/alignment.h"
 
 #include <array>
@@ -459,7 +460,30 @@ static_assert(LINK_HEALTH_TELEMETRY_ENABLED, "Link health telemetry must be enab
 // Power-of-2 period enables cheap modulo via bitwise AND
 constexpr uint32_t LINK_HEALTH_CHECK_OUTER_LOOP_PERIOD = 512;
 
-constexpr size_t SPECIAL_MARKER_2A_IDX = LINK_HEALTH_OVERLAY_STREAM_ID_IDX + 1;
+constexpr size_t WAN_DEBUG_REGISTER_STATE_BASE_ADDR_IDX = LINK_HEALTH_OVERLAY_STREAM_ID_IDX + 1;
+constexpr size_t WAN_DEBUG_REGISTER_STATE_BASE_ADDR = get_compile_time_arg_val(WAN_DEBUG_REGISTER_STATE_BASE_ADDR_IDX);
+constexpr size_t WAN_DEBUG_REGISTER_STATE_SIZE = sizeof(WANDebugRegisterState);
+
+// Byte offset within each DRAM bank to WAN debug slab (after profiler); 0 = disabled (non-Blackhole / no mirror).
+constexpr size_t WAN_DEBUG_DRAM_BANK_BYTE_OFFSET_IDX = WAN_DEBUG_REGISTER_STATE_BASE_ADDR_IDX + 1;
+constexpr uint32_t WAN_DEBUG_DRAM_BANK_BYTE_OFFSET = get_compile_time_arg_val(WAN_DEBUG_DRAM_BANK_BYTE_OFFSET_IDX);
+// Slots per half of the WAN DRAM slab for this link; 0 = disabled. Host passes WAN_DEBUG_DRAM_RESERVED_SLOTS_PER_HALF
+// on BH.
+constexpr size_t WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF_IDX = WAN_DEBUG_DRAM_BANK_BYTE_OFFSET_IDX + 1;
+constexpr uint32_t WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF =
+    get_compile_time_arg_val(WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF_IDX);
+
+// DRAM ring NOC addressing for this image (not recomputed in the main loop). Sender ERISC only runs this path.
+// DRAM bank: MY_ETH_CHANNEL % NUM_DRAM_BANKS. Which half of the WAN slab on that bank (for links sharing a bank):
+// (MY_ETH_CHANNEL / NUM_DRAM_BANKS) % 2 — e.g. with 8 banks, eth ch 0 and 8 both use bank 0, lower vs upper half.
+constexpr uint32_t WAN_DEBUG_DRAM_RING_BANK_ID = static_cast<uint32_t>(MY_ETH_CHANNEL % NUM_DRAM_BANKS);
+constexpr uint32_t WAN_DEBUG_DRAM_HALF_SPAN_BYTES =
+    WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF * static_cast<uint32_t>(WAN_DEBUG_REGISTER_STATE_SIZE);
+constexpr uint32_t WAN_DEBUG_DRAM_SLAB_HALF_INDEX = static_cast<uint32_t>((MY_ETH_CHANNEL / NUM_DRAM_BANKS) % 2);
+constexpr uint32_t WAN_DEBUG_DRAM_HALF_BASE_OFFSET =
+    WAN_DEBUG_DRAM_BANK_BYTE_OFFSET + WAN_DEBUG_DRAM_SLAB_HALF_INDEX * WAN_DEBUG_DRAM_HALF_SPAN_BYTES;
+
+constexpr size_t SPECIAL_MARKER_2A_IDX = WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF_IDX + 1;
 constexpr size_t SPECIAL_MARKER_2A = 0x20c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2A_IDX) == SPECIAL_MARKER_2A,

@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
+#include "internal/ethernet/tt_eth_ss_regs.h"
 #include "hal_types.hpp"
 #include "eth_l1_address_map.h"
 #include "llrt/hal.hpp"
@@ -293,7 +294,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
              (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
-            (addr == RISCV_DEBUG_REG_SOFT_RESET_0));
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0) || (addr == WAN_DEBUG_REGISTER_E || addr == WAN_DEBUG_REGISTER_F));
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };

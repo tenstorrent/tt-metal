@@ -34,6 +34,7 @@
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/wan_debug_register_msgs.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif
@@ -53,6 +54,12 @@ constexpr size_t L1_TO_LOCAL_MEM_DUMP_SIZE = 32;
 std::array<uint32_t, L1_TO_LOCAL_MEM_DUMP_SIZE> L1_values = {};
 
 size_t max_packet_size_bytes = 0;
+
+// WAN DRAM ring cursor: initialized once at startup, advances each mirrored write (not reset each loop iter).
+uint32_t wan_debug_dram_ring_index = 0;
+// WAN debug L1/DRAM snapshot sequence; starts at 1 (0 = never written). Wraps 0xFFFFFFFF -> 1.
+uint32_t wan_debug_junk_seq = 1;
+
 // bool first_worker_connection = false;
 // size_t last_worker_connection_value = 0;
 /*
@@ -580,6 +587,10 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 }
 
 bool hung = false;
+
+// Max outgoing fabric packet size (payload + header) for eth_send_packet_bytes_unsafe on this path.
+constexpr size_t kMaxFabricEdmOutgoingPacketSizeBytes = 4416;
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -599,6 +610,7 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+    ASSERT(payload_size_bytes <= kMaxFabricEdmOutgoingPacketSizeBytes);
 
     if (payload_size_bytes > max_packet_size_bytes) {
         max_packet_size_bytes = payload_size_bytes;
@@ -2310,6 +2322,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
 
+    // Logical grid X/Y for this Ethernet core (dataflow_api.h); unchanged for the lifetime of this router.
+    const uint32_t wan_debug_eth_logical_xy_packed =
+        (static_cast<uint32_t>(get_absolute_logical_y()) << 8) | static_cast<uint32_t>(get_absolute_logical_x());
+
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
@@ -2603,6 +2619,59 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             //         //     WATCHER_RING_BUFFER_PUSH(0xabcd1234);
             //         // }
             //     // }
+            // }
+
+            if constexpr (is_sender_channel_serviced[0] && MY_ERISC_ID == 0) {
+                // WAN debug (ERISC 0 only): snapshot Ethernet/WAN registers into CT-arg L1, optional mirror to DRAM
+                // ring.
+                if (WAN_DEBUG_REGISTER_STATE_BASE_ADDR != 0) {
+                    auto* wan_l1 =
+                        reinterpret_cast<volatile tt_l1_ptr WANDebugRegisterState*>(WAN_DEBUG_REGISTER_STATE_BASE_ADDR);
+                    // Ethernet CSRs: use READ_REG (volatile tt_reg_ptr) per risc_common.h, not plain volatile
+                    // uint32_t*.
+                    wan_l1->sequence_number = wan_debug_junk_seq;
+                    wan_l1->version_number = 1;
+                    wan_l1->eth_noc_coordinates = wan_debug_eth_logical_xy_packed;
+                    wan_l1->wan_csr_a = READ_REG(WAN_DEBUG_REGISTER_A);
+                    wan_l1->wan_csr_b = READ_REG(WAN_DEBUG_REGISTER_B);
+                    wan_l1->wan_csr_c = READ_REG(WAN_DEBUG_REGISTER_C);
+                    wan_l1->wan_csr_d = READ_REG(WAN_DEBUG_REGISTER_D);
+                    wan_l1->reserved_pad_u32_0 = 0;
+
+                    if (WAN_DEBUG_DRAM_BANK_BYTE_OFFSET != 0 && WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF != 0) {
+                        const uint32_t slot_byte_offset =
+                            wan_debug_dram_ring_index * static_cast<uint32_t>(WAN_DEBUG_REGISTER_STATE_SIZE);
+                        const uint64_t dram_noc = get_noc_addr_from_bank_id<true>(
+                            WAN_DEBUG_DRAM_RING_BANK_ID, WAN_DEBUG_DRAM_HALF_BASE_OFFSET + slot_byte_offset);
+                        noc_async_write(
+                            static_cast<uint32_t>(WAN_DEBUG_REGISTER_STATE_BASE_ADDR),
+                            dram_noc,
+                            static_cast<uint32_t>(WAN_DEBUG_REGISTER_STATE_SIZE));
+                        noc_async_write_barrier();
+                        if (wan_debug_junk_seq == 0xFFFFFFFF) {
+                            wan_debug_junk_seq = 1;
+                        } else {
+                            wan_debug_junk_seq++;
+                        }
+                        wan_debug_dram_ring_index++;
+                        if (wan_debug_dram_ring_index >= WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF) {
+                            wan_debug_dram_ring_index = 0;
+                        }
+                    }
+                }
+            }
+
+            // if (hung) {
+            //     static bool hung_wan_csr_dumped_to_watcher = false;
+            //     if (!hung_wan_csr_dumped_to_watcher) {
+            //         hung_wan_csr_dumped_to_watcher = true;
+            //         WATCHER_RING_BUFFER_PUSH(0xBAD08888);
+            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_A));
+            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_B));
+            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_C));
+            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_D));
+            //         WATCHER_RING_BUFFER_PUSH(wan_debug_eth_logical_xy_packed);
+            //     }
             // }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {

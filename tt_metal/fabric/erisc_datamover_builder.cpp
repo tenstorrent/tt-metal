@@ -11,6 +11,7 @@
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
+#include "hostdev/wan_debug_register_msgs.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -361,6 +362,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->notify_worker_of_read_counter_update_src_address = buffer_address;
         buffer_address += field_size;
     }
+
+    // Allocate space for WAN Debug Register storage (struct may be 20B; reserve up to align(..., field_size) for L1
+    // map)
+    buffer_address = tt::align(buffer_address, field_size);  // 16, matches rest of this block
+    this->wan_debug_register_storage_address = buffer_address;
+    buffer_address += tt::align(sizeof(WANDebugRegisterState), field_size);
+
+    log_info(
+        tt::LogFabric,
+        "FabricEriscDatamoverConfig: WANDebugRegisterState L1 at 0x{:x} (struct {} B, reserved {} B)",
+        static_cast<uint32_t>(this->wan_debug_register_storage_address),
+        static_cast<unsigned>(sizeof(WANDebugRegisterState)),
+        static_cast<unsigned>(tt::align(sizeof(WANDebugRegisterState), field_size)));
 
     // Channel Allocations
     this->max_l1_loading_size =
@@ -872,6 +886,33 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     // Link health overlay stream ID (0xFF = disabled)
     ct_args.push_back(static_cast<uint32_t>(risc_config.link_health_overlay_stream_id()));
+
+    // WAN debug snapshot in ERISC L1 (see hostdev/wan_debug_register_msgs.h)
+    ct_args.push_back(static_cast<uint32_t>(config.wan_debug_register_storage_address));
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t wan_debug_dram_bank_byte_offset = 0;
+    uint32_t wan_debug_dram_ring_slots_per_half = 0;
+    if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
+        wan_debug_dram_bank_byte_offset = hal.get_dev_addr(tt::tt_metal::HalDramMemAddrType::PROFILER) +
+                                          hal.get_dev_size(tt::tt_metal::HalDramMemAddrType::PROFILER);
+        TT_FATAL(
+            wan_debug_dram_bank_byte_offset != 0,
+            "WAN debug DRAM base addr needs to be non-zero, or else it will override the profiler.");
+        wan_debug_dram_ring_slots_per_half = WAN_DEBUG_DRAM_RESERVED_SLOTS_PER_HALF;
+        const uint32_t wan_debug_dram_half_slab_byte_offset =
+            wan_debug_dram_bank_byte_offset + WAN_DEBUG_DRAM_RESERVED_SIZE / 2;
+        log_info(
+            tt::LogFabric,
+            "WAN debug DRAM (risc {}): byte offset within each bank — full slab base 0x{:x}, second half slab base "
+            "0x{:x} (total reserved WAN slab {} bytes)",
+            risc_id,
+            wan_debug_dram_bank_byte_offset,
+            wan_debug_dram_half_slab_byte_offset,
+            static_cast<unsigned>(WAN_DEBUG_DRAM_RESERVED_SIZE));
+    }
+    ct_args.push_back(wan_debug_dram_bank_byte_offset);
+    ct_args.push_back(wan_debug_dram_ring_slots_per_half);
 }
 
 /*

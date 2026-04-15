@@ -244,6 +244,9 @@ struct FabricEriscDatamoverConfig {
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
 
+    // WAN / ETH debug register snapshot in ERISC L1 (see hostdev/wan_debug_register_msgs.h)
+    std::size_t wan_debug_register_storage_address = 0;
+
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_address = {};

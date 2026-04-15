@@ -4,10 +4,16 @@
 
 #include "device_manager.hpp"
 
+#include <sstream>
+
 #include <numa.h>
 #include <pthread.h>
 #include <tracy/Tracy.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
+
+#include <umd/device/types/core_coordinates.hpp>
+
+#include "hostdev/wan_debug_register_addresses.h"
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -177,6 +183,66 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
 }  // namespace device_cpu_allocator
 
 namespace tt_metal {
+
+namespace {
+
+// Writes one ETH SS register on every active logical Ethernet core (same policy as get_active_ethernet_cores(false)).
+void write_eth_ss_reg_to_all_active_eth_cores(
+    tt::Cluster& cluster, const std::vector<Device*>& active_devices, std::uint64_t reg_addr, const char* reg_name) {
+    const std::uint32_t reg_val = WAN_DEBUG_REGISTER_E_F_PRESET_U32;
+    // Include fabric-router ETH cores: they are still active links; only skip_reserved_cores=true trims them (WH).
+    constexpr bool kSkipReservedFabricRouters = false;
+    std::ostringstream cores_written;
+    for (Device* dev : active_devices) {
+        if (dev == nullptr) {
+            continue;
+        }
+        const ChipId chip_id = dev->id();
+        for (const CoreCoord& logical_eth_core : dev->get_active_ethernet_cores(kSkipReservedFabricRouters)) {
+            const CoreCoord virt_xy =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_eth_core, CoreType::ETH);
+            if (cores_written.tellp() > 0) {
+                cores_written << "; ";
+            }
+            cores_written << "chip" << chip_id << " L(" << logical_eth_core.x << ',' << logical_eth_core.y << ") T("
+                          << virt_xy.x << ',' << virt_xy.y << ')';
+            cluster.write_reg(&reg_val, tt_cxy_pair(chip_id, virt_xy.x, virt_xy.y), reg_addr);
+            std::uint32_t readback = 0;
+            cluster.read_reg(&readback, tt_cxy_pair(chip_id, virt_xy.x, virt_xy.y), reg_addr);
+            if (readback != reg_val) {
+                log_warning(
+                    tt::LogMetal,
+                    "ETH SS register readback mismatch: {} chip {} eth ({}, {}): got 0x{:08x}",
+                    reg_name,
+                    chip_id,
+                    virt_xy.x,
+                    virt_xy.y,
+                    readback);
+            }
+        }
+    }
+    log_info(
+        tt::LogMetal,
+        "Successfully wrote to ETH SS {} on active Ethernet cores ({} device(s)): {}",
+        reg_name,
+        active_devices.size(),
+        cores_written.str());
+}
+
+void write_eth_ss_reg_all_eth_cores(
+    tt::Cluster& cluster, const std::vector<Device*>& active_devices, bool is_mock_device) {
+    if (is_mock_device) {
+        return;
+    }
+    write_eth_ss_reg_to_all_active_eth_cores(
+        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_E), "WAN_DEBUG_REGISTER_E");
+    write_eth_ss_reg_to_all_active_eth_cores(
+        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_F), "WAN_DEBUG_REGISTER_F");
+    log_info(tt::LogMetal, "Sleeping 10 seconds after WAN debug register E/F writes before continuing init");
+    sleep(10);
+}
+
+}  // namespace
 
 void DeviceManager::initialize(
     const std::vector<ChipId>& device_ids,
@@ -475,6 +541,9 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 
     initializers_[DispatchKernelInitializer::key]->configure();
     initializers_[FabricFirmwareInitializer::key]->configure();
+
+    // Host ETH SS register write after fabric router sync (wait_for_fabric_router_sync in fabric configure).
+    write_eth_ss_reg_all_eth_cores(ctx.get_cluster(), active_devices, descriptor_->is_mock_device());
 
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }

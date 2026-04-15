@@ -5,6 +5,8 @@
 #ifndef TT_ETH_SS_REGS_H
 #define TT_ETH_SS_REGS_H
 
+#include "hostdev/wan_debug_register_addresses.h"
+
 ///////////////
 // ETH Params
 

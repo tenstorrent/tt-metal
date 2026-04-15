@@ -14,7 +14,9 @@
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
+#include "internal/ethernet/tt_eth_ss_regs.h"
 #include "hal_types.hpp"
+#include "hostdev/wan_debug_register_msgs.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
@@ -37,6 +39,8 @@ constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
+static_assert(WAN_DEBUG_DRAM_ALIGNMENT_BYTES == DRAM_ALIGNMENT);
+
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
 constexpr static std::uint32_t get_dram_profiler_size(
     [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
@@ -57,7 +61,7 @@ constexpr static std::uint32_t get_dram_profiler_size(
 }
 
 constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
-    return DRAM_PROFILER_BASE + dram_profiler_size;
+    return DRAM_PROFILER_BASE + dram_profiler_size + WAN_DEBUG_DRAM_RESERVED_SIZE;
 }
 constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
     return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
@@ -328,7 +332,9 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC ||
+             addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
+            (addr == WAN_DEBUG_REGISTER_E || addr == WAN_DEBUG_REGISTER_F));
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
