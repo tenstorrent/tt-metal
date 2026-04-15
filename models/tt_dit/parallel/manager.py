@@ -40,6 +40,7 @@ class CCLManager:
         self.rs_ping_pong_idx = [0, 0]
         self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
+        self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
@@ -76,6 +77,13 @@ class CCLManager:
         self.ag_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Initialize exp ring joint SDPA semaphores (num_links per set, 2 sets for ping pong)
+        exp_ring_n_sems = self.num_links * 2
+        self.exp_ring_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
         }
 
         # Initialize neighbor pad semaphores
@@ -229,6 +237,21 @@ class CCLManager:
         n_sems = 2
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for exp ring joint SDPA operations.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of num_links semaphores for the current ping pong cycle
+        """
+        cur_idx = self.exp_ring_ping_pong_idx[mesh_axis]
+        n_sems = self.num_links
+        self.exp_ring_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.exp_ring_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_np_ping_pong_semaphore(self, mesh_axis):
         """
