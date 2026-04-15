@@ -16,17 +16,16 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
+from models.demos.rvc.torch_impl.audio import load_audio
+
 DEFAULT_BACKEND = "transformers_wavlm_xvector"
 DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
-BASE_DIRECTORY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-FIXED_AUDIO_FILE = "sample-speech.wav"
 
 
 class SpeakerEmbeddingBackendError(RuntimeError):
@@ -52,30 +51,6 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
     if denom == 0:
         raise ValueError("Speaker embeddings must have non-zero norm.")
     return float(np.dot(reference, candidate) / denom)
-
-
-def _load_audio_16khz_mono() -> torch.Tensor:
-    if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
-        raise SpeakerEmbeddingBackendError(
-            "Audio loading for speaker similarity requires optional dependencies. "
-            "Install them with: pip install librosa soundfile"
-        )
-
-    import librosa
-    import soundfile as sf
-
-    audio_path = os.path.abspath(os.path.join(BASE_DIRECTORY, FIXED_AUDIO_FILE))
-    if audio_path.startswith(BASE_DIRECTORY):
-        with open(audio_path, "rb") as audio_file:
-            audio, sample_rate = sf.read(audio_file)
-    else:
-        raise ValueError(f"Audio file must be located under {BASE_DIRECTORY}")
-    if audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
-    audio = np.asarray(audio, dtype=np.float32)
-    if sample_rate != 16000:
-        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-    return torch.from_numpy(audio).unsqueeze(0)
 
 
 def _load_speechbrain_encoder(model_id: str, device: str):
@@ -119,7 +94,7 @@ def compute_speaker_embedding(
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> np.ndarray:
-    waveform = _load_audio_16khz_mono()
+    waveform = load_audio(16000).unsqueeze(0)
 
     if backend == "speechbrain_ecapa":
         classifier = _load_speechbrain_encoder(model_id=model_id, device=device)

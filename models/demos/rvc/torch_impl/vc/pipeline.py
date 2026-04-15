@@ -362,7 +362,7 @@ class Pipeline:
         if not os.path.exists(audio_path):
             raise FileNotFoundError("input_audio_path not found.")
 
-        audio = load_audio(audio_path, 16000)
+        audio = load_audio(16000)
         audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:
             audio /= audio_max

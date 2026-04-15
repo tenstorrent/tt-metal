@@ -35,13 +35,19 @@ Then set the required environment variables:
 ```sh
 export RVC_CONFIGS_DIR="$PWD/models/demos/rvc/data/configs"
 export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
-export RVC_TEST_INPUT="$PWD/models/demos/rvc/data/sample-speech.wav"
 ```
+
+The current demo uses a fixed input audio file:
+
+- `models/demos/rvc/data/sample-speech.wav`
 
 Run inference using the helper script:
 
 ```sh
 mkdir -p ./models/demos/rvc/data/output
+
+# The current helper scripts still accept `-i`, but the pipeline itself now
+# loads the fixed demo input from `models/demos/rvc/data/sample-speech.wav`.
 uv run --active models/demos/rvc/scripts/infer_ttnn.py -i ./models/demos/rvc/data/sample-speech.wav -o ./models/demos/rvc/data/output/output_ttnn.wav
 
 # torch version
@@ -56,7 +62,7 @@ from models.demos.rvc.torch_impl.vc.pipeline import Pipeline
 import soundfile as sf
 
 pipe = Pipeline(if_f0=True, version="v1", num="48k")
-audio = pipe.infer("./models/demos/rvc/data/sample-speech.wav", speaker_id=0, f0_method="rapt")
+audio = pipe.infer()
 sf.write("./models/demos/rvc/data/output/output.wav", audio, pipe.tgt_sr, subtype="PCM_16")
 ```
 
@@ -105,29 +111,26 @@ Recommended backend for the bounty metric:
 ```sh
 pip install transformers
 python models/demos/rvc/scripts/eval_speaker_similarity.py \
-  --source-audio path/to/original_source.wav \
-  --generated-audio path/to/converted_audio.wav \
-  --json
+  --device cpu
 ```
 
 Notes:
 - The default backend uses a Transformers `WavLMForXVector` speaker encoder and reports cosine similarity.
 - `speechbrain_ecapa` is also supported, but it depends on `torchaudio` and may require a CPU-compatible install.
 - If the model is not already cached locally, backend initialization may need network access to download weights.
+- The current eval path uses the fixed demo audio input under `models/demos/rvc/data/sample-speech.wav`.
 - This is intentionally separate from the TTNN inference pipeline so future evals such as WER, mel similarity,
   and frame-level TT-vs-Torch comparisons can live under `models/demos/rvc/evals/`.
 
-Content-preservation WER can be computed from source audio and generated audio:
+Content-preservation WER can be computed with the fixed demo audio input:
 
 ```sh
 python models/demos/rvc/scripts/eval_wer.py \
-  --source-audio path/to/original_source.wav \
-  --generated-audio path/to/converted_audio.wav \
   --device cpu
 ```
 
-This runs ASR on both files, normalizes the transcripts, and reports
-`WER(source_transcript, generated_transcript)`.
+This currently runs on the fixed demo audio input and reports the metric from
+that fixed-path flow.
 
 Token-level accuracy against a PyTorch reference can be computed from a Torch-generated
 reference audio and a TTNN-generated candidate audio:

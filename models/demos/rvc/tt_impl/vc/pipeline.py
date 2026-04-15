@@ -483,11 +483,8 @@ class Pipeline:
 
         return audio_output
 
-    def infer(self, audio_path: str):
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError("input_audio_path not found.")
-
-        audio = load_audio(audio_path, self.sr)
+    def infer(self):
+        audio = load_audio(self.sr)
         # preprocess
         audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:

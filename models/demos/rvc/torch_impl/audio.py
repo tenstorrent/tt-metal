@@ -10,6 +10,9 @@ import librosa
 import numpy as np
 import torch
 
+BASE_DIRECTORY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+FIXED_AUDIO_FILE = "sample-speech.wav"
+
 
 def audio2(i, o, format, sr):
     inp = av.open(i, "r")
@@ -33,7 +36,10 @@ def audio2(i, o, format, sr):
     inp.close()
 
 
-def load_audio(file, sr):
+def load_audio(sr):
+    file = os.path.abspath(os.path.join(BASE_DIRECTORY, FIXED_AUDIO_FILE))
+    if not file.startswith(BASE_DIRECTORY):
+        raise RuntimeError(f"Audio file must be located under {BASE_DIRECTORY}")
     if not os.path.exists(file):
         raise RuntimeError("You input a wrong audio path that does not exists, please fix it!")
     try:

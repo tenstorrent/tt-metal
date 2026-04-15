@@ -43,8 +43,8 @@ def test_pipeline_real_file_usage(device) -> None:
     torch_pipe = TorchPipeline(if_f0=True, version="v1", num="48k")
     tt_pipe = TTPipeline(tt_device=device, if_f0=True, version="v1", num="48k")
 
-    torch_out = np.asarray(torch_pipe.infer(str(input_path)))
-    tt_out = np.asarray(tt_pipe.infer(str(input_path)))
+    torch_out = np.asarray(torch_pipe.infer())
+    tt_out = np.asarray(tt_pipe.infer())
 
     # assert torch_out.size > 0
     # assert tt_out.size > 0

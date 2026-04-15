@@ -45,9 +45,7 @@ def main() -> None:
     import time
 
     start_time = time.time()
-    audio = pipe.infer(
-        args.input,
-    )
+    audio = pipe.infer()
     end_time = time.time()
     print(f"Inference took {end_time - start_time:.2f} seconds.")
     audio = audio.cpu().numpy()
