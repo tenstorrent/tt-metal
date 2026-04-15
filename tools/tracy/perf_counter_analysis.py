@@ -856,6 +856,11 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Packer L1 Efficiency",
         "NOC vs Compute Balance",
         "TDMA vs NOC L1 Share",
+        "Stall Overlap T0",
+        "Stall Overlap T1",
+        "Stall Overlap T2",
+        "Packer Load Imbalance",
+        "Compute-to-Unpack Ratio",
     ]
 
     # Non-percentage metrics (raw rates, not %)
@@ -1460,10 +1465,11 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Unpacker L1 Efficiency"] = compute_ratio_metric("L1_0_UNPACKER_0_GRANT", "UNPACK0_BUSY_THREAD0")
 
     if has_counter("L1_0_PORT1_GRANT") and has_counter("PACKER_BUSY"):
-        # Packer port is shared (other traffic uses it too), so cap at 100%
+        # Packer port is shared with other clients, so grant/busy can exceed 100%.
+        # Don't cap — values >100% indicate the L1 port has headroom.
         grant = get_counter_series("L1_0_PORT1_GRANT")
         busy = get_counter_series("PACKER_BUSY")
-        ratio = (grant / busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
+        ratio = (grant / busy * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Packer L1 Efficiency"] = _group_to_stat_dict(ratio)
 
     if has_counter("FPU_COUNTER") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
@@ -1476,6 +1482,45 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         fpu = get_counter_series("FPU_COUNTER")
         ratio = (noc_total / (fpu + noc_total) * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["NOC vs Compute Balance"] = _group_to_stat_dict(ratio)
+
+    # === Stall Cause Overlap Factor ===
+    # sum(all 9 stall reasons) / THREAD_STALLS per thread.
+    # >1.0 means multiple stall conditions overlap (hardware busy simultaneously).
+    for t in [0, 1, 2]:
+        stalls_name = f"THREAD_STALLS_{t}"
+        reason_names = [
+            f"WAITING_FOR_THCON_IDLE_{t}",
+            f"WAITING_FOR_UNPACK_IDLE_{t}",
+            f"WAITING_FOR_PACK_IDLE_{t}",
+            f"WAITING_FOR_MATH_IDLE_{t}",
+            f"WAITING_FOR_NONZERO_SEM_{t}",
+            f"WAITING_FOR_NONFULL_SEM_{t}",
+            f"WAITING_FOR_MOVE_IDLE_{t}",
+            f"WAITING_FOR_MMIO_IDLE_{t}",
+            f"WAITING_FOR_SFPU_IDLE_{t}",
+        ]
+        if has_counter(stalls_name) and all(has_counter(r) for r in reason_names):
+            total_stalls = get_counter_series(stalls_name)
+            reason_sum = sum(get_counter_series(r) for r in reason_names)
+            ratio = (reason_sum / total_stalls).replace([float("inf"), -float("inf")], nan)
+            per_op_stats[f"Stall Overlap T{t}"] = _group_to_stat_dict(ratio)
+
+    # === Packer Load Imbalance ===
+    # (max - min) / max of 4 packer engine utilization. WH only (PACK_COUNT=4).
+    if all(has_counter(f"PACKER_BUSY_{i}") for i in range(3)) and has_counter("PACKER_BUSY"):
+        engines = [get_counter_series(f"PACKER_BUSY_{i}") for i in range(3)] + [get_counter_series("PACKER_BUSY")]
+        engine_max = pd.concat(engines, axis=1).max(axis=1)
+        engine_min = pd.concat(engines, axis=1).min(axis=1)
+        imbalance = ((engine_max - engine_min) / engine_max * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Packer Load Imbalance"] = _group_to_stat_dict(imbalance)
+
+    # === Compute-to-Unpack Ratio ===
+    # MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY). >100% = compute-bound, <100% = memory-bound.
+    if has_counter("MATH_COUNTER") and has_counter("UNPACK0_BUSY_THREAD0") and has_counter("UNPACK1_BUSY_THREAD0"):
+        math = get_counter_series("MATH_COUNTER")
+        unpack = get_counter_series("UNPACK0_BUSY_THREAD0") + get_counter_series("UNPACK1_BUSY_THREAD0")
+        ratio = (math / unpack * 100).replace([float("inf"), -float("inf")], nan)
+        per_op_stats["Compute-to-Unpack Ratio"] = _group_to_stat_dict(ratio)
 
     return {"per_op_stats": per_op_stats, "per_op_counts": per_op_counts}
 
@@ -2071,10 +2116,10 @@ def compute_device_only_metrics(
     eff_pivot["Unpacker L1 Efficiency"] = eff_pivot.apply(unpacker_l1_eff, axis=1)
 
     def packer_l1_eff(x):
-        """L1 grant to packer port / packer busy cycles. Capped at 100%."""
+        """L1 grant to packer port / packer busy cycles."""
         grant = x.get("value_L1_0_PORT1_GRANT", 0)
         busy = x.get("value_PACKER_BUSY", 0)
-        return min(100.0, grant / busy * 100) if busy > 0 else nan
+        return (grant / busy * 100) if busy > 0 else nan
 
     eff_pivot["Packer L1 Efficiency"] = eff_pivot.apply(packer_l1_eff, axis=1)
 
@@ -2105,6 +2150,53 @@ def compute_device_only_metrics(
         return (tdma / total * 100) if total > 0 else nan
 
     eff_pivot["TDMA vs NOC L1 Share"] = eff_pivot.apply(tdma_vs_noc_share, axis=1)
+
+    # === New composite metrics ===
+
+    # Stall Cause Overlap Factor per thread
+    for t in [0, 1, 2]:
+        stalls_col = f"value_THREAD_STALLS_{t}"
+        reason_cols = [
+            f"value_WAITING_FOR_THCON_IDLE_{t}", f"value_WAITING_FOR_UNPACK_IDLE_{t}",
+            f"value_WAITING_FOR_PACK_IDLE_{t}", f"value_WAITING_FOR_MATH_IDLE_{t}",
+            f"value_WAITING_FOR_NONZERO_SEM_{t}", f"value_WAITING_FOR_NONFULL_SEM_{t}",
+            f"value_WAITING_FOR_MOVE_IDLE_{t}", f"value_WAITING_FOR_MMIO_IDLE_{t}",
+            f"value_WAITING_FOR_SFPU_IDLE_{t}",
+        ]
+        if stalls_col in eff_pivot.columns and all(c in eff_pivot.columns for c in reason_cols):
+            eff_pivot[f"Stall Overlap T{t}"] = eff_pivot.apply(
+                lambda x, sc=stalls_col, rc=reason_cols: (
+                    sum(x.get(c, 0) for c in rc) / x[sc] if x.get(sc, 0) > 0 else nan
+                ),
+                axis=1,
+            )
+
+    # Packer Load Imbalance
+    busy_cols = ["value_PACKER_BUSY_0", "value_PACKER_BUSY_1", "value_PACKER_BUSY_2", "value_PACKER_BUSY"]
+    if all(c in eff_pivot.columns for c in busy_cols):
+        eff_pivot["Packer Load Imbalance"] = eff_pivot.apply(
+            lambda x: (
+                (max(x.get(c, 0) for c in busy_cols) - min(x.get(c, 0) for c in busy_cols))
+                / max(x.get(c, 0) for c in busy_cols)
+                * 100
+                if max(x.get(c, 0) for c in busy_cols) > 0
+                else nan
+            ),
+            axis=1,
+        )
+
+    # Compute-to-Unpack Ratio
+    if "value_MATH_COUNTER" in eff_pivot.columns and "value_UNPACK0_BUSY_THREAD0" in eff_pivot.columns:
+        eff_pivot["Compute-to-Unpack Ratio"] = eff_pivot.apply(
+            lambda x: (
+                x.get("value_MATH_COUNTER", 0)
+                / (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0))
+                * 100
+                if (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) > 0
+                else nan
+            ),
+            axis=1,
+        )
 
     # Aggregate metrics per operation (min, median, max, avg)
     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
@@ -2189,6 +2281,11 @@ def compute_device_only_metrics(
         "Packer L1 Efficiency",
         "NOC vs Compute Balance",
         "TDMA vs NOC L1 Share",
+        "Stall Overlap T0",
+        "Stall Overlap T1",
+        "Stall Overlap T2",
+        "Packer Load Imbalance",
+        "Compute-to-Unpack Ratio",
     ]
     # Non-percentage metrics (raw rates)
     _ipc_metric_names = [
