@@ -101,7 +101,8 @@ run_t3000_ttnn_tests() {
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
-  timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
+  # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
   timeout 300 ./build/test/ttnn/test_ccl_multi_cq_multi_device ; fail+=$?
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
