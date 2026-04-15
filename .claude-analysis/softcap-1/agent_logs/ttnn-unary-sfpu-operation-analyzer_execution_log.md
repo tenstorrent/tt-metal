@@ -35,3 +35,41 @@ The LLK dispatch layer (`llk_math_eltwise_binary_sfpu_binop.h`) references `cker
 7. Read init/addrmod configuration (llk_math_eltwise_binary_sfpu.h)
 8. Verified all SFPU identifiers by grep
 9. Wrote analysis file
+
+---
+
+## Session Summary (hardtanh)
+- **Operation**: hardtanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS
+- **Output File**: `.claude-analysis/softcap-1/hardtanh_analysis.md`
+
+## Key Findings (hardtanh)
+
+### Integration Gap
+HARDTANH has a complete core SFPU kernel (`_calculate_hardtanh_`) in both WH and BH `ckernel_sfpu_hardtanh.h`, but the dispatch chain is broken:
+- No case in `get_op_init_and_func_parameterized()` (would TT_THROW)
+- No compute API header (`hardtanh_tile()` does not exist)
+- No LLK dispatch function (`llk_math_eltwise_unary_sfpu_hardtanh.h` does not exist)
+
+### SFPU Kernel Characteristics
+- **Style**: SFPI-based (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_endif`)
+- **Core algorithm**: Additive-shift-and-clamp (not direct min/max comparison)
+- **Instructions per iteration**: SFPLOAD (1), SFPMAD (3), SFPSETCC (2), SFPPUSHC (2), SFPPOPC (2), SFPLOADI (2 CC-guarded), SFPSTORE (1)
+- **Parameters**: 3 FP16_B-encoded values (shifted/negated thresholds)
+- **Approximation mode**: Template parameter accepted but never branched on
+- **Hardware variants**: WH and BH implementations are byte-identical
+
+### Parameter Comment Discrepancy
+Source code comments state `param2 = -(pos_threshold)`, but mathematical analysis proves the algorithm only produces correct results when `param2 = +pos_threshold = +max_val`. Since the host-side parameter encoding has never been implemented (dispatch is not wired), this discrepancy has not been exposed at runtime.
+
+## Timeline (hardtanh)
+1. Read `unary_op_utils.cpp` -- found HARDTANH in `is_parametrized_type()` but no dispatch case
+2. Searched broadly for hardtanh across codebase -- found `ckernel_sfpu_hardtanh.h` in WH and BH
+3. Verified no API header, no LLK dispatch, no compute API exists
+4. Read core SFPU kernel source (both architectures, identical)
+5. Analyzed SFPI-to-SFPU instruction mapping via `sfpi.h` compiler abstractions
+6. Performed mathematical derivation and correctness proof for the shift-and-clamp algorithm
+7. Discovered param2 comment discrepancy through mathematical verification
+8. Verified all SFPU identifiers via grep
+9. Wrote analysis file with full annotated source and mathematical proof
