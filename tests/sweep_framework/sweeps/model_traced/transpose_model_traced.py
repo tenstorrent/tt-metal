@@ -71,6 +71,19 @@ def _is_sharded(memory_config):
     return False
 
 
+def _shard_grid_fits_device(memory_config, device):
+    """Check if a sharded memory config's shard grid fits within the device's compute grid."""
+    if not _is_sharded(memory_config):
+        return True
+    shard_spec = getattr(memory_config, "shard_spec", None)
+    if shard_spec is None:
+        return True
+    num_shards = shard_spec.grid.num_cores()
+    compute_grid = device.compute_with_storage_grid_size()
+    max_cores = compute_grid.x * compute_grid.y
+    return num_shards <= max_cores
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -104,7 +117,13 @@ def run(
     if output_memory_config is not None and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", output_memory_config)
         if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+            # If the parsed output memory config is sharded but its shard grid exceeds
+            # the device's compute grid (e.g., traced on a 32-core device but running
+            # on a 4-core Galaxy node), fall back to DRAM interleaved.
+            if _is_sharded(parsed_mc) and not _shard_grid_fits_device(parsed_mc, device):
+                op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                op_kwargs["memory_config"] = parsed_mc
     elif _is_sharded(input_a_memory_config) and "memory_config" not in op_kwargs:
         # Sharded input but no explicit output memory_config — use DRAM interleaved
         # to avoid the transposed output inheriting an incompatible shard spec.
@@ -123,6 +142,10 @@ def run(
     # Create tensor using interleaved→sharded for sharded memory configs.
     # Direct from_torch with sharded config triggers TilizeDeviceOperation which
     # can clash with L1 circular buffers.
+    # If input shard grid exceeds device cores, fall back to DRAM interleaved
+    if _is_sharded(input_a_memory_config) and not _shard_grid_fits_device(input_a_memory_config, device):
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
