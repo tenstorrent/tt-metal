@@ -31,7 +31,7 @@ Analyzed the SFPU kernel implementation for the `atanh` unary operation. The ker
 ## Status: SUCCESS
 
 ## Summary
-Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel implements `sinh(x) = (exp(x) - exp(-x)) / 2` using a custom `exp_21f` helper (Moroz et al. 2022 2^z algorithm) with a Taylor fallback `x + x³/6` for |x| < 0.5 to avoid catastrophic cancellation. Uses SFPI abstractions throughout (Style A) and is identical across Wormhole and Blackhole.
+Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kernel implements `sinh(x) = (exp(x) - exp(-x)) / 2` using a custom `exp_21f` helper (Moroz et al. 2022 2^z algorithm) with a Taylor fallback `x + x^3/6` for |x| < 0.5 to avoid catastrophic cancellation. Uses SFPI abstractions throughout (Style A) and is identical across Wormhole and Blackhole.
 
 ## Key Findings
 - **Compute kernel**: `eltwise_sfpu.cpp` (default for SINH)
@@ -40,8 +40,8 @@ Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kern
 - **APPROXIMATION_MODE template**: `false`; has no branching effect inside the kernel body
 - **Kernel style**: SFPI-based (Style A)
 - **SFPU instructions**: SFPLOAD, SFPSTORE, SFPMAD, SFPIADD, SFPLOADI, SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPSETEXP, SFPSETSGN, SFPCAST, SFP_STOCH_RND, SFPSETCC, SFPENCC, SFPMOV
-- **Address mode**: ADDR_MOD_7 (dest.incr=0) for both WH and BH — same configuration
-- **Key design**: Dual-path (exp-based for |x|≥0.5, Taylor for |x|<0.5); explicit BF16 output rounding via SFP_STOCH_RND; `_float_to_int32_positive_` is an IEEE bit-reinterpret used in the Moroz exp_21f algorithm
+- **Address mode**: ADDR_MOD_7 (dest.incr=0) for both WH and BH -- same configuration
+- **Key design**: Dual-path (exp-based for |x|>=0.5, Taylor for |x|<0.5); explicit BF16 output rounding via SFP_STOCH_RND; `_float_to_int32_positive_` is an IEEE bit-reinterpret used in the Moroz exp_21f algorithm
 
 ## Output
 - Analysis file: `.claude-analysis/softcap-1/sinh_analysis.md`
@@ -54,3 +54,35 @@ Analyzed the SFPU kernel implementation for the `sinh` unary operation. The kern
 5. Confirmed WH and BH ckernel_sfpu_sinh.h implementations are byte-for-byte identical
 6. Confirmed `SfpuType::sinh` is registered in both WH and BH llk_sfpu_types.h
 7. Confirmed ADDR_MOD_7 (not ADDR_MOD_6) is the only configured slot for sinh in eltwise_unary_sfpu_configure_addrmod
+
+---
+
+## Operation: tanhshrink
+## Status: SUCCESS
+
+## Summary
+Analyzed the SFPU kernel implementation for the `tanhshrink` unary operation. Tanhshrink computes `x - tanh(x)` and is a composite operation: it first applies tanh via the unary SFPU path, then subtracts using either FPU binary or SFPU binary subtraction. The operation is in a partially-nuked state: the dispatch integration was removed from `unary_op_utils.cpp`, and the underlying tanh LLK/ckernel files (`ckernel_sfpu_tanh.h`, `llk_math_eltwise_unary_sfpu_tanh.h`) were deleted. Two orphaned compute kernel files exist but would not compile.
+
+## Key Findings
+- **Compute kernel**: Two orphaned dedicated kernel files (not using standard `eltwise_sfpu.cpp` dispatch)
+  - `tanhshrink_kernel.cpp` -- FPU binary subtraction via `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>`
+  - `tanhshrink_sfpu_kernel.cpp` -- SFPU binary subtraction via `sub_binary_tile(0, 1, 0)`
+- **SFPU_OP_CHAIN_0**: Not applicable (dedicated kernels, not standard dispatch)
+- **math_approx_mode**: `false` (default)
+- **tanh_tile template**: `fast_and_approx=false` (default)
+- **Kernel style**: SFPI-based (Style A) for the subtraction phase
+- **SFPU instructions (subtraction)**: SFPLOAD, SFPMAD (vFloat subtraction), SFPSTORE
+- **SFPU instructions (tanh, nuked)**: Would have used SFPNONLINEAR InstrMod=5 (hardware-accelerated tanh)
+- **Address mode**: ADDR_MOD_7 with all-zero increments (same for WH and BH)
+
+## Output
+- Analysis file: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
+
+## Verification Steps Taken
+1. Verified `_calculate_sfpu_binary_` function exists in both WH and BH ckernel_sfpu_binary.h
+2. Verified `_sfpu_binary_init_` function exists in both WH and BH ckernel_sfpu_binary.h
+3. Confirmed tanh LLK (`llk_math_eltwise_unary_sfpu_tanh`) does NOT exist anywhere in the codebase
+4. Confirmed `ckernel_sfpu_tanh.h` does NOT exist anywhere in the codebase
+5. Verified all file paths cited in the abstraction layers table exist
+6. Confirmed WH and BH ckernel_sfpu_binary.h implementations are identical
+7. Verified ADDR_MOD_7 configuration in llk_math_eltwise_binary_sfpu.h
