@@ -544,21 +544,20 @@ def _filter_results(outputs, default_results, results):
     return outputs
 
 
-def _clear_volatile_op_tensors(container):
-    """Clear volatile input slots and stale output tensors on ops after dispatch.
+def _clear_updated_inputs(container):
+    """Clear input slots that ``update()`` wrote this cycle, plus stale outputs.
 
-    Volatile slots (written by ``update()``) are tracked per-op in
-    ``_pending_clear``.  Clearing them from ``op.input_tensors`` ensures the
-    Python side mirrors C++ (where dirty slots are also cleared).  Non-volatile
-    slots (weights) remain — same as unfused.  Output tensors from
-    materialization are cleared once (``dispatch()`` allocates fresh ones).
+    Mirrors C++ (where ``set_input()`` slots are cleared after dispatch).
+    Inputs not provided via ``update()`` stay in ``op.input_tensors`` — they're
+    read from Python at dispatch time.  Output tensors from materialization are
+    cleared once (``dispatch()`` allocates fresh ones each call).
     """
     for op in container._cached_ops:
-        pending = op._pending_clear
-        if pending:
-            for idx in pending:
+        updated = op._updated_indices
+        if updated:
+            for idx in updated:
                 op.input_tensors[idx] = None
-            pending.clear()
+            updated.clear()
         if op.output_tensors:
             op.output_tensors = []
 
@@ -842,7 +841,7 @@ class Sequential:
         """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
         for op in self._cached_ops:
             op._fusion_input_setter = None
-            op._pending_clear = []
+            op._updated_indices = []
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
@@ -916,7 +915,7 @@ class Sequential:
         state = self._dispatch_state
         if state is not None and state.ready():
             outputs = state.dispatch()
-            _clear_volatile_op_tensors(self)
+            _clear_updated_inputs(self)
             return _filter_results(outputs, self._default_results, results)
 
         if self._cached_run is None:
@@ -984,7 +983,7 @@ class Parallel:
         """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
         for op in self._cached_ops:
             op._fusion_input_setter = None
-            op._pending_clear = []
+            op._updated_indices = []
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
@@ -1059,7 +1058,7 @@ class Parallel:
         state = self._dispatch_state
         if state is not None and state.ready():
             outputs = state.dispatch()
-            _clear_volatile_op_tensors(self)
+            _clear_updated_inputs(self)
             return _filter_results(outputs, self._default_results, results)
 
         if self._cached_run is None:

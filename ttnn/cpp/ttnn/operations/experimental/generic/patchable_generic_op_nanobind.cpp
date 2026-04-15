@@ -80,34 +80,37 @@ std::vector<Tensor> allocate_outputs(
     return outputs;
 }
 
-/// Reference to one element of a Python list — used to read constant
-/// (non-volatile) input tensors from live ``op.input_tensors`` at dispatch time
-/// without caching the Tensor in C++ (which would pin L1).
+/// Reference to one element of a Python list.  Used to read input tensors
+/// from live ``op.input_tensors`` at dispatch time when ``set_input()`` hasn't
+/// provided a value for that slot this cycle.
 struct PyListRef {
     nb::object py_list;
     Py_ssize_t idx;
 };
 
 /// Persistent dispatch state — caches all marshalling work at construction.
-/// ``set_input()`` writes volatile tensors into pre-sized slots; constant
-/// inputs are read from live Python lists at dispatch time (zero C++ pinning).
+///
+/// Each input slot has two sources: a C++ ``optional<Tensor>`` (populated by
+/// ``set_input()``) and a Python-list fallback (``py_refs_``).  At dispatch
+/// time, ``has_value()`` slots use the C++ tensor; empty slots read from
+/// Python.  After dispatch, all C++ slots are cleared — zero tensors pinned
+/// between calls.
 class FusionDispatchState {
-    // Cached at construction (never changes)
+    // Program state (immutable after construction)
     std::vector<TensorSpec> output_specs_;
     std::vector<std::uint32_t> shared_output_map_;
     std::vector<std::uint32_t> result_reorder_;
     AddressSlots address_slots_;
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
-
-    // Pre-built MeshProgramDescriptor — patched IN PLACE each dispatch.
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_desc_;
 
-    // Per dedup index: volatile input slot (written by set_input, cleared
-    // after dispatch) and a Python-list reference for reading constants.
+    // Per dedup index: C++ slot (from set_input, cleared after dispatch)
+    // and Python fallback (from op.input_tensors, for inputs not provided
+    // via set_input this cycle).
     std::vector<std::optional<Tensor>> inputs_;
-    std::vector<PyListRef> py_refs_;  // where to read non-dirty slots from Python
+    std::vector<PyListRef> py_refs_;
 
-    // Set by set_input(), cleared by dispatch().
+    // True after any set_input() call; cleared after dispatch().
     bool ready_ = false;
 
 public:
@@ -148,8 +151,8 @@ public:
         // 4. Build MeshProgramDescriptor ONCE.
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
 
-        // 5. All slots start empty (nullopt).  Volatile slots are populated by
-        //    set_input(); constant slots are read from Python via py_refs_.
+        // 5. All slots start empty.  set_input() populates individual slots;
+        //    dispatch() reads the rest from Python via py_refs_.
         inputs_.resize(py_refs_.size(), std::nullopt);
     }
 
@@ -164,7 +167,7 @@ public:
         // 1. Allocate ephemeral outputs.
         auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
 
-        // 2. Build io_tensors: populated slots from C++ inputs_, empty slots from Python.
+        // 2. Build io_tensors: set_input slots from C++, others from Python.
         std::vector<Tensor> io_tensors;
         io_tensors.reserve(py_refs_.size() + outputs.size());
         for (size_t i = 0; i < py_refs_.size(); ++i) {
@@ -184,7 +187,7 @@ public:
         // 4. Dispatch.
         (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
 
-        // 5. Release all populated input slots — no tensors pinned between dispatches.
+        // 5. Clear all C++ input slots — no tensors pinned between dispatches.
         for (auto& slot : inputs_) {
             slot.reset();
         }
