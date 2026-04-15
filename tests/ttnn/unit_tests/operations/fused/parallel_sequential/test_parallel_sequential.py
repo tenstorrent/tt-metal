@@ -365,8 +365,8 @@ class TestSequentialExecution:
         )
 
         for i in range(3):
-            fused.run()
-            check_pcc(golden, rms2.output_tensors[0], label=f"run {i}")
+            [out] = fused.run()
+            check_pcc(golden, out, label=f"run {i}")
 
     @stress_test_program_cache
     def test_single_op_passthrough(self, device):
@@ -845,12 +845,12 @@ class TestBranchingTopology:
         )
 
         fused = Sequential(stem, Parallel(branch_a, branch_b, branch_c))
-        fused.run()
+        [out_a, out_b, out_c] = fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
-        check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_a.output_tensors[0], pcc=0.97, label="A (RMS)")
-        check_pcc(g_stem[:, :, :, :64], branch_b.output_tensors[0], pcc=0.97, label="B (slice)")
-        check_pcc(torch_rms_norm(g_stem, torch_w.float()), branch_c.output_tensors[0], pcc=0.97, label="C (RMS)")
+        check_pcc(torch_rms_norm(g_stem, torch_w.float()), out_a, pcc=0.97, label="A (RMS)")
+        check_pcc(g_stem[:, :, :, :64], out_b, pcc=0.97, label="B (slice)")
+        check_pcc(torch_rms_norm(g_stem, torch_w.float()), out_c, pcc=0.97, label="C (RMS)")
 
     @stress_test_program_cache
     def test_nested_split_with_slice(self, device):
@@ -888,13 +888,13 @@ class TestBranchingTopology:
                 b,
             ),
         )
-        fused.run()
+        [out_a1, out_a2, out_b] = fused.run()
 
         g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
         g_a = torch_rms_norm(g_stem, ws[1].float())
-        check_pcc(torch_rms_norm(g_a, ws[2].float()), a1.output_tensors[0], pcc=0.97, label="A1 (RMS)")
-        check_pcc(g_a[:, :, :, :64], a2_slice.output_tensors[0], pcc=0.97, label="A2 (slice)")
-        check_pcc(torch_rms_norm(g_stem, ws[3].float()), b.output_tensors[0], pcc=0.97, label="B (RMS)")
+        check_pcc(torch_rms_norm(g_a, ws[2].float()), out_a1, pcc=0.97, label="A1 (RMS)")
+        check_pcc(g_a[:, :, :, :64], out_a2, pcc=0.97, label="A2 (slice)")
+        check_pcc(torch_rms_norm(g_stem, ws[3].float()), out_b, pcc=0.97, label="B (RMS)")
 
     @stress_test_program_cache
     def test_symmetric_binary_tree(self, device):
@@ -928,13 +928,12 @@ class TestBranchingTopology:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
         g_right = torch_rms_norm(g_root, ws[2].float())
-        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -942,7 +941,7 @@ class TestBranchingTopology:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     @stress_test_program_cache
@@ -977,19 +976,18 @@ class TestBranchingTopology:
                 right,
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_root = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_root, ws[1].float())
-        leaves = [ll_deep, lr, right]
         goldens = [
             torch_rms_norm(torch_rms_norm(g_left, ws[2].float()), ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
             torch_rms_norm(g_root, ws[5].float()),
         ]
         for i, label in enumerate(["LL(deep)", "LR", "Right"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
     @stress_test_program_cache
     def test_overlapping_branches_error(self, device):
@@ -1049,15 +1047,16 @@ class TestParallelExecution:
             rms_tails.append(rms)
             chains.append(Sequential(ln, rms))
 
+        chain_outs = []
         for ch in chains:
-            ch.run()
+            chain_outs.append(ch.run())
 
         for i in range(n_chains):
             golden = torch_rms_norm(
                 torch_layer_norm(torch_inputs[i].float(), t["torch_weights"][0].float()),
                 t["torch_weights"][1].float(),
             )
-            check_pcc(golden, rms_tails[i].output_tensors[0], label=f"chain {i}")
+            check_pcc(golden, chain_outs[i][0], label=f"chain {i}")
 
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @stress_test_program_cache
@@ -1094,14 +1093,14 @@ class TestParallelExecution:
         fused = Sequential(ln1, rms, ln2)
 
         mm.launch()
-        fused.run()
+        [out_ln2] = fused.run()
 
         check_pcc(torch_a @ torch_b, mm.output_tensors[0], pcc=0.99, label="matmul")
 
         g = torch_layer_norm(t["torch_input"].float(), t["torch_weights"][0].float(), t["torch_biases"][0].float())
         g = torch_rms_norm(g, t["torch_weights"][1].float())
         golden = torch_layer_norm(g, t["torch_weights"][2].float(), t["torch_biases"][1].float())
-        check_pcc(golden, ln2.output_tensors[0], label="3-phase chain")
+        check_pcc(golden, out_ln2, label="3-phase chain")
 
     @stress_test_program_cache
     def test_two_disjoint_trees_parallel(self, device):
@@ -1145,19 +1144,16 @@ class TestParallelExecution:
         b_right = slice_desc(stem_b.output_tensors[0], [0, 0, 0, 0], [1, 1, 128, 64], core_range_set=cores(6, 0, 7, 0))
         tree_b = Sequential(stem_b, Parallel(b_left, b_right))
 
-        # Launch both in parallel
-        tree_a.run()
-        tree_b.run()
+        [out_a_left, out_a_right] = tree_a.run()
+        [out_b_left, out_b_right] = tree_b.run()
 
-        # Verify tree A (read from individual leaf ops)
         g_stem_a = torch_rms_norm(torch_input_a.float(), torch_w.float())
-        check_pcc(g_stem_a[:, :, :, :64], a_left.output_tensors[0], pcc=0.97, label="tree_a slice")
-        check_pcc(torch_rms_norm(g_stem_a, torch_w.float()), a_right.output_tensors[0], pcc=0.97, label="tree_a RMS")
+        check_pcc(g_stem_a[:, :, :, :64], out_a_left, pcc=0.97, label="tree_a slice")
+        check_pcc(torch_rms_norm(g_stem_a, torch_w.float()), out_a_right, pcc=0.97, label="tree_a RMS")
 
-        # Verify tree B (read from individual leaf ops)
         g_stem_b = torch_rms_norm(torch_input_b.float(), torch_w.float())
-        check_pcc(torch_rms_norm(g_stem_b, torch_w.float()), b_left.output_tensors[0], pcc=0.97, label="tree_b RMS")
-        check_pcc(g_stem_b[:, :, :, :64], b_right.output_tensors[0], pcc=0.97, label="tree_b slice")
+        check_pcc(torch_rms_norm(g_stem_b, torch_w.float()), out_b_left, pcc=0.97, label="tree_b RMS")
+        check_pcc(g_stem_b[:, :, :, :64], out_b_right, pcc=0.97, label="tree_b slice")
 
     @stress_test_program_cache
     def test_full_grid_stress(self, device):
@@ -1279,30 +1275,26 @@ class TestParallelExecution:
 
         # Launch all 7
         mm1.launch()
-        chain1.run()
-        chain2.run()
-        chain3.run()
-        tree.run()
+        [out_rms1] = chain1.run()
+        [out_ln2] = chain2.run()
+        [out_rms3c] = chain3.run()
+        [out_br_a, out_br_b] = tree.run()
         mm2.launch()
         single.launch()
 
         w, b = torch_w.float(), torch_b.float()
         check_pcc(torch_mm1_a @ torch_mm1_b, mm1.output_tensors[0], pcc=0.99, label="MM1")
-        check_pcc(
-            torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), rms1.output_tensors[0], label="LN->RMS"
-        )
-        check_pcc(
-            torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), ln2.output_tensors[0], label="RMS->LN"
-        )
+        check_pcc(torch_rms_norm(torch_layer_norm(torch_norms[0].float(), w), w), out_rms1, label="LN->RMS")
+        check_pcc(torch_layer_norm(torch_rms_norm(torch_norms[1].float(), w), w, b), out_ln2, label="RMS->LN")
         check_pcc(
             torch_rms_norm(torch_rms_norm(torch_norms[2].float(), w) @ torch_mm3_b.float(), w),
-            rms3c.output_tensors[0],
+            out_rms3c,
             label="RMS->MM->RMS",
         )
 
         g_stem = torch_rms_norm(torch_stem_in.float(), w)
-        check_pcc(torch_rms_norm(g_stem, w), br_a.output_tensors[0], label="tree A")
-        check_pcc(torch_rms_norm(g_stem, w), br_b.output_tensors[0], label="tree B")
+        check_pcc(torch_rms_norm(g_stem, w), out_br_a, label="tree A")
+        check_pcc(torch_rms_norm(g_stem, w), out_br_b, label="tree B")
 
         check_pcc(torch_mm2_a @ torch_mm2_b, mm2.output_tensors[0], pcc=0.99, label="MM2")
         check_pcc(torch_rms_norm(torch_norms[3].float(), w), single.output_tensors[0], pcc=0.99, label="single RMS")
@@ -1593,21 +1585,20 @@ class TestDocExample:
                 Sequential(op3, op6),
             ),
         )
-        fused.run()
+        [out_op4, out_op5, out_op6] = fused.run()
 
-        # Golden
         g1 = torch.matmul(torch_a.float(), torch_b1.float())
         g_left = g1[:, :, :, :128]
         g_right = g1[:, :, :, 128:]
 
-        check_pcc(torch.matmul(g_left, torch_b4.float()), op4.output_tensors[0], pcc=0.97, label="op4 matmul")
+        check_pcc(torch.matmul(g_left, torch_b4.float()), out_op4, pcc=0.97, label="op4 matmul")
         check_pcc(
             torch_layer_norm(g_left, torch_ln_w.float(), torch_ln_bias.float()),
-            op5.output_tensors[0],
+            out_op5,
             pcc=0.97,
             label="op5 LN",
         )
-        check_pcc(torch_rms_norm(g_right, torch_rms_w.float()), op6.output_tensors[0], pcc=0.97, label="op6 RMS")
+        check_pcc(torch_rms_norm(g_right, torch_rms_w.float()), out_op6, pcc=0.97, label="op6 RMS")
 
 
 # ===========================================================================
@@ -1771,7 +1762,6 @@ class TestDeepSeekV3:
                 label=f"KV persistent iter {i}",
             )
 
-    @pytest.mark.skip(reason="Manual profiling benchmark — not for CI")
     def test_q_kv_rms_norm_profile(self, device):
         """Profile fused-inline vs fused-persistent vs unfused (100 trials × 100 iters)."""
         import statistics
@@ -1802,8 +1792,8 @@ class TestDeepSeekV3:
             q=rms_norm.rms_norm(program_config=s["q_pc"], **q_norm_kw),
             kv=rms_norm.rms_norm(program_config=s["kv_pc"], **kv_norm_kw),
         )
-        fused_persistent.q.update(input_tensor=tt_q_base)
-        fused_persistent.kv.update(input_tensor=tt_kv_base)
+        fused_persistent.q.update(tt_q_base)
+        fused_persistent.kv.update(tt_kv_base)
         for _ in range(2):
             fused_persistent.run()
 
@@ -1837,13 +1827,13 @@ class TestDeepSeekV3:
             ttnn.synchronize_device(device)
             inline_times.append(time.perf_counter() - t0)
 
-        # --- fused persistent ---
+        # --- fused persistent (positional update to match real model usage) ---
         persistent_times = []
         for _ in range(N_TRIALS):
             t0 = time.perf_counter()
             for _ in range(N_ITERS):
-                fused_persistent.q.update(input_tensor=tt_q_base)
-                fused_persistent.kv.update(input_tensor=tt_kv_base)
+                fused_persistent.q.update(tt_q_base)
+                fused_persistent.kv.update(tt_kv_base)
                 fused_persistent.run()
             ttnn.synchronize_device(device)
             persistent_times.append(time.perf_counter() - t0)
@@ -2250,13 +2240,13 @@ class TestPersistentMode:
             tt_in = ttnn.from_torch(torch_in, device=device, layout=ttnn.TILE_LAYOUT)
 
             fused.stem.update(tt_in)
-            fused.run()
+            [out_a, out_b] = fused.run()
 
             g_stem = torch_rms_norm(torch_in.float(), ws[0].float())
             g_a = torch_rms_norm(g_stem, ws[1].float())
             g_b = torch_rms_norm(g_stem, ws[2].float())
-            check_pcc(g_a, fused.a.output_tensors[0], pcc=0.98, label=f"branch_a iter {i}")
-            check_pcc(g_b, fused.b.output_tensors[0], pcc=0.98, label=f"branch_b iter {i}")
+            check_pcc(g_a, out_a, pcc=0.98, label=f"branch_a iter {i}")
+            check_pcc(g_b, out_b, pcc=0.98, label=f"branch_b iter {i}")
 
 
 # ===========================================================================
@@ -2357,15 +2347,15 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            fused.run()
+            [out_a, out_b] = fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                a.output_tensors[0],
+                out_a,
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                b.output_tensors[0],
+                out_b,
                 label=f"branch B run {run}",
             )
 
@@ -2409,13 +2399,12 @@ class TestAsymmetricBarrier:
                 Sequential(right, Parallel(rl, rr)),
             ),
         )
-        fused.run()
+        outs = fused.run()
 
         ws = t["torch_weights"]
         g_stem = torch_rms_norm(t["torch_input"].float(), ws[0].float())
         g_left = torch_rms_norm(g_stem, ws[1].float())
         g_right = torch_rms_norm(g_stem, ws[2].float())
-        leaves = [ll, lr, rl, rr]
         goldens = [
             torch_rms_norm(g_left, ws[3].float()),
             torch_rms_norm(g_left, ws[4].float()),
@@ -2423,7 +2412,7 @@ class TestAsymmetricBarrier:
             torch_rms_norm(g_right, ws[6].float()),
         ]
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
-            check_pcc(goldens[i], leaves[i].output_tensors[0], label=label)
+            check_pcc(goldens[i], outs[i], label=label)
 
     @stress_test_program_cache
     def test_narrow_deep_left_wide_right(self, device):
@@ -2588,14 +2577,14 @@ class TestAsymmetricBarrier:
         g_stem = torch_rms_norm(t["torch_input"].float(), t["torch_weights"][0].float())
 
         for run in range(5):
-            fused.run()
+            [out_a, out_b] = fused.run()
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][1].float()),
-                a.output_tensors[0],
+                out_a,
                 label=f"branch A run {run}",
             )
             check_pcc(
                 torch_rms_norm(g_stem, t["torch_weights"][2].float()),
-                b.output_tensors[0],
+                out_b,
                 label=f"branch B run {run}",
             )

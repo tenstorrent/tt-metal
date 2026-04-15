@@ -180,11 +180,11 @@ class OpDescriptor:
             self._descriptor = descriptor
 
         if isinstance(input_tensors, dict):
-            self._input_names = tuple((k, i) for i, k in enumerate(input_tensors))
+            self._input_names = {k: i for i, k in enumerate(input_tensors)}
             self.input_tensors = list(input_tensors.values())
         else:
             self.input_tensors = input_tensors if input_tensors is not None else []
-            self._input_names = input_names
+            self._input_names = dict(input_names) if input_names else None
         self.output_tensors = output_tensors if output_tensors is not None else []
         self.name = name
         self._complete_fn = complete_fn
@@ -210,30 +210,26 @@ class OpDescriptor:
             desc.update(input_tensor=new_q)
             desc.update(input_a=new_a, input_b=new_b)
         """
-        if args and kwargs:
-            raise ValueError("update(): positional OR keyword arguments, not both")
         if args:
+            if kwargs:
+                raise ValueError("update(): positional OR keyword arguments, not both")
             for i, t in enumerate(args):
                 self.input_tensors[i] = t
         elif kwargs:
-            if self._input_names is None:
+            names = self._input_names
+            if names is None:
                 raise ValueError(
                     "Keyword update requires named inputs. " "This OpDescriptor was created without input_names."
                 )
-            name_to_idx = dict(self._input_names)
             for name, t in kwargs.items():
-                idx = name_to_idx.get(name)
+                idx = names.get(name)
                 if idx is None:
                     raise ValueError(
-                        f"Unknown input name {name!r} for {self.name!r} op. "
-                        f"Valid names: {sorted(name_to_idx.keys())}"
+                        f"Unknown input name {name!r} for {self.name!r} op. " f"Valid names: {sorted(names)}"
                     )
                 self.input_tensors[idx] = t
 
-        # Lazy materialization: first update() that fills all real tensor slots.
-        # _DeferredOutput entries are internal edges (resolved by Sequential);
-        # don't trigger materialization until they're replaced with real tensors.
-        if self.program_cache_key is None and self._complete_fn is not None:
+        if self._complete_fn is not None and self.program_cache_key is None:
             if all(t is not None and not isinstance(t, _DeferredOutput) for t in self.input_tensors):
                 self._materialize()
 
