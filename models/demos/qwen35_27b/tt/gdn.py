@@ -933,33 +933,16 @@ class TtGatedDeltaNet(LightweightModule):
         ttnn.deallocate(a_all)
         ttnn.deallocate(b_all)
 
-        # Reshape output: [num_pairs * seq_len, 1, Dv] → [seq_len, Nv_TP, Dv] per device
-        # CPU round-trip for head transpose (tile layout can't do this reshape correctly)
-        out_flat_cpu = ttnn.to_torch(prefill_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
+        # Reshape output on-device: [num_pairs * seq_len, 1, Dv] → [seq_len, Nv_TP, Dv]
+        # 4D reshape + permute (stays in TILE_LAYOUT, no CPU round-trip)
+        out_4d = ttnn.reshape(prefill_output, (1, num_pairs, seq_len, Dv))
         ttnn.deallocate(prefill_output)
-
-        out_4d_parts = []
-        for d in range(num_devices):
-            # [Nv_TP * seq_len, 1, Dv] → [Nv_TP, seq_len, Dv] → [seq_len, Nv_TP, Dv]
-            o_d = out_flat_cpu[d * num_pairs * seq_len : (d + 1) * num_pairs * seq_len]
-            o_d = o_d.squeeze(1).reshape(Nv_TP, seq_len, Dv).permute(1, 0, 2)
-            o_d = o_d.reshape(seq_len, self.value_dim_tp)
-            out_4d_parts.append(o_d.unsqueeze(0).unsqueeze(0))
-        out_4d = torch.cat(out_4d_parts, dim=0).contiguous()
-        del out_flat_cpu, out_4d_parts
-
-        chunk_out_dev = ttnn.from_torch(
-            out_4d.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
-        )
-        del out_4d
+        out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, seq_len, num_pairs, Dv]
+        out_4d = ttnn.reshape(out_4d, (1, 1, seq_len, self.value_dim_tp))
 
         # Batched RMS norm + SiLU gate (all tokens at once, no per-token loop)
-        out_r = ttnn.reshape(chunk_out_dev, (seq_len, Nv_TP, Dv))
-        ttnn.deallocate(chunk_out_dev)
+        out_r = ttnn.reshape(out_4d, (seq_len, Nv_TP, Dv))
+        ttnn.deallocate(out_4d)
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)
         ttnn.deallocate(out_r)
         out_f = ttnn.reshape(out_n, (1, 1, seq_len, self.value_dim_tp))
