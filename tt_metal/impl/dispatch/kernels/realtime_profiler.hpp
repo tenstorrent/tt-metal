@@ -80,20 +80,22 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* mailb
     ts->time_hi = time_hi;
 }
 
-// Set the program ID in both start and end timestamps of the appropriate ping-pong buffer.
-// Pops the program ID from the FIFO and sets it in the appropriate buffer.
-// If the FIFO is empty, the buffer retains its previous ID.
-// Reads mailbox state to determine which buffer to use (opposite of what's being pushed).
+// Pop a program ID from the FIFO without writing it to the buffer.
+// Returns the popped ID, or 0 if the FIFO was empty.
+// Call this early to maintain timing (FIFO pop involves L1 reads/writes),
+// then call write_buffer_id() later once the command type is known.
 FORCE_INLINE
-void set_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
+uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
     uint32_t id = 0;
-    if (!program_id_fifo_pop(mailbox, &id)) {
-        return;  // FIFO empty — keep whatever ID is already in the buffer
-    }
+    program_id_fifo_pop(mailbox, &id);
+    return id;
+}
 
-    // Determine buffer from mailbox state: write to buffer NOT being pushed
-    // PUSH_B means real-time profiler is pushing B, so write to A
-    // Otherwise (IDLE, PUSH_A) write to B
+// Write a program ID to both start and end timestamps of the current write buffer.
+// For GO_SIGNAL commands: pass the ID from pop_program_id().
+// For non-GO commands: pass 0 so the host filters them out.
+FORCE_INLINE
+void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox, uint32_t id) {
     RealtimeProfilerState state = static_cast<RealtimeProfilerState>(mailbox->realtime_profiler_state);
     bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
 

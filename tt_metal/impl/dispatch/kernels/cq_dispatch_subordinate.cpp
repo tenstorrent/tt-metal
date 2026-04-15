@@ -387,11 +387,13 @@ void kernel_main() {
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         record_realtime_timestamp(realtime_profiler_mailbox, true);
-        set_program_id(realtime_profiler_mailbox);
+        uint32_t popped_pid = pop_program_id(realtime_profiler_mailbox);
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
+        uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
+        write_buffer_id(realtime_profiler_mailbox, buffer_id);
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
