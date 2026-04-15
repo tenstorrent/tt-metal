@@ -286,6 +286,7 @@ def main():
             if declared_arch is None:
                 try:
                     import ttnn
+
                     device = ttnn.open_device(device_id=0)
                     declared_arch = str(device.arch()).split(".")[-1]
                     ttnn.close_device(device)

@@ -776,7 +776,6 @@ def _enrich_ops_from_device_logs(
                 for t in range(3):
                     assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
 
-
                 # Pipeline wait metrics
                 pipeline_wait_names = [
                     "SrcA Valid Wait",

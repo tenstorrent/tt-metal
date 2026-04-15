@@ -2157,10 +2157,14 @@ def compute_device_only_metrics(
     for t in [0, 1, 2]:
         stalls_col = f"value_THREAD_STALLS_{t}"
         reason_cols = [
-            f"value_WAITING_FOR_THCON_IDLE_{t}", f"value_WAITING_FOR_UNPACK_IDLE_{t}",
-            f"value_WAITING_FOR_PACK_IDLE_{t}", f"value_WAITING_FOR_MATH_IDLE_{t}",
-            f"value_WAITING_FOR_NONZERO_SEM_{t}", f"value_WAITING_FOR_NONFULL_SEM_{t}",
-            f"value_WAITING_FOR_MOVE_IDLE_{t}", f"value_WAITING_FOR_MMIO_IDLE_{t}",
+            f"value_WAITING_FOR_THCON_IDLE_{t}",
+            f"value_WAITING_FOR_UNPACK_IDLE_{t}",
+            f"value_WAITING_FOR_PACK_IDLE_{t}",
+            f"value_WAITING_FOR_MATH_IDLE_{t}",
+            f"value_WAITING_FOR_NONZERO_SEM_{t}",
+            f"value_WAITING_FOR_NONFULL_SEM_{t}",
+            f"value_WAITING_FOR_MOVE_IDLE_{t}",
+            f"value_WAITING_FOR_MMIO_IDLE_{t}",
             f"value_WAITING_FOR_SFPU_IDLE_{t}",
         ]
         if stalls_col in eff_pivot.columns and all(c in eff_pivot.columns for c in reason_cols):
