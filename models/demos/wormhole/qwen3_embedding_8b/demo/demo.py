@@ -22,6 +22,9 @@ Usage (pytest, picks device from MESH_DEVICE env):
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -sv -k "dp32"
     pytest .../demo.py -sv -k "dp1-batch1-seqlt512"   # batch=1, seq length < 512
 
+CSV log: each ``test_embedding_perf`` run appends one row to ``embedding_perf_results.csv``
+next to this file, or to the path in env ``TT_EMBEDDING_PERF_CSV`` (requires pandas).
+
 Short ISL: ``prefill_forward_text`` pads each prompt to ``get_padded_prefill_len(ISL)`` (ISL 32/64 → 128).
 So ``max_seq_len`` must be at least that padded length, not the raw token count.
 
@@ -32,7 +35,9 @@ import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 import torch
 from loguru import logger
@@ -67,6 +72,24 @@ MESH_SHAPES = {
     8: (1, 8),
     32: (8, 4),
 }
+
+_DEFAULT_EMBEDDING_PERF_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embedding_perf_results.csv")
+
+
+def append_embedding_perf_csv_row(row: dict, csv_path: str | None = None) -> str:
+    """Append one benchmark row to CSV (write header only if file is new or empty).
+
+    Path: ``csv_path``, or env ``TT_EMBEDDING_PERF_CSV``, or ``embedding_perf_results.csv`` beside this file.
+    Returns the path written.
+    """
+    path = csv_path or os.environ.get("TT_EMBEDDING_PERF_CSV", _DEFAULT_EMBEDDING_PERF_CSV)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    df = pd.DataFrame([row])
+    write_header = not os.path.isfile(path) or os.path.getsize(path) == 0
+    df.to_csv(path, mode="a", header=write_header, index=False)
+    return path
 
 
 def load_input_texts(input_file, batch_size):
@@ -592,7 +615,8 @@ def test_embedding_perf(
     # ---- Print results ----
     logger.info("")
     logger.info("=" * 60)
-    logger.info(f"  Qwen3-Embedding-8B Performance  ({tt_device_name})")
+    _perf_title = getattr(model_args, "base_model_name", None) or MODEL_NAME.rsplit("/", 1)[-1]
+    logger.info(f"  {_perf_title} Performance  ({tt_device_name})")
     logger.info("=" * 60)
     logger.info(f"  Data parallel:        {data_parallel}")
     logger.info(f"  Global batch size:    {batch_size}")
@@ -612,6 +636,34 @@ def test_embedding_perf(
     logger.info(f"  Avg tokens/s:         {tokens_per_sec_avg:.0f}")
     logger.info(f"  Best tokens/s:        {tokens_per_sec_best:.0f}")
     logger.info("=" * 60)
+
+    perf_csv_row = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "test_id": test_id,
+        "device": tt_device_name,
+        "num_devices": num_devices,
+        "model_name": getattr(model_args, "base_model_name", None) or getattr(model_args, "model_name", MODEL_NAME),
+        "batch_size": batch_size,
+        "batch_per_dp": batch_per_dp,
+        "data_parallel": data_parallel,
+        "input_seq_len": isl,
+        "max_seq_len": max_seq_len,
+        "total_input_tokens": total_input_tokens,
+        "num_iterations": num_iterations,
+        "compile_prefill_s": measurements["compile_prefill"],
+        "build_model_s": measurements["build_model_time"],
+        "avg_prefill_ms": avg_prefill_time * 1000.0,
+        "best_prefill_ms": best_prefill_time * 1000.0,
+        "embeddings_per_sec_avg": measurements["embeddings/s_avg"],
+        "embeddings_per_sec_best": measurements["embeddings/s_best"],
+        "tokens_per_sec_avg": measurements["prefill_t/s_avg"],
+        "tokens_per_sec_best": measurements["prefill_t/s_best"],
+    }
+    try:
+        csv_path = append_embedding_perf_csv_row(perf_csv_row)
+        logger.info(f"Appended perf row to {csv_path}")
+    except (OSError, ImportError) as e:
+        logger.warning(f"Could not append embedding perf CSV: {e}")
 
     # ---- Cosine similarity sanity check (only for real text inputs) ----
     if data_parallel <= 1 and embeddings is not None and batch_size >= 2:
@@ -674,6 +726,7 @@ if __name__ == "__main__":
         texts = load_input_texts(None, args.batch_size)
         optimizations = lambda ma: DecodersPrecision.performance(ma.n_layers, ma.model_name)
 
+        t_build0 = time.perf_counter()
         generator, model_args, tokenizer, kv_caches, page_table = prepare_embedding_model(
             device,
             global_batch_size=args.batch_size,
@@ -682,12 +735,15 @@ if __name__ == "__main__":
             page_params=page_params,
             data_parallel=1,
         )
+        build_model_s = time.perf_counter() - t_build0
 
         input_ids, prompt_lens = tokenize_and_pad(tokenizer, texts, args.max_seq_len)
         total_tokens = sum(prompt_lens)
 
         logger.info("Compile run...")
+        t_comp0 = time.perf_counter()
         _ = run_embedding_prefill(generator, input_ids, page_table, kv_caches, prompt_lens, True, True)
+        compile_prefill_s = time.perf_counter() - t_comp0
 
         logger.info(f"Benchmarking {args.iterations} iterations...")
         times = []
@@ -709,6 +765,35 @@ if __name__ == "__main__":
         logger.info(
             f"Best: {best_t * 1000:.1f}ms | {args.batch_size / best_t:.1f} emb/s | {total_tokens / best_t:.0f} tok/s"
         )
+
+        tt_name = determine_device_name(device)
+        cli_csv_row = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "test_id": "standalone-cli",
+            "device": tt_name,
+            "num_devices": 1,
+            "model_name": getattr(model_args, "base_model_name", None) or getattr(model_args, "model_name", MODEL_NAME),
+            "batch_size": args.batch_size,
+            "batch_per_dp": args.batch_size,
+            "data_parallel": 1,
+            "input_seq_len": args.max_seq_len,
+            "max_seq_len": args.max_seq_len,
+            "total_input_tokens": total_tokens,
+            "num_iterations": args.iterations,
+            "compile_prefill_s": compile_prefill_s,
+            "build_model_s": build_model_s,
+            "avg_prefill_ms": avg_t * 1000.0,
+            "best_prefill_ms": best_t * 1000.0,
+            "embeddings_per_sec_avg": args.batch_size / avg_t,
+            "embeddings_per_sec_best": args.batch_size / best_t,
+            "tokens_per_sec_avg": total_tokens / avg_t,
+            "tokens_per_sec_best": total_tokens / best_t,
+        }
+        try:
+            csv_path = append_embedding_perf_csv_row(cli_csv_row)
+            logger.info(f"Appended perf row to {csv_path}")
+        except (OSError, ImportError) as e:
+            logger.warning(f"Could not append embedding perf CSV: {e}")
 
         profiler.end("run")
 
