@@ -74,8 +74,10 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33) — read_batch_size not used by writer
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -100,9 +102,9 @@ void kernel_main() {
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling).
     // num_cores = effective_num_links = min(num_links, 4).
-    constexpr uint32_t MAX_BARRIER_CORES = 4;
-    ASSERT(num_cores <= MAX_BARRIER_CORES);
-    uint64_t all_core_barrier_noc_addrs[MAX_BARRIER_CORES];
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    ASSERT(num_cores <= MAX_WORKER_CORES);
+    uint64_t all_core_barrier_noc_addrs[MAX_WORKER_CORES];
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -201,6 +203,7 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
+        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);

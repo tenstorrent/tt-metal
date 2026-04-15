@@ -149,8 +149,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    constexpr uint32_t MAX_BARRIER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_BARRIER_CORES);
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -179,7 +179,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         mesh_coordinate[1],
         sender_cores);
 
-    // Must match the read_batch_size constexpr in reader_dispatch.cpp kernel.
     constexpr uint32_t read_batch_size = 8;
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
@@ -356,6 +355,9 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         l1_alignment,
         static_cast<uint32_t>(operation_attributes.num_links),
         static_cast<uint32_t>(topology),
+
+        // Batch configuration (1)
+        read_batch_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors

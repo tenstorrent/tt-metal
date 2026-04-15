@@ -18,6 +18,7 @@
     DebugPrinter()
 #endif
 
+// Signal last element to writer to break out of loop
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
@@ -73,8 +74,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(33);
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -161,7 +165,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
-    constexpr uint32_t read_batch_size = 8;
     cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
@@ -226,7 +229,7 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
-                        // Push route_info
+                        // Push route info to writer
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
@@ -236,7 +239,7 @@ void kernel_main() {
                         route_info[3] = 0;
                         cb_push_back(cb_route_info_id, 1);
 
-                        // Copy output payload from scratch (L1) into output CB for writer
+                        // Push output payload to writer
                         cb_reserve_back(cb_output_for_writer_id, 1);
                         uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
                         noc_async_read(

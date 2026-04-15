@@ -88,8 +88,10 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(46);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 48) — read_batch_size not used by writer
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -183,6 +185,7 @@ void kernel_main() {
                         << ENDL();
 
 #ifdef DEST_CHIP_ID
+        // Send payload
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
@@ -193,6 +196,7 @@ void kernel_main() {
             (int)aligned_output_page_size,
             l1_alignment);
 
+        // Send metadata
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             metadata_addr_gen,
@@ -202,6 +206,7 @@ void kernel_main() {
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);

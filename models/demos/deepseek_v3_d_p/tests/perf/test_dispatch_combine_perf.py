@@ -5,6 +5,9 @@
 """
 Performance test for dispatch and combine operations.
 
+TODO: Refactor to use run_model_device_perf_test_with_merge from models.perf.device_perf_utils
+once it is upstreamed from mbezulj/2603-moe-glx-perf-test branch. Also add perf test to BH LB CI pipeline.
+
 Measures device-side kernel durations via the Tracy device profiler for
 dispatch and combine operations across Linear vs Ring topologies.
 

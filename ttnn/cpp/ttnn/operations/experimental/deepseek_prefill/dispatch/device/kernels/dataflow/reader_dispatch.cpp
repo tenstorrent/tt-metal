@@ -86,8 +86,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(46);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 48)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(48);
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -153,7 +156,6 @@ void kernel_main() {
     int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
 
     // Set up batched scratch buffers
-    constexpr uint32_t read_batch_size = 8;
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
     cb_reserve_back(cb_weights_id, read_batch_size);
@@ -238,7 +240,7 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
 
-                        // Push route_info
+                        // Push route info to writer
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
@@ -248,14 +250,14 @@ void kernel_main() {
                         route_info[3] = 0;
                         cb_push_back(cb_route_info_id, 1);
 
-                        // Copy payload from input scratch (L1) into payload CB for writer
+                        // Push payload to writer
                         cb_reserve_back(cb_payload_for_writer_id, 1);
                         uint32_t payload_dst = get_write_ptr(cb_payload_for_writer_id);
                         noc_async_read(get_noc_addr(input_scratch_addr), payload_dst, aligned_input_page_size);
                         noc_async_read_barrier();
                         cb_push_back(cb_payload_for_writer_id, 1);
 
-                        // Push metadata
+                        // Push metadata to writer
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
                         volatile tt_l1_ptr int32_t* meta_dst =
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));

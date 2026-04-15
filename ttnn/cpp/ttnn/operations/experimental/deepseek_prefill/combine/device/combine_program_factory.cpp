@@ -144,14 +144,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    // MAX_BARRIER_CORES: kernel writer_combine.cpp sizes its barrier address array to this limit.
-    constexpr uint32_t MAX_BARRIER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_BARRIER_CORES);
+    // Maximum worker cores: one per fabric link direction.
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
-        effective_num_links <= MAX_BARRIER_CORES,
-        "effective_num_links {} exceeds MAX_BARRIER_CORES {} (kernel barrier array limit)",
+        effective_num_links <= MAX_WORKER_CORES,
+        "effective_num_links {} exceeds MAX_WORKER_CORES {} (kernel barrier array limit)",
         effective_num_links,
-        MAX_BARRIER_CORES);
+        MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -176,7 +176,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
     auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
 
-    // Must match the read_batch_size constexpr in reader_combine.cpp kernel.
     constexpr uint32_t read_batch_size = 8;
 
     // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
@@ -294,6 +293,9 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         l1_alignment,
         static_cast<uint32_t>(num_links),
         static_cast<uint32_t>(topology),
+
+        // Batch configuration (1)
+        read_batch_size,
     };
 
     // Append TensorAccessorArgs for all 4 tensors
