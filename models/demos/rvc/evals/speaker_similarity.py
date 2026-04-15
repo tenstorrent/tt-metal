@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,7 @@ import torch.nn.functional as F
 
 DEFAULT_BACKEND = "transformers_wavlm_xvector"
 DEFAULT_SPEAKER_ENCODER = "microsoft/wavlm-base-plus-sv"
+BASE_AUDIO_DIRECTORY = "/root/tt-metal2/models/demos/rvc/data"
 
 
 class SpeakerEmbeddingBackendError(RuntimeError):
@@ -56,7 +58,15 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
     return float(np.dot(reference, candidate) / denom)
 
 
-def _load_audio_16khz_mono(audio_path: str | Path) -> torch.Tensor:
+def _resolve_audio_path(audio_filename: str) -> Path:
+    base_directory = os.path.abspath(BASE_AUDIO_DIRECTORY)
+    candidate_path = os.path.abspath(os.path.join(base_directory, os.fspath(audio_filename)))
+    if os.path.commonpath([base_directory, candidate_path]) != base_directory:
+        raise ValueError(f"Audio file must be located under {base_directory}")
+    return Path(candidate_path)
+
+
+def _load_audio_16khz_mono(audio_path: Path) -> torch.Tensor:
     if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
         raise SpeakerEmbeddingBackendError(
             "Audio loading for speaker similarity requires optional dependencies. "
@@ -66,11 +76,10 @@ def _load_audio_16khz_mono(audio_path: str | Path) -> torch.Tensor:
     import librosa
     import soundfile as sf
 
-    path = Path(audio_path).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Audio file does not exist: {path}")
+    if not audio_path.exists() or not audio_path.is_file():
+        raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
 
-    with path.open("rb") as audio_file:
+    with audio_path.open("rb") as audio_file:
         audio, sample_rate = sf.read(audio_file)
     if audio.ndim == 2:
         audio = np.mean(audio, axis=1)
@@ -116,13 +125,14 @@ def _load_transformers_wavlm_encoder(model_id: str, device: str):
 
 
 def compute_speaker_embedding(
-    audio_path: str | Path,
+    audio_filename: str,
     *,
     backend: str = DEFAULT_BACKEND,
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> np.ndarray:
-    waveform = _load_audio_16khz_mono(audio_path)
+    resolved_audio_path = _resolve_audio_path(audio_filename)
+    waveform = _load_audio_16khz_mono(resolved_audio_path)
 
     if backend == "speechbrain_ecapa":
         classifier = _load_speechbrain_encoder(model_id=model_id, device=device)
@@ -150,8 +160,8 @@ def compute_speaker_embedding(
 
 
 def compute_speaker_similarity(
-    source_audio_path: str | Path,
-    generated_audio_path: str | Path,
+    source_audio_path: str,
+    generated_audio_path: str,
     *,
     backend: str = DEFAULT_BACKEND,
     model_id: str = DEFAULT_SPEAKER_ENCODER,
@@ -171,8 +181,8 @@ def compute_speaker_similarity(
     )
     similarity = cosine_similarity(source_embedding, generated_embedding)
     return SpeakerSimilarityResult(
-        source_audio_path=str(source_audio_path),
-        generated_audio_path=str(generated_audio_path),
+        source_audio_path=str(_resolve_audio_path(source_audio_path)),
+        generated_audio_path=str(_resolve_audio_path(generated_audio_path)),
         backend=backend,
         model_id=model_id,
         similarity=similarity,
