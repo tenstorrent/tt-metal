@@ -20,3 +20,7 @@
 #if SFPU_OP_SINH_INCLUDE
 #include "api/compute/eltwise_unary/sinh.h"
 #endif
+
+#if SFPU_OP_SOFTCAP_INCLUDE
+#include "api/compute/eltwise_unary/softcap.h"
+#endif
