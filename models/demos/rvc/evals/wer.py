@@ -52,8 +52,8 @@ def _load_audio_16khz_mono(audio_path: str | Path) -> np.ndarray:
     import librosa
     import soundfile as sf
 
-    path = Path(audio_path)
-    if not path.exists():
+    path = Path(audio_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Audio file does not exist: {path}")
 
     audio, sample_rate = sf.read(path)
