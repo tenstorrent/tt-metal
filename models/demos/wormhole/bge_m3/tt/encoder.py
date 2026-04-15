@@ -24,6 +24,7 @@ class BgeM3TransformerBlock(LightweightModule):
         attention_weights = build_attention_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
         mlp_weights = build_mlp_weights(state_dict, layer_num, dtype, ttnn.bfloat16)
         max_seq_len = getattr(args, "max_seq_len", None)
+        max_batch_size = getattr(args, "max_batch_size", None)
 
         self.attention = BgeM3Attention.from_config(
             BgeM3AttentionConfig(
@@ -40,6 +41,7 @@ class BgeM3TransformerBlock(LightweightModule):
                 output_dtype=dtype,
                 score_prg_config=None,
                 max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
             )
         )
         self.attention_norm = _build_optional_layer_norm(
@@ -47,6 +49,7 @@ class BgeM3TransformerBlock(LightweightModule):
             eps=args.norm_eps,
             mesh_device=mesh_device,
             max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
 
         self.feed_forward = BgeM3MLP.from_config(
@@ -62,6 +65,7 @@ class BgeM3TransformerBlock(LightweightModule):
                 wo_dtype=dtype,
                 activation_dtype=ttnn.bfloat16,
                 max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
             )
         )
         self.feed_forward_norm = _build_optional_layer_norm(
@@ -69,6 +73,7 @@ class BgeM3TransformerBlock(LightweightModule):
             eps=args.norm_eps,
             mesh_device=mesh_device,
             max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
@@ -96,6 +101,7 @@ def _build_optional_layer_norm(
     eps: float,
     mesh_device,
     max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
 ) -> LayerNorm1D | None:
     if layer_norm_weights is None:
         return None
@@ -107,5 +113,6 @@ def _build_optional_layer_norm(
             eps=eps,
             mesh_device=mesh_device,
             max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
     )

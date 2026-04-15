@@ -31,8 +31,9 @@ class LayerNorm1DConfig:
     # Optional input memcfg override
     input_memcfg: ttnn.MemoryConfig | None = None
 
-    # Compile-time max sequence (matches matmul L1 policy for layernorm output buffer).
+    # Compile-time envelope (same as matmul: batch×seq + seq cap for L1 vs DRAM).
     max_seq_len: int | None = None
+    max_batch_size: int | None = None
     output_memcfg: ttnn.MemoryConfig | None = None
 
     # Compute kernel config
@@ -96,7 +97,8 @@ class LayerNorm1D(LightweightModule):
         x = _load_input_device_tensor(x, cfg)
         assert self.weight is not None and self.bias is not None, "weights must be loaded before forward"
 
-        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(cfg.max_seq_len)
+        max_b = cfg.max_batch_size if cfg.max_batch_size is not None else 1
+        out_mem = cfg.output_memcfg or bge_m3_linear_activation_memory_config(cfg.max_seq_len, max_b)
         return ttnn.layer_norm(
             x,
             epsilon=cfg.eps,
@@ -184,7 +186,8 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
         )
 
     if config.output_memcfg is None:
-        to_set["output_memcfg"] = bge_m3_linear_activation_memory_config(config.max_seq_len)
+        max_b = config.max_batch_size if config.max_batch_size is not None else 1
+        to_set["output_memcfg"] = bge_m3_linear_activation_memory_config(config.max_seq_len, max_b)
 
     weight_dram = bge_m3_weight_dram_memory_config()
 

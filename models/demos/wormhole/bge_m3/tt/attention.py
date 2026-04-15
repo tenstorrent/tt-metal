@@ -111,6 +111,7 @@ class BgeM3AttentionConfig:
     output_compute_kernel_cfg: object | None = None
     # Compile-time max sequence length (selects Wormhole HiFi4 at S8192 for PCC).
     max_seq_len: int | None = None
+    max_batch_size: int | None = None
 
     @property
     def qkv_out_dim(self) -> int:
@@ -367,17 +368,10 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.output_dtype is None:
         to_set["output_dtype"] = ttnn.bfloat16
 
-    # Phase C: activation memory (L1 + core_grid path when max_seq_len is modest); weights use DRAM (Phase E).
     max_seq = config.max_seq_len
-    act_mem = bge_m3_linear_activation_memory_config(max_seq)
-    if config.qkv_memcfg is None:
-        to_set["qkv_memcfg"] = act_mem
-    if config.score_memcfg is None:
-        to_set["score_memcfg"] = act_mem
-    if config.output_memcfg is None:
-        to_set["output_memcfg"] = act_mem
+    max_batch = config.max_batch_size if config.max_batch_size is not None else 1
 
-    # Phase D: resolve single target device.
+    # Phase C: resolve single target device.
     param_devices = [
         param.device
         for param in (config.wqkv, config.bqkv, config.wo_weight, config.wo_bias)
@@ -398,6 +392,15 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
+
+    # Phase D: activation memory (single envelope: batch×seq + seq cap — device_kernels).
+    act_mem = bge_m3_linear_activation_memory_config(max_seq, max_batch)
+    if config.qkv_memcfg is None:
+        to_set["qkv_memcfg"] = act_mem
+    if config.score_memcfg is None:
+        to_set["score_memcfg"] = act_mem
+    if config.output_memcfg is None:
+        to_set["output_memcfg"] = act_mem
 
     if config.score_prg_config is None:
         q0, k0 = _sdpa_chunks_for_seq_len(128)
