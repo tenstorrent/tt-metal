@@ -301,17 +301,18 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
 
-    def _capture_trace_prefill_sampling(self, model_id, padded_batch):
+    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
         """Capture a trace for batched prefill post-processing: norm + lm_head + sampling.
 
-        Input buffer: [1, 1, padded_batch, full_dim] host → column-sharded to [1, 1, padded_batch, dim_per_device].
+        Input buffer: [1, 1, sampling_batch, full_dim] host → column-sharded to
+        [1, 1, sampling_batch, dim_per_device].
         Output: (tt_tokens, tt_log_probs) from sampling.
         """
         mesh_device = self.model_args[model_id].mesh_device
         full_dim = self.model_args[model_id].dim
 
         dummy_input = ttnn.from_torch(
-            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -324,7 +325,7 @@ class Generator(WarmupForwardMixin):
         logger.info("Done compiling prefill sampling")
 
         trace_input = ttnn.from_torch(
-            torch.zeros(1, 1, padded_batch, full_dim, dtype=torch.bfloat16),
+            torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -679,17 +680,21 @@ class Generator(WarmupForwardMixin):
                     sampling_module.reset_output_state()
 
                     user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
-                        logits, last_token_idx, padded_batch, prefill_seq_len
+                        logits,
+                        last_token_idx,
+                        padded_batch,
+                        prefill_seq_len,
+                        target_batch=sampling_batch,
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{padded_batch}"
+                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}"
                     if enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
                                 s_trace_id,
                                 s_trace_output,
                                 s_trace_input,
-                            ) = self._capture_trace_prefill_sampling(model_id, padded_batch)
+                            ) = self._capture_trace_prefill_sampling(model_id, sampling_batch)
                             self.trace_id_prefill_sampling[sampling_trace_key] = s_trace_id
                             self.trace_output_prefill_sampling[sampling_trace_key] = s_trace_output
                             self.trace_input_prefill_sampling[sampling_trace_key] = s_trace_input
