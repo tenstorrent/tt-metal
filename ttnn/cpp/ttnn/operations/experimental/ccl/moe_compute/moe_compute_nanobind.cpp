@@ -10,12 +10,17 @@
 
 #include "moe_compute_nanobind.hpp"
 #include "moe_compute.hpp"
+#include "device/kernels/moe_ring_common.h"
 
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 void bind_moe_compute(nb::module_& mod) {
+    // Bind the activation function enum
+    nb::enum_<::detail::MoEActivationFunction>(mod, "MoEActivationFunction")
+        .value("SILU", ::detail::MoEActivationFunction::SILU)
+        .value("SWIGLU", ::detail::MoEActivationFunction::SWIGLU);
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -38,7 +43,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("mux_core_range_set") = nb::none(),
         nb::arg("output_memory_config") = nb::none(),
         nb::arg("optional_output_tensor") = nb::none(),
-        nb::arg("optional_cross_device_semaphore") = nb::none());
+        nb::arg("optional_cross_device_semaphore") = nb::none(),
+        nb::arg("activation_type") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/device/kernels/moe_ring_common.h"
 
 namespace ttnn::experimental::prim {
 
@@ -22,6 +23,7 @@ struct MoEComputeParams {
     uint32_t output_height_shard_dim;
     uint32_t output_width_shard_dim;
     SelectiveReduceCombineParams combine_params;
+    ::detail::MoEActivationFunction activation_type = ::detail::MoEActivationFunction::SILU;  // Default to SILU
 
     // Same value as combine_params.axis (single source of truth)
     std::optional<uint32_t> cluster_axis() const { return combine_params.axis; }
@@ -33,6 +35,7 @@ struct MoEComputeParams {
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("output_width_shard_dim", output_width_shard_dim);
         attrs.emplace_back("combine_params", combine_params);
+        attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
         return attrs;
     }
 };

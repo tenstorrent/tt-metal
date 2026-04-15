@@ -13,9 +13,12 @@
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #endif
+
+namespace detail {
 
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
@@ -26,10 +29,44 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
+template <MoEActivationFunction activation>
+inline void pack_init_activation() {};
+
+template <>
+inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
+};
+
+template <>
+inline void pack_init_activation<MoEActivationFunction::SILU>() {
+    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+};
+
+template <MoEActivationFunction activation>
+inline void pack_compute_activation() {};
+
+template <>
+inline void pack_compute_activation<MoEActivationFunction::SILU>() {
+    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+};
+
+template <>
+inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+};
+
+}  // namespace detail
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr auto activation_type =
+        detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
@@ -155,8 +192,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Initialize SFPU for SILU and eltwise multiply
-            PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
@@ -165,7 +201,7 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            noc_semaphore_wait_min(
+            detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
@@ -207,13 +243,9 @@ void kernel_main() {
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                 //---------------------------------------------------------------------
-                // Apply SILU activation and then eltwise multiply
+                // Apply activation
                 //---------------------------------------------------------------------
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+                detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 

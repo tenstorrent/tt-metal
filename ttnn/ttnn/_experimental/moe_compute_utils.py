@@ -72,8 +72,6 @@ def map_shared_experts(
     devices = expert_mapping_tensor.shape[0]
     routed_experts = expert_mapping_tensor.shape[1]
 
-    routed_experts_per_device = routed_experts // devices
-
     shared_experts = len(shared_expert_ids_to_devices)
 
     shared_experts_per_device = get_shared_experts_per_device(shared_expert_ids_to_devices, devices)
