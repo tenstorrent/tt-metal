@@ -863,7 +863,7 @@ constexpr std::uint32_t get_dest_max_tiles()
  * W-stride from the packer config is in the same byte-oriented addressing units.
  */
 template <DstSync SYNC_MODE, bool ACCUM_MODE>
-inline std::uint32_t get_pack_dest_max_tiles()
+__attribute__((noinline)) std::uint32_t get_pack_dest_max_tiles()
 {
     constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;
 
