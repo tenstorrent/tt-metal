@@ -73,3 +73,45 @@ Source code comments state `param2 = -(pos_threshold)`, but mathematical analysi
 7. Discovered param2 comment discrepancy through mathematical verification
 8. Verified all SFPU identifiers via grep
 9. Wrote analysis file with full annotated source and mathematical proof
+
+---
+
+## Session Summary (softshrink)
+- **Operation**: softshrink
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS (with caveat: SFPU kernel is nuked -- analysis documents the missing state)
+- **Commit**: f55803b727
+- **Output File**: `.claude-analysis/softcap-1/softshrink_analysis.md`
+
+## Key Findings (softshrink)
+
+### Complete Nuke
+SOFTSHRINK's SFPU kernel was completely deleted in DEEP_NUKE_MANIFEST Phase 1 (commit `efdc0ad853`). Every layer is missing:
+- Compute API header (`softshrink.h`) -- deleted
+- LLK dispatch (`llk_math_eltwise_unary_sfpu_softshrink.h`) -- deleted
+- Core SFPU kernel (`ckernel_sfpu_softshrink.h`) -- deleted
+- Host dispatch (`get_op_init_and_func_parameterized`) -- no SOFTSHRINK case
+- SfpuType enum -- no softshrink entry
+
+### Surviving Infrastructure
+- `UnaryOpType::SOFTSHRINK` enum value (`unary_op_types.hpp:113`)
+- `REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(softshrink, SOFTSHRINK)` macro
+- `is_parametrized_type()` returning true for SOFTSHRINK
+- Python nanobind binding
+- Tests (would fail at runtime with TT_THROW)
+
+### Family Classification
+Softshrink is classified as "Piecewise Linear" family in the DEEP_NUKE_MANIFEST, same family as hardtanh, hardsigmoid, hardswish. The expected implementation would use SFPI conditionals (`v_if`/`v_endif`) with a single float parameter (lambda).
+
+### No Special Program Factory Handling
+Unlike HARDSHRINK (which allocates CB c_1 and packs runtime args), SOFTSHRINK has no special handling in `unary_program_factory.cpp`.
+
+## Timeline (softshrink)
+1. Read `unary_op_utils.cpp` -- found no SOFTSHRINK in `get_op_init_and_func_parameterized`
+2. Read `unary_op_utils.hpp` -- confirmed SOFTSHRINK is parametrized type
+3. Searched `tt_metal/hw/ckernels/` and `tt_metal/third_party/tt_llk/` -- no kernel files
+4. Read `DEEP_NUKE_MANIFEST.md` -- confirmed Phase 1 deletion
+5. Read analogous hardtanh kernel for expected pattern reference
+6. Read shared dispatch infrastructure (params, init, macros)
+7. Wrote analysis documenting nuked state with expected patterns
+8. Committed analysis and breadcrumbs
