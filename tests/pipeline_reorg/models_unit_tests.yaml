@@ -43,9 +43,6 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -57,9 +54,6 @@
   model: llama3.2-3b
   skus:
     wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -342,9 +336,6 @@
     wh_n150:
       timeout: 5
       tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
   owner_id: UBHPP2NDP # Joseph Chu
   team: models
 
@@ -419,9 +410,6 @@
   model: phi-3-mini
   skus:
     wh_n150:
-      timeout: 3
-      tier: 3
-    wh_n300:
       timeout: 3
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
