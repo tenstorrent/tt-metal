@@ -241,7 +241,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs}};
+    return {std::move(program), {unary_writer_kernel_id, unary_reader_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
@@ -388,7 +388,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
+    return {std::move(program), {writer_kernel_id, reader_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
