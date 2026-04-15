@@ -373,18 +373,17 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-- name: Mamba-2.8B e2e tests
-  cmd: |
-    pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
-  model: mamba-2.8b
-  skus:
-    wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
-  owner_id: U06ECNVR0EN # Evan Smal
-  team: models
+# See issue: https://github.com/tenstorrent/tt-metal/issues/42163
+# - name: Mamba-2.8B e2e tests
+#   cmd: |
+#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
+#   model: mamba-2.8b
+#   skus:
+#     wh_n150:
+#       timeout: 5
+#       tier: 3
+#     wh_n300:
+#       timeout: 5
+#       tier: 3
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
