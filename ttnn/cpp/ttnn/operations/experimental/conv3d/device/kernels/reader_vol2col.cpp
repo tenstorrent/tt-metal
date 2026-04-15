@@ -369,7 +369,7 @@ void kernel_main() {
 
     // Tensor accessor for input tensor
     constexpr auto in_args = TensorAccessorArgs<36>();
-    const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
+    const auto in_reader = TensorAccessor(in_args, in_addr);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
