@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Initialize binary operands unpacker - unpack 1 tile per MOP run
     _llk_unpack_binary_operands_init_(buf_desc_id_a, buf_desc_id_b, 1);
 
-    for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(params.INPUT_TILE_CNT); ++i)
     {
         _llk_unpack_binary_operands_(i, i);
     }
@@ -104,17 +104,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE, ACC_TO_DEST); // tiny-tile testing not yet supported
 
     // Perform eltwise binary operation for each tile
-    int tile_idx        = 0;
-    int remaining_tiles = params.INPUT_TILE_CNT;
-
-    while (remaining_tiles)
+    std::uint32_t dest_idx = 0;
+    for (std::uint32_t remaining_tiles = static_cast<std::uint32_t>(params.INPUT_TILE_CNT); remaining_tiles > 0;
+         remaining_tiles -= std::min(remaining_tiles, params.NUM_TILES_IN_BLOCK))
     {
-        for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile) // number of result tiles to accumulate
+        const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, params.NUM_TILES_IN_BLOCK);
+        for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
         {
-            _llk_math_eltwise_binary_(tile_idx);
+            _llk_math_eltwise_binary_(dest_idx);
         }
-        tile_idx++;
-        remaining_tiles -= std::min(remaining_tiles, static_cast<int>(params.NUM_TILES_IN_BLOCK));
+        ++dest_idx;
     }
 
     // Signal math completion
@@ -160,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_(buf_desc_id, 1);
 
     // Pack all result tiles
-    for (int i = 0; i < params.OUTPUT_TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(params.OUTPUT_TILE_CNT); ++i)
     {
         _llk_pack_(i, i);
     }

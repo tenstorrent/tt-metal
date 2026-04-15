@@ -425,6 +425,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -448,6 +449,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -471,6 +473,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -495,6 +498,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -519,6 +523,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -543,6 +548,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -635,6 +641,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -658,6 +665,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -681,6 +689,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -706,6 +715,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -731,6 +741,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }
@@ -756,6 +767,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
             if (this->arch_ == ARCH::QUASAR) {
                 return;
             }

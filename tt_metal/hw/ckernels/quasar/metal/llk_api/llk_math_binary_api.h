@@ -27,10 +27,11 @@ template <
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init(const std::uint32_t acc_to_dest = 0) {
+inline void llk_math_eltwise_binary_init(bool acc_to_dest = false) {
     static_assert(src_b_bcast_type == BroadcastType::NONE, "Broadcast types will be added in a future update");
 
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, false /* enable_direct_indexing */, binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, acc_to_dest);
+    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, binary_reuse_dest>(
+        ckernel::DEFAULT_TENSOR_SHAPE, acc_to_dest);
 }
 
 /**
@@ -52,13 +53,13 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init_with_operands(
-    const std::uint32_t operand_A, [[maybe_unused]] const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operand_A, [[maybe_unused]] const std::uint32_t operand_B, bool acc_to_dest = false) {
     static_assert(src_b_bcast_type == BroadcastType::NONE, "Broadcast types will be added in a future update");
 
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
 
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, false /* enable_direct_indexing */, binary_reuse_dest>(tensor_shape_A, acc_to_dest);
+    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, binary_reuse_dest>(tensor_shape_A, acc_to_dest);
 }
 
 /**

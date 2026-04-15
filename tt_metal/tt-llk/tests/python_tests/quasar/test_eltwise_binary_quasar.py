@@ -36,6 +36,7 @@ from helpers.test_variant_parameters import (
     OUTPUT_TILE_CNT,
     TEST_FACE_DIMS,
 )
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 ELTWISE_DIMENSIONS = [
@@ -43,7 +44,6 @@ ELTWISE_DIMENSIONS = [
     for dest_sync in (DestSync.Half, DestSync.Full)
     for dims in generate_unary_input_dimensions(DestAccumulation.No, dest_sync)
 ]
-from helpers.tile_shape import construct_tile_shape
 
 
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.

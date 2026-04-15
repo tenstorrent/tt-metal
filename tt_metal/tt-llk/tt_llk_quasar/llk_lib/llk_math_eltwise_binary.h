@@ -13,7 +13,7 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, std::uint8_t CLR_SRC, std::uint8_t SRCB_BROADCAST_TYPE, std::uint8_t ADDR_MOD>
-constexpr std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
+inline std::uint32_t eltwise_binary_func(std::uint8_t EN_DST_ACC)
 {
     if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWADD)
     {
@@ -238,8 +238,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
-    bool EN_DI                            = false,
-    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    bool EN_DI                            = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     if constexpr (EN_DI)
