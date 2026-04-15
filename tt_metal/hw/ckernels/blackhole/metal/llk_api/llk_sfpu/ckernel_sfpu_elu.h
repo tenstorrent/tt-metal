@@ -61,13 +61,15 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_elu(uint slope) {
     sfpi::vFloat alpha = Converter::as_float(slope);
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat orig_x = sfpi::dst_reg[0];
         // Clamp input to [ELU_CLAMP_LO, +inf) before polynomial eval (branchless)
+        sfpi::vFloat x = orig_x;
         sfpi::vFloat lo = ELU_CLAMP_LO;
         sfpi::vec_min_max(lo, x);  // x = max(x, ELU_CLAMP_LO)
         sfpi::vFloat result = alpha * piecewise_poly_eval<ELU_DEGREE>(ELU_COEFFS, x);
-        x = sfpi::dst_reg[0];  // Re-read original x for positive path
-        v_if(x >= 0.0f) { result = x; }
+        v_if(orig_x >= 0.0f) { result = orig_x; }
+        v_endif;
+        v_if(orig_x < ELU_CLAMP_LO) { result = -alpha; }
         v_endif;
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));

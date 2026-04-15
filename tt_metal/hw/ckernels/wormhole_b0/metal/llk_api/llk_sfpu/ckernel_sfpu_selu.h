@@ -81,6 +81,8 @@ inline void calculate_selu(uint scale, uint alpha) {
 #endif
         v_if(x >= 0.0f) { result = scale_val * x; }
         v_endif;
+        v_if(x < SELU_CLAMP_LO) { result = -1.7580993408e+00f; }
+        v_endif;
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }

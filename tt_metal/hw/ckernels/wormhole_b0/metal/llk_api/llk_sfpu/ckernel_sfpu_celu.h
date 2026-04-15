@@ -63,10 +63,13 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat x_rescaled = alpha_recip * x;
         // Clamp x_rescaled to [CELU_CLAMP_LO, +inf) before polynomial eval (branchless)
+        sfpi::vFloat orig_xr = x_rescaled;
         sfpi::vFloat lo = CELU_CLAMP_LO;
         sfpi::vec_min_max(lo, x_rescaled);  // x_rescaled = max(x_rescaled, CELU_CLAMP_LO)
         sfpi::vFloat result = alpha * piecewise_poly_eval<CELU_DEGREE>(CELU_COEFFS, x_rescaled);
         v_if(x >= 0.0f) { result = x; }
+        v_endif;
+        v_if(orig_xr < CELU_CLAMP_LO) { result = -alpha; }
         v_endif;
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
