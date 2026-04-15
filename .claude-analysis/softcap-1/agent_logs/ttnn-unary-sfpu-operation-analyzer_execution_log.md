@@ -197,3 +197,72 @@ Analyzed the SFPU kernel implementation for the `hardtanh` unary operation. The 
 
 ### Output
 - Analysis file: `.claude-analysis/softcap-1/hardtanh_analysis.md`
+
+---
+
+## Operation: tanhshrink
+## Date: 2026-04-15
+
+### Summary
+Analyzed the SFPU kernel implementation for the `tanhshrink` unary operation. Tanhshrink has a unique architecture: it uses dedicated compute kernels (two variants) rather than the standard `SFPU_OP_CHAIN_0` dispatch. Both variants compute `x - tanh(x)` by combining a tanh SFPU step with a subtraction step. However, the tanh component (`tanh_tile()`) calls `llk_math_eltwise_unary_sfpu_tanh()` which has NO implementation in the codebase. The analysis focuses on the fully-defined SFPU binary subtraction path (`_calculate_sfpu_binary_` with `BinaryOp::SUB`).
+
+### Key Findings
+- **Compute kernel**: Dedicated kernel (NOT `eltwise_sfpu.cpp`), two variants:
+  - `tanhshrink_kernel.cpp` -- hybrid FPU+SFPU: tanh via SFPU, then FPU binary_dest_reuse subtraction
+  - `tanhshrink_sfpu_kernel.cpp` -- pure SFPU: tanh via SFPU, then SFPU sub_binary_tile subtraction
+- **SFPU_OP_CHAIN_0**: NOT USED -- dedicated kernel with direct API calls
+- **Dispatch path**: BROKEN -- `get_op_init_and_func_default()` has no TANHSHRINK case (would throw)
+- **Tanh component**: BROKEN -- `llk_math_eltwise_unary_sfpu_tanh` is referenced but never defined; no `ckernel_sfpu_tanh.h` exists; `SfpuType::tanh` not in Metal enum
+- **Subtraction component (SFPU)**: FULLY DEFINED -- `_calculate_sfpu_binary_<APPROX, BinaryOp::SUB, 8>` in `ckernel_sfpu_binary.h`
+- **Subtraction component (FPU)**: FULLY DEFINED -- `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>` uses FPU math unit
+- **Kernel style**: SFPI abstractions (Style A) for binary subtraction
+- **WH/BH parity**: Identical `ckernel_sfpu_binary.h` on both platforms
+- **SFPU instructions** (binary subtraction only): SFPLOAD (2 reads), SFPMAD (subtraction as a*1.0+(-b)), SFPSTORE (1 write)
+- **Address mode**: ADDR_MOD_7 with all-zero increments (binary SFPU uses SfpuType::unused)
+- **Approximation mode**: `false` from `get_op_approx_mode()`; `tanh_tile()` uses default `fast_and_approx=false`
+
+### Files Read
+1. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+2. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp`
+3. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp`
+4. `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp`
+5. `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp`
+6. `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+7. `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.cpp`
+8. `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/tanhshrink_kernel.cpp`
+9. `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/tanhshrink_sfpu_kernel.cpp`
+10. `tt_metal/hw/inc/api/compute/compute_kernel_api.h`
+11. `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h`
+12. `tt_metal/hw/inc/api/compute/eltwise_binary.h`
+13. `tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h`
+14. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binop.h`
+15. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_init.h`
+16. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h`
+17. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_unary_sfpu_api.h`
+18. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h`
+19. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h`
+20. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+21. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+22. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h`
+23. `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h`
+24. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_sfpu.h`
+25. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_defs.h`
+26. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_activations.h`
+27. `tt_metal/third_party/tt_llk/tests/helpers/include/llk_sfpu_types.h`
+28. `.claude/references/sfpu-hardware-model.md`
+29. `.claude/references/logging/sfpu-operation-analyzer.md`
+
+### Verification Results
+- `_calculate_sfpu_binary_`: VERIFIED in `ckernel_sfpu_binary.h` (both WH and BH)
+- `_sfpu_binary_init_`: VERIFIED in `ckernel_sfpu_binary.h` (both WH and BH)
+- `sub_binary_tile`: VERIFIED in `eltwise_binary_sfpu.h`
+- `sub_binary_tile_init`: VERIFIED in `eltwise_binary_sfpu.h`
+- `tanh_tile`: VERIFIED as DECLARED in `compute_kernel_api.h` but calls UNDEFINED function
+- `llk_math_eltwise_unary_sfpu_tanh`: VERIFIED as UNDEFINED -- no implementation anywhere in codebase
+- No `ckernel_sfpu_tanh.h`: VERIFIED absent via find across all tt_metal directories
+- `SfpuType::tanh`: VERIFIED present in test helpers `llk_sfpu_types.h`, ABSENT from production Metal `llk_sfpu_types.h`
+- All file paths in abstraction layers table: VERIFIED
+- SFPU instructions: VERIFIED via SFPI abstraction mappings (dst_reg reads -> SFPLOAD, vFloat arithmetic -> SFPMAD, dst_reg writes -> SFPSTORE)
+
+### Output
+- Analysis file: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
