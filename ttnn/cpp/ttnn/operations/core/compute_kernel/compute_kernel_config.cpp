@@ -18,7 +18,7 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    tt::ARCH arch,
+    tt::ARCH,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
     const tt::tt_metal::MathFidelity default_fidelity,
     bool default_approx_mode,
@@ -26,8 +26,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_l1_acc,
     bool default_dst_full_sync_en,
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
-
     if (device_kernel_config.has_value()) {
         return device_kernel_config.value();
     }
@@ -98,8 +96,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 }
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
+    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,

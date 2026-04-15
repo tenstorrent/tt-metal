@@ -49,7 +49,7 @@ void kernel_main() {
 
     cb_push_back(cb_value, 1);
 
-    const auto s = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s = TensorAccessor(dst_args, output_addr);
 
     cb_wait_front(cb_value, 1);
 

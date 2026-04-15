@@ -31,7 +31,7 @@ void kernel_main() {
 
     // Tensor accessor
     // ---------------
-    const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr, dst_tile_size);
+    const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_dst(dst_cb_idx);
