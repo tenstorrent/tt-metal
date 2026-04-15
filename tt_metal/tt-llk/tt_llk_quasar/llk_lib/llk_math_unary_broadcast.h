@@ -170,14 +170,14 @@ inline void _llk_math_eltwise_unary_broadcast_d2b_mop_config_(const TileShape& t
  * @brief Init unary-broadcast math: addrmods, MOP when not unpack_to_dest, reset counters.
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast.
  * @tparam unpack_to_dest UNP path wrote to dest; MOVB2D MOP deferred to per-tile call.
- * @tparam is_fp32_dest_acc_en Same name/position as unpack init for uniform call sites. Must be false when
+ * @tparam EN_32BIT_DEST Same name/position as unpack init for uniform call sites. Must be false when
  *         unpack_to_dest is true (static_assert below).
  * @param tile_shape Passed to addrmod / MOP setup.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool EN_32BIT_DEST = false>
 inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
 {
-    static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
+    static_assert(!(unpack_to_dest && EN_32BIT_DEST), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tile_shape);
     if constexpr (!unpack_to_dest)
     {
@@ -190,11 +190,11 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TileShape& tile_shape)
  * @brief Run one tile of unary broadcast math: set dest write addr, optional D2B then MOVB2D when unpack_to_dest.
  * @tparam BROADCAST_TYPE Scalar, row, or column broadcast.
  * @tparam unpack_to_dest When true, runs D2B then MOVB2D replay for unpack-to-dest workaround.
- * @tparam is_fp32_dest_acc_en Same template args as init; combination unpack_to_dest + true is rejected in init.
+ * @tparam EN_32BIT_DEST Same template args as init; combination unpack_to_dest + true is rejected in init.
  * @param tile_idx Destination tile index within current dest bank (SyncHalf).
  * @param tile_shape Used when unpack_to_dest (D2B / MOVB2D MOP); otherwise ignored.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool EN_32BIT_DEST = false>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx, [[maybe_unused]] const TileShape& tile_shape)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);

@@ -16,12 +16,12 @@ using namespace ckernel;
  * works for any unpack resource
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
@@ -48,13 +48,13 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
-    // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
+    // If EN_32BIT_DEST and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
-    if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A && EN_32BIT_DEST)
     {
         temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
     }
-    else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
+    else if constexpr (UNP_SEL == p_unpacr::UNP_B && EN_32BIT_DEST)
     {
         temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
     }
@@ -65,12 +65,12 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 /**
  * @brief MOP configuration for unpack to SrcA or SrcB with a tile transpose, implements input A -> A^T or B -> B^T
  * @tparam UNP_SEL: Selects which unpacker resource to use, supports p_unpacr::UNP_A or p_unpacr::UNP_B
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
@@ -105,7 +105,7 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
         TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
-    if constexpr (IS_32b_DEST_EN)
+    if constexpr (EN_32BIT_DEST)
     {
         if constexpr (UNP_SEL == p_unpacr::UNP_A)
         {
@@ -165,13 +165,13 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
+ * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid for reuse_dest
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool EN_32BIT_DEST, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_init_(
     const std::uint32_t buf_desc_id, const std::uint32_t num_tiles = NUM_TILES, const std::uint32_t num_faces = NUM_FACES)
 {
@@ -192,11 +192,11 @@ inline void _llk_unpack_unary_operand_init_(
     }
     else if constexpr (TRANSPOSE_EN)
     {
-        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
     }
     else
     {
-        _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+        _llk_unpack_unary_operand_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, num_tiles);
     }
 }
 

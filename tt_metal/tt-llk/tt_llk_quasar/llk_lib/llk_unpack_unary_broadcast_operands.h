@@ -19,19 +19,19 @@ using namespace ckernel;
  * @tparam UNP_SEL Unpacker select; must be UNP_B unless unpack_to_dest (then UNP_A).
  * @tparam BROADCAST_TYPE SCALAR, COL, or ROW (not NONE).
  * @tparam unpack_to_dest When true, unpack targets math dest (UNP_A); otherwise srcB (UNP_B).
- * @tparam is_fp32_dest_acc_en Float32 dest accumulation enable. Must be false when unpack_to_dest is true
+ * @tparam EN_32BIT_DEST Float32 dest accumulation enable. Must be false when unpack_to_dest is true
  *         until that path is supported (enforced by static_assert below).
  * @param buf_desc_id Buffer descriptor for UNPACR source.
  * @param num_tiles Outer MOP loop count (tiles to unpack from L1).
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool EN_32BIT_DEST = false>
 inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
         unpack_to_dest || (UNP_SEL == p_unpacr::UNP_B),
         "UNP_SEL must be p_unpacr::UNP_B when unpack_to_dest is false - movA2D broadcast is not working on Quasar");
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
+    static_assert(!(unpack_to_dest && EN_32BIT_DEST), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
 
     const std::uint32_t MOP_OUTER_LOOP            = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP        = 1;
@@ -112,14 +112,14 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @tparam UNP_SEL Unpacker resource; must be UNP_B unless unpack_to_dest.
  * @tparam BROADCAST_TYPE SCALAR, COL, or ROW.
  * @tparam unpack_to_dest Route unpack to dest (UNP_A) vs srcB (UNP_B).
- * @tparam is_fp32_dest_acc_en Forwarded to mop_config; must be false when unpack_to_dest is true.
+ * @tparam EN_32BIT_DEST Forwarded to mop_config; must be false when unpack_to_dest is true.
  * @param buf_desc_id Buffer descriptor for UNPACR source.
  * @param num_tiles Number of tiles in the outer unpack loop.
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool EN_32BIT_DEST = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
-    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
+    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest, EN_32BIT_DEST>(buf_desc_id, num_tiles);
 }
 
 /**
