@@ -241,3 +241,87 @@ class TestFastDeviceToHost:
             print(f"  Iterations:    {n_iters}")
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+    def test_uint8_accuracy(self, mesh_device, num_links, device_params, topology):
+        """Compare on-device uint8 conversion against host float32 path."""
+        import torch
+
+        # VAE output is in [0, 1] after add(1)*0.5 + clamp
+        gen = torch.Generator().manual_seed(42)
+        ref = torch.rand(B, C, T, H, W, generator=gen, dtype=torch.bfloat16)
+        tt_tensor = _shard_to_device(ref, mesh_device)
+
+        # --- Host reference path: bf16 → float32 → ×255 → uint8 ---
+        host_uint8 = (ref.float() * 255).round().clamp(0, 255).to(torch.uint8)
+
+        # --- Device path: bf16 → ×255 → clamp → typecast(uint8) → D2H ---
+        tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+        tt_scaled = ttnn.multiply(tt_tile, 255.0)
+        tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+        tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
+        tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
+        # tt_uint8 = ttnn.to_layout(tt_uint8, ttnn.ROW_MAJOR_LAYOUT)
+
+        concat_dims = _make_concat_dims()
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+        device_uint8 = fast_device_to_host(tt_uint8, mesh_device, concat_dims, ccl_manager=ccl_manager)
+
+        diff = (device_uint8.int() - host_uint8.int()).abs()
+        max_err = diff.max().item()
+        mean_err = diff.float().mean().item()
+        pct_exact = (diff == 0).float().mean().item() * 100
+
+        print(f"\n--- uint8 accuracy (device vs host float32 path) ---")
+        print(f"  Max error:     {max_err}")
+        print(f"  Mean error:    {mean_err:.4f}")
+        print(f"  Exact match:   {pct_exact:.1f}%")
+        assert max_err <= 1, f"Max uint8 error {max_err} > 1"
+
+    def test_uint8_performance(self, mesh_device, num_links, device_params, topology):
+        """Measure on-device uint8 conversion + D2H + permute."""
+        import torch
+
+        n_iters = 10
+        gen = torch.Generator().manual_seed(42)
+        ref = torch.rand(B, C, T, H, W, generator=gen, dtype=torch.bfloat16)
+        tt_tensor = _shard_to_device(ref, mesh_device)
+        concat_dims = _make_concat_dims()
+        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+        def _convert_and_transfer():
+            tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+            tt_scaled = ttnn.multiply(tt_tile, 255.0)
+            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+            tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
+            tt_uint8 = ttnn.to_layout(tt_uint8, ttnn.ROW_MAJOR_LAYOUT)
+            return fast_device_to_host(
+                tt_uint8,
+                mesh_device,
+                concat_dims,
+                ccl_manager=ccl_manager,
+                permute=(0, 2, 3, 4, 1),
+            )
+
+        # Warmup
+        _convert_and_transfer()
+
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            _convert_and_transfer()
+        ttnn.synchronize_device(mesh_device)
+        end = time.perf_counter()
+
+        avg_s = (end - start) / n_iters
+        tensor_bytes = B * C * T * H * W  # uint8 = 1 byte
+        throughput_gbs = (tensor_bytes / avg_s) / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- on-device uint8 + D2H + permute performance (root=0) ---")
+            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
+            print(f"  Output shape:  (1, {T}, {H}, {W}, {C}) uint8 (BTHWC)")
+            print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB")
+            print(f"  Iterations:    {n_iters}")
+            print(f"  Average time:  {avg_s * 1000:.1f} ms")
+            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
