@@ -1108,7 +1108,6 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            subdevice_id=ttnn.SubDeviceId(0),
             use_broadcast=True,
         )
 
