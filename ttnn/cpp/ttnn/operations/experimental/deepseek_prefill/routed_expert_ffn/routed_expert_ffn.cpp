@@ -31,13 +31,17 @@ uint32_t best_in0_block_w(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    tt::tt_metal::DataType output_dtype) {
+    tt::tt_metal::DataType output_dtype,
+    uint32_t reserved_l1 = 0) {
     using namespace ttnn::operations::matmul::utilities;
 
     // get_estimated_size_of_cbs is an estimate that doesn't account for CB alignment
     // overhead and other internal allocations. Apply a 10% safety margin (same approach
     // as softmax op) so the chosen block width fits on all platforms.
+    // reserved_l1 accounts for L1 space consumed by other allocations (e.g. block-sharded
+    // output tensors) that aren't reflected in get_max_l1_space().
     uint32_t max_l1_space = static_cast<uint32_t>(get_max_l1_space(input_tensor_a) * 0.9);
+    max_l1_space = max_l1_space > reserved_l1 ? max_l1_space - reserved_l1 : 0;
     uint32_t interm_tile_size = estimate_interm_tile_size(compute_kernel_config, output_dtype);
 
     uint32_t best = 1;
@@ -140,12 +144,32 @@ ttnn::Tensor routed_expert_ffn_optim(
     const uint32_t gate_up_per_core_M = tt::div_up(M_tiles, gate_up_grid_y);
     const uint32_t gate_up_per_core_N = tt::div_up(N_gate_tiles, GRID_X);
 
-    (void)K_gate_tiles;
-    const uint32_t gate_up_in0_bw = 16;  // empirically optimal: smaller blocks pipeline better with DRAM reads
+    const bool is_wormhole = x.device()->arch() == tt::ARCH::WORMHOLE_B0;
 
-    // subblock: sharded output constraint requires out_subblock_w==per_core_N or out_subblock_h==1
-    // Use subblock(1, per_core_N) to satisfy constraint
-    const uint32_t gate_up_sub_w = gate_up_per_core_N;
+    uint32_t gate_up_in0_bw;
+    uint32_t gate_up_sub_w;
+    if (is_wormhole) {
+        // Wormhole has a smaller compute grid (8x10 vs 14x10), so per_core_N is larger
+        // and the hardcoded in0_block_w=16 overflows L1. Size dynamically, reserving
+        // space for the block-sharded output tensor that will also live in L1.
+        tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(x.dtype());
+        uint32_t output_shard_bytes = gate_up_per_core_M * gate_up_per_core_N * tt::tile_size(out_df);
+        gate_up_in0_bw = best_in0_block_w(
+            K_gate_tiles,
+            gate_up_per_core_M,
+            gate_up_per_core_N,
+            x,
+            gate_proj,
+            compute_kernel_config,
+            x.dtype(),
+            output_shard_bytes);
+        // Cap subblock to fit dest register (h*w <= 8)
+        gate_up_sub_w = largest_divisor(gate_up_per_core_N, 8);
+    } else {
+        // Blackhole: keep tuned values — empirically optimal on 14x10 grid
+        gate_up_in0_bw = 16;
+        gate_up_sub_w = gate_up_per_core_N;
+    }
 
     // Use x directly from DRAM — skip the DRAM→L1 copy to save device time.
     const auto& x_l1 = x;
@@ -280,10 +304,9 @@ ttnn::Tensor routed_expert_ffn(
     std::optional<ttnn::Tensor> output) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
 
-    // The optimized path uses manually configured matmul program configs that are tuned
-    // for Blackhole's larger L1. Fall back to default (auto-configured) matmuls on
-    // Wormhole and for large M.
-    if (M_tiles > 64 || x.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+    // Fall back to default (auto-configured) matmuls for very large M where the
+    // manually configured program configs would need too many grid rows.
+    if (M_tiles > 64) {
         return routed_expert_ffn_default(
             /*x=*/x,
             /*gate_proj=*/gate_proj,
