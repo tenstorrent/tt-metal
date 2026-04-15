@@ -6,6 +6,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
@@ -21,29 +22,37 @@ constexpr uint32_t largest_divisor(uint32_t n, uint32_t max_val) {
     return 1;
 }
 
-// Find best in0_block_w: largest divisor of K_tiles that keeps total CB usage within L1.
-// Total CB per core (double-buffered):
-//   in0 CB: per_core_M * in0_block_w * 2 * In0TileBytes
-//   in1 CB: per_core_N * in0_block_w * 2 * In1TileBytes
-//   out + partials: per_core_M * per_core_N * 2 * out_tile_bytes (fixed, not block_w dependent)
-// We budget ~1.2MB for in0+in1 CBs, leaving ~300KB for out/partials/overhead.
-constexpr uint32_t L1_CB_BUDGET_BYTES = 1200 * 1024;  // 1.2 MB
+// Find best in0_block_w: largest divisor of K_tiles that keeps estimated CB usage within
+// the device's actual L1 budget, queried via matmul utilities (same approach as matmul op).
+uint32_t best_in0_block_w(
+    uint32_t K_tiles,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType output_dtype) {
+    using namespace ttnn::operations::matmul::utilities;
 
-// Tile sizes per data type (bytes)
-constexpr uint32_t BFLOAT16_TILE_BYTES = 2048;   // 1024 * 2
-constexpr uint32_t BFLOAT8_B_TILE_BYTES = 1088;  // 256 * 4 + 16 * 4
-constexpr uint32_t BFLOAT4_B_TILE_BYTES = 576;   // 128 * 4 + 16 * 4
+    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t interm_tile_size = estimate_interm_tile_size(compute_kernel_config, output_dtype);
 
-template <uint32_t In0TileBytes, uint32_t In1TileBytes>
-[[maybe_unused]] constexpr uint32_t best_in0_block_w(uint32_t K_tiles, uint32_t per_core_M, uint32_t per_core_N) {
     uint32_t best = 1;
     for (uint32_t d = 1; d <= K_tiles; ++d) {
         if (K_tiles % d != 0) {
             continue;
         }
-        uint32_t in0_bytes = per_core_M * d * 2 * In0TileBytes;
-        uint32_t in1_bytes = per_core_N * d * 2 * In1TileBytes;
-        if (in0_bytes + in1_bytes <= L1_CB_BUDGET_BYTES) {
+        uint32_t estimated_size = get_estimated_size_of_cbs(
+            /*per_core_M=*/per_core_M,
+            /*per_core_N=*/per_core_N,
+            /*in0_block_w=*/d,
+            /*input_tensor_a=*/input_tensor_a,
+            /*input_tensor_b=*/input_tensor_b,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*interm_single_tile_size=*/interm_tile_size,
+            /*bias_single_tile_size=*/0);
+        if (estimated_size < max_l1_space) {
             best = d;
         }
     }
@@ -98,10 +107,6 @@ ttnn::Tensor routed_expert_ffn_default(
         /*optional_output_tensor=*/std::move(output));
 }
 
-// Template parameters: IN0/IN1 tile bytes.
-// Gate/up matmuls use In0TileBytes for x and In1TileBytes for weights.
-// Down matmul uses In0TileBytes for activated (same dtype as matmul output) and In1TileBytes for down_proj.
-template <uint32_t In0TileBytes, uint32_t In1TileBytes>
 ttnn::Tensor routed_expert_ffn_optim(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -215,8 +220,14 @@ ttnn::Tensor routed_expert_ffn_optim(
     const uint32_t down_per_core_M = tt::div_up(M_tiles, down_grid_y);
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
-    const uint32_t down_in0_bw =
-        best_in0_block_w<In0TileBytes, In1TileBytes>(K_down_tiles, down_per_core_M, down_per_core_N);
+    const uint32_t down_in0_bw = best_in0_block_w(
+        /*K_tiles=*/K_down_tiles,
+        /*per_core_M=*/down_per_core_M,
+        /*per_core_N=*/down_per_core_N,
+        /*input_tensor_a=*/activated,
+        /*input_tensor_b=*/down_proj,
+        /*compute_kernel_config=*/compute_kernel_config,
+        /*output_dtype=*/x.dtype());
 
     // subblock_w: largest divisor of per_core_N that fits in dest (h*w <= 8)
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
@@ -281,12 +292,7 @@ ttnn::Tensor routed_expert_ffn(
         "routed_expert_ffn: x must be BFLOAT16 or BFLOAT8_B, got {}",
         x.dtype());
 
-    if (x.dtype() == DataType::BFLOAT16) {
-        return routed_expert_ffn_optim<BFLOAT16_TILE_BYTES, BFLOAT8_B_TILE_BYTES>(
-            x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
-    }
-    return routed_expert_ffn_optim<BFLOAT8_B_TILE_BYTES, BFLOAT4_B_TILE_BYTES>(
-        x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
+    return routed_expert_ffn_optim(x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
