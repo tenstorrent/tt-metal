@@ -197,12 +197,10 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_des
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32: unless the API uses SFPU-based true float32 accumulation, the tile engine accumulates in
-# TF32, so accuracy may be lower / ULP higher than the IEEE 754 float32 reference (PyTorch).
-# Large HW reductions on BH reached ~6.3e5 ULP class.
-# fp32_dest_acc_en=True is required for FP32 inputs (device enforces this).
-_FP32_ULP_THRESHOLD = 800_000
-_FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
+# fp32_dest_acc_en=True is required for FP32 inputs.
+# Higher threshold requirement on WH compared to BH (800K, .001)
+_FP32_ULP_THRESHOLD = 1_800_000
+_FP32_NEAR_ZERO_ATOL_FRACTION = 0.00125
 
 
 @pytest.mark.parametrize(

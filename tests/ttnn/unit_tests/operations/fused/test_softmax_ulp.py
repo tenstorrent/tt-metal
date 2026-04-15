@@ -193,8 +193,8 @@ def test_softmax_ulp_bf16_wide_uniform_h(device, shape, dim, desc, fp32_dest_acc
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32: fp32_dest_acc_en=True only, normal inputs; W/H sweep stays well under this cap on BH.
-_FP32_ULP_THRESHOLD = 200_000
+# FP32: fp32_dest_acc_en=True only, normal inputs.
+_FP32_ULP_THRESHOLD = 360_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.001
 
 

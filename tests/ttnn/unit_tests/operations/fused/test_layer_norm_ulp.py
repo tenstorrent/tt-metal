@@ -74,6 +74,8 @@ def _make_ln_input(h: int, w: int, dtype: torch.dtype, distribution: str) -> tor
         return torch.randn((h, w), dtype=torch.float32).to(dtype)
     if distribution == "wide_uniform":
         return torch.empty((h, w), dtype=torch.float32).uniform_(-1e3, 1e3).to(dtype)
+    if distribution == "centered_uniform":
+        return torch.empty((h, w), dtype=torch.float32).uniform_(-0.5, 0.5).to(dtype)
     # uniform_01 (default, matches original torch.rand behaviour)
     return torch.rand((h, w), dtype=torch.float32).to(dtype)
 
@@ -254,15 +256,13 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford, d
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32 max-ULP cap; no_wb peak ~1.92e6, wb peak ~2.31e6 (both on BH shape sweeps).
-# Single threshold covers both variants with comfortable margin.
-_FP32_ULP_THRESHOLD = 3_000_000
+_FP32_ULP_THRESHOLD = 2_500_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.004
 
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+@pytest.mark.parametrize("distribution", ["normal", "wide_uniform", "centered_uniform"])
 def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, distribution):
     """FP32 layer_norm ULP vs torch float32 golden (no weight/bias); fp32_dest_acc_en=True only."""
     torch.manual_seed(0)
@@ -287,7 +287,7 @@ def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford, dis
 
 @pytest.mark.parametrize("h, w, desc", _SHAPES, ids=[c[2] for c in _SHAPES])
 @pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
+@pytest.mark.parametrize("distribution", ["normal", "wide_uniform", "centered_uniform"])
 @pytest.mark.parametrize("wb_mode", ["wb", "weight_only", "bias_only"])
 def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, distribution, wb_mode):
     """FP32 layer_norm ULP with weight/bias variants vs torch float32 golden; fp32_dest_acc_en=True only.
