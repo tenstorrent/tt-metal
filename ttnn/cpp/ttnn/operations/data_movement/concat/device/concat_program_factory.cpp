@@ -296,8 +296,8 @@ void ConcatProgramFactory::override_runtime_arguments(
 
     std::vector<uint32_t> src_addrs;
     src_addrs.reserve(tensor_args.input_tensors.size());
-    for (uint32_t i = 0; i < tensor_args.input_tensors.size(); ++i) {
-        src_addrs.push_back(tensor_args.input_tensors[i].buffer()->address());
+    for (const auto& input_tensor : tensor_args.input_tensors) {
+        src_addrs.push_back(input_tensor.buffer()->address());
     }
 
     Buffer* dst_buffer = tensor_return_value.buffer();
