@@ -112,21 +112,15 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_intimg.py
 
 blackhole:
-  # pytest-timeout timeouts
-  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  - tests/ttnn/unit_tests/operations/matmul/test_linear.py
-  - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
-  - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
-
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
+  - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
 
   # MOVD2B failures
