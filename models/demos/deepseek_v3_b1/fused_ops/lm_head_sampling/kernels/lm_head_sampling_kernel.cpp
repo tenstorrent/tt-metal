@@ -129,10 +129,14 @@ void kernel_main() {
     }
 
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender = {},
+        .receiver =
+            {
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_dst_cb"),
+                get_named_compile_time_arg_val("mcast_dst_num_pages"),
+            },
     };
 
     // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
@@ -228,18 +232,22 @@ void kernel_main() {
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
-        get_write_ptr(mcast_dst_cb),
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_size_bytes"),
+                mcast_src_cb,
+                get_named_compile_time_arg_val("mcast_src_num_pages"),
+                Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
+                get_write_ptr(mcast_dst_cb),
+            },
+        .receiver = {},
     };
 
     // Matmul writer args (BRISC is a no-op for matmul; compute runs on TRISC)

@@ -9,7 +9,7 @@
 #include <string>
 #include <cstdint>
 
-namespace tt::tt_metal::noc_estimator::common {
+namespace tt::tt_metal::experimental::noc_estimator {
 
 // Values match tt::ARCH from umd/device/types/arch.hpp
 enum class Architecture { WORMHOLE_B0 = 2, BLACKHOLE = 3 };
@@ -32,7 +32,7 @@ enum class NocPattern {
 };
 
 // Standard transaction sizes (stored once in YAML header)
-const std::vector<uint32_t> STANDARD_TRANSACTION_SIZES = {
+inline const std::vector<uint32_t> STANDARD_TRANSACTION_SIZES = {
     64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
 
 struct LatencyData {
@@ -126,4 +126,4 @@ struct NumericFields {
     }
 };
 
-}  // namespace tt::tt_metal::noc_estimator::common
+}  // namespace tt::tt_metal::experimental::noc_estimator
