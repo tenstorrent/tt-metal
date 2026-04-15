@@ -161,3 +161,59 @@ When `ttnn::power(tensor, scalar)` is called:
 9. Read `moreh_common.hpp` -- composite power implementation reference
 10. Verified all 13 existing file paths and confirmed all 5 expected-missing files
 11. Wrote analysis documenting the missing state with implementation requirements
+
+---
+
+## Session Summary (tanh)
+- **Operation**: tanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Status**: SUCCESS (with caveat: SFPU kernel files are missing from worktree)
+- **Output File**: `.claude-analysis/softcap-1/tanh_analysis.md`
+
+## Key Findings (tanh)
+
+### Missing SFPU Implementation
+The tanh SFPU kernel implementation files (`ckernel_sfpu_tanh.h`, `llk_math_eltwise_unary_sfpu_tanh.h`) were stripped from this worktree as part of the generator evaluation environment. The API-level header `compute_kernel_api.h` still defines `tanh_tile<fast_and_approx=false>()` and `tanh_tile_init<false>()`, referencing the undefined `llk_math_eltwise_unary_sfpu_tanh()`.
+
+### Dispatch Chain Status
+- **API Header**: EXISTS (`compute_kernel_api.h`, lines 154-180)
+- **LLK Dispatch**: MISSING (no `llk_math_eltwise_unary_sfpu_tanh.h`)
+- **Core SFPU Kernel**: MISSING (no `ckernel_sfpu_tanh.h`)
+- **Host Dispatch**: BROKEN (no case for `UnaryOpType::TANH` in `get_op_init_and_func_default()`)
+- **SfpuType Enum**: No `tanh` entry in metal `SfpuType` (only frac, swish, atanh, sinh)
+- **Integration Test**: Still references `"tanh_tile_init(); tanh_tile(0);"` in `test_sfpu_compute.cpp`
+
+### Approximation Mode
+- `math_approx_mode` returns `false` for TANH (default case)
+- `fast_and_approx` template parameter defaults to `false`
+- LLK tests explicitly skip tanh with approximation mode: "Metal tanh does not support approximation mode"
+
+### Hardware Architecture Differences
+- **Quasar**: Has hardware-accelerated tanh via `SFPNONLINEAR` with `TANH_MODE=0x5` (1 ULP max error on FP16_B)
+- **Wormhole/Blackhole**: No hardware tanh support. Must be computed in software using exponential building blocks
+
+### Reconstructed Algorithm
+Based on the sibling `sinh` implementation (which uses `exp_21f` for 2^z approximation), tanh would compute:
+```
+tanh(x) = (exp(x) - exp(-x)) / (exp(x) + exp(-x))
+         = (2^(x*log2e) - 2^(-x*log2e)) / (2^(x*log2e) + 2^(-x*log2e))
+```
+Key differences from sinh:
+1. Division instead of halving (requires reciprocal via SFPNONLINEAR or Newton-Raphson)
+2. Small-x Taylor: `tanh(x) ~ x - x^3/3` (vs sinh's `x + x^3/6`)
+3. Large-x saturation: clamp to +/-1.0 for `|x| > ~9`
+
+## Timeline (tanh)
+1. Read `unary_op_utils.cpp` -- found TANH in UnaryOpType enum but not in dispatch
+2. Confirmed `get_macro_definition()` returns `"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"` (default)
+3. Read `compute_kernel_api.h` -- found API signatures for `tanh_tile<>()` and `tanh_tile_init<>()`
+4. Searched for `llk_math_eltwise_unary_sfpu_tanh` -- found only in API header (reference, not definition)
+5. Confirmed no `ckernel_sfpu_tanh.h` exists anywhere in the codebase
+6. Read sibling implementations: `ckernel_sfpu_sinh.h` (exp_21f helper), `ckernel_sfpu_atanh.h` (log polynomial)
+7. Read LLK dispatch pattern from `llk_math_eltwise_unary_sfpu_sinh.h`
+8. Read parameters dispatch infrastructure (`llk_math_eltwise_unary_sfpu_params.h`)
+9. Read SFPU hardware model reference (SFPNONLINEAR tanh mode, instruction semantics)
+10. Verified `Quasar TANH_MODE=0x5` for hardware comparison
+11. Verified LLK test skip for tanh approximation mode
+12. Verified all SFPU identifiers via grep
+13. Wrote analysis with annotated sinh source as reference and reconstructed tanh structure
