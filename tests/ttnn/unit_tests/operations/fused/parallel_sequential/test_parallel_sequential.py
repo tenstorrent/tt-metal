@@ -1725,16 +1725,15 @@ class TestDeepSeekV3:
     def test_q_kv_rms_norm_persistent(self, device):
         """Persistent mode: lazy-init Parallel, update() + run() each iteration.
 
-        Replicates the code pattern from MLA1D._fwd_decode_norm_and_rope.
-        Cannot call the method directly because it also requires RoPE, concat,
-        and reshard configs unrelated to the norms.
+        Matches MLA1D decode: reuse branch :class:`OpDescriptor` objects with
+        :meth:`~OpDescriptor.update`. Fusion program reuse comes from ``_BUILD_CACHE``;
+        no ``FusedOp`` is retained on the container between calls.
         """
         from models.experimental.ops.descriptors.fusion import Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm
 
         s = self._setup_mla_norm_configs(device)
 
-        # cfg mirrors MLA1D.create_state
         cfg = {
             "q_norm": dict(epsilon=1e-6, weight=s["tt_q_w"], compute_kernel_config=s["cc"]),
             "kv_norm": dict(epsilon=1e-6, weight=s["tt_kv_w"], compute_kernel_config=s["cc"]),
@@ -1748,7 +1747,6 @@ class TestDeepSeekV3:
             tt_q = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
             tt_kv = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
 
-            # Same pattern as MLA1D._fwd_decode_norm_and_rope
             fused = cfg["fused_qkv_norm"]
             if fused is None:
                 fused = Parallel(
@@ -1772,6 +1770,128 @@ class TestDeepSeekV3:
                 pcc=0.98,
                 label=f"KV persistent iter {i}",
             )
+
+    @pytest.mark.skip(reason="Manual profiling benchmark — not for CI")
+    def test_q_kv_rms_norm_profile(self, device):
+        """Profile fused-inline vs fused-persistent vs unfused (100 trials × 100 iters)."""
+        import statistics
+        import time
+
+        from models.experimental.ops.descriptors.fusion import Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        s = self._setup_mla_norm_configs(device)
+        N_TRIALS = 100
+        N_ITERS = 100
+
+        torch_q_in = torch.rand(1, 1, s["bsz"], s["q_lora_rank"], dtype=torch.bfloat16)
+        torch_kv_in = torch.rand(1, 1, s["bsz"], s["kv_lora_rank"], dtype=torch.bfloat16)
+        tt_q_base = ttnn.from_torch(torch_q_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["q_mem"])
+        tt_kv_base = ttnn.from_torch(torch_kv_in, device=device, layout=ttnn.TILE_LAYOUT, memory_config=s["kv_mem"])
+
+        q_norm_kw = dict(epsilon=1e-6, weight=s["tt_q_w"], compute_kernel_config=s["cc"])
+        kv_norm_kw = dict(epsilon=1e-6, weight=s["tt_kv_w"], compute_kernel_config=s["cc"])
+
+        # --- warmup all three paths (2 iters each) so caches are hot ---
+        for _ in range(2):
+            q_d = rms_norm.rms_norm(tt_q_base, program_config=s["q_pc"], **q_norm_kw)
+            kv_d = rms_norm.rms_norm(tt_kv_base, program_config=s["kv_pc"], **kv_norm_kw)
+            Parallel(q=q_d, kv=kv_d).run()
+
+        fused_persistent = Parallel(
+            q=rms_norm.rms_norm(program_config=s["q_pc"], **q_norm_kw),
+            kv=rms_norm.rms_norm(program_config=s["kv_pc"], **kv_norm_kw),
+        )
+        fused_persistent.q.update(input_tensor=tt_q_base)
+        fused_persistent.kv.update(input_tensor=tt_kv_base)
+        for _ in range(2):
+            fused_persistent.run()
+
+        for _ in range(2):
+            ttnn.rms_norm(
+                tt_q_base,
+                weight=s["tt_q_w"],
+                epsilon=1e-6,
+                program_config=s["q_pc"],
+                compute_kernel_config=s["cc"],
+                memory_config=s["q_mem"],
+            )
+            ttnn.rms_norm(
+                tt_kv_base,
+                weight=s["tt_kv_w"],
+                epsilon=1e-6,
+                program_config=s["kv_pc"],
+                compute_kernel_config=s["cc"],
+                memory_config=s["kv_mem"],
+            )
+        ttnn.synchronize_device(device)
+
+        # --- fused inline ---
+        inline_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                q_d = rms_norm.rms_norm(tt_q_base, program_config=s["q_pc"], **q_norm_kw)
+                kv_d = rms_norm.rms_norm(tt_kv_base, program_config=s["kv_pc"], **kv_norm_kw)
+                Parallel(q=q_d, kv=kv_d).run()
+            ttnn.synchronize_device(device)
+            inline_times.append(time.perf_counter() - t0)
+
+        # --- fused persistent ---
+        persistent_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                fused_persistent.q.update(input_tensor=tt_q_base)
+                fused_persistent.kv.update(input_tensor=tt_kv_base)
+                fused_persistent.run()
+            ttnn.synchronize_device(device)
+            persistent_times.append(time.perf_counter() - t0)
+
+        # --- unfused (two consecutive ttnn.rms_norm) ---
+        unfused_times = []
+        for _ in range(N_TRIALS):
+            t0 = time.perf_counter()
+            for _ in range(N_ITERS):
+                ttnn.rms_norm(
+                    tt_q_base,
+                    weight=s["tt_q_w"],
+                    epsilon=1e-6,
+                    program_config=s["q_pc"],
+                    compute_kernel_config=s["cc"],
+                    memory_config=s["q_mem"],
+                )
+                ttnn.rms_norm(
+                    tt_kv_base,
+                    weight=s["tt_kv_w"],
+                    epsilon=1e-6,
+                    program_config=s["kv_pc"],
+                    compute_kernel_config=s["cc"],
+                    memory_config=s["kv_mem"],
+                )
+            ttnn.synchronize_device(device)
+            unfused_times.append(time.perf_counter() - t0)
+
+        med_inline = statistics.median(inline_times)
+        med_persistent = statistics.median(persistent_times)
+        med_unfused = statistics.median(unfused_times)
+        per_iter_inline_us = med_inline / N_ITERS * 1e6
+        per_iter_persistent_us = med_persistent / N_ITERS * 1e6
+        per_iter_unfused_us = med_unfused / N_ITERS * 1e6
+
+        print(f"\n{'='*70}")
+        print(f"  Q/KV RMS Norm Profile: {N_TRIALS} trials × {N_ITERS} iterations")
+        print(f"{'='*70}")
+        print(f"  {'Mode':<22} {'Median (s)':<14} {'Per-iter (µs)':<16} {'vs unfused':<12}")
+        print(f"  {'-'*22} {'-'*14} {'-'*16} {'-'*12}")
+        print(
+            f"  {'Fused inline':<22} {med_inline:<14.4f} {per_iter_inline_us:<16.1f} {med_unfused/med_inline:<12.2f}x"
+        )
+        print(
+            f"  {'Fused persistent':<22} {med_persistent:<14.4f} {per_iter_persistent_us:<16.1f} {med_unfused/med_persistent:<12.2f}x"
+        )
+        print(f"  {'Unfused (2× rms_norm)':<22} {med_unfused:<14.4f} {per_iter_unfused_us:<16.1f} {'1.00x':<12}")
+        print(f"{'='*70}\n")
 
 
 # ===========================================================================

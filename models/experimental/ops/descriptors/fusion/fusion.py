@@ -32,10 +32,10 @@ which patches only changed tensor-address slots.
 captured at ``build()`` before dispatch (so in-place branch tensor updates are
 visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
 
-**Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` call
-``build()`` once (until the graph or fusion id changes), then reuse the same
-``FusedOp`` for each ``run()`` while still refreshing merged IO every time — the
-intended pattern for build-once / launch-many without stale handles.
+**Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` dispatch
+via :func:`_container_run` which does a ``_BUILD_CACHE`` lookup + direct
+``patchable_generic_op`` dispatch without constructing or retaining a
+``FusedOp``. No tensor references are held between calls.
 """
 
 import os
@@ -689,8 +689,6 @@ class Sequential:
         if not all_items:
             raise ValueError("Sequential() requires at least 1 item")
         self._items = all_items
-        self._run_fused: Optional[FusedOp] = None
-        self._run_called = False
         self._descriptor_names: tuple = ()
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
@@ -698,17 +696,15 @@ class Sequential:
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
-        """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
-        self._run_fused = None
-        self._run_called = False
+        """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
-        self.invalidate_run()
         self._items.append(item)
+        self.invalidate_run()
         return self
 
     def build(self, device=None, kernel_dir: str = None) -> FusedOp:
@@ -743,8 +739,6 @@ class Sequential:
             rebind_output_sources=rebind_src,
             branch_ops=tuple(ops),
         )
-        # Compute address_slots AFTER refresh_merged_io so the IO tensor
-        # ordering matches what launch() will see (single source of truth).
         fused.refresh_merged_io(list(ops))
         io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
         fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors)
@@ -756,12 +750,11 @@ class Sequential:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """``build()`` once per stable graph, then ``launch()`` each call.
+        """Dispatch the fused program via ``_BUILD_CACHE`` + ``patchable_generic_op``.
 
-        On the first call, builds the fused program and caches it.
-        Subsequent calls reuse the cached ``FusedOp`` — just refreshing IO
-        from the branch descriptors' current ``input_tensors`` (set via
-        :meth:`~OpDescriptor.update`).
+        First call builds the fused program and populates ``_BUILD_CACHE``.
+        Subsequent calls hit the cache directly — no ``FusedOp`` is retained
+        on the container, so no tensor references are held between calls.
 
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
@@ -772,19 +765,8 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        if self._run_fused is not None:
-            # Persistent fast path: refresh IO from branch ops + dispatch.
-            self._run_fused.launch()
-            if results is None:
-                results = self._default_results
-            return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
-
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        out = _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
-        if self._run_called:
-            self._run_fused = self.build(device=device, kernel_dir=kernel_dir)
-        self._run_called = True
-        return out
+        return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
@@ -823,6 +805,9 @@ class Parallel:
         self.fused.q.update(tt_q)
         self.fused.kv.update(tt_kv)
         tt_q, tt_kv = self.fused.run()
+
+    No ``FusedOp`` is retained on the container between calls — the fusion
+    ``_BUILD_CACHE`` provides the fast path without extending tensor lifetime.
     """
 
     def __init__(self, *items, **named_items):
@@ -832,8 +817,6 @@ class Parallel:
         if len(all_items) < 2:
             raise ValueError("Parallel() requires at least 2 items")
         self._items = all_items
-        self._run_fused: Optional[FusedOp] = None
-        self._run_called = False
         self._descriptor_names: tuple = ()
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
@@ -841,17 +824,15 @@ class Parallel:
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
-        """Clear :meth:`run` cache (call after mutating ``_items`` without :meth:`add`)."""
-        self._run_fused = None
-        self._run_called = False
+        """Reset cached topology info (call after mutating ``_items`` without :meth:`add`)."""
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
-        self.invalidate_run()
         self._items.append(item)
+        self.invalidate_run()
         return self
 
     def build(self, device=None, kernel_dir: str = None) -> FusedOp:
@@ -899,12 +880,11 @@ class Parallel:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """``build()`` once per stable graph, then ``launch()`` each call.
+        """Dispatch the fused program via ``_BUILD_CACHE`` + ``patchable_generic_op``.
 
-        On the first call, builds the fused program and caches it.
-        Subsequent calls reuse the cached ``FusedOp`` — just refreshing IO
-        from the branch descriptors' current ``input_tensors`` (set via
-        :meth:`~OpDescriptor.update`).
+        First call builds the fused program and populates ``_BUILD_CACHE``.
+        Subsequent calls hit the cache directly — no ``FusedOp`` is retained
+        on the container, so no tensor references are held between calls.
 
         Args:
             results: List of descriptors whose ``output_tensors[0]`` are
@@ -914,23 +894,8 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        if self._run_fused is not None:
-            # Persistent fast path: refresh IO from branch ops + dispatch.
-            self._run_fused.launch()
-            if results is None:
-                results = self._default_results
-            return [(desc.output_tensors[0] if desc.output_tensors else None) for desc in results]
-
-        # Inline or persistent cold start: materialize deferred ops, then dispatch.
         _materialize_chain(self._items, self._internal_edges, self._cached_ops)
-        out = _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
-        # Cache FusedOp for persistent fast path IF this container is reused.
-        # Use _BUILD_CACHE hit (cheap) — but only after the second run() call
-        # to avoid penalizing one-shot inline usage.
-        if self._run_called:
-            self._run_fused = self.build(device=device, kernel_dir=kernel_dir)
-        self._run_called = True
-        return out
+        return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
         """Internal build returning intermediate _BuildResult."""
