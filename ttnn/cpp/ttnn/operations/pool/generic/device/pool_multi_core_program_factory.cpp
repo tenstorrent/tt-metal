@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
@@ -813,7 +813,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto device_compute_kernel_config = init_device_compute_kernel_config(
         device_arch,
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         false,                                                             // math_approx_mode
         (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
         false,                                                             // packer_l1_acc

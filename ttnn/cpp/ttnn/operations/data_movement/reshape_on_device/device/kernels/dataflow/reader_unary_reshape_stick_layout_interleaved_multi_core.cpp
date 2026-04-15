@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
 
-    const auto s = TensorAccessor(src_args, src_addr, old_stick_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,11 +27,11 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
     constexpr auto output_args = TensorAccessorArgs<3>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
     constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
-    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr);
 #endif
 
     constexpr uint32_t onetile = 1U;

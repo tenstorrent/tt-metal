@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,9 +26,8 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
 constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(8);
-constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
-constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
-constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
+constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(9);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(10);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -61,15 +60,14 @@ void kernel_main() {
         }
     }
 
-    constexpr uint32_t ct_idx = 12;
+    constexpr uint32_t ct_idx = 11;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    const auto output_tensor_addrgen =
-        TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
+    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,12 +16,22 @@ void kernel_main() {
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
 
-    const auto source_address_generator = TensorAccessor(src_args, src_addr, page_size);
+    const auto source_address_generator = TensorAccessor(src_args, src_addr);
 
     DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_args.is_dram ? "T" : "F")
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
            << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size
            << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
+    DEVICE_PRINT(
+        "swr: args "
+        "\n\tsrc_addr={}\n\tsrc_is_dram={}\n\tnum_pages_to_read_total={}\n\tpages_per_edm_buffer={}\n\tpage_size={}"
+        "\n\twrite_scatter_mode={}\n",
+        src_addr,
+        src_args.is_dram,
+        num_pages_to_read_total,
+        pages_per_edm_buffer,
+        page_size,
+        write_scatter_mode);
 
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {

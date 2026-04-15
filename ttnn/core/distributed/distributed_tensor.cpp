@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,6 +49,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         // DPRINT << "hartid: 0x" << HEX() << hartid << " risc_mask: 0x" << risc_mask << " hart_bit: 0x" << hart_bit <<
         // DEC() << ENDL();
+        // DEVICE_PRINT("hartid: 0x{:x} risc_mask: 0x{:x} hart_bit: 0x{:x}\n", hartid, risc_mask, hart_bit);
         if (risc_mask & hart_bit) {
             // Find this risc's per-risc config by counting set bits before this position
             uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
@@ -58,11 +59,22 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
 
             // DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
+            // DEVICE_PRINT("risc_index: {}\n", static_cast<uint32_t>(risc_index));
             dfb_interface.num_tcs_to_rr = per_risc_ptr->num_tcs_and_init.num_tcs_to_rr;
             // DPRINT << "num_tcs_to_rr: " << static_cast<uint32_t>(dfb_interface.num_tcs_to_rr) << ENDL();
+            // DEVICE_PRINT("num_tcs_to_rr: {}\n", static_cast<uint32_t>(dfb_interface.num_tcs_to_rr));
 
             // Address fields are in bytes on host; convert to 16B units on TRISC (cb_addr_shift=4), keep bytes on DM
             // (cb_addr_shift=0)
+            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
+            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
+            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
+            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
+#ifdef COMPILE_FOR_TRISC
+            dfb_interface.stride_size_tiles = init_ptr->stride_in_entries;
+            dfb_interface.wr_entry_ptr = 0;
+#endif
+
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
                 uint32_t base = per_risc_ptr->base_addr[i] >> cb_addr_shift;
                 dfb_interface.tc_slots[i].base_addr = base;
@@ -70,19 +82,20 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 dfb_interface.tc_slots[i].rd_ptr = base;
                 dfb_interface.tc_slots[i].wr_ptr = base;
                 dfb_interface.tc_slots[i].packed_tile_counter = per_risc_ptr->packed_tile_counter[i];
+#ifdef COMPILE_FOR_TRISC
+                dfb_interface.tc_slots[i].base_entry_idx =
+                    (base - dfb_interface.tc_slots[0].base_addr) / dfb_interface.entry_size;
+                dfb_interface.tc_slots[i].rd_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+                dfb_interface.tc_slots[i].wr_entry_idx = dfb_interface.tc_slots[i].base_entry_idx;
+#endif
             }
-            dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
-            // DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
-            dfb_interface.stride_size_tiles = init_ptr->stride_in_entries;
-            dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
-            // DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
-            dfb_interface.rd_entry_idx = 0;
-            dfb_interface.wr_entry_idx = 0;
-            dfb_interface.wr_entry_ptr = 0;
 
             dfb_interface.tc_idx = 0;
+#ifdef COMPILE_FOR_TRISC
             dfb_interface.tensix_trisc_mask = init_ptr->risc_mask_bits.tensix_trisc_mask;
+#else
             dfb_interface.broadcast_tc = per_risc_ptr->num_tcs_and_init.broadcast_tc;
+#endif
 
 #ifndef COMPILE_FOR_TRISC
             if (per_risc_ptr->flags.is_producer) {
@@ -147,6 +160,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                         //        << " tc: " <<
                         //        static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
                         //        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
+                        // DEVICE_PRINT("Setting clientL fields clientL={} tc: {} mask: {}\n", producer_client_type,
+                        // dfb::get_counter_id(per_risc_ptr->packed_tile_counter[0]), clientR_valid_mask);
                         g_remapper_configurator.configure_clientL_all_fields(
                             producer_client_type,
                             dfb::get_counter_id(per_risc_ptr->packed_tile_counter[0]),
@@ -164,9 +179,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                             //        << " id: " << static_cast<uint32_t>(id_R) << " tc: " <<
                             //        static_cast<uint32_t>(tc_R)
                             //        << ENDL();
+                            // DEVICE_PRINT("Setting clientR slot {} id: {} tc: {}\n", clientR_idx, id_R, tc_R);
                             g_remapper_configurator.set_clientR_slot(clientR_idx, id_R, tc_R);
                         }
                         // DPRINT << "Writing all remapper configs" << ENDL();
+                        // DEVICE_PRINT("Writing all remapper configs\n");
                         g_remapper_configurator.write_all_configs();
                     }
 
@@ -190,8 +207,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dst.tile_counters[j] = producer_tcs[j];
                 }
                 dst.tiles_to_post = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
-                // do that here to avoid raising spurious interrupts
+                // To avoid DM synchronization, the final credit sync that manually posts credits in
+                // DataflowBuffer::finish doesn't clear tiles to process do that here to avoid raising spurious
+                // interrupts
                 CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
                 asm volatile("nop");
 
@@ -206,8 +224,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 for (uint8_t j = 0; j < dst.num_counters; j++) {
                     dst.tile_counters[j] = consumer_tcs[j];
                 }
-                // To avoid DM synchronization, the final credit sync that manually posts credits in DataflowBuffer::finish doesn't clear tiles to process
-                // do that here to avoid raising spurious interrupts
+                // To avoid DM synchronization, the final credit sync that manually posts credits in
+                // DataflowBuffer::finish doesn't clear tiles to process do that here to avoid raising spurious
+                // interrupts
                 CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
                 asm volatile("nop");
 
@@ -219,18 +238,19 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         }
 
         // Program which transaction ids should trigger the implicit sync ISR
-        // per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0(producer_txn_id_mask);
-        uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
+        // per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_x(producer_txn_id_mask);
+        uint64_t reg_val = CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
         reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
         CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
 
-        // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(consumer_txn_id_mask);
-        reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
+        // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_x(consumer_txn_id_mask);
+        reg_val = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
         reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
         CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
 
         if (enable_remapper) {
             // DPRINT << "Enabling remapper" << ENDL();
+            // DEVICE_PRINT("Enabling remapper\n");
             g_remapper_configurator.enable_remapper();
         }
 
@@ -266,6 +286,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
                     //         << " initializing tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
+                    // DEVICE_PRINT("dfb {} initializing tc_id: {}\n", logical_dfb_id, tc_id);
                     ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                     ckernel::trisc::tile_counters[tc_id].f.buf_capacity = init_ptr->capacity;
 #elif !defined(COMPILE_FOR_TRISC)
@@ -273,6 +294,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
                     //         << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
                     //         << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
+                    // DEVICE_PRINT("dfb {} initializing tc tensix_id: {} tc_id: {}\n", logical_dfb_id, tensix_id,
+                    // tc_id);
                     llk_intf_reset(tensix_id, tc_id);
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
 #endif
@@ -313,4 +336,5 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         }
     }
     // DPRINT << "all_tcs_initialized" << ENDL();
+    // DEVICE_PRINT("all_tcs_initialized\n");
 }

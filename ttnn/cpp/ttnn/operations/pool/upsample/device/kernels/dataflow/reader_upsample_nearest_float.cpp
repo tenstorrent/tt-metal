@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,7 @@ void kernel_main() {
 
     // Tensor accessor compile-time args start at index 9
     constexpr auto src_args = TensorAccessorArgs<9>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr, aligned_stick_nbytes);
+    const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr);
 
     // Process sticks assigned to this core
     uint32_t page_id = start_stick_id;

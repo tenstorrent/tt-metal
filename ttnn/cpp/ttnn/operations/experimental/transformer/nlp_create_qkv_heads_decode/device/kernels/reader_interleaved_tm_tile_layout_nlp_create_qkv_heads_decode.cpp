@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,8 +25,7 @@ void kernel_main() {
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
 
     // Q
-    constexpr uint32_t qkv_tile_bytes = get_tile_size(cb_id_q_out);
-    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr, qkv_tile_bytes);
+    const auto qkv_reader = TensorAccessor(qkv_args, q_start_addr);
 
     uint32_t q_write_addr = 0;
     uint32_t qkv_tile_id = 0;

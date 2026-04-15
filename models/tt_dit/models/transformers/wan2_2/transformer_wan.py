@@ -1,14 +1,19 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from loguru import logger
+
+if not os.environ.get("TT_DIT_DEBUG"):
+    logger.disable(__name__)
+
 
 import ttnn
 
@@ -22,7 +27,8 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
+from ....utils.tensor import bf16_tensor, from_torch, unflatten
+from ....utils.tracing import traced_function
 from .attention_wan import WanAttention
 
 
@@ -39,6 +45,7 @@ class WanTransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -73,6 +80,7 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=True,
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
         )
 
         self.attn2 = WanAttention(
@@ -84,6 +92,7 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=False,
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
         )
 
         self.norm2 = (
@@ -210,12 +219,12 @@ class WanTransformerBlock(Module):
             spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
         )
 
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-
         if self.ccl_manager.topology == ttnn.Topology.Linear:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
+                    spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+
             spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
             # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
             # NOTE: higher precision compute config in addcmul may be needed for correctness
@@ -230,6 +239,7 @@ class WanTransformerBlock(Module):
                 c_gate_msa_1B1D,
                 scalar=1.0,
                 compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
             )
 
         return spatial_1BND
@@ -428,9 +438,6 @@ class WanTransformer3DModel(Module):
         return tt_prompt_1BLP
 
     def prepare_timestep_conditioning(self, timestep):
-        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
-        # TODO: Cleanup and move out of prepare_timestep_conditioning.
-        timestep = float32_tensor(timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=self.mesh_device)
         tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
         tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
@@ -439,10 +446,9 @@ class WanTransformer3DModel(Module):
 
     def prepare_conditioning(self, timestep, encoder_hidden_states):
         """
-        Given torch inputs, execute the combined timestep and text embedding.
+        Given inputs, execute the combined timestep and text embedding.
         Return tensors on device.
         """
-        assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
         tt_temb_11BD, tt_timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
         tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states)
 
@@ -585,7 +591,7 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI_torch, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep_torch):
+    def inner_step(self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -594,18 +600,10 @@ class WanTransformer3DModel(Module):
             - trans_mat
             - N
 
-        Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
+        Spatial input is a tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
         Spatial output is an fp32 ttnn.Tensor on device with same layout.
         """
-
-        # Push spatial input to device
-        spatial_1BNI = bf16_tensor(
-            spatial_1BNI_torch,
-            device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
-        )
-        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep_torch)
+        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
 
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
@@ -641,3 +639,38 @@ class WanTransformer3DModel(Module):
         )
 
         return spatial_1BNI
+
+    # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def combined_step(
+        self,
+        do_classifier_free_guidance: bool,
+        spatial_1BNI: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        negative_prompt_1BLP: ttnn.Tensor,
+        N: int,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        guidance_scale: float,
+    ) -> ttnn.Tensor:
+        cond = self.inner_step(
+            spatial_1BNI,
+            prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            timestep,
+        )
+        if not do_classifier_free_guidance:
+            return cond
+
+        uncond = self.inner_step(
+            spatial_1BNI, negative_prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep
+        )
+
+        combined = ttnn.lerp(uncond, cond, guidance_scale)
+
+        return combined

@@ -108,14 +108,14 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -283,7 +283,7 @@ jobs:
 
       - name: Upload dual teacher forced accuracy artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.teacher_forced || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-teacher-forced-accuracy-${{ github.run_id }}
           path: |
@@ -317,7 +317,7 @@ jobs:
 
       - name: Upload quad teacher forced accuracy artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.teacher_forced }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
           path: |
@@ -352,7 +352,7 @@ jobs:
 
       - name: Upload dual demo output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-demo-output-${{ github.run_id }}
           path: |
@@ -386,7 +386,7 @@ jobs:
 
       - name: Upload dual MTP demo output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-demo-mtp-output-${{ github.run_id }}
           path: |
@@ -420,7 +420,7 @@ jobs:
 
       - name: Upload quad demo output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-demo-output-${{ github.run_id }}
           path: |
@@ -454,7 +454,7 @@ jobs:
 
       - name: Upload quad MTP demo output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-demo-mtp-output-${{ github.run_id }}
           path: |
@@ -489,7 +489,7 @@ jobs:
 
       - name: Upload dual demo stress output artifacts
         if: ${{ always() && matrix.setup == 'dual' && (inputs.demo_stress || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-demo-stress-output-${{ github.run_id }}
           path: |
@@ -523,7 +523,7 @@ jobs:
 
       - name: Upload quad demo stress output artifacts
         if: ${{ always() && matrix.setup == 'quad' && inputs.demo_stress }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-demo-stress-output-${{ github.run_id }}
           path: |

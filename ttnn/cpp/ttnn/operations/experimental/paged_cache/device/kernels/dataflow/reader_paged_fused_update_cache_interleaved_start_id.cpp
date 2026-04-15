@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,12 +68,12 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
 
-    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, cache_addr);
 
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
-        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr, index_stick_size_B);
+        const auto addrg = TensorAccessor(index_tensor_args, index_tensor_addr);
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
         if constexpr (index_is_dram) {
@@ -96,8 +96,7 @@ void kernel_main() {
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
 
                 if constexpr (page_table_is_dram) {
-                    const auto page_table_gen =
-                        TensorAccessor(page_table_args, page_table_tensor_addr, page_table_stick_size);
+                    const auto page_table_gen = TensorAccessor(page_table_args, page_table_tensor_addr);
                     uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(my_batch_idx);
                     noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
                     noc_async_read_barrier();

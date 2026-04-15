@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
 
     constexpr auto src_args = TensorAccessorArgs<2>();
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     const uint32_t end_id = start_page_id + num_pages;
 

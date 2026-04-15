@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from glob import glob
 from pathlib import Path
 
@@ -86,6 +87,35 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
+def _resolve_tt_metal_commit() -> str:
+    """Resolve the tt-metal commit used for this run."""
+    repo_root = Path(__file__).resolve().parents[4]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = ""
+
+    return commit or "unknown"
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -102,6 +132,9 @@ def _print_performance_metrics(results: dict) -> None:
         trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
         logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+        tt_metal_commit = statistics.get("tt-metal_commit")
+        if tt_metal_commit:
+            logger.info(f"tt-metal commit: {tt_metal_commit}")
 
 
 def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
@@ -766,6 +799,7 @@ def run_demo(
                 checkpoint_fh.flush()
                 os.fsync(checkpoint_fh.fileno())
 
+            statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
@@ -850,7 +884,7 @@ def main() -> None:
             ),
             random_weights=bool(args.random_weights),
         )
-        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+        if _is_primary_artifact_writer():
             _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before

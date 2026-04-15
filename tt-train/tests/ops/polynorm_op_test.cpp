@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,10 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/random_data.hpp"
 
 class PolyNormOpTest : public ::testing::Test {
 protected:
@@ -185,17 +185,10 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> polynorm_ref
     return {dL_dx, dL_dw, dL_db};
 }
 
-xt::xarray<float> make_random_xtensor(const std::vector<uint32_t>& shape, float low, float high) {
-    auto& rng = ttml::autograd::ctx().get_generator();
-    xt::xarray<float> x = xt::empty<float>(shape);
-    ttml::core::parallel_generate<float>(
-        x, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, rng());
-    return x;
-}
-
 PolyNormCaseData make_case_data(const std::vector<uint32_t>& input_shape) {
+    auto& rng = ttml::autograd::ctx().get_generator();
     PolyNormCaseData data{
-        .input = make_random_xtensor(input_shape, -1.0F, 1.0F),
+        .input = ttml::test_utils::make_uniform_xarray<float>(input_shape, -1.0F, 1.0F, rng()),
         .weight = xt::xarray<float>::from_shape({1, 1, 1, 3}),
         .bias = xt::xarray<float>::from_shape({1, 1, 1, 1}),
     };

@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.0"
+        default: "v1.5.3"
       job-timeout:
         required: false
         type: number
@@ -170,17 +170,18 @@ jobs:
           set -euo pipefail
           pip3 install -q PyYAML
           python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
-          import json, sys, yaml
+          import json, re, sys, yaml
           path, out_path = sys.argv[1], sys.argv[2]
           with open(path) as f:
               tests = yaml.safe_load(f)
           # TTSim runs all tests on ubuntu-latest; ignore skus and timeouts from YAML, use fixed timeout.
-          TTSIM_TIMEOUT_MINUTES = 20
+          TTSIM_TIMEOUT_MINUTES = 40
           entries = []
           for t in tests:
               if not t.get("ttsim") or not t.get("cmd"):
                   continue
-              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": t.get("cmd", ""), "timeout": TTSIM_TIMEOUT_MINUTES})
+              cmd = re.sub(r'\s+--timeout\s+\d+', '', t['cmd'])
+              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": cmd, "timeout": TTSIM_TIMEOUT_MINUTES})
           if not entries:
               raise SystemExit("No TTSim-compatible TTNN tests found (ttsim: true)")
           with open(out_path, "a") as f:
@@ -227,6 +228,8 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         PYTHONHASHSEED: 0
+        OPENBLAS_NUM_THREADS: 1
+        OMP_NUM_THREADS: 1
     defaults:
       run:
         shell: bash
@@ -278,15 +281,15 @@ jobs:
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         run: |
-          # Run pytest with parallel execution and skip list.
+          # Run pytest with parallel execution, pytest-level timeouts disabled (more harm than good on sim), and skip list.
           # If a worker crashes, pytest-xdist only reports "worker crashed"
           # which is useless for debugging. Re-run the failures serially to
           # get actionable output.
-          if ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}; then
+          if ${{ matrix.test-group.cmd }} -p no:timeout -n 4 ${{ steps.skip-list.outputs.skip_args }}; then
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          ${{ matrix.test-group.cmd }} -p no:timeout --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
           exit 1
 
   ttsim-cpp-unit-tests:

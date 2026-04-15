@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -129,6 +129,9 @@ FORCE_INLINE bool process_upstream_sockets(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_packet_header,
     uint64_t* upstream_bytes_acked_noc_addrs,
     volatile tt_l1_ptr uint32_t* termination_semaphore) {
+    if constexpr (num_sockets_this_risc == 0) {
+        return false;
+    }
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
@@ -171,7 +174,9 @@ FORCE_INLINE bool process_upstream_sockets(
             remaining--;
         }
 
-        worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        if constexpr (num_sockets_this_risc > 1) {
+            worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        }
     }
     return false;
 }
@@ -192,12 +197,10 @@ void kernel_main() {
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
-#if defined(COMPILE_FOR_BRISC)
     set_sender_socket_page_size(sender_socket, page_size);
-#endif
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
+    SocketReceiverInterface receiver_sockets[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
@@ -210,7 +213,7 @@ void kernel_main() {
     uint64_t downstream_data_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
 
-    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc];
+    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     if constexpr (use_fabric_on_receiver) {
         for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
             upstream_bytes_acked_noc_addrs[i] = get_noc_addr(
@@ -261,13 +264,8 @@ void kernel_main() {
         uint64_t dst_addr_base;
 #if defined(COMPILE_FOR_BRISC)
         noc_semaphore_set(page_ready_sem, 1);
-        dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
-#elif defined(COMPILE_FOR_NCRISC)
-        {
-            SocketSenderInterface sender_socket_cur = create_sender_socket_interface(sender_socket_config_addr);
-            dst_addr_base = downstream_data_addr + sender_socket_cur.write_ptr;
-        }
 #endif
+        dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
 
         terminated = process_upstream_sockets(
             receiver_sockets,
@@ -291,6 +289,9 @@ void kernel_main() {
         }
 #elif defined(COMPILE_FOR_NCRISC)
         noc_semaphore_set(ncrisc_done_sem, 1);
+        // Used to update NCRISC local copy of write_ptr
+        // Only brisc will update the actual socket config in l1 with the new write_ptr
+        socket_push_pages(sender_socket, 1);
 #endif
     }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
+#include "api/debug/checkpoint.h"
 
 // clang-format on
 
@@ -82,8 +83,8 @@ uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t prev_noc_mode = DM_DEDICATED_NOC;
@@ -448,6 +449,9 @@ int main() {
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
+#ifdef DEBUG_CHECKPOINT_ENABLED
+            debug_checkpoint_init(enables);
+#endif
             run_triscs(enables);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;

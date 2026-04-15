@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -80,7 +80,7 @@ def test_forward_pass(
         test_name="test_lm_head1d",
         real_weights=False,
     )
-    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_config = get_model_config(LMHead1D, mode, hf_config, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 

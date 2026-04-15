@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -67,6 +67,7 @@ def test_moe(
     With gate: gate_weights are passed to TorchMoe, forward only takes x.
     Can run with random weights (fast) or real HF weights (slow).
     """
+    torch.manual_seed(42)
     use_hf_weights = model_id is not None
 
     logger.debug(f"\n{'='*60}")
@@ -100,10 +101,9 @@ def test_moe(
         gate_weights_dict = None
     else:
         logger.debug("Creating random weights for experts...")
-        routed_expert_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=42)
-        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
+        routed_expert_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
+        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
         if use_gate:
-            torch.manual_seed(42)
             gate_weights_dict = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32)
         else:
             gate_weights_dict = None
@@ -117,7 +117,6 @@ def test_moe(
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            seed=42,
         )
         expert_offsets, expert_token_counts, _ = get_gate_outputs(
             indices,
@@ -129,7 +128,6 @@ def test_moe(
             expert_dispatch_table=expert_dispatch_table,
         )
     else:
-        torch.manual_seed(42)
         x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
 
     # Create TorchMoe module

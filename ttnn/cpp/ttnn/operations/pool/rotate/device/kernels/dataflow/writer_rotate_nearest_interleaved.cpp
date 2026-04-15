@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t num_cb_pages = get_compile_time_arg_val(2);
     constexpr uint32_t burst_size = get_compile_time_arg_val(3);
     constexpr auto dst_args = TensorAccessorArgs<4>();
-    const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr, output_stick_nbytes);
+    const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr);
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_burst =

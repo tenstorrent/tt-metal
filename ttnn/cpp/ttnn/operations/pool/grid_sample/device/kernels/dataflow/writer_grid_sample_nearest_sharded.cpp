@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -164,10 +164,10 @@ void kernel_main() {
 
     // Input tensor accessor for remote NOC reads - same as sharded reader
     constexpr auto input_tensor_args = TensorAccessorArgs<17>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     constexpr auto grid_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    const auto grid_tensor_accessor = TensorAccessor(grid_tensor_args, grid_addr, grid_stick_nbytes);
+    const auto grid_tensor_accessor = TensorAccessor(grid_tensor_args, grid_addr);
 
     // Calculate starting batch from global grid stick position
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;

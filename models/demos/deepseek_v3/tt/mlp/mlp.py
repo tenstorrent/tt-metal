@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
@@ -112,7 +112,7 @@ class MLP(AbstractModule):
         """
         torch_metaweight_tensor = torch_metaweight_tensor.transpose(
             2, 1
-        )  # In torch the weights are in (out_features, in_features) format
+        ).contiguous()  # In torch the weights are in (out_features, in_features) format
 
         # Calculate the expected weight dimensions
         num_shards, per_device_in_features, per_device_out_features = torch_metaweight_tensor.shape

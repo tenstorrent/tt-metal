@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <future>
 #include <set>
 
@@ -559,8 +560,34 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
-    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    // Firmware uses bank_noc_xy_t (uint32_t for Quasar configs with odd bank counts, uint16_t otherwise)
+    // to ensure table sizes are always 4-byte aligned for l1_to_local_mem_copy. Match that here.
+    const uint32_t dram_noc_xy_size = dram_bank_to_noc_xy_[device_id].size();
+    const uint32_t l1_noc_xy_size = l1_bank_to_noc_xy_[device_id].size();
+    const uint32_t num_nocs = hal_.get_num_nocs();
+    const bool use_u32_entries = (cluster_.arch() == tt::ARCH::QUASAR) &&
+                                 ((dram_noc_xy_size / num_nocs) % 2 != 0 || (l1_noc_xy_size / num_nocs) % 2 != 0);
+
+    std::vector<uint32_t> dram_noc_xy_padded, l1_noc_xy_padded;
+    void* dram_noc_data;
+    void* l1_noc_data;
+    uint32_t dram_to_noc_sz_in_bytes;
+    uint32_t l1_to_noc_sz_in_bytes;
+
+    if (use_u32_entries) {
+        dram_noc_xy_padded.assign(dram_bank_to_noc_xy_[device_id].begin(), dram_bank_to_noc_xy_[device_id].end());
+        l1_noc_xy_padded.assign(l1_bank_to_noc_xy_[device_id].begin(), l1_bank_to_noc_xy_[device_id].end());
+        dram_noc_data = dram_noc_xy_padded.data();
+        l1_noc_data = l1_noc_xy_padded.data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint32_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint32_t);
+    } else {
+        dram_noc_data = dram_bank_to_noc_xy_[device_id].data();
+        l1_noc_data = l1_bank_to_noc_xy_[device_id].data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint16_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint16_t);
+    }
+
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
 
@@ -575,21 +602,11 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         auto start_core = virtual_core;
         cluster_.noc_multicast_write(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            l1_noc_addr);
+            l1_noc_data, l1_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
@@ -610,17 +627,10 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             l1_offset_addr);
     } else {
         cluster_.write_core(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
-        cluster_.write_core(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            l1_noc_addr);
+        cluster_.write_core(l1_noc_data, l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.write_core(

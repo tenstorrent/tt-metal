@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ This module assembles the full MoE pipeline:
 
 from typing import Optional, Union
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -363,20 +364,15 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
-        # Step 5: Reduce (weighted sum over topk + reduce-scatter for TP sharding)
+        # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
         # ========================================
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
-        #                  (1, 1, 256, 4, 2048) per device - 5D tensor!
+        #                  (1, 1, 256, 4, 2048) per device - 5D tensor, ROW_MAJOR
         #
-        # TtReduceModule does:
-        # 1. Apply weights: weights * combined_output (broadcast multiply)
-        # 2. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
-        # 3. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        # combined_output_tiled is too big to fit L1; keep in DRAM for now
-        combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"[TtMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
-
-        routed_output = self.reduce_module(combined_output_tiled, weights=weights)
+        # TtReduceModule uses fused post_combine_reduce kernel:
+        # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
+        # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
+        routed_output = self.reduce_module(combined_output, weights=weights)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
@@ -399,6 +395,21 @@ class TtMoe(LightweightModule):
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:
+            # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
+            _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+            max_token_count = int(_counts_host.to(torch.int64).max().item())
+            max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
+            if max_token_count > max_capacity:
+                logger.error(
+                    f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
+                    f"max_dispatched_tokens_per_expert ({max_capacity}). "
+                    f"Overflow tokens were dropped - output data is corrupted. "
+                    f"Increase capacity_factor or reduce sequence length."
+                )
+                logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+
             intermediates = TtMoEIntermediates(
                 gate_scores=weights,
                 gate_indices=indices,

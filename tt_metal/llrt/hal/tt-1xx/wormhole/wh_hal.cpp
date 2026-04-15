@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -116,8 +116,8 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/noc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc");
+        includes.push_back("tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:

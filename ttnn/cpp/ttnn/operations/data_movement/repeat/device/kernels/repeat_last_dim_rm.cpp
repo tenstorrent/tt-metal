@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,8 +48,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
     cb_reserve_back(cb_id_in0, 1);

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -367,7 +367,6 @@ def initialize_test_inputs(
     num_routed_experts: int,
     num_experts_per_tok: int,
     max_dispatched_tokens_per_expert: int,
-    seed: int = 42,
     validate: bool = True,
     num_dispatch_groups: int = 1,
     skip_x_initialization: bool = False,
@@ -382,7 +381,6 @@ def initialize_test_inputs(
         num_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
         max_dispatched_tokens_per_expert: Maximum number of tokens per expert
-        seed: Random seed for reproducibility
         validate: Whether to validate expert activations
         num_dispatch_groups: Number of parallel dispatch groups
 
@@ -391,7 +389,6 @@ def initialize_test_inputs(
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
-    torch.manual_seed(seed)
 
     input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None
@@ -636,7 +633,6 @@ def create_torch_expert_weights(
     num_experts: int,
     emb_dim: int,
     hidden_dim: int,
-    seed: int = 42,
 ) -> list[dict]:
     """
     Create random weights for torch experts.
@@ -645,12 +641,10 @@ def create_torch_expert_weights(
         num_experts: Number of experts to create weights for
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
-        seed: Random seed
 
     Returns:
         List of dicts with gate_proj, up_proj, down_proj per expert
     """
-    torch.manual_seed(seed)
     weights_list = []
     for _ in tqdm(range(num_experts), desc="Creating expert weights"):
         weights = {
@@ -665,7 +659,6 @@ def create_torch_expert_weights(
 def create_shared_expert_weights(
     emb_dim: int,
     hidden_dim: int,
-    seed: int = 123,
 ) -> dict:
     """
     Create random weights for shared expert in HF format.
@@ -673,12 +666,10 @@ def create_shared_expert_weights(
     Args:
         emb_dim: Embedding dimension
         hidden_dim: Hidden/intermediate dimension
-        seed: Random seed
 
     Returns:
         Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
     """
-    torch.manual_seed(seed)
     return {
         "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
         "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
@@ -692,7 +683,6 @@ def create_sparse_combine_output(
     topk: int,
     emb_dim: int,
     sparsity: float = 0.75,
-    seed: int = 42,
 ) -> torch.Tensor:
     """
     Create synthetic sparse combine output for testing.
@@ -706,12 +696,10 @@ def create_sparse_combine_output(
         topk: Number of expert slots per token
         emb_dim: Embedding dimension
         sparsity: Fraction of positions that are zero (default 0.75)
-        seed: Random seed for reproducibility
 
     Returns:
         Sparse tensor of shape [num_chips, seq_len, topk, emb_dim]
     """
-    torch.manual_seed(seed)
 
     # Create random data
     data = torch.randn(num_chips, seq_len, topk, emb_dim, dtype=torch.bfloat16)

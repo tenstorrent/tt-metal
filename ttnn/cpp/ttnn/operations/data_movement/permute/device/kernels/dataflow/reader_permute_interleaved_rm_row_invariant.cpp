@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
     constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
     constexpr auto src_args = TensorAccessorArgs<0>();
 
@@ -15,7 +14,7 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t curr_addr = src_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {

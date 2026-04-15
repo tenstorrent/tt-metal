@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -262,7 +262,7 @@ from tests.nightly.sdpa_perf_utils import (
 
 def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
     """Single-chip SDPA utilization (local_seq == total_seq, arch=blackhole)."""
-    return compute_math_utilization(seqlen, seqlen, head_dim, num_heads, duration_ns, core_count)
+    return compute_math_utilization(seqlen, seqlen, head_dim, head_dim, num_heads, duration_ns, core_count)
 
 
 # === TEST 4: PERFORMANCE TABLE (skipped on CI) ===
@@ -315,7 +315,7 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             nh_parallel = min(num_cores // batch_parallel, nh)
             max_q_parallel = num_cores // (batch_parallel * nh_parallel)
 
-            cores_used = compute_cores_used(s, q_chunk_size, num_cores=num_cores, num_heads=nh)
+            cores_used = compute_cores_used(s, q_chunk_size, compute_cores=num_cores, num_heads=nh)
             cores_idle = num_cores - cores_used
             core_util_pct = (cores_used * 100.0) / num_cores
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -320,8 +320,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
 
-    // Create reader kernel
-    std::vector<uint32_t> compile_time_args(
+    // Common compile-time args shared by reader and writer (indices 0..8)
+    std::vector<uint32_t> common_compile_time_args(
         {stick_nbytes,
          cb_src0_index,
          aligned_stick_nbytes,
@@ -331,18 +331,24 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
          patches_per_core,
          cb_src1_index,
          is_l1_aligned});
-    TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
+
+    // Create reader kernel with src TensorAccessorArgs
+    auto reader_compile_time_args = common_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
-    // Create writer kernel
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // Create writer kernel with dst TensorAccessorArgs
+    auto writer_compile_time_args = common_compile_time_args;
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Set runtime arguments for each core
 

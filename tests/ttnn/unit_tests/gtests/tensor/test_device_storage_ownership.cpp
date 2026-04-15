@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -125,13 +125,12 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_OwnerDeallocateAffectsView) {
     EXPECT_FALSE(view_storage.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_GettersThrowWhenDeallocated) {
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_BufferGettersThrowWhenDeallocated) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     tensor.deallocate(/*force=*/true);
 
     EXPECT_THROW(tensor.device_storage().get_buffer(), std::exception);
     EXPECT_THROW(tensor.device_storage().get_mesh_buffer(), std::exception);
-    EXPECT_THROW(tensor.device_storage().get_device(), std::exception);
 }
 
 // ======================================================================================

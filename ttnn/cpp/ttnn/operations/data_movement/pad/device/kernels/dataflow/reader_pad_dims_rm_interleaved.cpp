@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,6 @@ void kernel_main() {
     const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
@@ -63,9 +62,9 @@ void kernel_main() {
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
-    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
-    const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr, pad_value_const_buffer_nbytes);
+    const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr);
     const uint64_t const_buffer_noc_addr = get_noc_addr(0, s_const);
 
     uint16_t pad_value = pad_value_packed >> 16;

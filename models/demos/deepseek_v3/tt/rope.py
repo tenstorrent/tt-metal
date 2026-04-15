@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -259,8 +259,8 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        cos = ttnn.to_memory_config(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
+        sin = ttnn.to_memory_config(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
             return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
@@ -306,8 +306,8 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+        cos = ttnn.to_memory_config(cos, mem_config)
+        sin = ttnn.to_memory_config(sin, mem_config)
 
         if return_rot_idxs:
             return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
