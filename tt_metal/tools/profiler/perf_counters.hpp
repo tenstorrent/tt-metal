@@ -654,41 +654,46 @@ __attribute__((noinline)) void perf_counter_flush() {
 #endif
 }
 
+// Flush BEFORE each group (starting from 2nd) to ensure the buffer has room
+// for the full group. Flushing after is too late — timeStampedData silently
+// drops counters when bufferHasRoom returns false mid-group. Each group
+// needs at most ~330 uint32_t (INSTRN with 82 counters × 4), and the
+// buffer has 500 custom slots, so a fresh buffer always fits any single group.
 void read_perf_counters() {
-
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
     read_single_group(PerfCounterGroup::FPU);
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::PACK);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::UNPACK);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_0);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_1);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::INSTRN);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_2);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_3);
-    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
+    perf_counter_flush();
     read_single_group(PerfCounterGroup::L1_4);
 #endif
 #endif  // ARCH_BLACKHOLE
