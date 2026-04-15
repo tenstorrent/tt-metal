@@ -5,7 +5,7 @@
 import math
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import torch
 from loguru import logger
@@ -67,6 +67,13 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     if batch % num_banks == 0:
         return batch
     return ((batch + num_banks - 1) // num_banks) * num_banks
+
+
+def _decode_run_op_kwargs(fragment: Any) -> dict:
+    """Expand a decode op config entry for use as ``**kwargs`` (``OpConfigBase`` or ``dict``)."""
+    if isinstance(fragment, dict):
+        return fragment
+    return dict(fragment.items())
 
 
 def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
@@ -1380,7 +1387,6 @@ class MLA1D(AbstractModule):
             "mtp_alias_mask": None,
             "mtp_alias_runtime_cache": {},
             "ccl": ccl,
-            "fused_qkv_norm": None,  # Created lazily on first decode forward
         }
 
     @classmethod
@@ -2033,18 +2039,20 @@ class MLA1D(AbstractModule):
         cfg: RunDecodeConfig,
         rope_tensors: dict,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Parallel Q and KV Norms (persistent mode — built lazily on first call)
+        # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
         # Q: 1,1,32,1536, width sharded 4x4 [32,96]
         # KV: 1,1,32,512, width sharded 2x8 [32,32]
-        fused = cfg["fused_qkv_norm"]
+        fused = cfg.get("fused_qkv_norm")
         if fused is None:
+            q_pc = RMSNorm._get_pc(tt_q.memory_config())
+            kv_pc = RMSNorm._get_pc(tt_kv_nope.memory_config())
             fused = Parallel(
-                q=descriptors.rms_norm(program_config=RMSNorm._get_pc(tt_q.memory_config()), **cfg["q_norm"]),
-                kv=descriptors.rms_norm(program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]),
+                q=descriptors.rms_norm(program_config=q_pc, **_decode_run_op_kwargs(cfg["q_norm"])),
+                kv=descriptors.rms_norm(program_config=kv_pc, **_decode_run_op_kwargs(cfg["kv_norm"])),
             )
             cfg["fused_qkv_norm"] = fused
-        fused.q.update(input_tensor=tt_q)
-        fused.kv.update(input_tensor=tt_kv_nope)
+        fused.q.update(tt_q)
+        fused.kv.update(tt_kv_nope)
         tt_q, tt_kv_nope = fused.run()
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 

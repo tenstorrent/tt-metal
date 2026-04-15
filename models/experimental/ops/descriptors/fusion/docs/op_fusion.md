@@ -2766,23 +2766,17 @@ called on the same container:
 | Call # | Path | Overhead |
 |--------|------|----------|
 | 1st | `_materialize_chain` → `_container_run` (cold build) | Full codegen |
-| 2nd | `_container_run` (cache hit) + cache `FusedOp` on container | ~tens of µs |
-| 3rd+ | `_run_fused.launch()` (persistent fast path) | ~tens of µs |
+| 2nd+ | `_container_run` (cache hit → `patchable_generic_op`) | ~tens of µs |
 
-The two-call warmup avoids penalizing one-shot inline usage: the first call
-runs `_container_run` directly (no `FusedOp` cached on container).  The
-second call sees `_run_called=True` and caches a `FusedOp` via `self.build()`
-(a `_BUILD_CACHE` hit — cheap).  From the third call on, `_run_fused.launch()`
-skips all Python orchestration.
+The first `run()` call builds the fused program and populates `_BUILD_CACHE`.
+All subsequent calls hit the cache directly — `_container_run` gathers IO
+from the branch descriptors' current tensors, deduplicates them, and
+dispatches via `patchable_generic_op`.  No `FusedOp` is retained on the
+container between calls, so no tensor references are held and L1 buffer
+lifetime is not extended.
 
 See [Inline Mode](#inline-mode-simple) and [Persistent Mode](#persistent-mode-fast)
 at the top of this document for usage examples.
-
-The persistent fast path (`_run_fused.launch()`) calls `refresh_merged_io`
-which re-reads the branch descriptors' current `input_tensors` (mutated via
-`update()`), deduplicates them, and dispatches via `patchable_generic_op`.
-Default results and flattened ops are cached at construction time to avoid
-recomputation.
 
 
 ### Cache Invalidation
