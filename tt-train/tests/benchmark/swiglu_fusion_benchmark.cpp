@@ -22,6 +22,7 @@
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "test_utils/random_data.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -111,14 +112,6 @@ bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
     return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
 }
 
-std::vector<uint32_t> make_random_tokens(size_t count, uint32_t vocab_size, uint32_t seed) {
-    std::mt19937 gen(seed);
-    std::uniform_int_distribution<uint32_t> dist(0U, vocab_size - 1U);
-    std::vector<uint32_t> values(count);
-    std::generate(values.begin(), values.end(), [&]() { return dist(gen); });
-    return values;
-}
-
 RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
@@ -152,10 +145,10 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     constexpr uint32_t kFeaturesSeedBase = 2026U;
     constexpr uint32_t kTargetsSeedBase = 3039U;
     const size_t token_count = static_cast<size_t>(batch_size) * cfg.sequence_length;
-    const auto features_host =
-        make_random_tokens(token_count, model_cfg.vocab_size, kFeaturesSeedBase + batch_size + num_blocks);
-    const auto targets_host =
-        make_random_tokens(token_count, model_cfg.vocab_size, kTargetsSeedBase + batch_size + num_blocks);
+    const auto features_host = ttml::test_utils::make_uniform_vector<uint32_t>(
+        token_count, 0U, model_cfg.vocab_size - 1U, kFeaturesSeedBase + batch_size + num_blocks);
+    const auto targets_host = ttml::test_utils::make_uniform_vector<uint32_t>(
+        token_count, 0U, model_cfg.vocab_size - 1U, kTargetsSeedBase + batch_size + num_blocks);
     const ttnn::Shape features_shape({batch_size, 1, 1, cfg.sequence_length});
     const ttnn::Shape targets_shape({batch_size, cfg.sequence_length});
 
