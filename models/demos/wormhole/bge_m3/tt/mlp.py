@@ -12,6 +12,7 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
     bge_m3_linear_activation_memory_config,
     bge_m3_matmul_compute_kernel_config,
     bge_m3_matmul_core_grid,
+    bge_m3_mlp_wi_output_memory_config,
     bge_m3_weight_dram_memory_config,
 )
 
@@ -46,6 +47,7 @@ class BgeM3MLPConfig:
     wi_compute_kernel_cfg: object | None = None
     wo_compute_kernel_cfg: object | None = None
     max_seq_len: int | None = None
+    max_batch_size: int | None = None
 
 
 class BgeM3MLP(LightweightModule):
@@ -155,13 +157,7 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     if config.activation_dtype is None:
         to_set["activation_dtype"] = ttnn.bfloat16
     max_seq = config.max_seq_len
-    act_mem = bge_m3_linear_activation_memory_config(max_seq)
-    if config.wi_memcfg is None:
-        to_set["wi_memcfg"] = act_mem
-    if config.wo_memcfg is None:
-        to_set["wo_memcfg"] = act_mem
-    if config.activation_memcfg is None:
-        to_set["activation_memcfg"] = act_mem
+    max_batch = config.max_batch_size if config.max_batch_size is not None else 1
 
     # All parameters must target a single device.
     param_devices = [
@@ -184,6 +180,15 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
 
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
+
+    act_mem = bge_m3_linear_activation_memory_config(max_seq, max_batch)
+    wi_out_mem = bge_m3_mlp_wi_output_memory_config(max_seq, max_batch, mesh_device)
+    if config.activation_memcfg is None:
+        to_set["activation_memcfg"] = act_mem
+    if config.wi_memcfg is None:
+        to_set["wi_memcfg"] = wi_out_mem
+    if config.wo_memcfg is None:
+        to_set["wo_memcfg"] = act_mem
 
     if config.wi_compute_kernel_cfg is None:
         to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
@@ -236,8 +241,8 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: BgeM3MLPConfi
     """
     Resolve input to device tensor if x is LazyWeight; otherwise sanity-check x.
     """
-    mem_cfg = config.wi_memcfg
-    assert mem_cfg is not None, "wi_memcfg must be resolved before loading input tensor"
+    mem_cfg = config.activation_memcfg
+    assert mem_cfg is not None, "activation_memcfg must be resolved before loading input tensor"
 
     if isinstance(x, LazyWeight):
         resolved_x = resolve_lazy_weight(
