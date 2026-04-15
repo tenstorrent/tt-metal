@@ -161,12 +161,15 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
+    DeviceZoneScopedN("WAIT-record-end-ts");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
+        record_realtime_timestamp(realtime_profiler_mailbox, false);
     }
+
     WAYPOINT("WCD");
 }
 
@@ -318,6 +321,7 @@ void process_dispatch_s_wait_cmd() {
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
     }
+
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
     // counter. dispatch_d will clear it's own counter
     update_worker_completion_count_on_dispatch_d<true>();

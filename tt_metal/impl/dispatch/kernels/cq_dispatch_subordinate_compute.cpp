@@ -56,6 +56,7 @@ void kernel_main() {
 
             uint32_t current_count = *stream_reg;
             if (current_count != last_counts[i]) {
+                DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
                 record_realtime_timestamp(realtime_profiler_mailbox, false);
             }
