@@ -1554,6 +1554,70 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
+// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+//   - compute_grid = 8x8 (valid compute nodes: x in [0,7], y in [0,7])
+//   - dispatch cores at row 8 (the last row of the 8x9 tensix grid): {0..7, 8}
+//   - OOB: any node with x >= 8 or y >= 8 that is not a dispatch core (e.g. {8, 0})
+//
+// These tests are pinned to the mock WH fixture, not real hardware.
+
+TEST_F(ProgramSpecTestGen1, KernelTargetsDispatchCoreFails) {
+    // {0, 8} is a dispatch core on WH N150 (row 8 = last tensix row, reserved for firmware).
+    const NodeCoord dispatch_node{0, 8};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", dispatch_node);
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", dispatch_node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("dispatch core reserved for firmware")));
+}
+
+TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
+    // {8, 0} is out of bounds: x=8 is beyond the 8-wide compute grid.
+    const NodeCoord oob_node{8, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", oob_node);
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
+    // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
+    // valid node, but the DFB it produces to targets an OOB node.
+    const NodeCoord valid_node{0, 0};
+    const NodeCoord oob_node{0, 100};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", valid_node);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", valid_node, DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb_0", oob_node);  // DFB on OOB node
+
+    BindDFBToKernel(producer, "dfb_0", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb_0", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", valid_node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
 TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
     // Structural validation (CollectSpecData) must catch this on gen1 too
     NodeCoord node{0, 0};

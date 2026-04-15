@@ -14,6 +14,11 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include <core_descriptor.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
@@ -275,6 +280,92 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 }
 
 // ----------------------------------------------------------------------------
+// ValidateNodeBounds: Node coordinate bounds checking
+// ----------------------------------------------------------------------------
+//
+// Validates that every NodeCoord referenced in kernels, DFBs, and semaphores
+// is a valid worker node on this device. Checks:
+//
+//   1. Out of bounds: the coord is outside the compute worker grid.
+//   2. Dispatch node: the coord is reserved for dispatch.
+//
+// NOTE: This is dealing in logical coordinates, harvesting is handled
+// transparently at the UMD coordinate-translation layer.
+//
+// ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
+// representative of the full mesh.
+
+void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+
+    // Mock device gets special handling (handy for unit testing ProgramSpec validation cheaply)
+    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+
+    // A default DispatchCoreConfig and 1 CQ is sufficient to figure out node boundaries and
+    // dispatch node reservations.
+    // (MetalContext is uninitialized in mock mode)
+    DispatchCoreConfig dispatch_core_config{};
+    uint8_t num_hw_cqs = 1;
+    constexpr ChipId chip_id = 0;
+
+    // But get the real dispatch_core_config and num_hw_cqs (if available)
+    // (Makes no difference today, but hardbaking that assumption would be brittle)
+    if (!is_mock) {
+        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+        dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
+        num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
+    }
+
+    // Get the node grid size and reserved dispatch node info
+    const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
+    const auto& dispatch_cores_vec =
+        tt::get_logical_dispatch_cores(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
+    const std::unordered_set<NodeCoord> dispatch_core_set(dispatch_cores_vec.begin(), dispatch_cores_vec.end());
+
+    // Target node checker lambda (good for kernels, DFBs, semaphores)
+    auto check_target_nodes = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes,
+                                  std::string_view entity_type,
+                                  std::string_view entity_name) {
+        const NodeRangeSet range_set = to_node_range_set(target_nodes);
+        for (const NodeRange& range : range_set.ranges()) {
+            for (const NodeCoord& node : range) {
+                TT_FATAL(
+                    !dispatch_core_set.contains(node),
+                    "{} '{}' targets node ({},{}), which is reserved for dispatch firmware. " entity_type,
+                    entity_name,
+                    node.x,
+                    node.y);
+                TT_FATAL(
+                    node.x < compute_grid.x && node.y < compute_grid.y,
+                    "{} '{}' targets node ({},{}), which is out of bounds. "
+                    "The compute worker grid on this device is {}x{}.",
+                    entity_type,
+                    entity_name,
+                    node.x,
+                    node.y,
+                    compute_grid.x,
+                    compute_grid.y);
+            }
+        }
+    };
+
+    for (const auto& kernel : spec.kernels) {
+        check_target_nodes(kernel.target_nodes, "KernelSpec", kernel.unique_id);
+    }
+    for (const auto& dfb : spec.dataflow_buffers) {
+        check_target_nodes(dfb.target_nodes, "DataflowBufferSpec", dfb.unique_id);
+    }
+    for (const auto& sem : spec.semaphores) {
+        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
+    }
+}
+
+void ValidateNodeBoundsGen2(const ProgramSpec& spec) {
+    // TODO: Implement node bounds checking for Gen2 (Quasar).
+    (void)spec;  // placate clang-tidy
+    return;
+}
+
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -288,8 +379,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
 void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
     //////////////////////////////
-    // Architecture checks
+    // Node bounds checks
     //////////////////////////////
+
+    if (is_gen1_arch()) {
+        ValidateNodeBoundsGen1(spec);
+    }
+    if (is_gen2_arch()) {
+        ValidateNodeBoundsGen2(spec);
+    }
 
     //////////////////////////////
     // Validate KernelSpecs
