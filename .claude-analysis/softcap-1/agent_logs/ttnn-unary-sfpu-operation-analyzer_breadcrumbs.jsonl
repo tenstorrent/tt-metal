@@ -27,3 +27,4 @@
 {"event":"analysis_written","operation":"tanhshrink","output_file":".claude-analysis/softcap-1/tanhshrink_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","address_mode","local_knowledge_sources"],"ts":"2026-04-15T09:02:46+00:00"}
 {"event":"complete","operation":"tanhshrink","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/tanhshrink_analysis.md","commit":"6321921132","ts":"2026-04-15T09:03:41+00:00"}
 {"event":"analysis_written","operation":"hardtanh","output_file":".claude-analysis/softcap-1/hardtanh_analysis.md","sections":["dispatch_summary","call_chain","annotated_source","instruction_table","register_usage","address_mode","algorithm_explanation"],"ts":"2026-04-15T09:03:44+00:00"}
+{"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/hardtanh_analysis.md","commit":"bfeb2c6fc7","ts":"2026-04-15T09:05:29+00:00"}
