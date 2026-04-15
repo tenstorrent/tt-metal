@@ -4,6 +4,10 @@ set(CMAKE_C_COMPILER clang-20 CACHE INTERNAL "C compiler")
 
 set(CMAKE_CXX_COMPILER clang++-20 CACHE INTERNAL "C++ compiler")
 
+set(CMAKE_AR /usr/bin/llvm-ar-20 CACHE INTERNAL "Archiver")
+set(CMAKE_RANLIB /usr/bin/llvm-ranlib-20 CACHE INTERNAL "Ranlib")
+set(CMAKE_NM /usr/bin/llvm-nm-20 CACHE INTERNAL "NM")
+
 # Use for configure time
 set(ENABLE_LIBCXX FALSE CACHE INTERNAL "Using clang's libc++")
 

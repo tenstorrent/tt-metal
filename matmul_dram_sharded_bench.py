@@ -371,6 +371,8 @@ def main():
 if __name__ == "__main__":
     main()
 
+# changes on top of 108abf04bf81d317610f8630d4d8e30ae9482909
+
 #       M      K     N    dram_shrd  dram_reshrd  dram_tcast   1d_mcast   2d_mcast     auto  vs dram_sharded
 #   -------------------------------------------------------------------------------------
 # DRAM grid: (x=12,y=1)  → dram_grid for sharding: (x=11,y=0)
