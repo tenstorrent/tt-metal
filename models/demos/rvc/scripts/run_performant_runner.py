@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-secs", type=float, default=3.0, help="Prepared input audio duration at 16 kHz.")
     parser.add_argument("--speaker-id", type=int, default=0, help="Speaker ID.")
     parser.add_argument("--f0-up-key", type=int, default=0, help="Pitch shift in semitones.")
-    parser.add_argument("--f0-method", default="pm", choices=["pm"], help="F0 method.")
+    parser.add_argument("--f0-method", default="rapt", choices=["rapt", "dio"], help="F0 method.")
     parser.add_argument("--index-rate", type=float, default=0.75, help="Index rate.")
     parser.add_argument("--rms-mix-rate", type=float, default=0.25, help="RMS mix rate.")
     parser.add_argument("--protect", type=float, default=0.33, help="Protect rate.")
