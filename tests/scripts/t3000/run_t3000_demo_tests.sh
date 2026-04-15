@@ -68,6 +68,10 @@ run_t3000_llama3_tests() {
     echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
+  tt_cache=$TT_CACHE_HOME/$llama8b
+  HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" --use_hf_rope; fail+=$?
+  echo "LOG_METAL: Llama3 tests for $llama8b with HF-style rope completed"
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

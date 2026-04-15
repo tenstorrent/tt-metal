@@ -57,7 +57,9 @@ class ModelPipeline:
         if weights_mode == "real":
             if cache_path is None:
                 raise ValueError("weights_mode='real' requires cache_path")
-            provider: WeightProvider = CacheWeightProvider(cache_path)
+            if model_path is None:
+                raise ValueError("weights_mode='real' requires model_path")
+            provider: WeightProvider = CacheWeightProvider(cache_path, model_path)
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")

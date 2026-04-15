@@ -63,16 +63,6 @@ For single-host tests, run the test with appropriate environment variables and c
      tests/tt_metal/tt_fabric/golden_mapping_files/ControlPlaneFixture_Custom2x2.yaml
   ```
 
-- `TestControlPlaneInitNoMGD` (various cluster descriptors):
-  ```bash
-  TT_METAL_SLOW_DISPATCH_MODE=1 \
-  TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/<cluster_desc>.yaml \
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestControlPlaneInitNoMGD"
-
-  cp generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml \
-     tests/tt_metal/tt_fabric/golden_mapping_files/TestControlPlaneInitNoMGD.yaml
-  ```
-
 ### Multi-Host Tests
 
 For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_ttrun.md** in the distributed Python package (alongside `ttrun.py`) for **auto allocation** vs **legacy** mode.
@@ -180,7 +170,6 @@ The following tests generate and compare ASIC mapping files:
 - `ControlPlaneFixture_SingleGalaxy`
 - `ControlPlaneFixture_T3k`
 - `ControlPlaneFixture_Custom2x2`
-- `TestControlPlaneInitNoMGD` (various cluster descriptors)
 - `T3kCustomMeshGraphControlPlaneTests*`
 
 ### Multi-Host Tests

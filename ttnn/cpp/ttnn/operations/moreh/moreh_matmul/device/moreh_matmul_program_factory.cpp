@@ -121,7 +121,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     bool transpose_other = operation_attributes.transpose_other;
 
     const DeviceComputeKernelConfig& compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
+        input.device()->arch(), operation_attributes.compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
     ;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -364,10 +364,10 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     const auto compute_kernel_1_id = CreateComputeKernel(

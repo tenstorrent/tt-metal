@@ -38,7 +38,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
-            dfb.write_out(noc, dst_dram, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
+            noc.async_write<experimental::Noc::TxnIdMode::ENABLED>(dfb, dst_dram, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
 #else
             dfb.wait_front(ublock_size_tiles);
             noc.async_write(dfb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
@@ -51,11 +51,7 @@ void kernel_main() {
         dfb.finish();
 
 #ifdef ARCH_QUASAR
-        // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
-        LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
-        for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
-            noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
-        }
+        dfb.write_barrier(noc);
 #endif
     }
 #ifndef ARCH_QUASAR
