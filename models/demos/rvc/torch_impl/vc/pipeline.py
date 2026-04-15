@@ -355,13 +355,7 @@ class Pipeline:
         audio_output = (audio_output * max_int16).to(torch.int16)
         return audio_output
 
-    def infer(
-        self,
-        audio_path: str,
-    ):
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError("input_audio_path not found.")
-
+    def infer(self):
         audio = load_audio(16000)
         audio_max = torch.abs(audio).max().item() / 0.95
         if audio_max > 1:
