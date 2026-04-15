@@ -405,17 +405,14 @@ __attribute__((noinline)) void quick_push() {
     mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
-    uint32_t send_start = 0;
-    uint32_t send_count = wIndex;
-
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + send_count;
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
     if constexpr (NON_DROPPING) {
         if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
             signal_host_buffer_full();
             // Host index is reset because we got a new DRAM buffer
             profiler_control_buffer[HOST_BUFFER_END_INDEX] = 0;
-            currEndIndex = send_count;
+            currEndIndex = wIndex;
         }
     }
 
@@ -431,21 +428,20 @@ __attribute__((noinline)) void quick_push() {
 
     uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-    for (uint32_t i = 0; i < (send_count % NOC_ALIGNMENT_FACTOR); i++) {
+    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
-        send_count += PROFILER_L1_MARKER_UINT32_SIZE;
     }
 
-    currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + send_count;
+    currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + wIndex;
 
     // If sending all optional markers still leaves room for the two guaranteed end markers, send everything
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC -
                             (PROFILER_L1_GUARANTEED_MARKER_COUNT / 2) * PROFILER_L1_MARKER_UINT32_SIZE) {
         NocRegisterStateSave noc_state;
         profiler_noc_async_write_posted(
-            reinterpret_cast<uint32_t>(&profiler_data_buffer[myRiscID].data[send_start]),
+            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,
-            send_count * sizeof(uint32_t));
+            wIndex * sizeof(uint32_t));
 
         profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX] = currEndIndex;

@@ -593,38 +593,100 @@ void stop_perf_counter() {
 // The perf counter debug registers are shared across all RISCs on the Tensix core,
 // so BRISC can read counter values that were started/stopped by TRISC1.
 //
-// Note: quick_push() is NOT called between groups here. The profiler L1 buffer
-// (500 custom slots) fits FPU+PACK+UNPACK+L1_0 data (~228 slots). The INSTRN
-// group (82 counters = 328 slots) may partially overflow — counters that don't
-// fit are silently dropped by bufferHasRoom() in timeStampedData. The dropped
-// counters are the tail of the instrn_counters array (grant/issued counts).
-// Calling quick_push() mid-read would re-send the profiler header sentinel,
-// creating phantom program execution starts that cause TT_FATAL on the host.
+// Flush perf counter data from L1 to DRAM without touching the header.
+// Sends ONLY custom markers (from CUSTOM_MARKERS to wIndex). The header
+// (sentinel + guaranteed markers) is reserved at the start of DRAM and
+// written once by finish_profiler at program end.
+// The host-side parser processes these "pre-sentinel" TS_DATA markers
+// and associates them with the run established by the subsequent sentinel.
+__attribute__((noinline)) void perf_counter_flush() {
+#if defined(COMPILE_FOR_BRISC)
+    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        return;
+    }
+    if (wIndex <= CUSTOM_MARKERS) {
+        return;  // nothing to flush
+    }
+
+    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+
+    // Reserve header space on first flush
+    if (profiler_control_buffer[HOST_BUFFER_END_INDEX] == 0) {
+        profiler_control_buffer[HOST_BUFFER_END_INDEX] = CUSTOM_MARKERS;
+    }
+
+    uint32_t send_count = wIndex - CUSTOM_MARKERS;
+
+    // Pad to NOC alignment
+    for (uint32_t i = 0; i < (send_count % NOC_ALIGNMENT_FACTOR); i++) {
+        mark_padding();
+        send_count += PROFILER_L1_MARKER_UINT32_SIZE;
+    }
+
+    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + send_count;
+    if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+        wIndex = CUSTOM_MARKERS;
+        return;  // DRAM full, drop remaining counters
+    }
+
+    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           HOST_BUFFER_END_INDEX * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           profiler_control_buffer[HOST_BUFFER_END_INDEX] * sizeof(uint32_t);
+
+    const auto s = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
+
+    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+
+    NocRegisterStateSave noc_state;
+    profiler_noc_async_write_posted(
+        reinterpret_cast<uint32_t>(&profiler_data_buffer[myRiscID].data[CUSTOM_MARKERS]),
+        dram_bank_dst_noc_addr,
+        send_count * sizeof(uint32_t));
+    profiler_noc_async_flush_posted_write();
+
+    profiler_control_buffer[HOST_BUFFER_END_INDEX] = currEndIndex;
+    wIndex = CUSTOM_MARKERS;
+#endif
+}
+
 void read_perf_counters() {
+
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
     read_single_group(PerfCounterGroup::FPU);
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
     read_single_group(PerfCounterGroup::PACK);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
     read_single_group(PerfCounterGroup::UNPACK);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
     read_single_group(PerfCounterGroup::L1_0);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
     read_single_group(PerfCounterGroup::L1_1);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     read_single_group(PerfCounterGroup::INSTRN);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     read_single_group(PerfCounterGroup::L1_2);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
     read_single_group(PerfCounterGroup::L1_3);
+    if (!bufferHasRoom(0)) { perf_counter_flush(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     read_single_group(PerfCounterGroup::L1_4);
