@@ -39,12 +39,17 @@ def _compute_expert_subblock_metadata(
     subblock_k: int,
     per_core_n: int,
     num_subblocks_k: int,
+    subblock_n: int = 1,
 ) -> tuple[list[int], list[int]]:
     """Compute per-subblock block_sizes and per-tile relative fmt metadata.
 
     Unlike _compute_subblock_metadata (absolute addressing), this stores
-    relative byte offsets within each subblock. The TRISC adds the CB slot
+    relative byte offsets within each CB slot. The TRISC adds the CB slot
     base at runtime via custom_mm_compressed_block_runtime_dram.
+
+    When subblock_n > 1, multiple columns share one CB slot. Fmt offsets
+    accumulate across columns within each group so all offsets are relative
+    to the single slot_base that TRISC reads once per group.
 
     Returns:
         block_sizes: list of uint32, byte size per subblock.
@@ -53,25 +58,38 @@ def _compute_expert_subblock_metadata(
     """
     num_tiles_k = subblock_k * num_subblocks_k
     assert len(shard_assignment) == num_tiles_k * per_core_n
+    assert per_core_n % subblock_n == 0
 
     block_sizes = []
     tile_infos = []
 
     tile_idx = 0
-    for _n in range(per_core_n):
-        for _sb_k in range(num_subblocks_k):
-            block_bytes = 0
-            subblock_start = tile_idx
-            for _t in range(subblock_k):
-                fmt_idx = int(shard_assignment[tile_idx])
-                block_bytes += _TILE_SIZES[fmt_idx]
-                tile_idx += 1
+    for _ng in range(per_core_n // subblock_n):
+        # Cumulative byte offset within this group of subblock_n columns.
+        slot_offset_shifted = 0
+        group_bytes = 0
 
-            block_sizes.append(block_bytes)
+        for _sn in range(subblock_n):
+            for _sb_k in range(num_subblocks_k):
+                subblock_bytes = 0
+                subblock_start = tile_idx
+                for _t in range(subblock_k):
+                    fmt_idx = int(shard_assignment[tile_idx])
+                    subblock_bytes += _TILE_SIZES[fmt_idx]
+                    tile_idx += 1
 
-            subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
-            tiles = pack_tile_pairs(subblock_slice, base_addr_shifted=0, zero_tile_addr=_ZERO_TILE_SENTINEL)
-            tile_infos.extend(tiles)
+                group_bytes += subblock_bytes
+
+                subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
+                tiles = pack_tile_pairs(
+                    subblock_slice, base_addr_shifted=slot_offset_shifted, zero_tile_addr=_ZERO_TILE_SENTINEL
+                )
+                tile_infos.extend(tiles)
+
+                slot_offset_shifted += subblock_bytes >> _CB_ADDR_SHIFT
+
+        # One block_size entry per group (sum of subblock_n columns).
+        block_sizes.append(group_bytes)
 
     return block_sizes, tile_infos
 
@@ -201,6 +219,7 @@ def _build_program_for_device(
     dram_fmt_layout: dict = None,
     dram_core_params: dict = None,
     subblock_k: int = 0,
+    subblock_n: int = 1,
     cores_per_dram_bank: int = 1,
     num_in1_buffers: int = 3,
     # Routing (required).
@@ -271,7 +290,7 @@ def _build_program_for_device(
     # DRAM streaming parameters.
     num_subblocks_k = Kt // subblock_k
     max_tile_size = _TILE_SIZES[0]
-    max_subblock_bytes = subblock_k * max_tile_size
+    max_subblock_bytes = subblock_k * subblock_n * max_tile_size
     cb_in1_dram_total_bytes = num_in1_buffers * max_subblock_bytes
 
     # NOC max page size.
@@ -300,6 +319,7 @@ def _build_program_for_device(
         ("out_w", sram_per_core_n),
         ("cb_in0_num_pages", Kt),
         ("subblock_k", subblock_k),
+        ("subblock_n", subblock_n),
         ("num_subblocks_k", num_subblocks_k),
         ("per_core_n", dram_per_core_n),
         ("cb_in1_dram_size_bytes", cb_in1_dram_total_bytes),
@@ -392,6 +412,7 @@ def create_dram_expert_metadata(
     compute_core_grid,
     primary_worker_cores: list,
     subblock_k: int,
+    subblock_n: int,
     num_subblocks_k: int,
     per_core_N: int,
     cores_per_dram_bank: int,
@@ -425,7 +446,7 @@ def create_dram_expert_metadata(
     num_experts = num_total_experts
     num_banks = len(primary_worker_cores)
     num_total_cores = len(compute_cores_list)
-    num_iterations = num_subblocks_k * per_core_N
+    num_iterations = num_subblocks_k * (per_core_N // subblock_n)
     meta_stride = 2 + num_iterations
     tiles_per_expert = subblock_k * num_subblocks_k * per_core_N
 
@@ -486,6 +507,7 @@ def create_dram_expert_metadata(
                     subblock_k,
                     per_core_N,
                     num_subblocks_k,
+                    subblock_n,
                 )
                 dram_col_offset = _compute_dram_start_offset(shard_assignment, subblock_k, num_subblocks_k, col_start)
                 expert_in1_addr = data_tensor.buffer_address()
@@ -624,6 +646,7 @@ def create_dram_expert_tensors_multi_device(
     num_total_experts: int,
     is_dram_flags: list,
     num_in1_buffers: int = 3,
+    subblock_n: int = 1,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
@@ -651,7 +674,7 @@ def create_dram_expert_tensors_multi_device(
     logger.info("  Creating in1_backing_tensor (replicated mesh tensor)...")
     num_cores = len(compute_cores_list)
     max_tile_size = _TILE_SIZES[0]
-    in1_cb_tiles = subblock_k * num_in1_buffers
+    in1_cb_tiles = subblock_k * subblock_n * num_in1_buffers
     in1_backing_shard_shape = (32, in1_cb_tiles * 32)
     in1_backing_total_width = in1_cb_tiles * 32 * num_cores
     in1_backing_shard_spec = ttnn.ShardSpec(compute_core_grid, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -668,7 +691,7 @@ def create_dram_expert_tensors_multi_device(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     cb_in1_base_shifted = (in1_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
-    max_subblock_bytes_shifted = (subblock_k * max_tile_size) >> _CB_ADDR_SHIFT
+    max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
     logger.info(f"  in1_backing created, addr={in1_backing_tensor.buffer_address()}")
 
@@ -695,6 +718,7 @@ def create_dram_expert_tensors_multi_device(
                 compute_core_grid,
                 primary_cores_list,
                 subblock_k,
+                subblock_n,
                 num_subblocks_k,
                 per_core_N,
                 cores_per_dram_bank,
@@ -867,6 +891,7 @@ class ExpertKernel:
         sram_output_tensor: ttnn.Tensor = None,
         dram_fuse_silu: bool = False,
         tp_expert: bool = True,
+        subblock_n: int = 1,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -972,6 +997,7 @@ class ExpertKernel:
                     dram_fmt_layout=dram_fmt_layout,
                     dram_core_params=per_core_vals,
                     subblock_k=subblock_k,
+                    subblock_n=subblock_n,
                     cores_per_dram_bank=cores_per_dram_bank,
                     num_in1_buffers=num_in1_buffers,
                     table_idx_addrs=table_idx_l1,
