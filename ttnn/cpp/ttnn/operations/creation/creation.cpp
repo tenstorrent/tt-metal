@@ -57,12 +57,7 @@ Tensor full_impl(
     const MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
-    if (layout == Layout::TILE) {  // issue 41465
-        TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), output_mem_config));
-        std::vector<T> logical_fill(shape.volume(), value);
-        constexpr T k_implicit_tile_pad{};
-        Tensor host_tensor =
-            Tensor::from_vector(std::move(logical_fill), tensor_spec, nullptr, std::nullopt, k_implicit_tile_pad);
+    const auto finalize_host_tensor = [&](Tensor host_tensor) -> Tensor {
         if (optional_output_tensor.has_value()) {
             copy_to_device(host_tensor, *optional_output_tensor);
             return *optional_output_tensor;
@@ -71,21 +66,19 @@ Tensor full_impl(
             return host_tensor.to_device(device, output_mem_config);
         }
         return host_tensor;
+    };
+    if (layout == Layout::TILE) {
+        TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
+        std::vector<T> logical_fill(shape.volume(), value);
+        constexpr T k_implicit_tile_pad{};
+        return finalize_host_tensor(
+            Tensor::from_vector(std::move(logical_fill), tensor_spec, nullptr, std::nullopt, k_implicit_tile_pad));
     }
     TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto owned_buffer = std::vector<T>(tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
-    Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
-
-    if (optional_output_tensor.has_value()) {
-        copy_to_device(host_tensor, *optional_output_tensor);
-        return *optional_output_tensor;
-    }
-    if (device != nullptr) {
-        return host_tensor.to_device(device, output_mem_config);
-    }
-    return host_tensor;
+    return finalize_host_tensor(Tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout));
 }
 
 template Tensor arange_impl<::bfloat16>(
