@@ -384,7 +384,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                         // Replace tile_regs_wait with PACKER synchronization for SFPU overlap
                         PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG | p_stall::STALL_SFPU,
                             semaphore::t6_sem(semaphore::MATH_PACK),
                             p_stall::STALL_ON_ZERO));
 
