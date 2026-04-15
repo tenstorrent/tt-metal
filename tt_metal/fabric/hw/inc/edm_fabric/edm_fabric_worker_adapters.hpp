@@ -155,7 +155,7 @@ struct WorkerToFabricEdmSenderBase {
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        return WorkerToFabricEdmSenderBase(
+        auto connection = WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
             edm_worker_y,
@@ -172,6 +172,8 @@ struct WorkerToFabricEdmSenderBase {
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
             write_at_cmd_buf);
+        connection.edm_direction = direction;
+        return connection;
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
@@ -278,6 +280,10 @@ struct WorkerToFabricEdmSenderBase {
             worker_credits_stream_id,
             data_noc_cmd_buf,
             sync_noc_cmd_buf);
+    }
+
+    FORCE_INLINE eth_chan_directions get_edm_direction() const {
+        return static_cast<eth_chan_directions>(this->edm_direction);
     }
 
     // templatized num_slots to let callers implement bubble flow control without runtime overheads.
@@ -528,6 +534,7 @@ struct WorkerToFabricEdmSenderBase {
     // noc location of the edm we are connected to (where packets are sent to)
     uint8_t edm_noc_x;
     uint8_t edm_noc_y;
+    uint8_t edm_direction = static_cast<uint8_t>(eth_chan_directions::COUNT);
 
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;

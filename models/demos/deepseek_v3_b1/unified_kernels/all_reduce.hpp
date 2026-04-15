@@ -167,13 +167,20 @@ private:
         uint64_t dst_noc_base = 0;
         uint64_t remote_sem_noc = 0;
         {
-            DeviceZoneScopedN("CCL_WRITER_SETUP");
+            DeviceZoneScopedN("CCL_WRITER_SETUP_OPEN_START");
             connection.open_start();
-
+        }
+        {
+            DeviceZoneScopedN("CCL_WRITER_SETUP_HEADER_POOL");
             PacketHeaderPool::reset();
             header = PacketHeaderPool::allocate_header();
-            fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
-
+        }
+        {
+            DeviceZoneScopedN("CCL_WRITER_SETUP_FABRIC_ROUTE");
+            fabric_set_single_hop_unicast_route_from_direction(header, connection.get_edm_direction());
+        }
+        {
+            DeviceZoneScopedN("CCL_WRITER_SETUP_NOC_ADDR");
             dst_noc_base = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
             remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
         }
@@ -210,21 +217,30 @@ private:
         constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
 
         auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
-            header->to_noc_fused_unicast_write_atomic_inc(
-                {dst_noc_base + chunk_offset, remote_sem_noc, 1, false}, payload_bytes);
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_without_header_non_blocking_from_address(
-                src_base_addr + chunk_offset, payload_bytes);
-            connection.send_payload_flush_non_blocking_from_address(
-                reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SETUP");
+                header->to_noc_fused_unicast_write_atomic_inc(
+                    {dst_noc_base + chunk_offset, remote_sem_noc, 1, false}, payload_bytes);
+            }
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_WAIT_SLOT");
+                connection.wait_for_empty_write_slot();
+            }
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_DATA");
+                connection.send_payload_without_header_non_blocking_from_address(
+                    src_base_addr + chunk_offset, payload_bytes);
+            }
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SEND");
+                connection.send_payload_flush_non_blocking_from_address(
+                    reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+            }
         };
 
         uint32_t chunk_idx = CTArgs::link_index;
         for (; chunk_idx < CTArgs::num_chunks - 1; chunk_idx += CTArgs::num_links) {
-            {
-                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD");
-                send_payload(offset, regular_payload_bytes);
-            }
+            send_payload(offset, regular_payload_bytes);
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
                 offset += stride_bytes;
@@ -233,7 +249,6 @@ private:
         }
 
         if (chunk_idx < CTArgs::num_chunks) {
-            DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD");
             send_payload(offset, last_payload_bytes);
         }
 
