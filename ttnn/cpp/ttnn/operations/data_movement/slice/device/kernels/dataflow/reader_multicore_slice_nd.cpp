@@ -48,7 +48,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {
