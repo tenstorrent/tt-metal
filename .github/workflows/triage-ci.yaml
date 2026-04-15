@@ -29,8 +29,8 @@ on:
         default: "false"
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
+  actions: write
 
 jobs:
   bug-escapes:
@@ -44,4 +44,6 @@ jobs:
       auto-verify: ${{ inputs.auto-verify }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+
