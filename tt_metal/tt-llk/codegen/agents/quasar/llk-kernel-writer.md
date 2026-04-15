@@ -89,12 +89,119 @@ Write the kernel following the spec's instruction sequence, using the patterns y
 
 ### Step 4: Compile Check
 
-Run compilation check:
+Run compilation check using the test source that exercises this kernel.
+
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_generated_kernel} -v
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "PARAM(...)" -r "PARAM(...)" -v
 ```
+
+#### How compiler.py parameters work
+
+`-t` (template) and `-r` (runtime) flags inject C++ constants into the test build.
+The parameter classes live in `tests/python_tests/helpers/test_variant_parameters.py`,
+enums in `tests/python_tests/helpers/llk_params.py`.
+
+**Critical difference between `-t` and `-r`:**
+- `-t` calls the parameter's `convert_to_cpp()` → generates `constexpr` defines in the build header
+- `-r` calls the parameter's `convert_to_struct_fields()` → generates fields in the `RuntimeParams` struct (populated at runtime, NOT as `constexpr`)
+- `convert_to_cpp()` is called **only for `-t` params**
+
+This means: if the C++ test uses a symbol as a compile-time value (template argument,
+array size, `constexpr` variable), its parameter class **must** be `-t`. If it's `-r`,
+the symbol won't exist as a `constexpr` and you'll get `'X' was not declared in this scope`.
+
+Example: `INPUT_DIMENSIONS` generates `constexpr BLOCK_CT_DIM`, `BLOCK_RT_DIM`, etc.
+If the C++ test uses `BLOCK_CT_DIM` as a template arg, pass it as `-t "INPUT_DIMENSIONS(1,1,1,1)"`.
+
+#### How to find the correct parameters
+
+**Step 1: Check if a Python test already exists.**
+```bash
+ls tests/python_tests/quasar/test_*{op}*_quasar.py
+```
+If yes, read the `TestConfig(...)` call — items in `templates=[...]` become `-t`,
+items in `runtimes=[...]` become `-r`. For dynamic values (e.g., `tile_cnt_A`),
+substitute a simple concrete value like `1`. For `generate_input_dim([32,32],[32,32])`,
+use `INPUT_DIMENSIONS(1,1,1,1)` (it's a wrapper that returns that object).
+
+**Step 2: If no Python test exists, read the C++ test source and map symbols.**
+Scan the C++ test for symbols it references, then look up which parameter class
+generates each one. Use this reference table:
+
+**Template-only parameters (always `-t`):**
+
+| C++ symbol(s) | Parameter class | Default invocation |
+|---|---|---|
+| `SFPU_UNARY_OPERATION` / `ELTWISE_BINARY_OP` / `REDUCE_DIM` + `POOL_TYPE` | `MATH_OP(mathop=MathOperation.X)` | varies |
+| `MATH_FIDELITY` | `MATH_FIDELITY(MathFidelity.LoFi)` | `LoFi` |
+| `APPROX_MODE` | `APPROX_MODE()` | `No` |
+| `IMPLIED_MATH_FORMAT` | `IMPLIED_MATH_FORMAT()` | `No` |
+| `DATA_COPY_TYPE` | `DATA_COPY_TYPE(DataCopyType.A2D)` | `A2D` |
+| `UNPACKER_ENGINE_SEL` | `UNPACKER_ENGINE_SEL()` | `UnpA` |
+| `dest_sync` | `DEST_SYNC()` | `Half` |
+| `BROADCAST_TYPE` | `BROADCAST_TYPE(BroadcastType.X)` | varies |
+| `REUSE_DEST_TYPE` | `REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.X)` | varies |
+| `UNPACK_TRANSPOSE_FACES` (when template) | `UNPACK_TRANS_FACES(Transpose.No)` | `No` |
+
+**Runtime parameters (usually `-r`, can be `-t` if test needs compile-time access):**
+
+| C++ symbol(s) | Parameter class | Default invocation |
+|---|---|---|
+| `TILE_CNT` | `TILE_COUNT(1)` | `1` |
+| `num_faces`, `num_faces_A`, `num_faces_B` | `NUM_FACES(4)` | `4` |
+| `TEST_FACE_R_DIM`, `TEST_FACE_C_DIM` | `TEST_FACE_DIMS()` | `16, 16` |
+| `DST_INDEX` | `DEST_INDEX(0)` | `0` |
+| `FULL_RT_DIM`, `FULL_CT_DIM`, `BLOCK_CT_DIM`, `BLOCK_RT_DIM` | `INPUT_DIMENSIONS(1,1,1,1)` | `1,1,1,1` |
+| `RELU_CONFIG` | `RELU_CONFIG(0)` | `0` |
+| `RT_DIM`, `CT_DIM`, `KT_DIM` | `CRK_TILE_DIMM(1,1,1)` | `1,1,1` |
+| `NUM_TILES_IN_BLOCK` | `NUM_TILES_IN_BLOCK(1)` | `1` |
+| `NUM_BLOCKS` | `NUM_BLOCKS(1)` | `1` |
+| `INPUT_TILE_CNT` | `INPUT_TILE_CNT(1)` | `1` |
+| `OUTPUT_TILE_CNT` | `OUTPUT_TILE_CNT(1)` | `1` |
+
+**Rule of thumb**: If the C++ test uses a symbol in a template argument (`func<SYMBOL>(...)`),
+as an array size, or in a `constexpr` context, pass it as `-t`. Otherwise `-r` is fine.
+
+#### Common parameter sets by kernel type
+
+**SFPU kernels** (sigmoid, square, exp, rsqrt, etc.):
+```bash
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "MATH_OP(mathop=MathOperation.{Op})" \
+    -t "IMPLIED_MATH_FORMAT()" \
+    -t "DATA_COPY_TYPE(DataCopyType.A2D)" \
+    -t "UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA)" \
+    -t "DEST_SYNC(DestSync.Half)" \
+    -r "TILE_COUNT(1)" -r "NUM_FACES(4)" -r "TEST_FACE_DIMS()" -r "DEST_INDEX(0)" \
+    -v
+```
+
+**Math kernels** (eltwise_binary, reduce, matmul):
+```bash
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "MATH_FIDELITY(MathFidelity.LoFi)" \
+    -t "MATH_OP(mathop=MathOperation.{Op})" \
+    -t "IMPLIED_MATH_FORMAT()" \
+    -t "DEST_SYNC(DestSync.Half)" \
+    -r "TILE_COUNT(1)" -r "NUM_FACES(4)" -r "TEST_FACE_DIMS()" \
+    -v
+```
+
+**Pack/Unpack kernels** (pack, unpack_tilize, unpack_unary_operand):
+```bash
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "IMPLIED_MATH_FORMAT()" \
+    -t "DEST_SYNC(DestSync.Half)" \
+    -t "UNPACKER_ENGINE_SEL()" \
+    -r "TEST_FACE_DIMS()" -r "NUM_FACES(4)" -r "TILE_COUNT(1)" \
+    -v
+```
+
+These are starting points. Always cross-check against the C++ test source for
+additional symbols it needs.
 
 ### Step 5: Report Result
 

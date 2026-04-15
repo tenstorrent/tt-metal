@@ -13,6 +13,45 @@ This document catalogs error patterns observed during kernel development. It is 
 
 ---
 
+## compiler.py Parameter Errors
+
+These are the most common compilation failures — caused by wrong or missing compiler.py
+flags, NOT by kernel code bugs. **Check these first before investigating the kernel.**
+
+### Missing parameter flag
+
+**Pattern**: `'IMPLIED_MATH_FORMAT' was not declared in this scope` (or `UNPACKER_ENGINE_SEL`,
+`dest_sync`, `TILE_CNT`, `num_faces`, `TEST_FACE_R_DIM`, `DST_INDEX`, `BLOCK_CT_DIM`, etc.)
+
+**Cause**: The compiler.py invocation is missing a `-t` or `-r` flag for that symbol.
+
+**Fix**: Add the missing flag. See the mapping table in
+`codegen/agents/quasar/llk-kernel-writer.md` Step 4, or look up the symbol in
+`tests/python_tests/helpers/test_variant_parameters.py` to find which parameter class
+generates it.
+
+### Wrong `-t` vs `-r` flag
+
+**Pattern**: `'BLOCK_CT_DIM' was not declared in this scope` even though `INPUT_DIMENSIONS`
+is passed (as `-r`)
+
+**Cause**: `-r` generates `RuntimeParams` struct fields, NOT `constexpr` defines.
+If the C++ test uses the symbol as a template argument or compile-time constant,
+it needs `-t` (which calls `convert_to_cpp()` to generate `constexpr` defines).
+
+**Fix**: Change `-r "INPUT_DIMENSIONS(1,1,1,1)"` to `-t "INPUT_DIMENSIONS(1,1,1,1)"`.
+Same applies to any param where the C++ test needs compile-time access.
+
+### Missing `buffer_A` / `buffer_B` / `buffer_Res`
+
+**Pattern**: `'const struct RuntimeParams' has no member named 'buffer_A'`
+
+**Cause**: This was a bug in compiler.py (fixed). The `buffer_A/B/Res` fields come from
+`StimuliConfig`, which compiler.py now injects automatically as a dummy. If you see this
+error, the compiler.py script may be an older version.
+
+---
+
 ## SFPU Kernel Errors
 
 ### 1. Undeclared Symbol
@@ -20,6 +59,7 @@ This document catalogs error patterns observed during kernel development. It is 
 **Pattern**: `'X' was not declared in this scope`
 
 **Common causes**:
+- **Missing compiler.py flag** (see "compiler.py Parameter Errors" above) — check this FIRST
 - Wrong instruction/function name
 - Missing include file
 - Wrong namespace
@@ -390,6 +430,6 @@ In Python test: `unpack_to_dest = (formats.input_format.is_32_bit() == (dest_acc
 3. **One fix at a time** — change one thing, recompile, check
 4. **Structural vs. superficial** — if individual fixes keep failing, the problem may be structural (wrong includes, wrong namespace setup, wrong function pattern). Compare the full file against a similar working kernel.
 5. **Check the spec** — the error may trace back to a wrong instruction mapping in the spec
-6. **Use verbose mode**: `check_compile.py -v` shows full compiler output
+6. **Use verbose mode**: `compiler.py ... -v` shows full compiler output
 7. **Check namespace**: Most SFPI symbols are in `sfpi::` namespace
 8. **Verify includes order**: Some headers depend on others being included first

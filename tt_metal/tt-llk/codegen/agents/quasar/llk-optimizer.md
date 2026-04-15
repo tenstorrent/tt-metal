@@ -173,11 +173,21 @@ If a loop is not replayable, leave it unchanged.
 
 After applying optimizations:
 
-1. **Compile check**:
+1. **Compile check** (use the test source with the same params used during generation):
 ```bash
 cd codegen && source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py ../{kernel_path} -v
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "PARAM(...)" -r "PARAM(...)" -v
 ```
+Find the correct `-t`/`-r` flags from the Python test's `TestConfig(...)` call
+(`templates=` → `-t`, `runtimes=` → `-r`). If no Python test exists, read the C++ test
+source and map each symbol to a parameter class from
+`tests/python_tests/helpers/test_variant_parameters.py`. See the parameter reference
+table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mapping.
+
+**Important**: `-t` generates `constexpr` defines; `-r` generates `RuntimeParams` struct
+fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
+it **must** be `-t`.
 
 2. **Run functional tests**:
 ```bash

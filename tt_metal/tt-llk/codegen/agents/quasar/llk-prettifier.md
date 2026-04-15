@@ -98,20 +98,25 @@ After each significant refactoring step (not after every tiny edit, but after ea
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_kernel} -v
+CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
+    -t "PARAM(...)" -r "PARAM(...)" -v
 ```
+
+Find the correct `-t`/`-r` flags from the Python test's `TestConfig(...)` call
+(`templates=` → `-t`, `runtimes=` → `-r`). If no Python test exists, read the C++ test
+source and map each symbol to a parameter class from
+`tests/python_tests/helpers/test_variant_parameters.py`. See the parameter reference
+table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mapping.
+
+**Important**: `-t` generates `constexpr` defines; `-r` generates `RuntimeParams` struct
+fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
+it **must** be `-t`.
 
 This way if something breaks, you know exactly which change caused it.
 
 ### Step 5: Final Compilation Check
 
-Run a final compilation check on the complete refactored kernel:
-
-```bash
-cd codegen
-source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py {path_to_kernel} -v
-```
+Run a final compilation check on the complete refactored kernel (same command as Step 4).
 
 If compilation **FAILS**:
 - Undo the last change that broke it

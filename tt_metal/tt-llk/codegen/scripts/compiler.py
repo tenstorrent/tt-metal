@@ -2,329 +2,239 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compile agent for SFPI compilation of generated LLK code."""
+"""
+LLK compile checker — explicit template/runtime parameter interface.
 
-import subprocess
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
+Works like any test file (e.g. test_stream_integration.py): the caller
+specifies the .cpp test source and the exact template/runtime parameters.
+The script creates a TestConfig, calls build_elfs(), and reports pass/fail.
 
-from codegen.config.settings import settings
+Usage (from codegen/ directory):
+    source ../tests/.venv/bin/activate
+    CHIP_ARCH=quasar python scripts/compiler.py \
+        ../tests/sources/quasar/sfpu_square_quasar_test.cpp \
+        -t "MATH_OP(mathop=MathOperation.Square)" \
+        -t "APPROX_MODE()" \
+        -r "TILE_COUNT(1)" \
+        -r "NUM_FACES()" \
+        -v
 
-
-@dataclass
-class CompileError:
-    """Structured compile error information."""
-
-    file: str
-    line: Optional[int]
-    column: Optional[int]
-    severity: str  # "error", "warning", "note"
-    message: str
-    raw_line: str
-
-
-@dataclass
-class CompileResult:
-    """Result of a compilation attempt."""
-
-    success: bool
-    object_path: Optional[Path] = None
-    errors: list[CompileError] = field(default_factory=list)
-    warnings: list[CompileError] = field(default_factory=list)
-    stdout: str = ""
-    stderr: str = ""
-    return_code: int = 0
-
-    @property
-    def error_summary(self) -> str:
-        """Get a summary of errors for feedback to LLM."""
-        if not self.errors:
-            return ""
-
-        lines = ["Compilation Errors:"]
-        for err in self.errors[:10]:  # Limit to first 10 errors
-            if err.line:
-                lines.append(f"  Line {err.line}: {err.message}")
-            else:
-                lines.append(f"  {err.message}")
-
-        if len(self.errors) > 10:
-            lines.append(f"  ... and {len(self.errors) - 10} more errors")
-
-        return "\n".join(lines)
-
-
-class CompileAgent:
-    """Agent for compiling generated LLK code using SFPI compiler."""
-
-    # Architecture to compiler flags mapping (from tests/Makefile and test_config.py)
-    ARCH_FLAGS = {
-        # Quasar: uses BH cpu for now, per Makefile comment "until there is official support"
-        "quasar": ["-mcpu=tt-bh-tensix", "-DARCH_QUASAR"],
-        "blackhole": ["-mcpu=tt-bh-tensix", "-DARCH_BLACKHOLE"],
-        "wormhole": ["-mcpu=tt-wh-tensix", "-DARCH_WORMHOLE"],
-    }
-
-    def __init__(self, arch: str = "quasar"):
-        if arch not in settings.supported_architectures:
-            raise ValueError(f"Unsupported architecture: {arch}")
-
-        self.arch = arch
-        self.compiler = settings.sfpi_compiler
-        self.build_dir = settings.build_dir / arch
-        self.build_dir.mkdir(parents=True, exist_ok=True)
-
-    def compile(
-        self,
-        code: str,
-        filename: str = "generated_kernel.h",
-        extra_includes: Optional[list[Path]] = None,
-        op_name: Optional[str] = None,
-    ) -> CompileResult:
-        """
-        Compile the generated code.
-
-        Args:
-            code: The C++ code to compile
-            filename: Name for the temporary file
-            extra_includes: Additional include paths
-            op_name: Operation name for wrapper (e.g., "sigmoid"). If None, inferred from filename.
-
-        Returns:
-            CompileResult with success status and any errors
-        """
-        # Infer op name from filename if not provided
-        if op_name is None:
-            stem = Path(filename).stem  # ckernel_sfpu_sigmoid -> ckernel_sfpu_sigmoid
-            op_name = stem.replace("ckernel_sfpu_", "")
-
-        # Create a wrapper that includes the generated header
-        wrapper_code = self._create_wrapper(code, filename, op_name)
-
-        # Write files to build directory
-        header_path = self.build_dir / filename
-        wrapper_path = self.build_dir / "compile_test.cpp"
-
-        header_path.write_text(code)
-        wrapper_path.write_text(wrapper_code)
-
-        # Build compiler command
-        cmd = self._build_compile_command(wrapper_path, extra_includes)
-
-        # Run compilation
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=settings.compile_timeout,
-                cwd=self.build_dir,
-            )
-
-            errors, warnings = self._parse_compiler_output(result.stderr)
-
-            return CompileResult(
-                success=result.returncode == 0,
-                object_path=(
-                    self.build_dir / "compile_test.o"
-                    if result.returncode == 0
-                    else None
-                ),
-                errors=errors,
-                warnings=warnings,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                return_code=result.returncode,
-            )
-
-        except subprocess.TimeoutExpired:
-            return CompileResult(
-                success=False,
-                errors=[
-                    CompileError(
-                        file=str(wrapper_path),
-                        line=None,
-                        column=None,
-                        severity="error",
-                        message=f"Compilation timed out after {settings.compile_timeout}s",
-                        raw_line="",
-                    )
-                ],
-                return_code=-1,
-            )
-
-        except Exception as e:
-            return CompileResult(
-                success=False,
-                errors=[
-                    CompileError(
-                        file=str(wrapper_path),
-                        line=None,
-                        column=None,
-                        severity="error",
-                        message=f"Compilation failed: {str(e)}",
-                        raw_line="",
-                    )
-                ],
-                return_code=-1,
-            )
-
-    def _create_wrapper(self, code: str, filename: str, op_name: str) -> str:
-        """Create a wrapper .cpp file that includes the generated header.
-
-        This wrapper mimics how the test infrastructure includes and uses SFPU functions.
-        """
-        return f"""// Auto-generated compile test wrapper
-// Mimics the test infrastructure includes
-
-#include "ckernel_trisc_common.h"
-#include "cmath_common.h"
-#include "{filename}"
-
-using namespace ckernel;
-using namespace ckernel::sfpu;
-
-// Force template instantiation to check compilation
-namespace {{
-    void force_compile_{op_name}() {{
-        _calculate_{op_name}_<true>(16);
-        _calculate_{op_name}_<false>(16);
-    }}
-
-    void force_compile_init() {{
-        _init_{op_name}_<true>();
-        _init_{op_name}_<false>();
-    }}
-}}
+    # With no params (bare compilation, Float16_b format):
+    CHIP_ARCH=quasar python scripts/compiler.py \
+        ../tests/sources/quasar/sfpu_square_quasar_test.cpp
 """
 
-    def _build_compile_command(
-        self,
-        source_path: Path,
-        extra_includes: Optional[list[Path]] = None,
-    ) -> list[str]:
-        """Build the compiler command line."""
-        cmd = [str(self.compiler)]
+import argparse
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
 
-        # Standard flags (from test_config.py OPTIONS_ALL and INITIAL_OPTIONS_COMPILE)
-        cmd.extend(
-            [
-                "-c",  # Compile only, don't link
-                "-std=c++17",
-                "-O3",
-                "-g",
-                "-ffast-math",
-                "-fno-use-cxa-atexit",
-                "-Wall",
-                "-fno-exceptions",
-                "-fno-rtti",
-                "-nostdlib",
-                "-fno-builtin",
-                "-Wunused-parameter",
-                "-Wfloat-equal",
-                "-Wpointer-arith",
-                "-Wnull-dereference",
-                "-Wredundant-decls",
-                "-Wuninitialized",
-                "-Wmaybe-uninitialized",
-                "-DTENSIX_FIRMWARE",
-                "-DENV_LLK_INFRA",
-                "-DENABLE_LLK_ASSERT",
-            ]
-        )
+# ---------------------------------------------------------------------------
+# Path setup — must happen before test-infrastructure imports
+# ---------------------------------------------------------------------------
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_CODEGEN_DIR = _SCRIPT_DIR.parent
+_LLK_ROOT = _CODEGEN_DIR.parent
+_TESTS_DIR = _LLK_ROOT / "tests"
 
-        # Architecture-specific flags
-        cmd.extend(self.ARCH_FLAGS.get(self.arch, []))
+sys.path.insert(0, str(_TESTS_DIR / "python_tests"))
+sys.path.insert(0, str(_LLK_ROOT))
 
-        # Include paths
-        for inc_path in settings.get_include_paths(self.arch):
-            if inc_path.exists():
-                cmd.extend(["-I", str(inc_path)])
+os.environ.setdefault("LLK_HOME", str(_LLK_ROOT))
 
-        # Build directory for generated header
-        cmd.extend(["-I", str(self.build_dir)])
 
-        # Extra includes
-        if extra_includes:
-            for inc in extra_includes:
-                cmd.extend(["-I", str(inc)])
+# ---------------------------------------------------------------------------
+# Build the eval namespace with all symbols agents might use
+# ---------------------------------------------------------------------------
+def _build_eval_namespace() -> dict:
+    """Import all param classes and enums into a flat namespace for eval."""
 
-        # Output
-        cmd.extend(["-o", str(self.build_dir / "compile_test.o")])
+    return {k: v for k, v in locals().items() if not k.startswith("_")}
 
-        # Source file
-        cmd.append(str(source_path))
 
-        return cmd
+# ---------------------------------------------------------------------------
+# Test name resolution
+# ---------------------------------------------------------------------------
+def _resolve_test_name(cpp_path: Path) -> str:
+    """Convert absolute .cpp path to the relative name TestConfig expects."""
+    tests_dir = _LLK_ROOT / "tests"
+    try:
+        return str(cpp_path.resolve().relative_to(tests_dir.resolve()))
+    except ValueError:
+        return str(cpp_path)
 
-    def _parse_compiler_output(
-        self, stderr: str
-    ) -> tuple[list[CompileError], list[CompileError]]:
-        """
-        Parse compiler stderr to extract structured errors.
 
-        Returns:
-            Tuple of (errors, warnings)
-        """
-        errors = []
-        warnings = []
+# ---------------------------------------------------------------------------
+# Error parsing
+# ---------------------------------------------------------------------------
+def _parse_errors(stderr: str) -> list[str]:
+    errors = []
+    for line in stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r"\berror:", line):
+            errors.append(line)
+    return errors if errors else [stderr.split("\n")[0]]
 
-        for line in stderr.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
 
-            # GCC format: file:line:col: severity: message
-            # or: file:line: severity: message
-            error = self._parse_gcc_error_line(line)
-            if error:
-                if error.severity == "error":
-                    errors.append(error)
-                elif error.severity == "warning":
-                    warnings.append(error)
+# ---------------------------------------------------------------------------
+# Compile
+# ---------------------------------------------------------------------------
+def _make_dummy_stimuli(data_format):
+    """Create a minimal StimuliConfig so RuntimeParams includes buffer fields."""
+    import torch
+    from helpers.stimuli_config import StimuliConfig
 
-        return errors, warnings
+    dummy = torch.zeros(1024, dtype=torch.float32)
+    return StimuliConfig(
+        buffer_A=dummy,
+        stimuli_A_format=data_format,
+        buffer_B=dummy,
+        stimuli_B_format=data_format,
+        stimuli_res_format=data_format,
+        tile_count_A=1,
+        tile_count_B=1,
+        tile_count_res=1,
+        num_faces=4,
+    )
 
-    def _parse_gcc_error_line(self, line: str) -> Optional[CompileError]:
-        """Parse a single GCC error/warning line."""
-        import re
 
-        # Pattern: file:line:col: severity: message
-        pattern = r"^(.+?):(\d+):(\d+):\s*(error|warning|note):\s*(.+)$"
-        match = re.match(pattern, line)
-        if match:
-            return CompileError(
-                file=match.group(1),
-                line=int(match.group(2)),
-                column=int(match.group(3)),
-                severity=match.group(4),
-                message=match.group(5),
-                raw_line=line,
-            )
+def compile_check(
+    cpp_path: Path,
+    templates: list = None,
+    runtimes: list = None,
+    arch: str = "quasar",
+    verbose: bool = False,
+) -> tuple[bool, str]:
+    """
+    Compile a .cpp test source with explicit template/runtime params.
 
-        # Pattern without column: file:line: severity: message
-        pattern = r"^(.+?):(\d+):\s*(error|warning|note):\s*(.+)$"
-        match = re.match(pattern, line)
-        if match:
-            return CompileError(
-                file=match.group(1),
-                line=int(match.group(2)),
-                column=None,
-                severity=match.group(3),
-                message=match.group(4),
-                raw_line=line,
-            )
+    Returns (success: bool, message: str).
+    """
+    from helpers.format_config import DataFormat
+    from helpers.param_config import input_output_formats
+    from helpers.test_config import TestConfig
 
-        # Generic error without location
-        if "error:" in line.lower():
-            return CompileError(
-                file="",
-                line=None,
-                column=None,
-                severity="error",
-                message=line,
-                raw_line=line,
-            )
+    cpp_path = Path(cpp_path).resolve()
+    if not cpp_path.exists():
+        return False, f"File not found: {cpp_path}"
 
-        return None
+    templates = templates or []
+    runtimes = runtimes or []
+
+    test_name = _resolve_test_name(cpp_path)
+
+    if verbose:
+        print(f"  Test name:  {test_name}")
+        print(f"  Templates:  {[type(t).__name__ for t in templates]}")
+        print(f"  Runtimes:   {[type(r).__name__ for r in runtimes]}")
+
+    os.environ.setdefault("CHIP_ARCH", arch)
+
+    artefacts = TestConfig.DEFAULT_ARTEFACTS_PATH
+    if artefacts.exists():
+        shutil.rmtree(artefacts, ignore_errors=True)
+
+    TestConfig.setup_build(_LLK_ROOT)
+    TestConfig.create_build_directories()
+
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    stimuli = _make_dummy_stimuli(DataFormat.Float16_b)
+
+    configuration = TestConfig(
+        test_name,
+        formats,
+        templates=templates,
+        runtimes=runtimes,
+        variant_stimuli=stimuli,
+    )
+    configuration.generate_variant_hash()
+
+    try:
+        configuration.build_elfs()
+        return True, "Compilation successful"
+    except RuntimeError as exc:
+        stderr_text = str(exc)
+        errors = _parse_errors(stderr_text)
+        msg = f"{len(errors)} error(s)\n"
+        if verbose:
+            msg += stderr_text
+        else:
+            msg += "\n".join(errors[:15])
+            if len(errors) > 15:
+                msg += f"\n... and {len(errors) - 15} more (use -v for full output)"
+        return False, msg
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compile-check an LLK test source with explicit params"
+    )
+    parser.add_argument(
+        "file",
+        type=Path,
+        help="Path to .cpp test source",
+    )
+    parser.add_argument(
+        "-t",
+        "--template",
+        action="append",
+        default=[],
+        dest="templates",
+        help=(
+            "Template parameter expression, e.g. "
+            '"MATH_OP(mathop=MathOperation.Square)". '
+            "Can be repeated."
+        ),
+    )
+    parser.add_argument(
+        "-r",
+        "--runtime",
+        action="append",
+        default=[],
+        dest="runtimes",
+        help=(
+            'Runtime parameter expression, e.g. "TILE_COUNT(1)". ' "Can be repeated."
+        ),
+    )
+    parser.add_argument(
+        "--arch",
+        default=os.environ.get("CHIP_ARCH", "quasar"),
+        choices=["quasar", "blackhole", "wormhole"],
+    )
+    parser.add_argument("--verbose", "-v", action="store_true")
+    args = parser.parse_args()
+
+    filepath = args.file.resolve()
+    if not filepath.exists():
+        print(f"Error: File not found: {filepath}")
+        sys.exit(1)
+
+    # Eval template/runtime expressions in the helpers namespace
+    ns = _build_eval_namespace()
+    templates = [eval(expr, {"__builtins__": {}}, ns) for expr in args.templates]
+    runtimes = [eval(expr, {"__builtins__": {}}, ns) for expr in args.runtimes]
+
+    print(f"Compiling: {filepath.name}")
+    print(f"Architecture: {args.arch}")
+
+    success, message = compile_check(
+        filepath, templates, runtimes, args.arch, args.verbose
+    )
+
+    if success:
+        print(f"PASSED — {message}")
+        sys.exit(0)
+    else:
+        print(f"FAILED — {message}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

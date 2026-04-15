@@ -248,7 +248,7 @@ Different architectures process data in different chunk sizes and have different
 
 After implementing, verify:
 
-1. **Compilation**: `python scripts/check_compile.py {kernel_file} -v`
+1. **Compilation**: `CHIP_ARCH={arch} python scripts/compiler.py {test_source} -t "..." -r "..." -v`
 2. **Instruction validity**: Every instruction used exists in assembly.yaml
 3. **Pattern conformance**: The code matches existing target implementation patterns
 4. **Functional correctness**: Run available tests

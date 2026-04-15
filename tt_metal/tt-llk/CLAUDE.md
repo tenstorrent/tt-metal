@@ -15,7 +15,7 @@ claude
 > Generate gelu for Quasar
 ```
 
-The codegen system discovers architectural patterns dynamically from Confluence, DeepWiki, assembly.yaml, and existing implementations. See [codegen/CLAUDE.md](codegen/CLAUDE.md) for orchestrator details.
+The codegen system discovers architectural patterns dynamically from Confluence, DeepWiki, assembly.yaml, and existing implementations. Each target architecture has its own orchestrator and agents under `codegen/agents/{arch}/`. See [codegen/CLAUDE.md](codegen/CLAUDE.md) for the routing table.
 
 ## Repository Structure
 
@@ -25,8 +25,8 @@ tt-llk/
 ├── tt_llk_blackhole/        # Blackhole LLK (reference)
 ├── tt_llk_wormhole_b0/      # Wormhole LLK (reference)
 ├── codegen/                 # AI code generation system
-│   ├── CLAUDE.md            # Orchestrator instructions
-│   ├── agents/              # Agent playbooks
+│   ├── CLAUDE.md            # Pointer to orchestrator
+│   ├── agents/{arch}/       # Per-arch orchestrator + agent playbooks
 │   ├── references/          # Knowledge base
 │   ├── artifacts/           # Generated artifacts
 │   └── scripts/             # Tools
@@ -43,7 +43,7 @@ cd tests
 
 ### MCP Servers
 Pre-configured in `.mcp.json`. Atlassian requires authentication on first use.
-- **Atlassian** — Primary source for architecture knowledge. See `codegen/agents/llk-arch-lookup.md` for full page index. Key pages:
+- **Atlassian** — Primary source for architecture knowledge. See `codegen/agents/quasar/llk-arch-lookup.md` for full page index. Key pages:
   - Page ID `48300268` — uarch tree root (80+ sub-pages with detailed microarchitecture)
   - Page ID `1256423592` — Quasar/Trinity SFPU Micro-Architecture Spec (primary SFPU reference)
   - Page ID `1170505767` — Tensix SFPU Instruction Set Architecture (per-instruction details)
@@ -56,8 +56,14 @@ Pre-configured in `.mcp.json`. Atlassian requires authentication on first use.
 ```bash
 cd codegen
 source ../tests/.venv/bin/activate
-PYTHONPATH=.. python scripts/check_compile.py ../tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_{op}.h -v
+CHIP_ARCH=quasar python scripts/compiler.py ../tests/sources/quasar/sfpu_{op}_quasar_test.cpp \
+    -t "MATH_OP(mathop=MathOperation.{Op})" \
+    -t "APPROX_MODE()" \
+    -r "TILE_COUNT(1)" \
+    -r "NUM_FACES()" \
+    -v
 ```
+Template (`-t`) and runtime (`-r`) params use classes from `tests/python_tests/helpers/test_variant_parameters.py`.
 
 ### Run Tests
 ```bash
