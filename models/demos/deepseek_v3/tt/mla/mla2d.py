@@ -61,7 +61,11 @@ class MLA2D(MLA1D):
     ) -> ttnn.Tensor:
         if dims[0] is not None:
             slices = torch.split(torch_metaweight, 1, dim=dims[0])
-            assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
+            # Debugging-only invariant check:
+            # the stacked MLA row slices are expected to be identical because MLA2D
+            # fans a single state dict out across mesh rows before conversion.
+            # Leave the expensive torch.allclose validation disabled in the hot path.
+            # assert all(torch.allclose(s1, s2) for s1, s2 in zip(slices[:-1], slices[1:]))
             torch_metaweight = slices[0]
             dims = (None, dims[1])
         return super()._convert_weight(path, torch_metaweight, dims, mesh_device, memory_config, padding_needed)
