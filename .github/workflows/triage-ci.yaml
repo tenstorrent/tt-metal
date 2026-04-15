@@ -1,49 +1,74 @@
-name: "(triage) Bug Escape Detection"
+name: "(triage) Bug Escape Detection / Verify"
 
 on:
   workflow_dispatch:
     inputs:
+      # --- Verification mode (fill these to skip detection and verify a specific escape) ---
+      fix-commit-sha:
+        description: "Verify mode: fix commit SHA (leave blank for detection mode)"
+        type: string
+        default: ""
+      verify-test-pipeline:
+        description: "Verify mode: workflow file path (e.g. .github/workflows/t3000-perf-tests.yaml)"
+        type: string
+        default: ""
+      verify-test-job:
+        description: "Verify mode: job display name"
+        type: string
+        default: ""
+      verify-test-name:
+        description: "Verify mode: full pytest path"
+        type: string
+        default: ""
+      poll-interval-seconds:
+        description: "Verify mode: seconds between status checks"
+        type: string
+        default: "30"
+      # --- Detection mode (used when fix-commit-sha is blank) ---
       max-phase:
-        description: "Stop after this phase (0=smoke, 1=discover, 2=candidates, 3=fixpoints, 4=full)"
+        description: "Detection mode: stop after this phase (0-4)"
         type: string
         default: "4"
       test-workflows:
-        description: "Comma-separated workflow paths (empty = all)"
+        description: "Detection mode: comma-separated workflow paths (empty = all)"
         type: string
         default: ""
       consecutive-runs:
-        description: "Consecutive failing runs required"
+        description: "Detection mode: consecutive failing runs required"
         type: string
         default: "3"
       lookback-days:
-        description: "Days to look back for failures"
+        description: "Detection mode: days to look back for failures"
         type: string
         default: "14"
-      max-candidates:
-        description: "Max confirmed failures before Phase 2 stops"
-        type: string
-        default: "999"
-      auto-verify:
-        description: "Automatically dispatch verification for detected escapes"
-        type: string
-        default: "false"
 
 permissions:
   contents: write
   actions: write
 
 jobs:
-  bug-escapes:
+  detect:
+    if: inputs.fix-commit-sha == ''
     uses: tenstorrent/tt-auto-triage/.github/workflows/bug-escapes-ci.yaml@ebanerjee/bug-escapes
     with:
       max-phase: ${{ inputs.max-phase }}
       test-workflows: ${{ inputs.test-workflows }}
       consecutive-runs: ${{ inputs.consecutive-runs }}
       lookback-days: ${{ inputs.lookback-days }}
-      max-candidates: ${{ inputs.max-candidates }}
-      auto-verify: ${{ inputs.auto-verify }}
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+
+  verify:
+    if: inputs.fix-commit-sha != ''
+    uses: tenstorrent/tt-auto-triage/.github/workflows/verify-bug-escape-ci.yaml@ebanerjee/bug-escapes
+    with:
+      fix-commit-sha: ${{ inputs.fix-commit-sha }}
+      test-pipeline: ${{ inputs.verify-test-pipeline }}
+      test-job: ${{ inputs.verify-test-job }}
+      test-name: ${{ inputs.verify-test-name }}
+      poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
+      max-wait-minutes: "120"
+    secrets:
+      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
