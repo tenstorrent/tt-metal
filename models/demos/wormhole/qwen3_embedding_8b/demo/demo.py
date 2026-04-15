@@ -34,6 +34,10 @@ Short-seq tuning (Qwen3-Embedding checkpoints only, via ``ModelArgs`` in ``model
 ``Qwen3-Embedding-4B`` / ``0.6B`` prefill chunk sizes and N150 trace buckets (128–1024), N150
 ``prefill_len_cutoff`` 512 for chunked MLP, and reduced prefill warmup when ``max_seq_len`` ≤ 512.
 Other model families are unchanged.
+
+Experimental L1 prefill (N150, ``max_seq_len`` ≤ 512 only): set ``TT_EMBEDDING_PREFILL_L1=1`` to route
+prefill activations (embedding, residual, MLP, attention ``wo``) through L1 instead of DRAM. Disable if
+you see OOM or correctness issues.
 """
 
 import json
@@ -189,6 +193,12 @@ def prepare_embedding_model(
         logger.info(f"Distributed mode: using {len(submeshes)}/{len(all_submeshes)} local submeshes")
 
     # Overlap host dispatch with device (large op-to-op gaps in Tracy for embedding prefill on N150)
+    if os.getenv("TT_EMBEDDING_PREFILL_L1", "").lower() in ("1", "true", "yes"):
+        logger.info(
+            "TT_EMBEDDING_PREFILL_L1 enabled — experimental L1 prefill (N150, max_seq_len<=512); "
+            "see ModelArgs.use_embedding_prefill_l1"
+        )
+
     if os.getenv("TT_EMBEDDING_ASYNC_DISPATCH", "0") == "1":
         try:
             ttnn.enable_asynchronous_slow_dispatch(mesh_device)
