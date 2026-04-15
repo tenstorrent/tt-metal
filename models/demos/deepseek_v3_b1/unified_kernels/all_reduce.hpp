@@ -163,37 +163,44 @@ private:
 
         auto connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        connection.open_start();
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* header = nullptr;
+        uint64_t dst_noc_base = 0;
+        uint64_t remote_sem_noc = 0;
+        {
+            DeviceZoneScopedN("CCL_WRITER_SETUP");
+            connection.open_start();
 
-        PacketHeaderPool::reset();
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-        fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
+            PacketHeaderPool::reset();
+            header = PacketHeaderPool::allocate_header();
+            fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
 
-        const uint64_t dst_noc_base =
-            safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
-        const uint64_t remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
-
-        // Ensure local data is available in the CB before signaling or sending.
-        if constexpr (CTArgs::skip_local_push) {
-            // Fused path: preceding op (e.g. gather3) pushes to this CB.
-            cb_wait_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
-        } else if constexpr (CTArgs::signal_local_ready) {
-            // Standalone path: push the sharded tensor into the CB.
-            // Only the RISC with signal_local_ready does the push; the other
-            // RISC reads get_read_ptr directly (CB base points to the tensor).
-            cb_reserve_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
-            cb_push_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            dst_noc_base = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
+            remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
         }
 
-        // Signal local_ready AFTER data is confirmed present so the receiver
-        // can safely NOC-read from the sender's L1.
-        if constexpr (CTArgs::signal_local_ready) {
-            noc_semaphore_inc(local_ready_noc_addr, 1);
-            noc_async_atomic_barrier();
+        // Ensure local data is available in the CB before signaling or sending.
+        {
+            DeviceZoneScopedN("CCL_WRITER_LOCAL_READY");
+            if constexpr (CTArgs::skip_local_push) {
+                // Fused path: preceding op (e.g. gather3) pushes to this CB.
+                cb_wait_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            } else if constexpr (CTArgs::signal_local_ready) {
+                // Standalone path: push the sharded tensor into the CB.
+                // Only the RISC with signal_local_ready does the push; the other
+                // RISC reads get_read_ptr directly (CB base points to the tensor).
+                cb_reserve_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+                cb_push_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            }
+
+            // Signal local_ready AFTER data is confirmed present so the receiver
+            // can safely NOC-read from the sender's L1.
+            if constexpr (CTArgs::signal_local_ready) {
+                noc_semaphore_inc(local_ready_noc_addr, 1);
+                noc_async_atomic_barrier();
+            }
         }
 
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
-
         connection.open_finish();
 
         constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
@@ -214,24 +221,34 @@ private:
 
         uint32_t chunk_idx = CTArgs::link_index;
         for (; chunk_idx < CTArgs::num_chunks - 1; chunk_idx += CTArgs::num_links) {
-            send_payload(offset, regular_payload_bytes);
-            offset += stride_bytes;
-            noc_async_writes_flushed();
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD");
+                send_payload(offset, regular_payload_bytes);
+            }
+            {
+                DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
+                offset += stride_bytes;
+                noc_async_writes_flushed();
+            }
         }
 
         if (chunk_idx < CTArgs::num_chunks) {
+            DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD");
             send_payload(offset, last_payload_bytes);
         }
 
-        connection.close_start();
+        {
+            DeviceZoneScopedN("CCL_WRITER_CLOSE");
+            connection.close_start();
 
-        if constexpr (CTArgs::signal_local_ready) {
-            cb_pop_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            if constexpr (CTArgs::signal_local_ready) {
+                cb_pop_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            }
+
+            connection.close_finish();
+
+            noc_async_full_barrier();
         }
-
-        connection.close_finish();
-
-        noc_async_full_barrier();
 #endif
     }
 };
@@ -244,13 +261,16 @@ public:
 private:
     void impl([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (CTArgs::has_residual) {
-            cb_reserve_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-            cb_push_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
-        }
+        {
+            DeviceZoneScopedN("CCL_READER_PREP");
+            if constexpr (CTArgs::has_residual) {
+                cb_reserve_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
+                cb_push_back(CTArgs::residual_cb_id, CTArgs::total_num_tiles);
+            }
 
-        cb_reserve_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
-        cb_reserve_back(CTArgs::remote_data_cb_id, CTArgs::total_num_tiles);
+            cb_reserve_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
+            cb_reserve_back(CTArgs::remote_data_cb_id, CTArgs::total_num_tiles);
+        }
         constexpr uint32_t local_payload_bytes = CTArgs::total_num_tiles * CTArgs::page_size_bytes;
         const uint64_t local_data_src_noc =
             safe_get_noc_addr(args.sender_noc_x, args.sender_noc_y, args.sender_local_data_l1_addr, 0);
@@ -258,11 +278,6 @@ private:
 
         volatile tt_l1_ptr uint32_t* local_ready_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.local_ready_sem_bank_addr);
-        noc_semaphore_wait_min(local_ready_sem_ptr, 1);
-        unified_kernels::semaphore_dec(local_ready_sem_ptr, 1);
-
-        noc_async_read(local_data_src_noc, local_data_dst, local_payload_bytes);
-
         const std::array<uint32_t, MAX_NUM_LINKS> sem_addrs = {args.sem_bank_addr_0, args.sem_bank_addr_1};
         std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
         std::array<uint32_t, CTArgs::num_links> link_counters = {};
@@ -270,27 +285,40 @@ private:
         for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
             sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addrs[link_idx]);
         }
+        {
+            DeviceZoneScopedN("CCL_READER_LOCAL_READ");
+            noc_semaphore_wait_min(local_ready_sem_ptr, 1);
+            unified_kernels::semaphore_dec(local_ready_sem_ptr, 1);
 
-        noc_async_read_barrier();
-        cb_push_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
+            noc_async_read(local_data_src_noc, local_data_dst, local_payload_bytes);
 
-        uint32_t current_link = 0;
-        for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
-            const uint32_t tiles =
-                (chunk_idx < CTArgs::num_chunks - 1) ? CTArgs::tiles_per_chunk : CTArgs::last_chunk_tiles;
+            noc_async_read_barrier();
+            cb_push_back(CTArgs::recv_local_data_cb_id, CTArgs::total_num_tiles);
+        }
 
-            link_counters[current_link]++;
-            noc_semaphore_wait_min(sem_ptrs[current_link], link_counters[current_link]);
-            cb_push_back(CTArgs::remote_data_cb_id, tiles);
+        {
+            DeviceZoneScopedN("CCL_READER_RECV");
+            uint32_t current_link = 0;
+            for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
+                const uint32_t tiles =
+                    (chunk_idx < CTArgs::num_chunks - 1) ? CTArgs::tiles_per_chunk : CTArgs::last_chunk_tiles;
 
-            if (++current_link == CTArgs::num_links) {
-                current_link = 0;
+                link_counters[current_link]++;
+                noc_semaphore_wait_min(sem_ptrs[current_link], link_counters[current_link]);
+                cb_push_back(CTArgs::remote_data_cb_id, tiles);
+
+                if (++current_link == CTArgs::num_links) {
+                    current_link = 0;
+                }
             }
         }
 
-        for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-            if (link_counters[link_idx] > 0) {
-                unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
+        {
+            DeviceZoneScopedN("CCL_READER_CLEANUP");
+            for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                if (link_counters[link_idx] > 0) {
+                    unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
+                }
             }
         }
 #endif
@@ -359,25 +387,30 @@ private:
 
     void impl() {
 #if defined(COMPILE_FOR_TRISC)
-        reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
-        pack_reconfig_data_format<true>(CTArgs::cb_out);
+        {
+            DeviceZoneScopedN("CCL_COMPUTE_SETUP");
+            reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
+        }
 
         // TODO: Fix this to account for actual dst size
         static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
-
-        if constexpr (CTArgs::has_residual) {
-            copy_tile_to_dst_init_short(CTArgs::cb_residual);
-            cb_wait_front(CTArgs::cb_residual, CTArgs::num_tiles);
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                copy_tile(CTArgs::cb_residual, i, i);
+        {
+            DeviceZoneScopedN("CCL_COMPUTE_ADD");
+            if constexpr (CTArgs::has_residual) {
+                copy_tile_to_dst_init_short(CTArgs::cb_residual);
+                cb_wait_front(CTArgs::cb_residual, CTArgs::num_tiles);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                    copy_tile(CTArgs::cb_residual, i, i);
+                }
+                cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
+                add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote, true);
+                batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
+            } else {
+                add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote);
+                batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
             }
-            cb_pop_front(CTArgs::cb_residual, CTArgs::num_tiles);
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote, true);
-            batched_add<false>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
-        } else {
-            add_tiles_init(CTArgs::cb_local, CTArgs::cb_remote);
-            batched_add<true>(CTArgs::cb_local, CTArgs::cb_remote, CTArgs::cb_out, CTArgs::num_tiles);
         }
 #endif
     }
