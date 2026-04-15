@@ -2,3 +2,11 @@
 {"event":"pipeline_start","op_name":"softcap","math_definition":"cap * tanh(x / cap)","output_folder":".claude-analysis/softcap-1","ts":"2026-04-15T08:40:41+00:00"}
 {"event":"phase_start","phase":1,"phase_name":"Reference Discovery","ts":"2026-04-15T08:40:57+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-reference-discoverer","phase":1,"ts":"2026-04-15T08:41:00+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-reference-discoverer","status":"ok","commit":"d9ccbdb5f9","ts":"2026-04-15T08:49:32+00:00"}
+{"event":"phase_complete","phase":1,"phase_name":"Reference Discovery","status":"ok","references":["swish","tanhshrink","atanh","sinh","hardtanh"],"ts":"2026-04-15T08:49:33+00:00"}
+{"event":"phase_start","phase":2,"phase_name":"Reference Analysis","analyzer_count":5,"ts":"2026-04-15T08:49:41+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"swish","background":true,"ts":"2026-04-15T08:49:45+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"tanhshrink","background":true,"ts":"2026-04-15T08:49:46+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"atanh","background":true,"ts":"2026-04-15T08:49:47+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"sinh","background":true,"ts":"2026-04-15T08:49:48+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-15T08:49:49+00:00"}
