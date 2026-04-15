@@ -966,8 +966,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                                   "reader_unary_interleaved_start_id.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = reader_ct_args,
-                 .common_runtime_args = {device_input_tensor_1.buffer()->address(), num_tiles, 0u},
                  .runtime_args = {{{0, 0}, {device_input_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {device_input_tensor_1.buffer()->address(), num_tiles, 0u},
                  .config = tt::tt_metal::ReaderConfigDescriptor{},
              },
              {
@@ -975,8 +975,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                                   "writer_unary_interleaved_start_id.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = writer_ct_args,
-                 .common_runtime_args = {device_output_tensor_1.buffer()->address(), num_tiles, 0u},
                  .runtime_args = {{{0, 0}, {device_output_tensor_1.buffer()->address(), num_tiles, 0u}}},
+                 .common_runtime_args = {device_output_tensor_1.buffer()->address(), num_tiles, 0u},
                  .config = tt::tt_metal::WriterConfigDescriptor{},
              },
              {
