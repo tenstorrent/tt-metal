@@ -2070,31 +2070,19 @@ jobs:
 
           declare -A FILES_HAS_APPROVAL  # sorted_files -> true/false
 
-          # Helper function to check if two file lists have any overlap
-          files_have_overlap() {
-            local files1="$1"
-            local files2="$2"
-            if [ -z "$files1" ] || [ -z "$files2" ]; then
-              return 1
-            fi
-            # Convert comma-separated lists to arrays and check for any common file
-            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
-            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
-            for file1 in "${FILES1_ARRAY[@]}"; do
-              for file2 in "${FILES2_ARRAY[@]}"; do
-                if [ "$file1" = "$file2" ]; then
-                  return 0  # Found overlap
-                fi
-              done
-            done
-            return 1  # No overlap
-          }
-
           for sorted_files in "${!FILES_TO_MEMBERS[@]}"; do
             combined_members="${FILES_TO_MEMBERS[$sorted_files]}"
 
-            # Check if ANY member from combined set has approved
-            # Also check members from other file sets that overlap with this one
+            # Check if ANY member from the combined set has approved.
+            # FILES_TO_MEMBERS combines members from ALL teams/groups that own the
+            # exact same file set (e.g., ttnn-core team + tests/ttnn/ pattern group),
+            # so shared/cross-group approvals are correctly handled.
+            #
+            # NOTE: We intentionally do NOT check partially-overlapping file sets here.
+            # Overlap checking caused a bug where a reviewer from team-A (which owns a
+            # superset of files) would incorrectly mark team-B as approved — even though
+            # team-B requires its own member's approval. Only exact-same-file-set
+            # combined ownership should count.
             has_approval=false
             if [ -n "$combined_members" ]; then
               IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
@@ -2104,26 +2092,6 @@ jobs:
                   has_approval=true
                   echo "DEBUG select-owners: Files [$sorted_files] approved by $member"
                   break
-                fi
-              done
-            fi
-
-            # If not approved yet, check overlapping file sets
-            if [ "$has_approval" != "true" ]; then
-              for other_files in "${!FILES_TO_MEMBERS[@]}"; do
-                if [ "$other_files" != "$sorted_files" ] && files_have_overlap "$sorted_files" "$other_files"; then
-                  other_members="${FILES_TO_MEMBERS[$other_files]}"
-                  if [ -n "$other_members" ]; then
-                    IFS=',' read -ra OTHER_ARRAY <<< "$other_members"
-                    for member in "${OTHER_ARRAY[@]}"; do
-                      [ -z "$member" ] && continue
-                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                        has_approval=true
-                        echo "DEBUG select-owners: Files [$sorted_files] approved by $member (from overlapping set [$other_files])"
-                        break 2  # Break out of both loops
-                      fi
-                    done
-                  fi
                 fi
               done
             fi
@@ -2156,30 +2124,10 @@ jobs:
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check team-specific approval: only skip if an actual member of THIS team approved.
-              # The FILES_HAS_APPROVAL map uses combined/cross-team approval which is correct
-              # for display purposes, but for notifications we must verify the approver belongs
-              # to this team — otherwise a reviewer from a different team that owns overlapping
-              # files would incorrectly suppress the Slack ping for this team.
-              team_has_own_approval=false
-              if [ -n "$TEAM_MEMBERS" ]; then
-                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
-                if [ -n "$team_members_entry" ]; then
-                  this_team_members=$(echo "$team_members_entry" | cut -d':' -f2)
-                  if [ "$this_team_members" != "insufficient-permissions" ] && [ "$this_team_members" != "team-not-found" ] && [ "$this_team_members" != "unauthorized" ] && [ "$this_team_members" != "api-error" ] && [ "$this_team_members" != "no-members" ]; then
-                    IFS=',' read -ra THIS_TEAM_ARRAY <<< "$this_team_members"
-                    for member in "${THIS_TEAM_ARRAY[@]}"; do
-                      [ -z "$member" ] && continue
-                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                        team_has_own_approval=true
-                        echo "Team $team approved by own member $member, skipping"
-                        break
-                      fi
-                    done
-                  fi
-                fi
-              fi
-              if [ "$team_has_own_approval" = "true" ]; then
+              # Check combined approval for this file set
+              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
+              if [ "$has_approval" = "true" ]; then
+                echo "Team $team already approved (combined check), skipping"
                 continue
               fi
 
