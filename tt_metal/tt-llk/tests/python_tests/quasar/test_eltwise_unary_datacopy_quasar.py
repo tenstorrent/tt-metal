@@ -188,7 +188,6 @@ def test_eltwise_unary_datacopy_quasar(
         unpack_to_dest=False,
         dest_acc=dest_acc,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        # This ensures Python-side format inference uses Float16_b for MX internal math
         disable_format_inference=(
             implied_math_format == ImpliedMathFormat.Yes
             and formats.input_format.is_mx_format()
