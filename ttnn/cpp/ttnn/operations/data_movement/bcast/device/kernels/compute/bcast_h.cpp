@@ -12,15 +12,11 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
 
-    constexpr auto cb_id_in0 = static_cast<tt::CBIndex>(cb_in0);
-    constexpr auto cb_id_in1 = static_cast<tt::CBIndex>(cb_in1);
-    constexpr auto cb_id_out = static_cast<tt::CBIndex>(cb_out);
+    experimental::CircularBuffer cb_src0(static_cast<tt::CBIndex>(cb_in0));
+    experimental::CircularBuffer cb_src1(static_cast<tt::CBIndex>(cb_in1));
+    experimental::CircularBuffer cb_dst(static_cast<tt::CBIndex>(cb_out));
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_id_in0, cb_id_in1, cb_id_out);
-
-    experimental::CircularBuffer cb_src0(cb_id_in0);
-    experimental::CircularBuffer cb_src1(cb_id_in1);
-    experimental::CircularBuffer cb_dst(cb_id_out);
+    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_src0.get_cb_id(), cb_src1.get_cb_id(), cb_dst.get_cb_id());
 
     for (uint32_t b = 0; b < B; b++) {
         for (uint32_t h = 0; h < Ht; h++) {
@@ -36,8 +32,8 @@ void kernel_main() {
 
                 cb_src0.wait_front(onetile);
 
-                BCAST_OP<BroadcastType::ROW>(cb_id_in0, cb_id_in1, 0, 0, 0);
-                pack_tile(0, cb_id_out);
+                BCAST_OP<BroadcastType::ROW>(cb_src0.get_cb_id(), cb_src1.get_cb_id(), 0, 0, 0);
+                pack_tile(0, cb_dst.get_cb_id());
 
                 cb_src0.pop_front(onetile);
 
