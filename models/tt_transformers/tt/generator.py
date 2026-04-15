@@ -661,14 +661,15 @@ class Generator(WarmupForwardMixin):
                 if sampling_enabled:
                     sampling_executed = True
 
-                    combined_params = format_sampling_params(sampling_params, padded_batch)
+                    sampling_module = self.model[model_id].sampling
+                    sampling_batch = sampling_module.tt_sampling.max_batch_size
+                    combined_params = format_sampling_params(sampling_params, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
-                    combined_prompt_tokens = torch.zeros(padded_batch, max_prompt_len, dtype=torch.long)
+                    combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    sampling_module = self.model[model_id].sampling
                     sampling_module.reset_sampling_params(combined_params)
                     if getattr(combined_params, "seed", None) is not None:
                         sampling_module.seed_manager.reset_seed(combined_params.seed, empty_slots)
@@ -681,7 +682,7 @@ class Generator(WarmupForwardMixin):
                         logits, last_token_idx, padded_batch, prefill_seq_len
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}"
+                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{padded_batch}"
                     if enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
