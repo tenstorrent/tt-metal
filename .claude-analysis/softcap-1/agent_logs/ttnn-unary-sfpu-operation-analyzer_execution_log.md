@@ -93,3 +93,37 @@
 
 ## Output (sinh)
 - **Analysis file**: `.claude-analysis/softcap-1/sinh_analysis.md`
+
+---
+
+## Session Info (hardtanh)
+- **Operation**: hardtanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Start time**: 2026-04-15
+- **Status**: SUCCESS
+
+## Analysis Steps (hardtanh)
+
+1. **Read unary_op_utils.cpp** - HARDTANH has no case in `get_op_init_and_func_parameterized` (TT_THROW), `get_op_init_and_func_default` (TT_THROW), `get_compute_kernel_path` (default: eltwise_sfpu.cpp), `get_op_approx_mode` (default: false). Dispatch chain is NOT WIRED.
+2. **Read unary_op_utils.hpp** - `is_parametrized_type(HARDTANH)` returns true, confirming it expects min_val/max_val parameters.
+3. **Read unary.hpp** - `hardtanh(input, min_val=-1.0f, max_val=1.0f)` passes both params as `UnaryWithParam{UnaryOpType::HARDTANH, min_val, max_val}`.
+4. **Checked API layer** - No `hardtanh_tile()` function exists in `tt_metal/hw/inc/api/compute/eltwise_unary/`.
+5. **Checked LLK layer** - No `llk_math_eltwise_unary_sfpu_hardtanh.h` exists in either WH or BH llk_api directories.
+6. **Checked metal SfpuType** - `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h` has only frac/swish/atanh/sinh; no hardtanh entry.
+7. **Read core SFPU kernel** (`ckernel_sfpu_hardtanh.h`) - Both WH and BH identical. SFPI-based. Three-step clamping: add(-min), clamp-below, add(-(max-min)), clamp-above, add(max). Takes 3 uint32 FP16_B params.
+8. **Confirmed test SfpuType** - `llk_sfpu_types.h` has `hardtanh` at position 1 and `ActivationType::Hardtanh = 3` exists in `ckernel_defs.h`.
+9. **Analyzed SFPU instructions** - SFPLOADI (3x param load + 2x zero), SFPLOAD (1x/iter), SFPMAD (3x/iter adds), SFPSETCC (2x/iter CC_LT and CC_GTE), SFPPUSHC/SFPPOPC (2x/iter each), SFPSTORE (1x/iter).
+10. **Verified all identifiers** - `_calculate_hardtanh_` found in both WH and BH. All file paths verified.
+11. **Wrote analysis** to `.claude-analysis/softcap-1/hardtanh_analysis.md`.
+
+## Key Findings (hardtanh)
+- SFPU kernel exists and is complete but the full dispatch chain (API header, LLK dispatch, get_op_init_and_func case, metal SfpuType) is NOT yet wired
+- Kernel uses SFPI abstractions with a clever three-step clamping algorithm using additions and predicated zeroing
+- APPROXIMATION_MODE template parameter is unused -- same code for both true/false
+- Takes 3 pre-computed FP16_B parameters: -min_val, -(max_val-min_val), max_val
+- Source comment for param2 says "-(pos_threshold)" but mathematical analysis shows it must be positive max_val for correct results
+- WH and BH implementations are byte-for-byte identical
+- No special ADDR_MOD configuration needed (default ADDR_MOD_7 with zero increments)
+
+## Output (hardtanh)
+- **Analysis file**: `.claude-analysis/softcap-1/hardtanh_analysis.md`
