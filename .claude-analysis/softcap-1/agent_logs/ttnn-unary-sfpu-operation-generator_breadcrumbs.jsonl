@@ -10,3 +10,14 @@
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"atanh","background":true,"ts":"2026-04-15T10:42:30+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"hardtanh","background":true,"ts":"2026-04-15T10:42:30+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-analyzer","phase":2,"operation":"sinh","background":true,"ts":"2026-04-15T10:42:30+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"tanhshrink","status":"ok","commit":"94f5be4fdf","ts":"2026-04-15T10:55:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"swish","status":"ok","commit":"2fd992a923","ts":"2026-04-15T10:55:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"atanh","status":"ok","commit":"5a636f7536","ts":"2026-04-15T10:55:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"sinh","status":"ok","commit":"05ca10d15b","ts":"2026-04-15T10:55:08+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-analyzer","operation":"hardtanh","status":"ok","commit":"1be1783fc4","ts":"2026-04-15T10:55:08+00:00"}
+{"event":"phase_complete","phase":2,"phase_name":"Reference Analysis","status":"ok","analyzers_completed":5,"analyzers_failed":0,"ts":"2026-04-15T10:55:08+00:00"}
+{"event":"phase_start","phase":3,"phase_name":"Implementation","iteration":1,"ts":"2026-04-15T10:55:19+00:00"}
+{"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-implementor","phase":3,"ts":"2026-04-15T10:55:19+00:00"}
+{"event":"iteration_decision","iteration":1,"reason":"implementor subagent stuck for 22+ minutes with no file output - likely rate limited or context exceeded","action":"switching to direct implementation by orchestrator","ts":"2026-04-15T11:17:48+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-implementor","status":"ok","note":"direct implementation by orchestrator","ts":"2026-04-15T11:36:50+00:00"}
+{"event":"phase_complete","phase":3,"phase_name":"Implementation","status":"ok","ts":"2026-04-15T11:36:58+00:00"}
