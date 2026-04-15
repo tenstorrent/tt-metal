@@ -382,10 +382,11 @@ class OperandRegistry:
 
         return mapping
 
-    DEFAULT_L1_START_ADDRESS = 0x21000
+    DEFAULT_L1_START_ADDRESS = 0x00021000
+    DEFAULT_L1_END_ADDRESS = 0x00169FFF
 
     def allocate_l1_addresses(
-        self, start_address: int = DEFAULT_L1_START_ADDRESS
+        self, start_address: int = DEFAULT_L1_START_ADDRESS, end_address: int = DEFAULT_L1_END_ADDRESS
     ) -> None:
         """
         Allocate L1 addresses for all operands.
@@ -406,6 +407,9 @@ class OperandRegistry:
             if operand.l1_address is None:
                 operand.l1_address = current_address
                 current_address += operand.calculate_l1_size()
+                if current_address > end_address:
+                    raise ValueError("There is not enought space on device for all operands")
+
 
     def write_inputs_to_l1(self, location: str = "0,0") -> None:
         """Write all input operands to L1 memory."""
