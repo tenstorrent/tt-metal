@@ -48,6 +48,18 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
     statistics = results.get("statistics", {})
     assert statistics, "Expected demo statistics for performance assertion"
@@ -333,8 +345,8 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload when requested by the case.
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
         output_file = artifact_dir / f"{case['artifact_name']}.json"
