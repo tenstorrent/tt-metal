@@ -519,14 +519,19 @@ def pack_mxfp4(
     assert (
         len(fp32_array) >= elements_to_pack
     ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
+    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+        raise ValueError(
+            "pack_mxfp4 requires a block-aligned geometry: "
+            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
+            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
+        )
 
     fp32_array = fp32_array[:elements_to_pack]
 
     # Reshape into blocks: (num_blocks, 32)
     num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks = fp32_array[: num_blocks * MX_FORMAT_BLOCK_SIZE].reshape(
-        num_blocks, MX_FORMAT_BLOCK_SIZE
-    )
+    blocks = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
     # Pre-process blocks for element conversion: NaN -> 0.0 (MXFP4 has no NaN)
     blocks_raw = blocks
@@ -578,8 +583,10 @@ def pack_mxfp4(
     # Pack FP4 elements: 2 per byte (low nibble = element 0)
     packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
 
-    # FULLY SEPARATED layout: all scales first, then all packed elements
-    return scales_e8m0 + packed_bytes.tolist()
+    # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )
 
 
 def _round_ties_even(
@@ -595,12 +602,8 @@ def _round_ties_even(
     rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
     mantissa_lsb = (input_mantissa >> shift_out) & 0x1
 
-    if rounded_msb and rounded_lsbs != 0:
-        round_inc = 1
-    elif rounded_msb:
-        round_inc = 1 if mantissa_lsb == 0x1 else 0
-    else:
-        round_inc = 0
+    # Round-to-nearest-even: increment on >0.5, or on exact 0.5 when the kept LSB is 1.
+    round_inc = 1 if (rounded_msb and (rounded_lsbs != 0 or mantissa_lsb == 0x1)) else 0
 
     if output_width == 0:
         round_inc = rounded_msb if rounded_lsbs != 0x0 else 0

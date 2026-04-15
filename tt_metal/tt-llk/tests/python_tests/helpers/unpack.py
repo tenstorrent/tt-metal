@@ -401,8 +401,10 @@ def unpack_mxfp4(
             f"{block_size}, got {num_elements}."
         )
 
-    # Expected bytes = 1 scale byte per block + 32 FP4 elements packed as 2 per byte.
-    expected_len = num_blocks + (num_blocks * (block_size // 2))
+    # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
+    scale_section_len = _align16(num_blocks)
+    element_bytes_len = num_blocks * (block_size // 2)
+    expected_len = scale_section_len + element_bytes_len
     if len(packed_bytes) != expected_len:
         raise ValueError(
             "Invalid packed_bytes length for MXFP4: got "
@@ -410,7 +412,10 @@ def unpack_mxfp4(
         )
 
     scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
-    packed_u8 = np.frombuffer(bytes(packed_bytes[num_blocks:]), dtype=np.uint8)
+    packed_u8 = np.frombuffer(
+        bytes(packed_bytes[scale_section_len : scale_section_len + element_bytes_len]),
+        dtype=np.uint8,
+    )
 
     # Each byte packs 2 FP4 values: low nibble then high nibble.
     nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)

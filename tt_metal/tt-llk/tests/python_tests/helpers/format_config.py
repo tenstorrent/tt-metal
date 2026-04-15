@@ -4,7 +4,8 @@
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Tuple
+from fractions import Fraction
+from typing import List, Optional, Tuple, Union
 
 import ml_dtypes
 import numpy as np
@@ -22,16 +23,23 @@ class DataFormatInfo:
 
     Attributes:
         name (str): A human-readable name for the data format.
-        byte_size (int): The size in bytes of one unit of the data format.
+        byte_size (Fraction): The size in bytes of one unit of the data format.
     """
 
-    def __init__(self, name: str, byte_size: int):
+    def __init__(self, name: str, byte_size: Union[int, float, Fraction]):
         self.name = name
-        self.byte_size = byte_size
+        self.byte_size = (
+            byte_size if isinstance(byte_size, Fraction) else Fraction(byte_size)
+        )
+
+    def _byte_size_str(self) -> str:
+        if self.byte_size.denominator == 1:
+            return str(self.byte_size.numerator)
+        return str(float(self.byte_size))
 
     def __str__(self) -> str:
         """Returns the string representation of the data format info."""
-        return f"{self.name}/{self.byte_size}B"
+        return f"{self.name}/{self._byte_size_str()}B"
 
     def __repr__(self) -> str:
         """Returns the representation of the data format info."""
@@ -60,12 +68,12 @@ class DataFormat(Enum):
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     MxFp4 = DataFormatInfo(
-        "MxFp4", 0.5
+        "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
-    def size(self) -> int:
+    def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size
 
