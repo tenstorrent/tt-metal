@@ -52,6 +52,7 @@ struct DRAMStreamingMatmul {
         uint32_t in1_page_size_,
         uint32_t in1_num_pages_,
         uint32_t subblock_k_,
+        uint32_t subblock_n_,
         uint32_t per_core_n_,
         uint32_t in1_block_size_bytes_,
         uint32_t out_num_tiles_,
@@ -69,6 +70,7 @@ struct DRAMStreamingMatmul {
         static constexpr uint32_t in1_page_size = in1_page_size_;
         static constexpr uint32_t in1_num_pages = in1_num_pages_;
         static constexpr uint32_t subblock_k = subblock_k_;
+        static constexpr uint32_t subblock_n = subblock_n_;
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t in1_block_size_bytes = in1_block_size_bytes_;
         static constexpr uint32_t out_num_tiles = out_num_tiles_;
@@ -144,7 +146,7 @@ struct DRAMStreamingMatmul {
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
-            constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * CTArgs::per_core_n;
+            constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * (CTArgs::per_core_n / CTArgs::subblock_n);
 
             // bank_id and vc are per-core compile-time args
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
@@ -198,7 +200,9 @@ struct DRAMStreamingMatmul {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+            constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
+
+            cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
             l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
 
             // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
@@ -210,7 +214,7 @@ struct DRAMStreamingMatmul {
             }
             uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
-            // Read in1: for each N column, read num_subblocks_k K subblocks
+            // Read in1: each iteration reads subblock_k * subblock_n tiles (subblock_n N-columns)
             for (uint32_t n = 0; n < num_iterations; ++n) {
                 noc_async_read_set_trid(curr_block_trid);
 
@@ -223,9 +227,9 @@ struct DRAMStreamingMatmul {
 
                 if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
-                    cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
+                    cb_push_back(CTArgs::cb_in1, tiles_per_block);
                     block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
-                    cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+                    cb_reserve_back(CTArgs::cb_in1, tiles_per_block * (extra_blocks_in_flight + 1));
                 } else {
                     num_free_blocks_in_buffer -= 1;
                 }
@@ -240,7 +244,7 @@ struct DRAMStreamingMatmul {
             // Push remaining blocks
             for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
                 noc_async_read_barrier_with_trid(block_trid_to_wait);
-                cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
+                cb_push_back(CTArgs::cb_in1, tiles_per_block);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
 
@@ -336,19 +340,19 @@ struct DRAMStreamingMatmul {
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false>(
-                                CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
+                            // custom_mm_block<false>(
+                            //     CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
                         // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true>(
-                            CTArgs::cb_in0,
-                            CTArgs::cb_in1,
-                            (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
-                            0,
-                            w,
-                            CTArgs::subblock_k);
+                        // custom_mm_block<true>(
+                        //     CTArgs::cb_in0,
+                        //     CTArgs::cb_in1,
+                        //     (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
+                        //     0,
+                        //     w,
+                        //     CTArgs::subblock_k);
                         cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                     }
 

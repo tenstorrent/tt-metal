@@ -31,6 +31,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_in1_page_size"),
         get_named_compile_time_arg_val("dram_mm_in1_num_pages"),
         get_named_compile_time_arg_val("dram_mm_subblock_k"),
+        get_named_compile_time_arg_val("dram_mm_subblock_n"),
         get_named_compile_time_arg_val("dram_mm_per_core_n"),
         get_named_compile_time_arg_val("dram_mm_in1_block_size_bytes"),
         get_named_compile_time_arg_val("dram_mm_out_num_tiles"),

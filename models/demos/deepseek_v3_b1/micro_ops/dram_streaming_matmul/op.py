@@ -127,6 +127,7 @@ class DRAMStreamingMatmul:
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
         math_approx_mode: bool = False,
         subblock_k: int = None,  # K subblock size in tiles, None means full K
+        subblock_n: int = None,  # N-columns per DRAM read block, None means 1
         fused_activation: str = None,  # "silu" to fuse SiLU activation
         index_tensor: ttnn.Tensor = None,  # Expert index tensor for indexed access
         mul_tensor: ttnn.Tensor = None,  # Optional tensor to multiply with matmul output (16x16 tiles)
@@ -198,7 +199,14 @@ class DRAMStreamingMatmul:
         assert Kt % subblock_k == 0, f"Kt ({Kt}) must be divisible by subblock_k ({subblock_k})"
         num_subblocks_k = Kt // subblock_k
 
-        logger.debug(f"Kt={Kt}, subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}")
+        # Determine subblock_n (N-columns per DRAM read block)
+        if subblock_n is None:
+            subblock_n = 1
+        assert per_core_N % subblock_n == 0, f"per_core_N ({per_core_N}) must be divisible by subblock_n ({subblock_n})"
+        if subblock_n > 1:
+            assert num_subblocks_k == 1, f"subblock_n > 1 requires num_subblocks_k == 1, got {num_subblocks_k}"
+
+        logger.debug(f"Kt={Kt}, subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}, subblock_n={subblock_n}")
 
         # Determine subblock_w based on fp32_dest_acc_en and per_core_N
         # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
@@ -235,9 +243,10 @@ class DRAMStreamingMatmul:
         in1_tile_size = in1_tile.get_tile_size(in1_dtype)
 
         # Calculate page size for NOC transfers (respects max NOC burst size)
-        # Each block is subblock_k tiles (one K subblock)
-        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, in1_tile_size)
-        in1_block_size_bytes = subblock_k * in1_tile_size
+        # Each block is subblock_k * subblock_n tiles (subblock_n N-columns of K-tiles)
+        tiles_per_block = subblock_k * subblock_n
+        in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, tiles_per_block, in1_tile_size)
+        in1_block_size_bytes = tiles_per_block * in1_tile_size
 
         logger.debug(
             f"in1_page_size={in1_page_size}, in1_num_pages={in1_num_pages}, in1_block_size={in1_block_size_bytes}"
@@ -245,9 +254,9 @@ class DRAMStreamingMatmul:
 
         # CB sizes
         # in0: K tiles (full tensor, tensor-backed - size determined by tensor)
-        # in1: 3 buffers for DRAM read triple-buffering (each buffer holds subblock_k tiles)
+        # in1: 3 buffers for DRAM read triple-buffering (each buffer holds subblock_k * subblock_n tiles)
         num_in1_buffers = 3
-        in1_CB_tiles = subblock_k * num_in1_buffers
+        in1_CB_tiles = tiles_per_block * num_in1_buffers
         in1_CB_size = in1_CB_tiles * in1_tile_size
 
         # Output: per_core_N tiles (tensor-backed - size determined by tensor)
@@ -438,6 +447,7 @@ class DRAMStreamingMatmul:
             ("dram_mm_in1_page_size", in1_page_size),
             ("dram_mm_in1_num_pages", in1_num_pages),
             ("dram_mm_subblock_k", subblock_k),
+            ("dram_mm_subblock_n", subblock_n),
             ("dram_mm_per_core_n", per_core_N),
             ("dram_mm_in1_block_size_bytes", in1_block_size_bytes),
             ("dram_mm_out_num_tiles", out_num_tiles),
