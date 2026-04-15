@@ -961,3 +961,106 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         pcc_threshold=0.99,
         check_ulp=False,
     )
+
+
+import pytest
+import torch
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def run_linear(device, a, b, bias=None, optional_output=None):
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    bias_tt = None
+    if bias is not None:
+        bias_tt = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    optional_tt = None
+    if optional_output is not None:
+        optional_tt = ttnn.from_torch(optional_output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.linear(a_tt, b_tt, bias=bias_tt, optional_output_tensor=optional_tt)
+    return ttnn.to_torch(result)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape",
+    [
+        ((256, 1024), (1024, 512), (1, 1, 512)),
+        ((1, 1024), (1024, 512), (1, 512, 512)),
+        ((2, 16, 32), (2, 32, 8), None),
+        ((32, 64), (64, 16), (1, 17, 16)),  # Broadcast error: Invalid dimension"
+    ],
+)
+def test_linear_bias_broadcast(device, a_shape, b_shape, bias_shape):
+    torch.manual_seed(0)
+
+    a = torch.randn(*a_shape, dtype=torch.bfloat16)
+    b = torch.randn(*b_shape, dtype=torch.bfloat16)
+
+    if bias_shape is not None:
+        bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+    else:
+        bias = None
+
+    torch_failed = False
+    try:
+        if bias_shape is None:
+            expected = torch.matmul(a, b)
+        else:
+            expected = torch.matmul(a, b) + bias
+
+    except Exception:
+        torch_failed = True
+
+    if torch_failed:
+        with pytest.raises(Exception):
+            run_linear(device, a, b, bias)
+    else:
+        result = run_linear(device, a, b, bias)
+        assert result.shape == expected.shape
+        assert_numeric_metrics(
+            expected, result, pcc_threshold=0.999, check_ulp=False, check_frobenius=False, check_allclose=False
+        )
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape, optional_shape",
+    [
+        ((8, 64), (64, 4), (1, 1, 4), (1, 4, 8)),
+        ((8, 64), (64, 4), (1, 1, 4), (1, 3, 8)),  # Invalid optional output tensor
+    ],
+)
+def test_linear_bias_broadcast_with_optional_shape(device, a_shape, b_shape, bias_shape, optional_shape):
+    torch.manual_seed(0)
+
+    a = torch.randn(*a_shape, dtype=torch.bfloat16)
+    b = torch.randn(*b_shape, dtype=torch.bfloat16)
+    bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    optional = None
+    if optional_shape is not None:
+        optional = torch.empty(*optional_shape, dtype=torch.bfloat16)
+
+    torch_failed = False
+    try:
+        expected = torch.matmul(a, b) + bias
+    except Exception:
+        torch_failed = True
+
+    if torch_failed:
+        with pytest.raises(Exception):
+            run_linear(device, a, b, bias, optional)
+    else:
+        if expected.numel() != optional.numel():
+            with pytest.raises(Exception):
+                run_linear(device, a, b, bias, optional)
+        else:
+            result = run_linear(device, a, b, bias, optional)
+
+            if optional_shape is not None:
+                assert result.shape == optional_shape
+            else:
+                assert result.shape == expected.shape

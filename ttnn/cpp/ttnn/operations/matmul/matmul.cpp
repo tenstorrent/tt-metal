@@ -252,6 +252,39 @@ static ttnn::Tensor bound_matmul(
                 input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b));
     }
 
+    std::vector<uint32_t> result_shape;
+    if (bias.has_value()) {
+        const auto& a = utilities::compute_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            attributes.transpose_a,
+            attributes.transpose_b);                   // output_tensor.logical_shape();//matmul output
+        const auto& b = bias.value().logical_shape();  // bias
+
+        int rank_a = static_cast<int>(a.rank());
+        int rank_b = static_cast<int>(b.rank());
+        int max_rank = std::max(rank_a, rank_b);
+
+        std::vector<uint32_t> result(max_rank, 1);
+
+        for (int offset = 0; offset < max_rank; ++offset) {
+            int idx_a = rank_a - 1 - offset;
+            int idx_b = rank_b - 1 - offset;
+
+            uint32_t dim_a = (idx_a >= 0) ? a[idx_a] : 1;
+            uint32_t dim_b = (idx_b >= 0) ? b[idx_b] : 1;
+
+            TT_FATAL(dim_a == dim_b || dim_a == 1 || dim_b == 1, "Broadcast error: Invalid dimension");
+            result[max_rank - 1 - offset] = std::max(dim_a, dim_b);
+        }
+        result_shape = result;
+    } else {
+        const auto& shape = utilities::compute_matmul_output_shape(
+            input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+
+        result_shape = std::vector<uint32_t>(shape.begin(), shape.end());
+    }
+
     // Apply bias as post-processing if needed
     if (post_process_bias) {
         output_tensor = ttnn::add(
@@ -260,6 +293,26 @@ static ttnn::Tensor bound_matmul(
             /*output_dtype=*/std::nullopt,
             output_tensor.memory_config(),
             optional_output_tensor);
+    }
+
+    if (optional_output_tensor.has_value()) {
+        const auto& desired = optional_output_tensor->logical_shape();
+
+        uint32_t desired_vol = 1, current_vol = 1;
+
+        for (size_t i = 0; i < desired.rank(); ++i) {
+            desired_vol *= desired[i];
+        }
+        for (size_t i = 0; i < result_shape.size(); ++i) {
+            current_vol *= result_shape[i];
+        }
+        TT_FATAL(desired_vol == current_vol, "Invalid optional output tensor");
+
+        output_tensor = ttnn::reshape(output_tensor, desired);
+
+    } else if (bias.has_value()) {
+        ttsl::Span<const uint32_t> span(result_shape.data(), result_shape.size());
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(span));
     }
 
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
