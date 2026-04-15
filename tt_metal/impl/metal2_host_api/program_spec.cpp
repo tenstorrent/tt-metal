@@ -97,7 +97,7 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 //   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
 using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
-// DFB name -> ID map (for unpack_to_dest_mode indexing)
+// DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 
 // ============================================================================
@@ -286,37 +286,36 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // Validates that every NodeCoord referenced in kernels, DFBs, and semaphores
 // is a valid worker node on this device. Checks:
 //
-//   1. Out of bounds: the coord is outside the compute worker grid.
-//   2. Dispatch node: the coord is reserved for dispatch.
+//   1. Out of bounds: the coord is outside the compute worker grid
+//   2. Dispatch node: the coord is reserved for dispatch
 //
-// NOTE: This is dealing in logical coordinates, harvesting is handled
+// NOTE: We're dealing in logical coordinates, so harvesting is handled
 // transparently at the UMD coordinate-translation layer.
 //
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
-// representative of the full mesh.
+// representative of every device in the mesh.
 
 void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
-    // Mock device gets special handling (handy for unit testing ProgramSpec validation cheaply)
+    // Handle the mock device case (for cheap unit testing)
     const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     // A default DispatchCoreConfig and 1 CQ is sufficient to figure out node boundaries and
-    // dispatch node reservations.
-    // (MetalContext is uninitialized in mock mode)
+    // dispatch node reservations (and is available in mock mode)
     DispatchCoreConfig dispatch_core_config{};
     uint8_t num_hw_cqs = 1;
     constexpr ChipId chip_id = 0;
 
-    // But get the real dispatch_core_config and num_hw_cqs (if available)
-    // (Makes no difference today, but hardbaking that assumption would be brittle)
+    // But, best get the real dispatch_core_config and num_hw_cqs
+    // (Makes no difference now, but hardbaking that assumption would be brittle)
     if (!is_mock) {
         auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
         num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     }
 
-    // Get the node grid size and reserved dispatch node info
+    // Get the worker node grid size + reserved dispatch nodes info
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
     const auto& dispatch_cores_vec =
         tt::get_logical_dispatch_cores(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
@@ -331,7 +330,8 @@ void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
             for (const NodeCoord& node : range) {
                 TT_FATAL(
                     !dispatch_core_set.contains(node),
-                    "{} '{}' targets node ({},{}), which is reserved for dispatch firmware. " entity_type,
+                    "{} '{}' targets node ({},{}), which is reserved for dispatch firmware.",
+                    entity_type,
                     entity_name,
                     node.x,
                     node.y);
@@ -360,10 +360,9 @@ void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
     }
 }
 
+// TODO: Implement node bounds checking for Quasar.
 void ValidateNodeBoundsGen2(const ProgramSpec& spec) {
-    // TODO: Implement node bounds checking for Gen2 (Quasar).
-    (void)spec;  // placate clang-tidy
-    return;
+    (void)spec;  // to placate clang-tidy
 }
 
 // ValidateProgramSpec: Semantic validation
@@ -384,9 +383,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     if (is_gen1_arch()) {
         ValidateNodeBoundsGen1(spec);
-    }
-    if (is_gen2_arch()) {
+    } else if (is_gen2_arch()) {
         ValidateNodeBoundsGen2(spec);
+    } else {
+        TT_FATAL(false, "Unknown architecture");
     }
 
     //////////////////////////////
@@ -435,8 +435,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     kernel.num_threads == 1,
                     "KernelSpec '{}' specifies {} compute threads, but the target architecture does not support "
-                    "multi-threaded kernels. "
-                    "num_threads must be 1.",
+                    "multi-threaded kernels.",
                     kernel.unique_id,
                     kernel.num_threads);
             }
@@ -489,7 +488,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // On Gen1 (WH/BH), validate that no two DM kernels on the same node claim the same processor.
+    // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
     if (is_gen1_arch()) {
         // Maps (node, processor) -> the kernel that already claimed it
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
@@ -599,10 +598,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // WorkerSpecs are required on all architectures.
+    // WorkerSpecs are now required for all architectures.
     // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional and derive the WorkerSpec if absent.
-    //       (But I definitely want to require it on Quasar.)
+    //       If it's hated, we can make it optional, and derive the WorkerSpec if absent.
+    //       (Only on WH/BH though, I definitely want to require it on Quasar.)
     TT_FATAL(spec.workers.has_value(), "Workers are required");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
@@ -653,8 +652,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Does the Worker have enough cores to run all its kernels?
-
+    // Does the Worker have enough cores to run all of its kernels?
     for (const auto& worker : workers) {
         uint32_t dm_cores_needed = 0;
         uint32_t compute_engines_needed = 0;
@@ -1118,8 +1116,8 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 // InjectDFBAccessorArgs: inject DFB local accessor name -> ID into named_compile_args
 // ----------------------------------------------------------------------------
 //
-// TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-//   A follow-up PR will introduce a more elegant generated-header mechanism.
+// TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel!
+//       This CTA hack will be deleted in the next PR.
 
 void InjectDFBAccessorArgs(
     KernelSpec::CompileTimeArgBindings& named_compile_args,
@@ -1146,11 +1144,15 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec, con
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
     const auto& gen1 = dm_config.gen1_data_movement_config.value();
 
+    // Convert defines from vector<pair> to map (yuck)
+    // API uses vector<pair> for ease of Program caching.
+    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
         defines_map[key] = value;
     }
 
+    // Temporary hack: inject DFB local accessors as CTAs
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
@@ -1179,11 +1181,15 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         unpack_modes[dfb_id] = mode;
     }
 
+    // Convert defines from vector<pair> to map (yuck)
+    // API uses vector<pair> for ease of Program caching.
+    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
         defines_map[key] = value;
     }
 
+    // Temporary hack: inject DFB local accessors as CTAs
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
@@ -1209,12 +1215,13 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
-    // Convert defines from vector<pair> to map
+    // Convert defines from vector<pair> to map (yuck)
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
         defines_map[key] = value;
     }
 
+    // Temporary hack: inject DFB local accessors as CTAs
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
@@ -1251,9 +1258,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         unpack_modes[dfb_id] = mode;
     }
 
-    // Handle defines: must convert from vector<pair> to map.
-    // We use vector<pair> in the KernelSpec for ease of program caching
-    // TODO: Convert the ComputeConfig to use a vector<pair> to eliminate this pointless conversion.
+    // Convert defines from vector<pair> to map (yuck)
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
         defines_map[key] = value;

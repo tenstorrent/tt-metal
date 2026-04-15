@@ -1554,12 +1554,12 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
-// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+// WH N150 grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
 //   - compute_grid = 8x8 (valid compute nodes: x in [0,7], y in [0,7])
 //   - dispatch cores at row 8 (the last row of the 8x9 tensix grid): {0..7, 8}
 //   - OOB: any node with x >= 8 or y >= 8 that is not a dispatch core (e.g. {8, 0})
 //
-// These tests are pinned to the mock WH fixture, not real hardware.
+// These tests use the WH mock device, not real hardware.
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsDispatchCoreFails) {
     // {0, 8} is a dispatch core on WH N150 (row 8 = last tensix row, reserved for firmware).
