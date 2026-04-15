@@ -79,7 +79,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat t = beta * val;
@@ -105,10 +105,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
 #ifdef INP_FLOAT32
-            // FP32: inline Cody-Waite exp + 3-term Taylor ln(1+e) = e - e²/2 + e³/3
+            // FP32: inline Cody-Waite exp + 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
             sfpi::vFloat e = softplus_exp_negative(neg_a);
-            sfpi::vFloat e2 = e * e;
-            residual = e - e2 * 0.5f + e2 * e * 0.333333343f;
+            residual = e * (sfpi::vConst1 + e * (-0.5f + e * 0.333333343f));
 #else
             // BF16: exp_21f is faster than inline Cody-Waite (~8 vs ~15 ops)
             residual = _sfpu_exp_21f_bf16_<false>(neg_a);
@@ -117,24 +116,30 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         v_endif;
 
         // Reconstruct softplus(t):
-        //   t >= 0: softplus(t) = t + f(t)
-        //   t < 0:  softplus(t) = f(|t|) = residual
-        sfpi::vFloat sp = residual;
-        v_if(t >= 0.0f) { sp = t + residual; }
-        v_endif;
+        //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
+        //   t < 0:  softplus(t) = f(|t|) = 0 + residual
+        // Branch-free: vec_min_max clamps t to max(0,t), saving 1 instruction vs v_if
+        sfpi::vFloat zero_threshold = 0.0f;
+        sfpi::vec_min_max(zero_threshold, t);
+        sfpi::vFloat sp = t + residual;
 
-        sfpi::dst_reg[0] = beta_reciprocal * sp;
+        // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
+        sfpi::vFloat result = beta_reciprocal * sp;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+        sfpi::dst_reg[0] = result;
     }
     v_endif;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_softplus(uint param0, uint param1, uint param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_softplus_body<APPROXIMATION_MODE>(beta, beta_reciprocal, threshold);
+        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg++;
     }
 }
