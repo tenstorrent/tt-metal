@@ -41,10 +41,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     [[maybe_unused]] float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::SOFTCAP: {
-            auto param0_u = std::bit_cast<uint32_t>(param0) >> 16;
+            auto cap_bits = std::bit_cast<uint32_t>(param0);
+            float inv_cap = 1.0f / param0;
+            auto inv_cap_bits = std::bit_cast<uint32_t>(inv_cap);
             return {
                 "softcap_tile_init();",
-                fmt::format("softcap_tile({}, 0x{:x});", idst, param0_u)};
+                fmt::format("softcap_tile({}, 0x{:x}, 0x{:x});", idst, cap_bits, inv_cap_bits)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };

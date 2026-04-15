@@ -1,4 +1,7 @@
 #!/bin/bash
+# Auto-generated wrapper: wait for build before running tests
+source "/localdev/vignjatijevic/2026_04_15/0838_vignjatijevic_test-softcap-strict-metrics/clones/softcap_sfpu_gen_2_run1/tt-metal/.eval/wait_for_build.sh" || exit $?
+# --- Original scripts/run_safe_pytest.sh below ---
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.

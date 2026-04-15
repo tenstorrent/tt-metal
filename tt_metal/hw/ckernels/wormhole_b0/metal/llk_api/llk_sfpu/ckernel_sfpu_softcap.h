@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,24 +10,7 @@
 
 namespace ckernel::sfpu {
 
-// Convert positive float to int32 (for exp scaling).
-sfpi_inline sfpi::vInt softcap_float_to_int32_pos(sfpi::vFloat in) {
-    sfpi::vInt result;
-    sfpi::vInt exp = exexp(in);
-    v_if(exp < 0) { result = 0; }
-    v_elseif(exp > 30) { result = 0x7FFFFFFF; }
-    v_else {
-        sfpi::vInt man = exman8(in);
-        sfpi::vInt shift = exp - 23;
-        man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
-        result = man;
-    }
-    v_endif;
-    return result;
-}
-
 // Newton-Raphson reciprocal: returns 1/|in| (always positive).
-// Adapted from _reciprocal_compat_ in ckernel_sfpu_rsqrt_compat.h.
 template <int max_iter = 3>
 sfpi_inline sfpi::vFloat softcap_recip(const sfpi::vFloat in) {
     sfpi::vFloat val = sfpi::setsgn(in, 1);
@@ -50,114 +33,94 @@ sfpi_inline sfpi::vFloat softcap_recip(const sfpi::vFloat in) {
     return setexp(result, new_exp);
 }
 
-// Accurate exp(t) for t >= 0 using Cody-Waite range reduction + degree-7 Horner polynomial.
-// Returns exp(t) with ~23-bit mantissa precision.
+// Accurate exp(t) for t >= 0 using Cody-Waite range reduction.
+// Uses Hacker's Delight branchless integer rounding + exponent manipulation.
 sfpi_inline sfpi::vFloat softcap_exp(sfpi::vFloat t) {
     constexpr float log2ef = 1.4426950408889634f;
-    constexpr float ln2_hi = 6.93145751953125e-1f;
-    constexpr float ln2_lo = 1.4286068203094172e-6f;
+    constexpr float neg_ln2_hi = -6.93145751953125e-1f;
+    constexpr float neg_ln2_lo = -1.4286068203094172e-6f;
 
-    // Range reduction: n = round(t / ln2), r = t - n*ln2
     sfpi::vFloat z = t * sfpi::vFloat(log2ef);
 
-    // Round to nearest integer via magic-number add/subtract
-    sfpi::vFloat magic = sfpi::vFloat(8388608.0f);  // 2^23
-    sfpi::vFloat n_float = (z + magic) - magic;
+    // Hacker's Delight round-to-nearest-even (works for z >= 0)
+    const sfpi::vFloat c231 = sfpi::vFloat(12582912.0f);
+    sfpi::vFloat tmp = z + c231;
+    sfpi::vFloat k = tmp - c231;
+    sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
 
-    // Cody-Waite: compute r = t - n*ln2 accurately (two-part ln2)
-    sfpi::vFloat r = t - n_float * sfpi::vFloat(ln2_hi);
-    r = r - n_float * sfpi::vFloat(ln2_lo);
+    // Cody-Waite: r = t - k*ln2 (negated constants for MAD optimization)
+    sfpi::vFloat r = k * sfpi::vFloat(neg_ln2_hi) + t;
+    r = k * sfpi::vFloat(neg_ln2_lo) + r;
 
-    // Horner polynomial for exp(r), degree 7: sum_{k=0}^{7} r^k / k!
-    sfpi::vFloat p = sfpi::vFloat(0.00019841270f);   // 1/5040
-    p = p * r + sfpi::vFloat(0.0013888889f);          // 1/720
-    p = p * r + sfpi::vFloat(0.0083333335f);          // 1/120
-    p = p * r + sfpi::vFloat(0.041666668f);           // 1/24
-    p = p * r + sfpi::vFloat(0.16666667f);            // 1/6
-    p = p * r + sfpi::vFloat(0.5f);                   // 1/2
-    p = p * r + sfpi::vConst1;                        // 1
-    p = p * r + sfpi::vConst1;                        // 1 + r*(...)
+    // Horner polynomial for exp(r), degree 7
+    sfpi::vFloat p = sfpi::vFloat(0.00019841270f);
+    p = p * r + sfpi::vFloat(0.0013888889f);
+    p = p * r + sfpi::vFloat(0.0083333335f);
+    p = p * r + sfpi::vFloat(0.041666668f);
+    p = p * r + sfpi::vFloat(0.16666667f);
+    p = p * r + sfpi::vFloat(0.5f);
+    p = p * r + sfpi::vConst1;
+    p = p * r + sfpi::vConst1;
 
-    // Scale by 2^n: exp(t) = exp(r) * 2^n
-    sfpi::vInt n_int = softcap_float_to_int32_pos(n_float);
-    sfpi::vFloat two_to_n = sfpi::setexp(sfpi::vConst1, sfpi::vInt(127) + n_int);
-
-    return p * two_to_n;
+    // Scale by 2^k via exponent adjustment
+    sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
+    return sfpi::setexp(p, p_exp + k_int);
 }
 
 // softcap(x, cap) = cap * tanh(x / cap)
-//
-// Algorithm:
-//   y = x / cap
-//   |y| >= 9:     tanh(y) = sign(y)            (saturation)
-//   0.1 <= |y| < 9: tanh(y) = 1 - 2/(exp(2|y|) + 1)  (exp-based)
-//   |y| < 0.1:    tanh(y) = y - y^3/3 + 2y^5/15 - 17y^7/315  (Taylor)
-//   result = cap * tanh(y)
+// param0 = cap (full fp32 bit pattern), param1 = 1/cap (full fp32 bit pattern)
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_softcap(std::uint32_t param0) {
-    // Load cap from bfloat16-encoded parameter
-    sfpi::vFloat v_cap = sfpi::s2vFloat16b(param0);
-    // Pre-compute 1/cap (24-bit precision via Newton-Raphson)
-    sfpi::vFloat v_inv_cap = softcap_recip<3>(v_cap);
+inline void calculate_softcap(std::uint32_t param0, std::uint32_t param1) {
+    // Load full-precision fp32 via bit reinterpretation of vInt broadcast
+    sfpi::vFloat v_cap = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(param0));
+    sfpi::vFloat v_inv_cap = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(param1));
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-
-        // y = x / cap
         sfpi::vFloat y = x * v_inv_cap;
         sfpi::vFloat abs_y = sfpi::setsgn(y, 0);
 
-        // Default: saturation region (|y| >= 9)
-        // tanh(y) = sign(y), so result = sign(y) * cap
+        // Default: saturation (|y| >= 9) -> tanh = sign(y)
         sfpi::vFloat tanh_y = sfpi::vConst1;
 
-        // Exp-based region: 0.1 <= |y| < 9
+        // Exp-based region: 0.6 <= |y| < 9
+        // tanh(|y|) = 1 - 2/(exp(2|y|) + 1)
         v_if(abs_y < 9.0f) {
-            // t = 2 * |y|
             sfpi::vFloat t = abs_y + abs_y;
-
-            // exp(2|y|) via accurate range-reduced exp
             sfpi::vFloat exp_t = softcap_exp(t);
-
-            // tanh(|y|) = 1 - 2 / (exp(2|y|) + 1)
             sfpi::vFloat denom = exp_t + sfpi::vConst1;
             sfpi::vFloat inv_denom = softcap_recip<3>(denom);
             tanh_y = sfpi::vConst1 - sfpi::vFloat(2.0f) * inv_denom;
         }
         v_endif;
 
-        // Taylor region: |y| < 0.1
-        // tanh(y) = y - y^3/3 + 2y^5/15 - 17y^7/315
-        v_if(abs_y < 0.1f) {
+        // Sollya minimax polynomial region: |y| < 0.6
+        // tanh(y) = y * P(y^2) with optimized coefficients
+        v_if(abs_y < 0.6f) {
             sfpi::vFloat y2 = y * y;
-            sfpi::vFloat p = sfpi::vFloat(-0.053968254f);  // -17/315
-            p = p * y2 + sfpi::vFloat(0.13333334f);        //  2/15
-            p = p * y2 + sfpi::vFloat(-0.33333334f);       // -1/3
-            p = p * y2 + sfpi::vConst1;                    //  1
+            sfpi::vFloat p = sfpi::vFloat(1.5497928e-2f);
+            p = p * y2 + sfpi::vFloat(-5.2119765e-2f);
+            p = p * y2 + sfpi::vFloat(0.13310669f);
+            p = p * y2 + sfpi::vFloat(-0.33332360f);
+            p = p * y2 + sfpi::vFloat(0.99999994f);
             tanh_y = y * p;
         }
         v_endif;
 
-        // For the non-Taylor branches, apply sign of y
-        // (Taylor branch already uses signed y)
-        v_if(abs_y >= 0.1f) {
+        // Apply sign for non-polynomial regions
+        v_if(abs_y >= 0.6f) {
             v_if(y < 0.0f) { tanh_y = -tanh_y; }
             v_endif;
         }
         v_endif;
 
-        // result = cap * tanh(y)
-        sfpi::vFloat result = v_cap * tanh_y;
-
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = v_cap * tanh_y;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-inline void softcap_init() {
-    // No programmable constants needed
-}
+inline void softcap_init() {}
 
 }  // namespace ckernel::sfpu
