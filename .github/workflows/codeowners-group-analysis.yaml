@@ -2068,36 +2068,36 @@ jobs:
           # STEP 2: Check combined approval for each file set
           echo "DEBUG select-owners: Step 2 - Checking combined approval"
 
-          declare -A FILES_HAS_APPROVAL  # sorted_files -> true/false
-
-          for sorted_files in "${!FILES_TO_MEMBERS[@]}"; do
-            combined_members="${FILES_TO_MEMBERS[$sorted_files]}"
-
-            # Check if ANY member from the combined set has approved.
-            # FILES_TO_MEMBERS combines members from ALL teams/groups that own the
-            # exact same file set (e.g., ttnn-core team + tests/ttnn/ pattern group),
-            # so shared/cross-group approvals are correctly handled.
-            #
-            # NOTE: We intentionally do NOT check partially-overlapping file sets here.
-            # Overlap checking caused a bug where a reviewer from team-A (which owns a
-            # superset of files) would incorrectly mark team-B as approved — even though
-            # team-B requires its own member's approval. Only exact-same-file-set
-            # combined ownership should count.
-            has_approval=false
-            if [ -n "$combined_members" ]; then
-              IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
-              for member in "${COMBINED_ARRAY[@]}"; do
-                [ -z "$member" ] && continue
-                if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                  has_approval=true
-                  echo "DEBUG select-owners: Files [$sorted_files] approved by $member"
-                  break
-                fi
-              done
+          # Helper: check if a specific team has an approved member.
+          # Uses TEAM_MEMBERS (team -> its own members) rather than the combined
+          # FILES_TO_MEMBERS map, so two distinct teams that own the same file set
+          # are checked independently — one team's approval does NOT skip the other.
+          team_has_approval() {
+            local team="$1"
+            if [ -z "$TEAM_MEMBERS" ]; then
+              return 1
             fi
-
-            FILES_HAS_APPROVAL["$sorted_files"]="$has_approval"
-          done
+            local team_members_entry
+            team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+            if [ -z "$team_members_entry" ]; then
+              return 1
+            fi
+            local team_owners
+            team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+            if [ "$team_owners" = "insufficient-permissions" ] || [ "$team_owners" = "team-not-found" ] || \
+               [ "$team_owners" = "unauthorized" ] || [ "$team_owners" = "api-error" ] || [ "$team_owners" = "no-members" ]; then
+              return 1
+            fi
+            IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+            for member in "${MEMBERS_ARRAY[@]}"; do
+              [ -z "$member" ] && continue
+              if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                echo "DEBUG select-owners: Team $team approved by its own member $member"
+                return 0
+              fi
+            done
+            return 1
+          }
 
           # STEP 3: Select owners/groups for notification (only from pending file sets)
           echo "DEBUG select-owners: Step 3 - Selecting owners for notification"
@@ -2122,12 +2122,12 @@ jobs:
               fi
 
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
-              sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Team $team already approved (combined check), skipping"
+              # Check if this specific team has an approved member (team-level check,
+              # NOT the combined FILES_TO_MEMBERS check — so two teams owning the same
+              # files are evaluated independently).
+              if team_has_approval "$team"; then
+                echo "Team $team already has an approval from its own member, skipping"
                 continue
               fi
 
@@ -2256,16 +2256,24 @@ jobs:
               pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
               owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
 
-              sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+              IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Pattern $pattern already approved (combined check), skipping"
+              # Check if any of THIS pattern's owners have approved (pattern-level
+              # check, not the combined FILES_TO_MEMBERS check).
+              pattern_approved=false
+              for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                username=$(echo "$owner_pair" | cut -d'|' -f1)
+                [ -z "$username" ] && continue
+                if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                  pattern_approved=true
+                  echo "DEBUG select-owners: Pattern $pattern approved by its own member $username"
+                  break
+                fi
+              done
+              if [ "$pattern_approved" = "true" ]; then
+                echo "Pattern $pattern already has an approval from its own member, skipping"
                 continue
               fi
-
-              IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
 
               # Collect unapproved owners, excluding moreh team members and PR author
               PATTERN_UNAPPROVED=""
