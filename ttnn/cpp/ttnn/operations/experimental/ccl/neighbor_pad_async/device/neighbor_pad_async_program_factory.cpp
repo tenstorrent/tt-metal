@@ -512,8 +512,9 @@ NpFabricOnlyArtifacts build_np_fabric_only_program_artifacts(
         w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
-        // W-reader signals conv3d readers after w_nbr_sem wait (NP_PROGRESS_SEM).
-        // Must define BEFORE CreateKernel so the kernel compiles with it.
+        if (fabric_only) {
+            w_reader_kernel_config.defines["FABRIC_ONLY"] = "1";
+        }
         if (progress_sem_addr != 0) {
             w_reader_kernel_config.defines["NP_PROGRESS_SEM"] = "1";
         }

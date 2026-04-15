@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/device_print.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -126,6 +127,13 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
+    DEVICE_PRINT(
+        "[NP-W] dir={} is_w={} outer_dim_size={} progress_batch={}\n",
+        (uint32_t)direction,
+        (uint32_t)is_w_fabric_writer,
+        outer_dim_size,
+        (uint32_t)progress_t_batch_size);
+
     // H writers: always open fabric at start (for data transfer in main loop).
     // W writers: open at start only when startup barrier is enabled (defer data transfer until CB ready).
     bool fabric_opened = false;
@@ -187,7 +195,9 @@ void kernel_main() {
             }
 
             if constexpr (ring_size > 1) {
+                DEVICE_PRINT("[NP-W] H-writer waiting barrier_sem ring_size={}\n", (uint32_t)(ring_size - 1));
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
+                DEVICE_PRINT("[NP-W] H-writer barrier_sem done\n");
             }
         } else {
             // W barrier: 1-hop unicast to immediate W neighbor only.
@@ -232,7 +242,9 @@ void kernel_main() {
             // Wait for 1 barrier inc from each adjacent W device (if it exists)
             uint32_t w_barrier_wait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
             if (w_barrier_wait > 0) {
+                DEVICE_PRINT("[NP-W] W-writer waiting barrier_sem count={}\n", w_barrier_wait);
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), w_barrier_wait);
+                DEVICE_PRINT("[NP-W] W-writer barrier_sem done\n");
             }
         }
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -418,13 +430,18 @@ void kernel_main() {
             if ((outer_dim + 1) % progress_t_batch_size == 0) {
                 noc_async_write_barrier();
                 if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
-                    // 2D: route per-T-batch signal through W reader cores via barrier_sem.
-                    // Both dir=0 and dir=1 fire so W reader barrier_count = num_h_fabric_cores.
+                    DEVICE_PRINT(
+                        "[NP-W] H-writer 2D signal barrier_sem outer_dim={} targets={}\n",
+                        outer_dim,
+                        num_phase2_signal_targets);
                     for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
                         noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem), 1);
                     }
                 } else if (!direction && !is_w_fabric_writer) {
-                    // 1D: signal conv3d reader cores directly (no W reader in pipeline).
+                    DEVICE_PRINT(
+                        "[NP-W] H-writer 1D signal progress_sem outer_dim={} readers={}\n",
+                        outer_dim,
+                        num_reader_cores);
                     for (uint32_t i = 0; i < num_reader_cores; i++) {
                         const uint32_t reader_x = get_common_arg_val<uint32_t>(6 + i * 2);
                         const uint32_t reader_y = get_common_arg_val<uint32_t>(6 + i * 2 + 1);
@@ -444,6 +461,7 @@ void kernel_main() {
     // the last partial T-batch was not signaled inside the loop.  Fire it now.
     if constexpr (progress_t_batch_size > 0) {
         if (outer_dim_size % progress_t_batch_size != 0) {
+            DEVICE_PRINT("[NP-W] H-writer tail signal targets={}\n", num_phase2_signal_targets);
             if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
                 for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
                     noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem), 1);
@@ -464,6 +482,11 @@ void kernel_main() {
     // Used by both H fabric writers (incoming H halo) and W fabric writers (incoming W padding).
     if constexpr (handle_incoming_writes) {
         if (!is_first_chip) {
+            DEVICE_PRINT(
+                "[NP-W] handle_incoming: od_size={} padding={} sticks_to_read={}\n",
+                outer_dim_size,
+                padding,
+                num_sticks_to_read);
             uint32_t inc_offset = outer_dim_offset_start_id;
             for (uint32_t od = 0; od < outer_dim_size; od++) {
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -537,6 +560,7 @@ void kernel_main() {
     // When per-T-batch pipelining is active, W reader cores were already signaled
     // per batch inside the main loop (+ tail above), so skip the end-of-loop signal.
     if constexpr (progress_t_batch_size == 0) {
+        DEVICE_PRINT("[NP-W] H-writer end-of-loop signal targets={}\n", num_phase2_signal_targets);
         noc_async_write_barrier();
         for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
             uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
@@ -544,4 +568,5 @@ void kernel_main() {
         }
         noc_async_atomic_barrier();
     }
+    DEVICE_PRINT("[NP-W] H-writer DONE\n");
 }
