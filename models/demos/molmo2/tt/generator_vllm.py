@@ -1532,10 +1532,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         bias = build_molmo2_prefill_attention_bias(token_type_ids, attention_mask=hf_attention_mask).to(torch.bfloat16)
         is_mesh = self.mesh_device.__class__.__name__ == "MeshDevice"
         mm = ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh else None
+        # Use bfloat4_b for large masks to save DRAM (4x smaller than bfloat16)
+        mask_dtype = ttnn.bfloat4_b if seq_len > 8192 else ttnn.bfloat16
         return ttnn.from_torch(
             bias,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=mask_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mm,
@@ -1795,6 +1797,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Direct model forward (no trace) - used for vision input
             logger.info(f"_run_prefill: Non-traced forward for seq_len={padded_seq_len}")
 
+            # For long sequences, pass last_token_idx to avoid 9.5GB LM head logits
+            lti = actual_seq_len - 1 if padded_seq_len > 8192 else None
             logits_ttnn, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
@@ -1803,6 +1807,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 rot_mats=rot_mats,
                 page_table=page_table,
                 user_id=user_id,
+                last_token_idx=lti,
             )
 
             ttnn.deallocate(rot_mats[0])
