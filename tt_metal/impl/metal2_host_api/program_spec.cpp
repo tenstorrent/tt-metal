@@ -83,9 +83,14 @@ struct ProcessorMask {
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
 using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
-// Kernel -> ProcessorMask maps
+// Kernel -> ProcessorMask maps (Gen2/Quasar only)
 using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
 using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngineMask>;
+
+// Kernel -> DFB risc mask (passed to MakeDataflowBufferConfig)
+//   Gen1: bit 0 = RISCV_0 (BRISC), bit 1 = RISCV_1 (NCRISC), bit 2 = Tensix compute
+//   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
+using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
 // DFB name -> ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
@@ -286,10 +291,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Architecture checks
     //////////////////////////////
 
-    TT_FATAL(
-        tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR,
-        "Metal 2.0 API is currently only implemented for Quasar. WH/BH support coming soon.");
-
     //////////////////////////////
     // Validate KernelSpecs
     //////////////////////////////
@@ -321,23 +322,43 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
-            TT_FATAL(
-                kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
-                "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
-                kernel.unique_id,
-                QUASAR_TENSIX_ENGINES_PER_NODE);
-            // Looks odd here, but threads is not allowed; the remapper doesn't support it.
-            TT_FATAL(
-                kernel.num_threads != 3,
-                "KernelSpec '{}' has 3 threads, which is not supported. Legal values are 1, 2, and 4.",
-                kernel.unique_id);
+            if (is_gen2_arch()) {
+                TT_FATAL(
+                    kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
+                    "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
+                    kernel.unique_id,
+                    QUASAR_TENSIX_ENGINES_PER_NODE);
+                // 3 threads is not allowed; the Quasar remapper doesn't support it.
+                TT_FATAL(
+                    kernel.num_threads != 3,
+                    "KernelSpec '{}' has 3 threads, which is not supported on Quasar. Legal values are 1, 2, and 4.",
+                    kernel.unique_id);
+            } else {
+                TT_FATAL(
+                    kernel.num_threads == 1,
+                    "KernelSpec '{}' specifies {} compute threads, but the target architecture does not support "
+                    "multi-threaded kernels. "
+                    "num_threads must be 1.",
+                    kernel.unique_id,
+                    kernel.num_threads);
+            }
         }
         if (kernel.is_dm_kernel()) {
-            TT_FATAL(
-                kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
-                "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
-                kernel.unique_id,
-                QUASAR_USER_DM_CORES_PER_NODE);
+            if (is_gen2_arch()) {
+                TT_FATAL(
+                    kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
+                    "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
+                    kernel.unique_id,
+                    QUASAR_USER_DM_CORES_PER_NODE);
+            } else {
+                TT_FATAL(
+                    kernel.num_threads == 1,
+                    "KernelSpec '{}' specifies {} DM threads, but the target architecture does not support "
+                    "multi-threaded kernels. "
+                    "num_threads must be 1.",
+                    kernel.unique_id,
+                    kernel.num_threads);
+            }
         }
     }
 
@@ -366,6 +387,33 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     kernel.unique_id);
             } else {
                 TT_FATAL(false, "Unknown architecture");
+            }
+        }
+    }
+
+    // On Gen1 (WH/BH), validate that no two DM kernels on the same node claim the same processor.
+    if (is_gen1_arch()) {
+        // Maps (node, processor) -> the kernel that already claimed it
+        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_dm_kernel()) {
+                continue;
+            }
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const NodeRangeSet nodes = to_node_range_set(kernel.target_nodes);
+            for (const auto& range : nodes.ranges()) {
+                for (const auto& node : range) {
+                    auto key = std::make_pair(node, gen1.processor);
+                    auto [it, inserted] = claimed.try_emplace(key, kernel.unique_id);
+                    TT_FATAL(
+                        inserted,
+                        "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both claim the same DM processor. ",
+                        kernel.unique_id,
+                        it->second,
+                        node.x,
+                        node.y);
+                }
             }
         }
     }
@@ -453,10 +501,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // WorkerSpecs are required on Gen2+
+    // WorkerSpecs are required on all architectures.
     // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional on Gen2 and derive the WorkerSpec if absent.
-    TT_FATAL(spec.workers.has_value(), "Workers are required on Gen2+");
+    //       If it's hated, we can make it optional and derive the WorkerSpec if absent.
+    //       (But I definitely want to require it on Quasar.)
+    TT_FATAL(spec.workers.has_value(), "Workers are required");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
@@ -481,7 +530,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
     }
 
-    // Referential integrity: WorkerSpec kernel/DFB/semaphore references must exist
+    // WorkerSpec kernel/DFB/semaphore references must exist
     for (const auto& worker : workers) {
         for (const auto& kernel_name : worker.kernels) {
             TT_FATAL(
@@ -507,30 +556,45 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Does the Worker have enough cores to run all its kernels?
+
     for (const auto& worker : workers) {
         uint32_t dm_cores_needed = 0;
-        uint32_t compute_cores_needed = 0;
+        uint32_t compute_engines_needed = 0;
         for (const auto& kernel_name : worker.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
-                compute_cores_needed += kernel_spec->num_threads;
+                compute_engines_needed += kernel_spec->num_threads;
             }
             if (kernel_spec->is_dm_kernel()) {
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
-        TT_FATAL(
-            compute_cores_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
-            "WorkerSpec '{}' needs {} compute cores, but only {} are available",
-            worker.unique_id,
-            compute_cores_needed,
-            QUASAR_TENSIX_ENGINES_PER_NODE);
-        TT_FATAL(
-            dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
-            "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
-            worker.unique_id,
-            dm_cores_needed,
-            QUASAR_USER_DM_CORES_PER_NODE);
+        if (is_gen2_arch()) {
+            TT_FATAL(
+                compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
+                "WorkerSpec '{}' needs {} Tensix engines, but only {} are available",
+                worker.unique_id,
+                compute_engines_needed,
+                QUASAR_TENSIX_ENGINES_PER_NODE);
+            TT_FATAL(
+                dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
+                "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
+                worker.unique_id,
+                dm_cores_needed,
+                QUASAR_USER_DM_CORES_PER_NODE);
+        }
+        if (is_gen1_arch()) {
+            TT_FATAL(
+                compute_engines_needed <= 1,
+                "WorkerSpec '{}' has {} compute kernels. The target architecture supports at most one.",
+                worker.unique_id,
+                compute_engines_needed);
+            TT_FATAL(
+                dm_cores_needed <= 2,
+                "WorkerSpec '{}' has {} data movement kernels. The target architecture supports at most two.",
+                worker.unique_id,
+                dm_cores_needed);
+        }
     }
 
     // A worker can have at most one compute kernel
@@ -837,8 +901,9 @@ bool SolveWithOrderingBacktrack(
 
 }  // namespace dm_solver
 
-// Main entry point for processor assignment
-std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(const ProgramSpec& spec) {
+// Gen2 (Quasar) processor assignment: runs the backtracking DM solver and returns
+// a KernelRiscMaskMap using the Gen2 bit encoding (DM: bits 0-7, compute: bits 8-15).
+KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec) {
     DMProcessorMaskMap dm_assignments;
     ComputeEngineMaskMap compute_assignments;
 
@@ -869,7 +934,33 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
         "Either the ProgramSpec is invalid, or that the \"same DM cores on every node\" "
         "simplifying assumption has been violated.");
 
-    return {dm_assignments, compute_assignments};
+    // Convert to KernelRiscMaskMap using Gen2 bit encoding
+    KernelRiscMaskMap result;
+    for (const auto& [kernel, mask] : dm_assignments) {
+        result[kernel] = mask.bits;  // DM processors in bits 0-7
+    }
+    for (const auto& [kernel, mask] : compute_assignments) {
+        result[kernel] = static_cast<uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
+    }
+    return result;
+}
+
+// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1DataMovementConfig
+// and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
+KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
+    static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
+
+    KernelRiscMaskMap result;
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.is_dm_kernel()) {
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
+        } else {
+            result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
+        }
+    }
+    return result;
 }
 
 // ============================================================================
@@ -880,21 +971,12 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
-    const ComputeEngineMaskMap& kernel_to_compute_processor_mask_map) {
+    const KernelRiscMaskMap& kernel_to_risc_mask) {
     const KernelSpec* producer = dfb_endpoint_info.producer;
     const KernelSpec* consumer = dfb_endpoint_info.consumer;
 
-    // Create the combined processor mask for producer and consumer
-    // (uint16_t, where bits 0-7 = DM riscs, bits 8-15 = Tensix riscs)
-    auto get_dfb_risc_mask = [&](const KernelSpec* kernel) -> uint16_t {
-        if (kernel->is_dm_kernel()) {
-            return kernel_to_dm_processor_mask_map.at(kernel).bits;
-        }
-        return kernel_to_compute_processor_mask_map.at(kernel).bits << 8;
-    };
-    uint16_t producer_risc_mask = get_dfb_risc_mask(producer);
-    uint16_t consumer_risc_mask = get_dfb_risc_mask(consumer);
+    uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
+    uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
 
     // Convert user-facing access pattern enum to hardware interface access pattern enum
     // (TODO: We should merge these enums; it's silly to have separate ones.)
@@ -935,6 +1017,93 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 }
 
 // ----------------------------------------------------------------------------
+// InjectDFBAccessorArgs: inject DFB local accessor name -> ID into named_compile_args
+// ----------------------------------------------------------------------------
+//
+// TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
+//   A follow-up PR will introduce a more elegant generated-header mechanism.
+
+void InjectDFBAccessorArgs(
+    KernelSpec::CompileTimeArgBindings& named_compile_args,
+    const KernelSpec& kernel_spec,
+    const DFBNameToIdMap& dfb_name_to_id) {
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        const auto& local_dfb_name = dfb_binding.local_accessor_name;
+        TT_FATAL(
+            !named_compile_args.contains(local_dfb_name),
+            "DFB local accessor name '{}' collides with an existing CTA in kernel '{}'. ",
+            local_dfb_name,
+            kernel_spec.unique_id);
+        named_compile_args[local_dfb_name] = dfb_id;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// MakeGen1DataMovementConfig: Create a DataMovementConfig (WH/BH) from a KernelSpec
+// ----------------------------------------------------------------------------
+
+DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
+    const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
+    const auto& gen1 = dm_config.gen1_data_movement_config.value();
+
+    std::map<std::string, std::string> defines_map;
+    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
+        defines_map[key] = value;
+    }
+
+    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
+    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
+
+    return DataMovementConfig{
+        .processor = gen1.processor,
+        .noc = gen1.noc,
+        .noc_mode = gen1.noc_mode,
+        .compile_args = {},  // only named_compile_args is used
+        .defines = defines_map,
+        .named_compile_args = named_compile_args,
+        .opt_level = kernel_spec.compiler_options.opt_level,
+    };
+}
+
+// ----------------------------------------------------------------------------
+// MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
+// ----------------------------------------------------------------------------
+
+ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
+    const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
+
+    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        unpack_modes[dfb_id] = mode;
+    }
+
+    std::map<std::string, std::string> defines_map;
+    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
+        defines_map[key] = value;
+    }
+
+    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
+    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
+
+    return ComputeConfig{
+        .math_fidelity = compute_config.math_fidelity,
+        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
+        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_modes,
+        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
+        .math_approx_mode = compute_config.math_approx_mode,
+        .compile_args = {},  // only named_compile_args is used
+        .defines = defines_map,
+        .named_compile_args = named_compile_args,
+        .opt_level = kernel_spec.compiler_options.opt_level,
+    };
+}
+
+// ----------------------------------------------------------------------------
 // MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
@@ -948,29 +1117,12 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
         defines_map[key] = value;
     }
 
-    // Start with user-provided compile-time args, then add DFB accessor mappings
-    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
-    //    for creating DFBs from local accessor names.
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        if (named_compile_args.contains(local_dfb_name)) {
-            TT_FATAL(
-                false,
-                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
-                "DFB local_access_name is (temporarily) being appended to the CTAs. "
-                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
-                "For now, please rename either the CTA or the DFB local_accessor_name.",
-                local_dfb_name);
-        }
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
+    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .compile_args = {},  // Compile args are passed via named_compile_args
+        .compile_args = {},  // only named_compile_args is used
         .defines = defines_map,
         .named_compile_args = named_compile_args,
         .is_legacy_kernel = false,
@@ -1001,34 +1153,16 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         unpack_modes[dfb_id] = mode;
     }
 
-    // Handle defines:
-    // Must convert from vector<pair> to map.)
-    // (TODO: Consider changing this in the KernelSpec API to avoid unnecessary conversion?)
-    // (The design motivation was consistency with the existing ProgramDescriptor API.)
+    // Handle defines: must convert from vector<pair> to map.
+    // We use vector<pair> in the KernelSpec for ease of program caching
+    // TODO: Convert the ComputeConfig to use a vector<pair> to eliminate this pointless conversion.
     std::map<std::string, std::string> defines_map;
     for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
         defines_map[key] = value;
     }
 
-    // Start with user-provided compile-time args, then add DFB accessor mappings
-    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
-    //    for creating DFBs from local accessor names.
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        if (named_compile_args.contains(local_dfb_name)) {
-            TT_FATAL(
-                false,
-                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
-                "DFB local_access_name is (temporarily) being appended to the CTAs. "
-                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
-                "For now, please rename either the CTA or the DFB local_accessor_name.",
-                local_dfb_name);
-        }
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
+    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -1103,22 +1237,24 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
 
-    // Step 2: Solve kernel-to-core assignments
-    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
-        SolveKernelToProcessorAssignments(spec);
+    // Step 2: Build kernel risc masks (arch-specific)
+    //  - Gen2: backtracking solver assigns DM cores automatically
+    //  - Gen1: processor is user-specified in Gen1DataMovementConfig
+    KernelRiscMaskMap kernel_to_risc_mask =
+        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec) : BuildGen1KernelRiscMasks(spec);
 
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
-    // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
+    // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
-        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
-            &dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+        const experimental::dfb::DataflowBufferConfig config =
+            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping
         uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec.target_nodes), config);
@@ -1126,23 +1262,34 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         dfb_name_to_id[dfb_name] = dfb_id;
     }
 
-    // Create Kernels
+    // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
 
         std::shared_ptr<Kernel> kernel;
 
-        if (kernel_spec.is_dm_kernel()) {
-            auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                kernel_src, node_ranges, config, processors);
-        } else {
-            auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                kernel_src, node_ranges, config, processors);
+        if (is_gen2_arch()) {
+            uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
+            if (kernel_spec.is_dm_kernel()) {
+                auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
+                auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
+                kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                    kernel_src, node_ranges, config, processors);
+            } else {
+                auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+                auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
+                kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                    kernel_src, node_ranges, config, processors);
+            }
+        } else {  // gen1
+            if (kernel_spec.is_dm_kernel()) {
+                auto config = MakeGen1DataMovementConfig(kernel_spec, dfb_name_to_id);
+                kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config);
+            } else {
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
+                kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config);
+            }
         }
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
