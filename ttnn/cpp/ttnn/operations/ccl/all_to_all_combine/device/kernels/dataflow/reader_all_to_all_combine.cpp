@@ -68,9 +68,9 @@ void kernel_main() {
     const auto token_start_idx = get_arg_val<uint32_t>(3);
     const auto token_end_idx = get_arg_val<uint32_t>(4);
 
-    const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr, metadata_page_size_bytes);
-    const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr, mapping_page_size_bytes);
-    const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr, data_size_bytes);
+    const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr);
+    const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr);
+    const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr);
 
     // this gets sent to writer
     cb_reserve_back(local_experts_cb_id,1);

@@ -25,7 +25,6 @@ FORCE_INLINE void fill_zero_buffer(uint32_t cb_id) {
 
 void kernel_main() {
     // ===== Compile-time args =====
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(0);
     constexpr uint32_t cb_zero_buffer_id = get_compile_time_arg_val(1);
 
     // TensorAccessorArgs for the cache tensor (starting at index 2)
@@ -37,7 +36,7 @@ void kernel_main() {
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);

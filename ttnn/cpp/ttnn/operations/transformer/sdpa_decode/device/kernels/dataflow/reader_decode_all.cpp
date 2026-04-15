@@ -99,7 +99,7 @@ void kernel_main() {
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
             if constexpr (!is_cur_pos_tensor_sharded) {
-                const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
+                const auto addrg = TensorAccessor(pos_args, pos_addr);
                 // index_tensor has one page to read
                 uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
@@ -187,22 +187,25 @@ void kernel_main() {
         q_page_size_bytes,
         q_batch_offset);
 
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
 
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
 
-    const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
 
     // Read attention sink
     if constexpr (use_attention_sink) {
-        const auto attention_sink_reader =
-            TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+        const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
 
         cb_reserve_back(cb_attention_sink, PNHt);
         uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
-            noc_async_read_tile(tile, attention_sink_reader, attention_sink_write_ptr);
+            uint64_t sink_noc_addr = attention_sink_reader.get_noc_addr(tile);
+            // Use noc_async_read with explicit size instead of noc_async_read_tile because
+            // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
+            // noc_async_read_tile would read buffer->aligned_page_size() bytes, overflowing the CB.
+            noc_async_read(sink_noc_addr, attention_sink_write_ptr, attention_sink_tile_bytes);
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
         noc_async_read_barrier();

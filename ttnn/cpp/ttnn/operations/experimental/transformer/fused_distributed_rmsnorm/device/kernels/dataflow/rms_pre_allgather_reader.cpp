@@ -26,7 +26,7 @@ void kernel_main() {
 
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
 
-    const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_accessor = TensorAccessor(input_args, input_addr);
 
     // Generate constant tiles for reduce scalar
     generate_reduce_scaler(reduce_scalar_cb, scalar_val);

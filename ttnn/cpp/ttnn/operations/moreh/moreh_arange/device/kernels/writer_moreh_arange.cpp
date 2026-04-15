@@ -20,7 +20,7 @@ void kernel_main() {
     uint32_t num_bytes_per_tile = get_tile_size(cb_out);
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, num_bytes_per_tile);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     union value {
         float f;

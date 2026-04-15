@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const auto s = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
     uint32_t out_num_tiles_read = in0_w_tiles;

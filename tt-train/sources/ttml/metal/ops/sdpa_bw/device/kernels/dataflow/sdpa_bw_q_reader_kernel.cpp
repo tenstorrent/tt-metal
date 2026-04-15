@@ -49,13 +49,13 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
 
     // Create TensorAccessor generators for inputs
-    const auto grad_output_addr_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
-    const auto attn_output_addr_generator = TensorAccessor(attn_output_args, attn_output_addr, tile_bytes);
-    const auto query_addr_generator = TensorAccessor(query_args, query_addr, tile_bytes);
-    const auto key_addr_generator = TensorAccessor(key_args, key_addr, tile_bytes);
-    const auto value_addr_generator = TensorAccessor(value_args, value_addr, tile_bytes);
-    const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
-    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto grad_output_addr_generator = TensorAccessor(grad_output_args, grad_output_addr);
+    const auto attn_output_addr_generator = TensorAccessor(attn_output_args, attn_output_addr);
+    const auto query_addr_generator = TensorAccessor(query_args, query_addr);
+    const auto key_addr_generator = TensorAccessor(key_args, key_addr);
+    const auto value_addr_generator = TensorAccessor(value_args, value_addr);
+    const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr);
+    const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
     const uint32_t num_of_interm_tiles = 2U;

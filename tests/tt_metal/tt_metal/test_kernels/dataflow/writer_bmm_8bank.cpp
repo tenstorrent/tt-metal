@@ -34,7 +34,7 @@ void kernel_main() {
 #endif
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     experimental::Noc noc;
 

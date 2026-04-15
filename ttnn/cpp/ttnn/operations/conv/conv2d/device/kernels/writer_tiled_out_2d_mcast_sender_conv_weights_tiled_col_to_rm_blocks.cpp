@@ -153,12 +153,12 @@ void kernel_main() {
     // read in bias if enabled (done only once for all batches)
     constexpr uint32_t bias_pagesize =
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy value in case bias is not enabled
-    const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr);
 
     bool load_bias = true;
 
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
     constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
 
     // Pre-compute constants used in tile_id calculation (preserving exact original logic)

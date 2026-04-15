@@ -38,10 +38,10 @@ void kernel_main() {
     i += 1;
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
     const uint32_t bias_pagesize =
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy but valid value in case bias is not enabled
-    const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_pagesize);
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base);
     bool to_load_bias = true;
 
     for (uint32_t act_block_h_index = 0; act_block_h_index < act_num_blocks_h; act_block_h_index++) {

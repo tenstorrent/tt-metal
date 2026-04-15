@@ -8,14 +8,13 @@
 
 void kernel_main() {
     constexpr std::uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr std::uint32_t page_size = get_compile_time_arg_val(1);
     std::uint32_t src_addr_base = get_arg_val<uint32_t>(0);
     std::uint32_t num_tiles = get_arg_val<uint32_t>(1);
 
     constexpr auto src_args = TensorAccessorArgs<2>();
     const uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = get_tile_size(cb_id);
-    const auto src_addrgen = TensorAccessor(src_args, src_addr_base, page_size);
+    const auto src_addrgen = TensorAccessor(src_args, src_addr_base);
 
     // read tiles from src to CB
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

@@ -52,9 +52,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
 
-    const auto s0 = TensorAccessor(s0_args, values_addr, tile_bytes_input_values);
+    const auto s0 = TensorAccessor(s0_args, values_addr);
 
-    const auto s1 = TensorAccessor(s1_args, indices_addr, input_indices_page_size);
+    const auto s1 = TensorAccessor(s1_args, indices_addr);
 
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;

@@ -22,9 +22,11 @@ void kernel_main() {
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto batch_ids_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, input_addr_a, stick_size);
-    const auto s1 = TensorAccessor(src1_args, input_addr_b, stick_size);
+    const auto s0 = TensorAccessor(src0_args, input_addr_a);
+    const auto s1 = TensorAccessor(src1_args, input_addr_b);
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
 
     bool replace_batch = false;

@@ -80,16 +80,13 @@ void kernel_main() {
     const auto cb_id_decimal = cb_id++;
 
     // input
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr);
 
     // output
-    const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // output_grad
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
     fill_cb_with_value(cb_id_decimal, decimal);
 

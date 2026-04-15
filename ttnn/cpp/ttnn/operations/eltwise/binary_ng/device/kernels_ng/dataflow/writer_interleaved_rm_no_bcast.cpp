@@ -39,6 +39,8 @@ void kernel_main() {
     const uint32_t full_page_size = align(page_size_arg, alignment);
     const uint32_t row_width_bytes = row_width_elements * element_size;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst = TensorAccessor(dst_args, dst_addr, full_page_size);
 
     const uint32_t row_blocks_per_channel = (outHt + rows_per_tile - 1) / rows_per_tile;

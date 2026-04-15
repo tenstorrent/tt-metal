@@ -60,7 +60,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_combined_obj(cb_combined);
     experimental::CircularBuffer cb_out_obj(cb_out);
 
-    const auto tensor_out = TensorAccessor(dst_args, dst_addr, out_tile_size_bytes);
+    const auto tensor_out = TensorAccessor(dst_args, dst_addr);
 
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size

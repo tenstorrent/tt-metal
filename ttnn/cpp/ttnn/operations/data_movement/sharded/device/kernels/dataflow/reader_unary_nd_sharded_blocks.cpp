@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
 
     constexpr auto src_args = TensorAccessorArgs<4>();
-    const auto accessor_src = TensorAccessor(src_args, src_addr, tile_size_bytes);
+    const auto accessor_src = TensorAccessor(src_args, src_addr);
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {
         auto shard_pages = accessor_src.shard_pages(shard_id);
         for (auto page_iter = shard_pages.begin(); page_iter != shard_pages.end();

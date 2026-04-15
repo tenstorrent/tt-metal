@@ -157,8 +157,8 @@ void kernel_main() {
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, aligned_output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, aligned_metadata_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Sentinel-terminated fabric send loop
     while (true) {
