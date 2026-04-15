@@ -8,6 +8,8 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, assert_equal
 
+TEST_PADDING_VALUE = -42
+
 
 def assert_cumsum_quality(expected_output, torch_output):
     if torch_output.dtype == torch.int32:
@@ -16,8 +18,6 @@ def assert_cumsum_quality(expected_output, torch_output):
         assert_with_ulp(expected_output, torch_output, ulp_threshold=1)
     else:
         assert_allclose(expected_output, torch_output, rtol=1e-2, atol=1e-4)
-
-TEST_PADDING_VALUE = -42
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -169,8 +169,6 @@ def test_cumsum_backward(size, dim, dtypes, device):
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
 
