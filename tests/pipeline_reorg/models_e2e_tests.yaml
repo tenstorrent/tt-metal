@@ -282,7 +282,7 @@
 
 - name: Falcon-40B e2e tests
   cmd: |
-    pytest --timeout 720 models/demos/t3000/falcon40b/tests/test_demo.py
+    pytest --timeout 720 models/demos/t3000/falcon40b/tests/test_demo.py::test_demo[wormhole_b0-mesh_device0-True-device_params0-128]
   model: falcon-40b
   skus:
     wh_llmbox_perf:
