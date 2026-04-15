@@ -206,3 +206,53 @@
 - WH and BH implementations are byte-for-byte identical
 - The source code comment `param2 = -(pos_threshold)` is inconsistent with the algorithm producing correct results; the actual encoding likely has param2 = pos_threshold (positive)
 - APPROXIMATION_MODE template parameter is accepted but has zero effect on execution
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (tanhshrink)
+
+## Session Summary
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Operation**: tanhshrink
+- **Final Status**: SUCCESS
+- **Output File**: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
+
+## Analysis Steps
+
+### 1. Dispatch Tracing
+- Read `unary_op_utils.cpp` -- TANHSHRINK not in any switch cases
+- `get_compute_kernel_path()` returns `eltwise_sfpu.cpp` (default) -- no TANHSHRINK case
+- `get_op_init_and_func_default()` has no TANHSHRINK case -- would throw
+- Found dedicated compute kernel: `tanhshrink_kernel.cpp` (does not use SFPU_OP_CHAIN)
+- Approx mode: `false` (default)
+
+### 2. Abstraction Layer Tracing
+- API header: `compute_kernel_api.h` -- `tanh_tile<false>()` calls `llk_math_eltwise_unary_sfpu_tanh<false>(idst)`
+- LLK dispatch: **DELETED** -- `llk_math_eltwise_unary_sfpu_tanh.h` removed in deep nuke
+- Core SFPU: **DELETED** -- `ckernel_sfpu_tanh.h` removed in deep nuke Phase 1
+- Binary subtract API: `eltwise_binary.h` -- `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>`
+- Params dispatch: `llk_math_eltwise_unary_sfpu_params.h` (still exists)
+
+### 3. SFPU/FPU Kernel Analysis
+- **Algorithm**: `tanhshrink(x) = x - tanh(x)` implemented as:
+  - Phase 1 (SFPU): `copy_tile` + `tanh_tile(0)` -- computes tanh(x) in DEST
+  - Phase 2 (FPU): `binary_dest_reuse_tiles<ELWSUB, DEST_TO_SRCB>` -- moves DEST (tanh(x)) to SRCB, unpacks x from CB to SRCA, FPU computes x - tanh(x)
+- **Tanh SFPU impl deleted**: `ckernel_sfpu_tanh.h` was in exponential-composition family, described as "sigmoid via tanh"
+- **No SFPNONLINEAR on WH/BH**: Hardware tanh (`p_sfpnonlinear::TANH_MODE = 0x5`) is Quasar-only
+- **FPU subtract**: Uses `MathFidelity::LoFi` (sufficient for exact subtraction)
+
+### 4. Verification
+- `tanh_tile()` API verified in `compute_kernel_api.h`
+- `binary_dest_reuse_tiles()` API verified in `eltwise_binary.h`
+- `tanhshrink_kernel.cpp` verified to exist
+- `ckernel_sfpu_tanh.h` confirmed DELETED (DEEP_NUKE_MANIFEST.md Phase 1)
+- `SFPNONLINEAR` confirmed absent from WH/BH instruction sets
+- `p_sfpnonlinear::TANH_MODE` confirmed in Quasar `ckernel_instr_params.h`
+
+## Key Findings
+- TANHSHRINK is a hybrid SFPU+FPU operation: SFPU computes tanh, FPU computes the subtraction
+- The dedicated compute kernel `tanhshrink_kernel.cpp` exists but references deleted LLK functions
+- Dispatch routing is broken: `get_compute_kernel_path()` has no TANHSHRINK case
+- Double breakage: even if routing were fixed, the SFPU tanh implementation is deleted
+- The `DEST_TO_SRCB` reuse mechanism is a key design choice -- it avoids extra circular buffer tiles by re-reading the input from the same CB
+- Hardware tanh acceleration is Quasar-only (`SFPNONLINEAR TANH_MODE`)

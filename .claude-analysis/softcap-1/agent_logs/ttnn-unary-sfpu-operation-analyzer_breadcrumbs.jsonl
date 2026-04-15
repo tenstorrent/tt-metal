@@ -41,3 +41,4 @@
 {"event":"complete","operation":"sinh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/sinh_analysis.md","commit":"554442eab2","ts":"2026-04-15T13:01:16+00:00"}
 {"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/hardtanh_analysis.md","commit":"pending","ts":"2026-04-15T13:01:16+00:00"}
 {"event":"complete","operation":"hardtanh","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/hardtanh_analysis.md","commit":"a0465d93b7","ts":"2026-04-15T13:02:06+00:00"}
+{"event":"complete","operation":"tanhshrink","final_status":"SUCCESS","output_file":".claude-analysis/softcap-1/tanhshrink_analysis.md","commit":"pending","ts":"2026-04-15T13:03:05+00:00"}
