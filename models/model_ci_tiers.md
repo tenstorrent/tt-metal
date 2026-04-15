@@ -54,11 +54,13 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Llama70B (TTT) | WH/BH LoudBox |
 | Qwen3-32B (TTT) | WH/BH LoudBox |
 | Qwen2.5 32B (TTT) | WH LoudBox |
+| Qwen2.5-Coder-32B (TTT) | WH LoudBox |
 | llama90B-VL | WH LoudBox |
 | Qwen2.5-72B-VL | WH LoudBox |
-| Shallow-UNet | N150 |
+| Shallow-UNet | N150, N300, WH LoudBox |
 | Mistral-7B | N150 |
 | Mixtral 8x7B | WH LoudBox |
+| Gemma-3-4B | N150 |
 | Gemma-3-27B | WH LoudBox |
 ## Tier 3 Models
 | Model | Systems |
@@ -68,13 +70,12 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Mamba | N150 |
 | Llama 1B | N150 |
 | Llama 3B | N150 |
-| Llama 11B text | N150 |
 | Llama 11B-VL | WH LoudBox |
-| Qwen 2.5B-7B | N150 |
-| Qwen 2.5B-72B | WH LoudBox |
-| Qwen2.5-VL-32B-Instruct | WH LoudBox |
-| Phi 1.5 | N150 |
-| Phi 1.4 | N150 |
+| QwQ-32B | WH LoudBox |
+| Qwen 2.5-7B | N150 |
+| Qwen 2.5-72B | WH LoudBox |
+| Qwen2.5-VL-32B | WH LoudBox |
+| Phi-3 | N150 |
 
 
 # Pipelines
