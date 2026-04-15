@@ -23,3 +23,5 @@
 {"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-15T11:23:50+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-tester","phase":4,"ts":"2026-04-15T11:23:50+00:00"}
 {"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-tester","status":"failed","error":"SFPU compilation errors and segfault","ts":"2026-04-15T11:30:50+00:00"}
+{"event":"iteration_decision","iteration":2,"reason":"tester reported SFPU compilation errors and segfault","action":"orchestrator debugging implementation directly","ts":"2026-04-15T11:31:13+00:00"}
+{"event":"phase_complete","phase":4,"phase_name":"Testing","status":"failed","error":"255 ULP at near-zero bf16, sigmoid cancellation. SFPU v_if branching prevents fix.","ts":"2026-04-15T12:00:50+00:00"}

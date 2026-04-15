@@ -25,8 +25,8 @@ namespace ckernel {
  * | param0          | Cap parameter (float packed as uint32_t)                                   | uint32_t | Positive values                                        | True     |
  */
 // clang-format on
-ALWI void softcap_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_softcap<APPROX>(idst, param0)));
+ALWI void softcap_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+    MATH((llk_math_eltwise_unary_sfpu_softcap<APPROX>(idst, param0, param1)));
 }
 
 /**
