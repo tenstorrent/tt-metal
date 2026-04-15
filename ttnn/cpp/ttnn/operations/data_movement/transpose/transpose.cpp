@@ -5,6 +5,7 @@
 
 #include "clone/clone.hpp"
 #include "device/transpose_device_operation.hpp"
+#include "device/transpose_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -19,6 +20,8 @@ namespace detail {
 
 using namespace tt::tt_metal::experimental;
 using namespace tt;
+using tt::tt_metal::BufferType;
+using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
 
 inline Tensor transpose_(
     const Tensor& a,
@@ -37,30 +40,50 @@ inline Tensor transpose_(
     MemoryConfig output_mem_constructed;
     if (!output_mem_config.has_value() ||
         (output_mem_config.value().is_sharded() && !output_mem_config.value().shard_spec().has_value())) {
-        output_mem_constructed = a.memory_config();
-        if (a.is_sharded() && transpose_dim == ttnn::prim::TransposeOpDim::WH) {
-            const auto& input_padded_shape = a.padded_shape();
-            uint32_t W = input_padded_shape[3], H = input_padded_shape[2], C = input_padded_shape[1],
-                     N = input_padded_shape[0];
-            auto shard_spec = a.shard_spec().value();
-            if (N == 1 && C == 1 && shard_spec.shape[1] == W) {
-                std::swap(shard_spec.shape[0], shard_spec.shape[1]);
-                output_mem_constructed =
-                    MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, output_mem_constructed.buffer_type(), shard_spec);
-            } else {
-                shard_spec.shape[0] = shard_spec.shape[0] * W / H;
-                shard_spec.shape[1] = shard_spec.shape[1] * H / W;
-                output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+        bool native = a.is_sharded() && is_native_transpose_sharding(a.tensor_spec(), a.memory_config());
+        if (a.is_sharded() && native) {
+            output_mem_constructed = a.memory_config();
+            bool shard_spec_valid = true;
+            if (transpose_dim == ttnn::prim::TransposeOpDim::WH) {
+                const auto& input_padded_shape = a.padded_shape();
+                uint32_t W = input_padded_shape[3], H = input_padded_shape[2], C = input_padded_shape[1],
+                         N = input_padded_shape[0];
+                auto shard_spec = a.shard_spec().value();
+                if (N == 1 && C == 1 && shard_spec.shape[1] == W) {
+                    std::swap(shard_spec.shape[0], shard_spec.shape[1]);
+                    output_mem_constructed = MemoryConfig(
+                        TensorMemoryLayout::WIDTH_SHARDED, output_mem_constructed.buffer_type(), shard_spec);
+                } else {
+                    shard_spec.shape[0] = shard_spec.shape[0] * W / H;
+                    shard_spec.shape[1] = shard_spec.shape[1] * H / W;
+                    if (a.layout() == Layout::TILE && (shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                                                       shard_spec.shape[1] % tt::constants::TILE_WIDTH != 0)) {
+                        shard_spec_valid = false;
+                    } else {
+                        output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+                    }
+                }
             }
-        }
-        if (a.is_sharded() && transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
-            const auto& input_padded_shape = a.padded_shape();
-            const auto& input_logical_shape = a.logical_shape();
-            uint32_t H = input_logical_shape[2], C = input_logical_shape[1];
-            uint32_t H_padded = input_padded_shape[2], C_padded = tt::round_up(C, tt::constants::TILE_HEIGHT);
-            auto shard_spec = a.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] * H * C_padded / H_padded / C;
-            output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+            if (transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
+                const auto& input_padded_shape = a.padded_shape();
+                const auto& input_logical_shape = a.logical_shape();
+                uint32_t H = input_logical_shape[2], C = input_logical_shape[1];
+                uint32_t H_padded = input_padded_shape[2], C_padded = tt::round_up(C, tt::constants::TILE_HEIGHT);
+                auto shard_spec = a.shard_spec().value();
+                shard_spec.shape[0] = shard_spec.shape[0] * H * C_padded / H_padded / C;
+                if (shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0) {
+                    shard_spec_valid = false;
+                } else {
+                    output_mem_constructed = output_mem_constructed.with_shard_spec(shard_spec);
+                }
+            }
+            if (!shard_spec_valid) {
+                output_mem_constructed = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+            }
+        } else if (a.is_sharded()) {
+            output_mem_constructed = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+        } else {
+            output_mem_constructed = a.memory_config();
         }
     } else {
         output_mem_constructed = output_mem_config.value();

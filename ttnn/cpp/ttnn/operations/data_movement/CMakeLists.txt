@@ -317,6 +317,7 @@ target_sources(
             transpose/device/transpose_hc_tiled_program_factory.hpp
             transpose/device/transpose_wh_program_factory.hpp
             transpose/device/transpose_wh_sharded_program_factory.hpp
+            transpose/device/transpose_utils.hpp
             transpose/device/transpose_wh_sharded_rm_program_factory.hpp
             # unsqueeze/
             unsqueeze/unsqueeze.hpp
@@ -488,6 +489,7 @@ target_sources(
         transpose/device/transpose_hc_tiled_program_factory.cpp
         transpose/device/transpose_wh_program_factory.cpp
         transpose/device/transpose_wh_sharded_program_factory.cpp
+        transpose/device/transpose_utils.cpp
         transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_cn_program_factory.hpp"
+#include "transpose_utils.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -61,11 +62,15 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
     std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index), src0_buffer->aligned_page_size(), stick_size};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> reader_common_runtime_args;
+    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
     std::map<std::string, std::string> writer_defines;
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index), dst_buffer->aligned_page_size(), stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    std::vector<uint32_t> writer_common_runtime_args;
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     if (row_major) {
         reader_defines["CN_RM"] = "1";
@@ -78,6 +83,7 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
         "reader_unary_transpose_cn_interleaved_start_id.cpp",
         total_cores,
         ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -85,6 +91,7 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
         "writer_unary_transpose_cn_interleaved_start_id.cpp",
         total_cores,
         WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+    SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     // Set runtime arguments for each core
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
@@ -142,6 +149,15 @@ void TransposeCNProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
 
     const auto& input_tensor = tensor_args.input;
+
+    {
+        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *input_tensor.buffer(), reader_args);
+        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *output_tensor.buffer(), writer_args);
+    }
 
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
