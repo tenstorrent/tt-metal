@@ -164,6 +164,21 @@ REGISTER_UNARY_OPERATION(swish, SWISH)
 REGISTER_UNARY_OPERATION(hardmish, HARDMISH)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(softshrink, SOFTSHRINK)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(hardshrink, HARDSHRINK)
+
+// Softcap operation with default cap parameter
+inline Tensor softcap(
+    const Tensor& input_tensor,
+    float cap = 50.0f,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::SOFTCAP, static_cast<float>(cap)}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
 // fill takes a fill_value parameter, not a simple unary op
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(fill, FILL)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW)
