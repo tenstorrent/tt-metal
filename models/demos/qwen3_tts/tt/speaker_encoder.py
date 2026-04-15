@@ -14,12 +14,12 @@ Architecture:
     - Attentive Statistics Pooling
     - Final FC (3072 -> 2048)
 
-Note: This implementation uses PyTorch for the forward pass since TTNN
-doesn't have native support for 1D convolutions with reflect padding.
-The weights are stored and can be converted to TTNN format when needed.
+Note: Reflect ``conv1d`` runs on host PyTorch inside ``_conv1d_same_padding`` (no TTNN
+reflect pad). Activations use ``ttnn.relu`` / ``ttnn.tanh`` where possible; conv/FC
+weights are cached on device. Mel filterbank + Hann window are cached on host.
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -81,6 +81,14 @@ class SpeakerEncoder(LightweightModule):
         # Store weights as PyTorch tensors for CPU computation
         # Can be converted to TTNN when native ops are available
         self.pytorch_weights = {k: v.float() for k, v in self.weights.items()}
+        self._conv1d_param_tt_cache = {}
+        self._mel_stft_key = None
+        self._fc_linear_weight_tt = None
+        self._fc_bias_tt = None
+        self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+        )
 
     def compute_mel_spectrogram(
         self,
@@ -102,19 +110,13 @@ class SpeakerEncoder(LightweightModule):
         Returns:
             Mel spectrogram [batch, num_mels, time]
         """
-        from librosa.filters import mel as librosa_mel_fn
-
         if audio.dim() == 1:
             audio = audio.unsqueeze(0)
 
         device = audio.device
-
-        # Create mel filterbank
-        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
-        mel_basis = torch.from_numpy(mel).float().to(device)
-
-        # Hann window
-        hann_window = torch.hann_window(win_size).to(device)
+        mel_basis, hann_window = self._mel_stft_constants(n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
+        mel_basis = mel_basis.to(device)
+        hann_window = hann_window.to(device)
 
         # Padding
         padding = (n_fft - hop_size) // 2
@@ -143,24 +145,98 @@ class SpeakerEncoder(LightweightModule):
 
         return mel_spec
 
+    def _mel_stft_constants(
+        self,
+        n_fft: int,
+        num_mels: int,
+        sampling_rate: int,
+        win_size: int,
+        fmin: int,
+        fmax: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        key = (n_fft, num_mels, sampling_rate, win_size, fmin, fmax)
+        if self._mel_stft_key != key:
+            from librosa.filters import mel as librosa_mel_fn
+
+            mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
+            self._mel_basis_cpu = torch.from_numpy(mel).float()
+            self._hann_window_cpu = torch.hann_window(win_size).float()
+            self._mel_stft_key = key
+        return self._mel_basis_cpu, self._hann_window_cpu
+
+    def _conv1d_params_to_ttnn(self, weight: torch.Tensor, bias: torch.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        key = (weight.data_ptr(), bias.data_ptr())
+        hit = self._conv1d_param_tt_cache.get(key)
+        if hit is None:
+            w_tt = ttnn.from_torch(
+                weight,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            b_tt = ttnn.from_torch(
+                bias,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hit = (w_tt, b_tt)
+            self._conv1d_param_tt_cache[key] = hit
+        return hit
+
+    def _torch_ncl_to_ttnn_nlc(self, x_ncl: torch.Tensor) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            x_ncl.permute(0, 2, 1).contiguous(),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _ttnn_nlc_to_torch_ncl(self, x_nlc: ttnn.Tensor) -> torch.Tensor:
+        t = ttnn.to_torch(x_nlc, dtype=torch.float32)
+        if t.dim() == 4:
+            t = t.squeeze(1)
+        return t.permute(0, 2, 1).contiguous()
+
     def _conv1d_same_padding(
-        self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dilation: int = 1
-    ) -> torch.Tensor:
-        """Conv1d with same padding using reflect mode."""
-        kernel_size = weight.shape[-1]
+        self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor, dilation: int = 1
+    ) -> ttnn.Tensor:
+        """Same reflect pad + conv1d on host; I/O NLC ``[batch, seq, channels]``."""
+        x_t = ttnn.to_torch(x, dtype=torch.float32)
+        if x_t.dim() == 4:
+            x_t = x_t.squeeze(1)
+        x_t = x_t.permute(0, 2, 1).contiguous()
+        w_t = ttnn.to_torch(weight, dtype=torch.float32)
+        if w_t.dim() == 4:
+            w_t = w_t.squeeze(-1)
+        b_t = ttnn.to_torch(bias, dtype=torch.float32).reshape(-1)
+
+        kernel_size = w_t.shape[-1]
         effective_kernel = dilation * (kernel_size - 1) + 1
         pad_total = effective_kernel - 1
         pad_left = pad_total // 2
         pad_right = pad_total - pad_left
-        x_padded = F.pad(x, (pad_left, pad_right), mode="reflect")
-        return F.conv1d(x_padded, weight, bias, dilation=dilation)
+        x_padded = F.pad(x_t, (pad_left, pad_right), mode="reflect")
+        out_t = F.conv1d(x_padded, w_t, b_t, dilation=dilation)
+        out_nlc = out_t.permute(0, 2, 1).contiguous()
+        return ttnn.from_torch(
+            out_nlc,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _time_delay_net_block(
         self, x: torch.Tensor, conv_weight: torch.Tensor, conv_bias: torch.Tensor, dilation: int = 1
     ) -> torch.Tensor:
-        """Time Delay Network Block: Conv1d(same, reflect) + ReLU."""
-        out = self._conv1d_same_padding(x, conv_weight, conv_bias, dilation)
-        return F.relu(out)
+        """Time Delay Network Block: reflect conv (host) + ``ttnn.relu`` on device."""
+        w_tt, b_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
+        y_tt = ttnn.relu(self._conv1d_same_padding(self._torch_ncl_to_ttnn_nlc(x), w_tt, b_tt, dilation))
+        return self._ttnn_nlc_to_torch_ncl(y_tt)
 
     def _res2net_block(self, x: torch.Tensor, prefix: str, scale: int = 8) -> torch.Tensor:
         """Res2Net block with multi-scale feature extraction."""
@@ -255,9 +331,12 @@ class SpeakerEncoder(LightweightModule):
 
         attention_input = torch.cat([x, mean_expanded, std_expanded], dim=1)
 
-        attention = self._conv1d_same_padding(attention_input, tdnn_weight, tdnn_bias)
-        attention = torch.tanh(attention)
-        attention = self._conv1d_same_padding(attention, conv_weight, conv_bias)
+        tw_tt, tb_tt = self._conv1d_params_to_ttnn(tdnn_weight, tdnn_bias)
+        cw_tt, cb_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
+        a_tt = self._conv1d_same_padding(self._torch_ncl_to_ttnn_nlc(attention_input), tw_tt, tb_tt)
+        a_tt = ttnn.tanh(a_tt)
+        a_tt = self._conv1d_same_padding(a_tt, cw_tt, cb_tt)
+        attention = self._ttnn_nlc_to_torch_ncl(a_tt)
         attention = attention.masked_fill(mask == 0, float("-inf"))
         attention = F.softmax(attention, dim=2)
 
@@ -266,6 +345,28 @@ class SpeakerEncoder(LightweightModule):
 
         pooled_stats = torch.cat([weighted_mean, weighted_std], dim=1)
         return pooled_stats.unsqueeze(2)
+
+    def _ensure_fc_linear_params(self, fc_weight: torch.Tensor, fc_bias: torch.Tensor) -> None:
+        """Lazy-build ``[1, 1, in, out]`` weight + bias for ``ttnn.linear`` (matches Talker layout)."""
+        if self._fc_linear_weight_tt is not None:
+            return
+        w = fc_weight.squeeze(-1).float()
+        in_f, out_f = w.shape[1], w.shape[0]
+        w_host = w.T.contiguous().reshape(1, 1, in_f, out_f)
+        self._fc_linear_weight_tt = ttnn.from_torch(
+            w_host,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._fc_bias_tt = ttnn.from_torch(
+            fc_bias.float().reshape(1, 1, 1, -1),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward(self, mel_spectrogram: torch.Tensor) -> torch.Tensor:
         """
@@ -324,14 +425,29 @@ class SpeakerEncoder(LightweightModule):
             std = hidden.std(dim=2)
             hidden = torch.cat([mean, std], dim=1).unsqueeze(2)
 
-        # Final FC
+        # Final FC: ``ttnn.linear`` (kernel 1 conv); weights prepared once
         fc_weight = self.pytorch_weights.get("fc.weight")
         fc_bias = self.pytorch_weights.get("fc.bias")
         if fc_weight is not None:
-            hidden = F.conv1d(hidden, fc_weight, fc_bias)
-
-        # Squeeze time dimension
-        hidden = hidden.squeeze(-1)
+            self._ensure_fc_linear_params(fc_weight, fc_bias)
+            b, ch, tlen = hidden.shape
+            x_tt = ttnn.from_torch(
+                hidden.reshape(b, 1, tlen, ch),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            out_tt = ttnn.linear(
+                x_tt,
+                self._fc_linear_weight_tt,
+                bias=self._fc_bias_tt,
+                compute_kernel_config=self._compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hidden = ttnn.to_torch(out_tt, dtype=torch.float32).reshape(b, -1)
+        else:
+            hidden = hidden.squeeze(-1)
 
         return hidden
 
@@ -365,5 +481,5 @@ class SpeakerEncoder(LightweightModule):
             device=self.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
