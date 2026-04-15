@@ -88,3 +88,55 @@ Analyzed the softshrink unary operation and discovered that its **entire SFPU ke
 
 ### Output
 - Analysis file: `.claude-analysis/softcap-1/softshrink_analysis.md`
+
+---
+
+## Operation: swish
+## Date: 2026-04-15
+
+### Summary
+Analyzed the SFPU kernel implementation for the `swish` unary operation. The kernel computes `swish(x) = x * sigmoid(x)` using a piecewise approximation of sigmoid based on the absolute value of x: a degree-3 polynomial for |x| <= 2.5, a linear segment for 2.5 < |x| <= 5.0, and saturation to 1.0 for |x| > 5.0. Sign correction is applied for negative inputs.
+
+### Key Findings
+- **Compute kernel**: `eltwise_sfpu.cpp` (standard unary dispatch)
+- **SFPU_OP_CHAIN_0**: `swish_tile_init(); swish_tile(0);`
+- **Approximation mode**: `false` (unused -- kernel has no `if constexpr` on APPROXIMATION_MODE)
+- **Core SFPU function**: `calculate_swish<false, 8>()` in `ckernel_sfpu_swish.h`
+- **Kernel style**: SFPI abstractions (Style A)
+- **WH/BH parity**: Identical implementations on both platforms (byte-identical files)
+- **SFPU instructions**: SFPLOAD, SFPSTORE, SFPABS, SFPMUL, SFPADD, SFPMAD (Horner polynomial chain), SFPLOADI (float constants), SFPSETCC, SFPENCC, SFPPUSHC, SFPPOPC (CC management for 4 v_if blocks)
+- **Address mode**: ADDR_MOD_7 only (all-zero increments), same on WH and BH
+- **Mathematical approach**: 3-segment piecewise sigmoid approximation; max ULP error ~4 for bfloat16
+
+### Files Read
+1. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+2. `tt_metal/hw/inc/api/compute/eltwise_unary/swish.h`
+3. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_swish.h`
+4. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_swish.h`
+5. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_swish.h`
+6. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_swish.h`
+7. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+8. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+9. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+10. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h`
+11. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h`
+12. `runtime/sfpi/include/sfpi.h`
+13. `runtime/sfpi/include/sfpi_lib.h`
+14. `runtime/sfpi/include/sfpi_constants.h`
+15. `.claude/references/sfpu-hardware-model.md`
+16. `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
+17. `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+18. `tt_metal/jit_build/genfiles.cpp`
+19. `tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h`
+20. `tt_metal/hw/inc/api/compute/common_globals.h`
+
+### Verification Results
+- `calculate_swish`: VERIFIED in both WH and BH ckernels
+- `llk_math_eltwise_unary_sfpu_swish`: VERIFIED in both WH and BH
+- `llk_math_eltwise_unary_sfpu_swish_init`: VERIFIED in both WH and BH
+- All file paths in abstraction layers table: VERIFIED (all exist)
+- SFPU instructions: VERIFIED via SFPI-to-instruction mappings in sfpi.h and sfpi_lib.h (no raw TTI instructions in kernel; all instructions inferred from SFPI abstraction layer)
+- `SfpuType::swish`: VERIFIED in `llk_sfpu_types.h` line 10
+
+### Output
+- Analysis file: `.claude-analysis/softcap-1/swish_analysis.md`
