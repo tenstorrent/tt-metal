@@ -77,6 +77,17 @@ tt-smi -r <PCI_ID>  # reset device
 ```
 Only reset for runtime failures (TIMEOUT, runtime ASSERTION). Never reset for compile errors or reconfig escapes — resetting masks reconfig bugs.
 
+## Metal Integration
+
+LLK is consumed by tt-metal through a 4-layer stack. **When you change an LLK function signature, add a new op, or modify unpack/pack behavior**, you must also update the corresponding metal files.
+
+**Mandatory:** Before completing any LLK change, read `.claude/references/metal-integration.md` and follow the propagation checklist.
+
+Key layers above tt-llk:
+1. **CKernels LLK API** (`tt_metal/hw/ckernels/{arch}/metal/llk_api/`) — almost always needs updating
+2. **Compute API** (`tt_metal/hw/inc/api/compute/`) — update if the public interface changes
+3. **TTNN bypass files** — some TTNN operations directly include LLK headers, bypassing the API
+
 ## MCP Integration
 
 This repo uses three MCP servers: DeepWiki, Atlassian (Confluence), and Glean.
