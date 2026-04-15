@@ -446,7 +446,7 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         # Wire dispatch state lazily on the second call to the same container.
         # Only wires once; subsequent update()+run() cycles hit the
         # _dispatch_state fast path in run() and never reach here.
-        if container._dispatch_state is None and any(op.input_tensors for op in container._cached_ops):
+        if container._dispatch_state is None:
             _wire_dispatch_state(container, entry, container._cached_ops)
         outputs = ttnn._ttnn.operations.experimental.patchable_generic_op(
             ops_inputs,
@@ -457,11 +457,7 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
             entry.address_slots,
         )
 
-        if results is not None:
-            default_results = container._default_results
-            requested_ids = {id(d) for d in results}
-            return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
-        return outputs
+        return _filter_results(outputs, container._default_results, results)
 
     cache_device = device
     if cache_device is None:
@@ -488,15 +484,12 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
         container._cached_run = (entry, ops_inputs)
 
-        if results is not None:
-            default_results = (
-                _default_results_parallel_branches(container._items)
-                if surface_prefix == "P"
-                else _default_results(container._items)
-            )
-            requested_ids = {id(d) for d in results}
-            return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
-        return outputs
+        default_results = (
+            _default_results_parallel_branches(container._items)
+            if surface_prefix == "P"
+            else _default_results(container._items)
+        )
+        return _filter_results(outputs, default_results, results)
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
@@ -543,6 +536,14 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
     return ret
 
 
+def _filter_results(outputs, default_results, results):
+    """Return *outputs* filtered to the subset the caller requested."""
+    if results is not None:
+        requested_ids = {id(d) for d in results}
+        return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
+    return outputs
+
+
 def _clear_volatile_op_tensors(container):
     """Clear volatile input slots and stale output tensors on ops after dispatch.
 
@@ -568,8 +569,12 @@ def _wire_dispatch_state(container, entry, ops):
     After this, ``container.run()`` bypasses ``_container_run`` entirely —
     ``state.dispatch()`` handles everything in C++ with zero per-call marshalling.
     Each op's ``update()`` writes directly to C++ input slots via ``set_input()``.
+
+    No-op for containers with no input tensors (e.g. barrier-only kernels).
     """
     ops_inputs = [op.input_tensors for op in ops]
+    if not any(ops_inputs):
+        return
     state = ttnn._ttnn.operations.experimental.FusionDispatchState(
         ops_inputs,
         entry.output_specs,
@@ -912,11 +917,7 @@ class Sequential:
         if state is not None and state.ready():
             outputs = state.dispatch()
             _clear_volatile_op_tensors(self)
-            if results is not None:
-                default_results = self._default_results
-                requested_ids = {id(d) for d in results}
-                return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
-            return outputs
+            return _filter_results(outputs, self._default_results, results)
 
         if self._cached_run is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
@@ -1059,11 +1060,7 @@ class Parallel:
         if state is not None and state.ready():
             outputs = state.dispatch()
             _clear_volatile_op_tensors(self)
-            if results is not None:
-                default_results = self._default_results
-                requested_ids = {id(d) for d in results}
-                return [out for d, out in zip(default_results, outputs) if id(d) in requested_ids]
-            return outputs
+            return _filter_results(outputs, self._default_results, results)
 
         if self._cached_run is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
