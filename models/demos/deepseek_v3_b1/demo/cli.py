@@ -8,7 +8,6 @@ import argparse
 import contextlib
 import os
 import socket
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -312,7 +311,6 @@ def main(argv: list[str] | None = None) -> int:
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         weight_perf_report_path=args.weight_perf_report_path,
     )
-    print(file=sys.stdout, flush=True)
     return 0
 
 
