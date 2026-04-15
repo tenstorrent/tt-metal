@@ -114,13 +114,9 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 }
 #endif
 
-// Packs row slices into absolute CB positions with a fixed row stride.
-// Use this for out-of-order/output-indexed writes where each row starts at
-// row_base * row_stride + col_base and spans pack_width consecutive tiles. On
-// WH, blocked pack only pays off once the per-row width is large enough;
-// narrower writes fall back to regular tile-by-tile packing to avoid the
-// packer reconfiguration overhead.
-ALWI void pack_contiguous_rows(
+// Raw pack: caller must have already called configure_row_pack_width(out_cb, pack_width).
+// Use this in tight loops after configuring once at the loop boundary.
+ALWI void pack_contiguous_rows_nocfg(
     uint32_t out_cb,
     uint32_t row_base,
     uint32_t row_count,
@@ -142,6 +138,18 @@ ALWI void pack_contiguous_rows(
     }
 }
 
+// Safe pack: configures MOP then packs. Use for one-off calls or first-in-group.
+ALWI void pack_contiguous_rows(
+    uint32_t out_cb,
+    uint32_t row_base,
+    uint32_t row_count,
+    uint32_t row_stride,
+    uint32_t col_base,
+    uint32_t pack_width) {
+    configure_row_pack_width(out_cb, pack_width);
+    pack_contiguous_rows_nocfg(out_cb, row_base, row_count, row_stride, col_base, pack_width);
+}
+
 /**
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
@@ -159,7 +167,8 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-    bool trigger_reduce = false) {
+    bool trigger_reduce = false,
+    bool skip_pack_configure = false) {
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -173,8 +182,11 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     tile_regs_commit();
 
     tile_regs_wait();
-    configure_row_pack_width(out_cb, subblock_w);
-    pack_contiguous_rows(out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
+    if (!skip_pack_configure) {
+        configure_row_pack_width(out_cb, subblock_w);
+    }
+    pack_contiguous_rows_nocfg(
+        out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     if (trigger_reduce) {
         PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
     }
@@ -262,7 +274,8 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     uint32_t q_subblock,
     uint32_t global_col_base,
     uint32_t sbh,
-    uint32_t sbw) {
+    uint32_t sbw,
+    bool skip_pack_configure = false) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t tiles_per_column = sbw;
     const uint32_t max_row_base = q_subblock * tiles_per_row;
@@ -307,9 +320,16 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
-        // Pack back to inout_cb at the same absolute positions
-        configure_row_pack_width(inout_cb, tiles_per_column);
-        pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
+        // Pack back to inout_cb at the same absolute positions.
+        // In Phase 1, the caller pre-configures (cb_qkt_im, actual_sbw) before the kt loop
+        // and blocked_matmul_and_pack restores it after each sub_exp. Skip the redundant
+        // reconfigure here when the caller guarantees the state.
+        if (skip_pack_configure) {
+            pack_contiguous_rows_nocfg(
+                inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
+        } else {
+            pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
+        }
         configure_single_tile_pack(reduce_cb);
         {
             uint32_t dst_index = 0;
@@ -335,7 +355,6 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     // Restore packer ReLU config after all exp operations complete
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-    configure_row_pack_width(inout_cb, tiles_per_column);
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
@@ -371,6 +390,7 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
+        configure_single_tile_pack(out_cb);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             pack_tile<false>(i, out_cb);
         }
@@ -422,7 +442,6 @@ void salad_correct_fused(
             (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch_rem > 0 ? last_batch_rem : col_batch);
         const bool is_last_out_batch = (col_base + cur_cols >= tiles_per_column);
         const bool fuse_sum_here = can_fuse_last && is_last_out_batch;
-        const bool use_blocked_out_pack = should_use_blocked_pack_width(cur_cols);
 
         tile_regs_acquire();
         uint32_t dst_index = 0;
@@ -439,9 +458,6 @@ void salad_correct_fused(
         }
         tile_regs_commit();
         tile_regs_wait();
-        if (use_blocked_out_pack) {
-            configure_pack_width(out_out_cb, cur_cols);
-        }
         pack_contiguous_rows(out_out_cb, write_row_base, tiles_per_row, tiles_per_column, col_base, cur_cols);
         dst_index = tiles_per_row * cur_cols;
         if (fuse_sum_here) {
@@ -449,9 +465,6 @@ void salad_correct_fused(
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
             }
-        }
-        if (use_blocked_out_pack) {
-            configure_single_tile_pack(out_out_cb);
         }
         tile_regs_release();
     }
@@ -484,6 +497,7 @@ void normalize_row_streaming(
     uint32_t scratch_cb,
     uint32_t normalized_out_cb,
     uint32_t sbh) {
+    configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
@@ -548,34 +562,6 @@ void normalize_row_streaming(
 }
 
 // ===================== Streaming SDPA Core Functions =====================
-
-/**
- * L1-accumulate ring mask tiles onto QKT for one row group (q_subblock).
- * Copies mask tiles from cb_mask_in and adds them in-place to cb_qkt_im using L1 accumulation.
- */
-template <uint32_t Sk_chunk_t, uint32_t cb_mask_in, uint32_t cb_qkt_im, uint32_t dst_size>
-static void apply_ring_mask_to_qkt(uint32_t q_subblock, uint32_t sbh) {
-    for (uint32_t row = 0; row < sbh; row++) {
-        uint32_t out_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
-        uint32_t mask_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
-        copy_tile_to_dst_init_short(cb_mask_in);
-        PACK((llk_pack_reconfig_l1_acc(1)));
-        for (uint32_t base = 0; base < Sk_chunk_t; base += dst_size) {
-            uint32_t batch = (Sk_chunk_t - base < dst_size) ? (Sk_chunk_t - base) : dst_size;
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < batch; i++) {
-                copy_tile(cb_mask_in, mask_row_offset + base + i, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < batch; i++) {
-                pack_tile<true>(i, cb_qkt_im, out_row_offset + base + i);
-            }
-            tile_regs_release();
-        }
-        PACK((llk_pack_reconfig_l1_acc(0)));
-    }
-}
 
 /**
  * L1-accumulate a single mask tile onto one position in out_cb.
@@ -713,7 +699,6 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    const bool use_blocked_qkt_pack = configure_row_pack_width(cb_qkt_im, actual_sbw);
     cb_wait_front(cb_kt_in, DHt * KT_stride);
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
@@ -728,6 +713,12 @@ static void sdpa_inner_loop_step(
             reconfig_data_format(cb_kt_in, cb_q_in);
         }
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
+        // and blocked_matmul_and_pack skip their internal configure (same cb+width).
+        // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
+        // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
+        // When q_subblock == 0, no sub_exp → global stays set → skip there too.
+        configure_row_pack_width(cb_qkt_im, actual_sbw);
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
@@ -742,7 +733,8 @@ static void sdpa_inner_loop_step(
                     prev_q_subblock,
                     kt_subblock * actual_sbw,
                     qkt_subblock_h,
-                    actual_sbw);
+                    actual_sbw,
+                    /*skip_pack_configure=*/true);
                 if constexpr (!uniform_pack_format) {
                     pack_reconfig_data_format(cb_qkt_im);
                 }
@@ -770,7 +762,8 @@ static void sdpa_inner_loop_step(
                     qkt_subblock_h,
                     in0_block_w,
                     in0_block_w,
-                    kt_trigger_reduce);
+                    kt_trigger_reduce,
+                    /*skip_pack_configure=*/q_subblock == 0);
                 kt_index_offset += actual_sbw;
             }
         }
@@ -785,6 +778,7 @@ static void sdpa_inner_loop_step(
         // mask at active_Sk-1 instead of Sk_chunk_t-1.
         if constexpr (use_ring_mask) {
             if (apply_mask && lw_partial_tile_idx > 0) {
+                configure_single_tile_pack(cb_qkt_im);
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
                 apply_lightweight_mask_streaming<KT_stride>(
@@ -822,7 +816,6 @@ static void sdpa_inner_loop_step(
             if (save_max_cb != INVALID_CB) {
                 cb_push_back(save_max_cb, qkt_subblock_h);
             }
-            configure_pack_width(cur.max, use_blocked_qkt_pack ? actual_sbw : 1);
         }
 
         q_index_offset += qkt_subblock_h * in0_block_w;
@@ -875,7 +868,6 @@ static void sdpa_inner_loop_step(
         cb_reserve_back(out_cb, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
-        configure_single_tile_pack(cb_qkt_im);
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             // Split-drain: interleave per-column-subblock sub_exp with partial V matmul.
@@ -907,6 +899,8 @@ static void sdpa_inner_loop_step(
                         reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                     }
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
+                    // Configure once before v_subblock loop; skip inside.
+                    configure_row_pack_width(out_cb, qktv_subblock_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
                             cb_qkt_im,
@@ -919,7 +913,9 @@ static void sdpa_inner_loop_step(
                             qktv_subblock_w,
                             qktv_h,
                             matmul_inner,
-                            KT_stride);
+                            KT_stride,
+                            /*trigger_reduce=*/false,
+                            /*skip_pack_configure=*/true);
                         v_index_offset += qktv_subblock_w;
                     }
                     if constexpr (!uniform_unpack_format) {
@@ -1011,6 +1007,8 @@ static void sdpa_inner_loop_step(
                     reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
                 mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
+                // Configure once before v_subblock loop; skip inside.
+                configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
                         cb_qkt_im,
@@ -1023,7 +1021,9 @@ static void sdpa_inner_loop_step(
                         qktv_subblock_w,
                         cur_h,
                         active_Sk,
-                        KT_stride);
+                        KT_stride,
+                        /*trigger_reduce=*/false,
+                        /*skip_pack_configure=*/true);
                     v_index_offset += qktv_subblock_w;
                 }
                 if constexpr (!uniform_unpack_format) {
