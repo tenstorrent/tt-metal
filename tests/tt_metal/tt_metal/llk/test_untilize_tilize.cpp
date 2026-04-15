@@ -538,7 +538,7 @@ static void run_quasar_pack_untilize_test(
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
-    bool is_8bit_integer = (data_fmt == tt::DataFormat::Int8 || data_fmt == tt::DataFormat::UInt8);
+    bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t input_single_tile_size = tt::tile_size(data_format);
     // For int8: Int8 in dest is promoted to Int32, pack writes Int32
@@ -564,11 +564,11 @@ static void run_quasar_pack_untilize_test(
 
     uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
 
-    tt::DataFormat output_data_fmt = data_fmt;
+    tt::DataFormat output_data_format = data_format;
     if (is_8bit_integer) {
-        output_data_fmt = tt::DataFormat::Int32;
+        output_data_format = tt::DataFormat::Int32;
     } else if (fp32_dest_acc_en) {
-        output_data_fmt = tt::DataFormat::Float32;
+        output_data_format = tt::DataFormat::Float32;
     }
 
     tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
@@ -589,7 +589,7 @@ static void run_quasar_pack_untilize_test(
         .num_consumers = 1,
         .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = true,
-        .data_format = output_format};
+        .data_format = output_data_format};
 
     uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
     uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
@@ -636,9 +636,9 @@ static void run_quasar_pack_untilize_test(
     // For Int16, pack incrementing 16-bit integers two-per-uint32. gold_standard_untilize
     // operates on raw uint32_t (rearranges 16-bit slots), so golden comparison works for both.
     std::vector<uint32_t> src_vec;
-    if (data_fmt == tt::DataFormat::Int8) {
+    if (data_format == tt::DataFormat::Int8) {
         src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
-    } else if (data_fmt == tt::DataFormat::UInt8) {
+    } else if (data_format == tt::DataFormat::UInt8) {
         src_vec = create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
     } else if (data_format == tt::DataFormat::Int16) {
         src_vec.resize(src_dram_buffer_size / sizeof(uint32_t));
@@ -658,7 +658,6 @@ static void run_quasar_pack_untilize_test(
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
-    uint32_t datum_bytes = is_8bit_integer ? 1 : 2;
     ::unit_tests::compute::GoldenConfig golden_config = {
         .num_tiles_r_dim = static_cast<int>(num_tiles_r),
         .num_tiles_c_dim = static_cast<int>(num_tiles_c),
@@ -669,7 +668,7 @@ static void run_quasar_pack_untilize_test(
         // Int8/UInt8 in dest is promoted to Int32. Expand each byte to a uint32_t word.
         // Hardware uses sign-magnitude representation for Int8:
         //   bit 31 = sign (MSB of the byte), bits [6:0] = magnitude (lower 7 bits of the byte)
-        bool is_signed = (data_fmt == tt::DataFormat::Int8);
+        bool is_signed = (data_format == tt::DataFormat::Int8);
         std::vector<uint32_t> golden_int32;
         golden_int32.reserve(golden.size() * 4);
         for (auto word : golden) {
