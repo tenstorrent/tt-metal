@@ -176,10 +176,34 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
-    e2e_perf = stop_measuring_time(start_time)
+    try:
+        start_time = start_measuring_time()
+        output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        e2e_perf = stop_measuring_time(start_time)
+    except Exception as e:
+        err_msg = str(e)
+        if "must not exceed number of cores" in err_msg or "shard_grid_fit_error" in err_msg:
+            # The traced output memory_config shard spec is incompatible with the
+            # transposed output shape on this device (e.g., traced on a 32-chip Galaxy
+            # but the per-chip transpose output needs more shards than the grid provides).
+            # Retry with DRAM interleaved input and no sharded output memory_config.
+            if _is_sharded(input_a_memory_config):
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_tensor_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+            fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            start_time = start_measuring_time()
+            output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **fallback_kwargs)
+            output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+            e2e_perf = stop_measuring_time(start_time)
+        else:
+            raise
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:
