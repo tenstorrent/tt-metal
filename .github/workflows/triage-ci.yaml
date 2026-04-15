@@ -70,4 +70,5 @@ jobs:
       poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
       max-wait-minutes: "120"
     secrets:
-      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # RETRY_WORKFLOW_TOKEN is a PAT with repo+actions scope — not rescoped like GITHUB_TOKEN
+      GITHUB_WRITE_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
