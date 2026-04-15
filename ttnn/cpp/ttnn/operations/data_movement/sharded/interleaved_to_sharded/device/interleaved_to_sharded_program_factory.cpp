@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
+#include <iostream>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -50,8 +51,6 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     auto shard_strategy = output.memory_config().memory_layout();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
-    CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
     auto* src_buffer = input.buffer();
@@ -105,12 +104,62 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         }
     }
 
-    auto all_cores = shard_spec.grid;
+    // When the output is DRAM-sharded, shard_spec.grid contains DRAM bank
+    // coordinates (e.g. x=0..11 on WH), which are not valid compute-core
+    // coordinates.  Map the shards 1-to-1 onto real compute cores instead.
+    // The DRAM bank addresses are communicated to each kernel via
+    // shard_builder::extend_sharding_run_time_args, so the kernel can target
+    // the correct bank regardless of which compute core runs it.
+    CoreRangeSet all_cores;
+    CoreCoord end_core;
+    if (dst_is_dram) {
+        uint32_t num_shards = shard_spec.grid.num_cores();
+        auto compute_grid = input.device()->compute_with_storage_grid_size();
+        uint32_t grid_x = compute_grid.x;
+        uint32_t full_rows = num_shards / grid_x;
+        uint32_t remainder = num_shards % grid_x;
+        std::set<CoreRange> ranges;
+        if (full_rows > 0) {
+            ranges.insert(CoreRange({0, 0}, {grid_x - 1, full_rows - 1}));
+        }
+        if (remainder > 0) {
+            ranges.insert(CoreRange({0, full_rows}, {remainder - 1, full_rows}));
+        }
+        std::cout << "Mapping " << num_shards << " DRAM shards to " << ranges.size() << " compute core ranges: ";
+        for (const auto& range : ranges) {
+            std::cout << "[" << range.start_coord.x << "," << range.start_coord.y << " - " << range.end_coord.x << "," << range.end_coord.y << "] ";
+        }
+        std::cout << std::endl;
+        all_cores = CoreRangeSet(ranges);
+        end_core = (*all_cores.ranges().rbegin()).end_coord;
+    } else {
+        all_cores = shard_spec.grid;
+        end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
+    }
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
-    uint32_t num_input_units = num_units_per_shard;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+
+    // For DRAM output the CB is a staging buffer (not globally allocated), so
+    // cap its size to fit in L1 by processing the shard in height-chunks.
+    // For L1 output chunk_height_tiles == num_units_per_shard_height (no chunking).
+    uint32_t chunk_height_tiles = num_units_per_shard_height;
+    uint32_t num_input_units = num_units_per_shard;
+    if (dst_is_dram && input.layout() == Layout::TILE) {
+        constexpr uint32_t max_cb_bytes = 600 * 1024;  // leave room for scratch CBs and kernels
+        uint32_t effective_page_size = output_page_size;
+        if (convert_df) {
+            uint32_t inp_page = tt::align(input_unit_size, src_buffer->alignment());
+            effective_page_size = std::max(effective_page_size, inp_page);
+        }
+        uint32_t max_tiles = max_cb_bytes / effective_page_size;
+        uint32_t tiles_per_row = num_units_per_shard_width;
+        uint32_t max_rows = std::max(max_tiles / tiles_per_row, 1u);
+        chunk_height_tiles = std::min(num_units_per_shard_height, max_rows);
+        num_input_units = chunk_height_tiles * tiles_per_row;
+    }
+
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
         uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
@@ -199,7 +248,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
         if (input.layout() == Layout::TILE) {
@@ -245,7 +294,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                 num_units_offset,
                 curr_num_units_per_shard,
                 curr_idx_h + curr_idx_w,
-                starting_idx_h};
+                starting_idx_h,
+                chunk_height_tiles};
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
             // Writer run-time args
@@ -260,7 +310,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                     curr_num_units_per_shard,
                     num_units_offset,
                     curr_idx_h + curr_idx_w,
-                    starting_idx_h};
+                    starting_idx_h,
+                    chunk_height_tiles};
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             } else {
                 writer_run_time_args = {curr_num_units_per_shard};
