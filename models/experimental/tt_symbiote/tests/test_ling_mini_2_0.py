@@ -14,48 +14,22 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearIColShardedWRowSharded,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.attention import (
-    PagedAttentionConfig,
-    TTNNPagedAttentionKVCache,
-)
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
-from models.experimental.tt_symbiote.demos.HF_chat import DecodeParams, decode_with_logit_postprocess
-
-
-def create_paged_kv_cache(model_config, device, batch_size=1):
-    """Create a paged attention KV cache for Ling-mini-2.0.
-
-    Args:
-        model_config: Model configuration
-        device: TTNN device
-        batch_size: Batch size
-
-    Returns:
-        TTNNPagedAttentionKVCache instance
-    """
-    config = PagedAttentionConfig(
-        block_size=64,
-        max_num_blocks=32,
-        batch_size=batch_size,
-    )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
+from models.experimental.tt_symbiote.models.ling import (
+    DecodeParams,
+    create_paged_kv_cache,
+    decode_with_logit_postprocess,
+)
 
 
 @pytest.mark.parametrize(
@@ -152,10 +126,8 @@ def test_ling_mini_2_0(mesh_device):
     output_ids_tt = decode_with_logit_postprocess(
         model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 128, decode_params, mesh_device
     )
-    import ttnn as _ttnn
-
     output_ids = to_torch_auto_compose(output_ids_tt, device=mesh_device).long()
-    _ttnn.deallocate(output_ids_tt)
+    ttnn.deallocate(output_ids_tt)
     prompt_len = inputs["input_ids"].shape[-1]
     decoded = tokenizer.decode(output_ids.reshape(-1)[prompt_len:].tolist())
     print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")
