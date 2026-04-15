@@ -16,6 +16,7 @@ except ImportError:
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
@@ -295,6 +296,14 @@ class TTNNPagedAttentionKVCache(Cache):
             key_states = ttnn.to_torch(key_states)
         if isinstance(value_states, ttnn.Tensor):
             value_states = ttnn.to_torch(value_states)
+
+        if self._is_on_device:
+            # Running totals are maintained by paged_fill_on_device /
+            # paged_update_on_device. HuggingFace still calls ``Cache.update`` after
+            # forward; using ``key_states.shape[2]`` here would reset layer length
+            # to the *current* slice (1 on decode) and corrupt ``get_seq_length``,
+            # breaking ``past_seen_tokens`` / RoPE positions in the model body.
+            return key_states, value_states
 
         seq_len = key_states.shape[2]
         self._seq_lengths[layer_idx] = seq_len
@@ -2296,10 +2305,12 @@ def _reverse_permute_1d(tensor: torch.Tensor, rotary_dim: int, head_dim: int = 0
     return result.reshape(dim)
 
 
+@trace_enabled
 class TTNNBailingMoEAttention(TTNNModule):
     """TTNN Attention for BailingMoeV2 (Ling-mini-2.0 model).
 
     Uses TTNNPagedAttentionKVCache for paged attention with on-device KV storage.
+    Trace replay applies on single-token decode (see ``HF_chat`` ``_TRACE_RUNNING`` gating).
     """
 
     def __init__(self):

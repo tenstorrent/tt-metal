@@ -8,6 +8,8 @@ from typing import Optional, List
 
 import torch
 import ttnn
+from transformers.cache_utils import DynamicCache
+from transformers.utils import logging as hf_logging
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask,
     _prepare_4d_causal_attention_mask_for_sdpa,
@@ -15,6 +17,33 @@ from transformers.modeling_attn_mask_utils import (
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+
+logger = hf_logging.get_logger(__name__)
+
+
+def _set_bypass_ttnn_recursive(module: TTNNModule, value: bool) -> None:
+    """Enable ``_bypass_tensor_wrapping`` on this TTNN module and nested TTNNModule children."""
+    module._bypass_tensor_wrapping = value
+    for child in list(module.__dict__.values()):
+        if isinstance(child, TTNNModule):
+            _set_bypass_ttnn_recursive(child, value)
+        elif isinstance(child, (list, tuple)):
+            for c in child:
+                if isinstance(c, TTNNModule):
+                    _set_bypass_ttnn_recursive(c, value)
+
+
+def _set_bypass_on_bailing_inner(ttnn_model: "TTNNBailingMoeV2Model", value: bool) -> None:
+    """Walk HF ``model`` subtree (layers, embeddings, norm) and set bypass on TTNN modules."""
+    _set_bypass_ttnn_recursive(ttnn_model, value)
+    inner = ttnn_model.model
+    for layer in inner.layers:
+        if isinstance(layer, TTNNModule):
+            _set_bypass_ttnn_recursive(layer, value)
+    for attr in ("word_embeddings", "rotary_emb", "norm"):
+        m = getattr(inner, attr, None)
+        if isinstance(m, TTNNModule):
+            _set_bypass_ttnn_recursive(m, value)
 
 
 class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
@@ -289,3 +318,148 @@ class TTNNBailingMoeV2Model(TTNNModule):
             attentions=all_self_attns,
             router_logits=all_router_logits,
         )
+
+    def forward_ttnn(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        past_key_values=None,
+        position_ids: Optional[ttnn.Tensor] = None,
+        *,
+        cache_position: Optional[ttnn.Tensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        output_router_logits: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ):
+        """Transformer forward with ``ttnn.Tensor`` activations only (no ``TorchTTNNTensor`` in the stack).
+
+        Uses ``_bypass_tensor_wrapping`` on TTNN submodules so ``module_run`` returns raw ``ttnn.Tensor``.
+        Causal LM ``lm_head`` should be invoked separately so logits capture / HF logits processors keep working.
+
+        ``input_ids`` must be on-device (e.g. uint32 ROW_MAJOR). A small CPU torch tensor is used only to
+        build the 4D causal mask via HuggingFace helpers when SDPA/non-flash paths require it.
+        """
+        ttnn_object = self
+        inner = self.model
+        output_attentions = output_attentions if output_attentions is not None else inner.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else inner.config.output_hidden_states
+        )
+        output_router_logits = (
+            output_router_logits if output_router_logits is not None else inner.config.output_router_logits
+        )
+        use_cache = use_cache if use_cache is not None else inner.config.use_cache
+        return_dict = return_dict if return_dict is not None else inner.config.use_return_dict
+
+        if inner.num_nextn_predict_layers and inner.num_nextn_predict_layers > 0:
+            raise NotImplementedError(
+                "TTNNBailingMoeV2Model.forward_ttnn does not support MTP/nextn layers; use models with num_nextn_predict_layers == 0."
+            )
+
+        batch_size, seq_length = int(input_ids.shape[0]), int(input_ids.shape[1])
+
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache()
+
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+
+        try:
+            _set_bypass_on_bailing_inner(self, True)
+
+            inputs_embeds = inner.word_embeddings(input_ids)
+
+            if position_ids is None:
+                position_ids = ttnn.arange(past_seen_tokens, past_seen_tokens + seq_length)
+                position_ids = ttnn.unsqueeze(position_ids, 0)
+
+            if inner._use_flash_attention_2:
+                attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
+            else:
+                dummy_embed = torch.zeros(
+                    batch_size,
+                    seq_length,
+                    inner.config.hidden_size,
+                    dtype=torch.bfloat16,
+                )
+                if inner._use_sdpa and not output_attentions:
+                    attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
+                        attention_mask,
+                        (batch_size, seq_length),
+                        dummy_embed,
+                        past_seen_tokens,
+                    )
+                else:
+                    attention_mask = _prepare_4d_causal_attention_mask(
+                        attention_mask, (batch_size, seq_length), dummy_embed, past_seen_tokens
+                    )
+                if attention_mask is not None:
+                    nd = ttnn_object.device.get_num_devices() if hasattr(ttnn_object.device, "get_num_devices") else 1
+                    mm = ttnn.ReplicateTensorToMesh(ttnn_object.device) if nd > 1 else None
+                    attention_mask = ttnn.from_torch(
+                        attention_mask,
+                        device=ttnn_object.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=mm,
+                    )
+
+            hidden_states = inputs_embeds
+            position_embeddings = inner.rotary_emb(hidden_states, position_ids)
+
+            all_hidden_states = () if output_hidden_states else None
+            all_self_attns = () if output_attentions else None
+            all_router_logits = () if output_router_logits else None
+            next_decoder_cache = None
+            layers = inner.layers
+
+            for decoder_layer in layers:
+                if output_hidden_states:
+                    all_hidden_states += (hidden_states,)
+
+                layer_outputs = decoder_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    output_router_logits=output_router_logits,
+                    use_cache=use_cache,
+                    position_embeddings=position_embeddings,
+                    cache_position=cache_position,
+                )
+                hidden_states = layer_outputs[0]
+
+                if use_cache:
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+
+                if output_attentions:
+                    all_self_attns += (layer_outputs[1],)
+
+                if output_router_logits and layer_outputs[-1] is not None:
+                    all_router_logits += (layer_outputs[-1],)
+
+            hidden_states = inner.norm(hidden_states)
+            main_hidden_states = hidden_states
+
+            if output_hidden_states:
+                all_hidden_states += (main_hidden_states,)
+
+            next_cache = next_decoder_cache if use_cache else None
+            if not return_dict:
+                return tuple(
+                    v
+                    for v in [main_hidden_states, next_cache, all_hidden_states, all_self_attns, all_router_logits]
+                    if v is not None
+                )
+            return MoeV2ModelOutputWithPast(
+                last_hidden_state=main_hidden_states,
+                past_key_values=next_cache,
+                hidden_states=all_hidden_states,
+                mtp_hidden_states=None,
+                attentions=all_self_attns,
+                router_logits=all_router_logits,
+            )
+        finally:
+            _set_bypass_on_bailing_inner(self, False)

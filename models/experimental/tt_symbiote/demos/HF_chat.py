@@ -4,6 +4,8 @@
 
 """Interactive chatbot for HF models with TTNN backend."""
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -30,17 +32,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinearIColShardedWRowSharded,
+    TTNNLinearIColShardedWAllReduced,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.modules.attention import (
-    PagedAttentionConfig,
-    TTNNPagedAttentionKVCache,
-)
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+from models.experimental.tt_symbiote.models.ling import (
+    DecodeParams,
+    create_paged_kv_cache,
+    decode_with_logit_postprocess,
+    generation_torch_device,
+    preprocess_generation_inputs,
+    replicated_mesh_tt_to_torch,
+)
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -88,24 +97,11 @@ def cleanup(mesh_device):
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def create_paged_kv_cache(model_config, device, batch_size=1):
-    config = PagedAttentionConfig(
-        block_size=64,
-        max_num_blocks=32,
-        batch_size=batch_size,
-    )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
-
-
 def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     print(f"Loading {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
 
     nn_to_ttnn = {
@@ -129,7 +125,11 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     type(model).device = property(lambda self: torch.device("cpu"))
     set_device(model, mesh_device)
 
-    all_modules = {**modules1, **modules2, **modules3}
+    if mesh_device.get_num_devices() > 1 and isinstance(model.lm_head, TTNNLinearIColShardedWRowSharded):
+        model.lm_head.__class__ = TTNNLinearIColShardedWAllReduced
+        print("lm_head: TTNNLinearIColShardedWAllReduced (full vocab on each device after lm_head).")
+
+    all_modules = {**modules1, **modules2}
     print(f"Preprocessing {len(all_modules)} TTNN module weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
@@ -141,26 +141,53 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
     return model, tokenizer, paged_cache
 
 
-def warmup(model, tokenizer, mesh_device, paged_cache):
+def warmup(model, _tokenizer, mesh_device, paged_cache, decode_params=None):
+    decode_params = decode_params or DecodeParams()
     print("Warming up with zero inputs at seq_len = 256 ...")
-    vocab_size = model.config.vocab_size
     for seq_len in [256, 1024]:
-        input_ids = torch.zeros((1, seq_len), dtype=torch.long, device=model.device)
-        attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=model.device)
-        model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=2,
-            use_cache=True,
-            past_key_values=paged_cache,
+        prompt_tt = ttnn.zeros(
+            (1, seq_len),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        mask_tt = ttnn.ones(
+            (1, seq_len),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        input_ids = replicated_mesh_tt_to_torch(prompt_tt, mesh_device).long()
+        attention_mask = replicated_mesh_tt_to_torch(mask_tt, mesh_device).long()
+        ttnn.deallocate(mask_tt)
+        out_tt = decode_with_logit_postprocess(
+            model,
+            input_ids,
+            attention_mask,
+            paged_cache,
+            max_new_tokens=2,
+            decode_params=decode_params,
+            mesh_device=mesh_device,
+            prompt_ids_tt=prompt_tt,
+        )
+        ttnn.deallocate(out_tt)
         paged_cache.reset()
         print(f"  seq_len={seq_len} done")
     TracedRun.release_all()
     print("Warmup complete.")
 
 
-def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
+def chat_loop(
+    model,
+    tokenizer,
+    paged_cache,
+    mesh_device,
+    max_new_tokens=256,
+    decode_params=None,
+):
+    decode_params = decode_params or DecodeParams()
     messages = []
     print("\n--- Ling-mini-2.0 Chatbot ---")
     print("Type 'quit' or 'exit' to stop, '/clear' to reset history.\n")
@@ -189,29 +216,43 @@ def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
 
         messages.append({"role": "user", "content": user_input})
 
+        torch_dev = generation_torch_device(model)
         inputs = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
-        ).to(model.device)
-        if "token_type_ids" in inputs:
-            del inputs["token_type_ids"]
+        )
+        inputs = preprocess_generation_inputs(
+            inputs,
+            model.config,
+            paged_cache,
+            max_new_tokens,
+            torch_dev,
+        )
 
         # Reset KV cache values in-place (preserves device buffer addresses so
         # decode traces remain valid) and release only prefill traces (different
         # prompt lengths require new prefill captures each turn).
         paged_cache.reset()
 
-        outputs = model.generate(
-            **inputs,
+        prompt_len = inputs["input_ids"].shape[-1]
+        outputs_tt = decode_with_logit_postprocess(
+            model,
+            inputs["input_ids"],
+            inputs["attention_mask"],
+            paged_cache,
             max_new_tokens=max_new_tokens,
-            use_cache=True,
-            past_key_values=paged_cache,
+            decode_params=decode_params,
+            mesh_device=mesh_device,
         )
-
-        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True)
+        try:
+            outputs = replicated_mesh_tt_to_torch(outputs_tt, mesh_device).long().to(torch_dev)
+            gen_ids = outputs[0, prompt_len:].tolist()
+            response = tokenizer.decode(gen_ids, skip_special_tokens=True)
+        finally:
+            ttnn.deallocate(outputs_tt)
         print(f"\nAssistant: {response}\n")
 
         messages.append({"role": "assistant", "content": response})
@@ -221,13 +262,42 @@ def main():
     parser = argparse.ArgumentParser(description="HF Chatbot with TTNN acceleration")
     parser.add_argument("--model", default="inclusionAI/Ling-mini-2.0", help="HuggingFace model name")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate per turn")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Logits temperature; 0=greedy, >0 enables sampling (top-p/top-k apply)",
+    )
+    parser.add_argument("--top-p", type=float, default=0.95, dest="top_p")
+    parser.add_argument("--top-k", type=int, default=50, dest="top_k")
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        dest="repetition_penalty",
+        help=">1.0 discourages repeating tokens (1.0 disables)",
+    )
+    parser.add_argument(
+        "--no-repeat-ngram-size",
+        type=int,
+        default=0,
+        dest="no_repeat_ngram_size",
+        help="If >0, blocks repeating n-grams of this size",
+    )
     args = parser.parse_args()
+    decode_params = DecodeParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
+        no_repeat_ngram_size=args.no_repeat_ngram_size,
+    )
     DispatchManager.DisableTiming()  # Disable timing during interactive chat
     mesh_device = setup_mesh_device()
     try:
         model, tokenizer, paged_cache = load_model(mesh_device, args.model)
-        warmup(model, tokenizer, mesh_device, paged_cache)
-        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens)
+        warmup(model, tokenizer, mesh_device, paged_cache, decode_params)
+        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens, decode_params)
     finally:
         cleanup(mesh_device)
 

@@ -13,47 +13,23 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearIColShardedWRowSharded,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.attention import (
-    PagedAttentionConfig,
-    TTNNPagedAttentionKVCache,
-)
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
-
-
-def create_paged_kv_cache(model_config, device, batch_size=1):
-    """Create a paged attention KV cache for Ling-mini-2.0.
-
-    Args:
-        model_config: Model configuration
-        device: TTNN device
-        batch_size: Batch size
-
-    Returns:
-        TTNNPagedAttentionKVCache instance
-    """
-    config = PagedAttentionConfig(
-        block_size=64,
-        max_num_blocks=32,
-        batch_size=batch_size,
-    )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
+from models.experimental.tt_symbiote.models.ling import (
+    DecodeParams,
+    create_paged_kv_cache,
+    decode_with_logit_postprocess,
+    replicated_mesh_tt_to_torch,
+)
 
 
 @pytest.mark.parametrize(
@@ -133,17 +109,27 @@ def test_ling_mini_2_0(mesh_device):
     model.eval()
     torch.set_grad_enabled(False)
 
-    # Warmup run without trace
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
+    decode_params = DecodeParams()  # greedy: temperature=0
+
+    # Warmup
+    decode_with_logit_postprocess(
+        model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 2, decode_params, mesh_device
+    )
     paged_cache.reset()
-    # Actual run with trace
-    outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_cache)
+    # Short decode (program cache hot)
+    decode_with_logit_postprocess(
+        model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 4, decode_params, mesh_device
+    )
     paged_cache.reset()
 
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)
-
-    decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
+    output_ids_tt = decode_with_logit_postprocess(
+        model, inputs["input_ids"], inputs.get("attention_mask"), paged_cache, 128, decode_params, mesh_device
+    )
+    output_ids = replicated_mesh_tt_to_torch(output_ids_tt, mesh_device).long()
+    ttnn.deallocate(output_ids_tt)
+    prompt_len = inputs["input_ids"].shape[-1]
+    decoded = tokenizer.decode(output_ids.reshape(-1)[prompt_len:].tolist())
     print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")
 
     # Verify output is coherent (non-empty generated text)
