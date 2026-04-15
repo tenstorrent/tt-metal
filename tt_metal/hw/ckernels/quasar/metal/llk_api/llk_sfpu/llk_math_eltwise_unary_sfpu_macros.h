@@ -59,14 +59,11 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE, EXTRA_PARAM>, DST_IDX, PARAM0)
 
 // For unary ops with one extra uint parameter AND additional template params (DATA_FORMAT, ITERATIONS)
-#define SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(                                                        \
-    FN, MODE, APPROXIMATE, DATA_FORMAT, EXTRA_PARAM, DST_IDX, PARAM0)                                               \
-    static_assert(                                                                                                  \
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16, \
-        "Unsupported data format. Supported: Int32, UInt32, UInt16");                                               \
-    constexpr InstrModLoadStore _INSTRUCTION_MODE =                                                                 \
-        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;                   \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                              \
+#define SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(                                      \
+    FN, MODE, APPROXIMATE, DATA_FORMAT, EXTRA_PARAM, DST_IDX, PARAM0)                             \
+    static_assert(DATA_FORMAT == DataFormat::Int32, "Unsupported data format. Supported: Int32"); \
+    constexpr InstrModLoadStore _INSTRUCTION_MODE = InstrModLoadStore::INT32;                     \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                            \
         ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>, DST_IDX, PARAM0)
 
 // For ops with exactly two extra uint parameters (and no custom init callback)
@@ -172,22 +169,18 @@
         ckernel::sfpu::FN<APPROXIMATE, ITER, FP32, FAST_APPROX, LEGACY_COMPAT>, DST_IDX)
 
 // For kernels whose functor takes three template parameters (e.g., <APPROXIMATE, DATA_FORMAT, ITERATIONS>).
-#define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROXIMATE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE)          \
-    static_assert(                                                                                                 \
-        DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                              \
-            DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 ||                               \
-            DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::Bfp8_b ||                              \
-            DATA_FORMAT == DataFormat::Bfp4_b,                                                                     \
-        "Unsupported data format. Supported data formats are: Float32, Float16_b, Int32, UInt32, UInt16, Bfp8_b, " \
-        "Bfp4_b.");                                                                                                \
-    constexpr InstrModLoadStore INSTRUCTION_MODE =                                                                 \
-        (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                             \
-         DATA_FORMAT == DataFormat::Bfp8_b || DATA_FORMAT == DataFormat::Bfp4_b)                                   \
-            ? InstrModLoadStore::DEFAULT                                                                           \
-        : (DATA_FORMAT == DataFormat::UInt16)                                     ? InstrModLoadStore::LO16        \
-        : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32       \
-                                                                                  : InstrModLoadStore::DEFAULT;    \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                             \
+#define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROXIMATE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE) \
+    static_assert(                                                                                        \
+        DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                     \
+            DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::Float16,                       \
+        "Unsupported data format. Supported data formats are: Float32, Float16_b, Int32, Float16.");      \
+    constexpr InstrModLoadStore INSTRUCTION_MODE =                                                        \
+        (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||                    \
+         DATA_FORMAT == DataFormat::Float16)                                                              \
+            ? InstrModLoadStore::DEFAULT                                                                  \
+        : (DATA_FORMAT == DataFormat::Int32) ? InstrModLoadStore::INT32                                   \
+                                             : InstrModLoadStore::DEFAULT;                                \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                    \
         ckernel::sfpu::FN<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>, DST_IDX);
 
 // For the compare with zero ops (eqz, nez, ltz, gtz, lez, gez)
