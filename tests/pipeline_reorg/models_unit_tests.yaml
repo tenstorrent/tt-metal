@@ -274,7 +274,7 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
   model: qwen3-32b-galaxy
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 10
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
