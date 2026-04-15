@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
@@ -54,8 +55,7 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
     if (is_merge_core) {
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_zero, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            0.0f);
+        dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
     }
 
     uint32_t inp_tile_idx = tile_offset;

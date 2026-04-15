@@ -123,28 +123,6 @@ target_sources(
             cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
-            cpp/ttnn/kernel_lib/binary_op_helpers.hpp
-            cpp/ttnn/kernel_lib/binary_op_helpers.inl
-            cpp/ttnn/kernel_lib/cb_helpers_compute.hpp
-            cpp/ttnn/kernel_lib/cb_helpers_compute.inl
-            cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp
-            cpp/ttnn/kernel_lib/cb_helpers_dataflow.inl
-            cpp/ttnn/kernel_lib/common_types.hpp
-            cpp/ttnn/kernel_lib/copy_tile_helpers.hpp
-            cpp/ttnn/kernel_lib/copy_tile_helpers.inl
-            cpp/ttnn/kernel_lib/dest_helpers.hpp
-            cpp/ttnn/kernel_lib/l1_helpers.hpp
-            cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp
-            cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
-            cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp
-            cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl
-            cpp/ttnn/kernel_lib/sfpu_helpers.hpp
-            cpp/ttnn/kernel_lib/sfpu_helpers.inl
-            cpp/ttnn/kernel_lib/sfpu_helpers_bitwise.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.hpp
-            cpp/ttnn/kernel_lib/tilize_helpers.inl
-            cpp/ttnn/kernel_lib/untilize_helpers.hpp
-            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -994,6 +972,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)

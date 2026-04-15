@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 constexpr uint32_t compute_input_cb_id_0 = get_compile_time_arg_val(0);
 constexpr uint32_t compute_input_cb_id_1 = get_compile_time_arg_val(1);
@@ -29,8 +29,7 @@ void kernel_main() {
     constexpr auto tensor_args = TensorAccessorArgs<initial_ct_idx>();
     auto tensor_accessor = TensorAccessor(tensor_args, input_address, page_size);
 
-    constexpr uint32_t scaler = 0;
-    generate_reduce_scaler(compute_input_cb_id_1, scaler);
+    dataflow_kernel_lib::prepare_zero_tile<compute_input_cb_id_1>();
 
     uint32_t l1_write_addr;
     uint32_t input_granularity_index = 0;
