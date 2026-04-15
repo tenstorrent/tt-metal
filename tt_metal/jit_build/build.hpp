@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/hal_types.hpp>
-#include "impl/jit_server/types.hpp"
+#include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -176,7 +176,7 @@ public:
     // Build a transport-ready target recipe from this build state and
     // kernel-specific settings.  Replaces the PoC pattern of exposing
     // individual getters for every internal field.
-    jit_server::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
+    tt::jit_build::TargetRecipe export_target_recipe(const JitBuildSettings* settings) const;
     const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
     bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
 };

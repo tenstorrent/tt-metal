@@ -773,8 +773,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     extract_zone_src_locations(out_dir);
 }
 
-jit_server::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
-    jit_server::TargetRecipe target;
+tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
+    tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
     target.lflags = lflags_;

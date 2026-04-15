@@ -144,10 +144,10 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
     return data;
 }
 
-std::vector<tt::tt_metal::jit_server::GeneratedFile> read_directory_files(
+std::vector<tt::jit_build::GeneratedFile> read_directory_files(
     const std::string& dir, std::span<const std::string> extensions) {
     namespace fs = std::filesystem;
-    std::vector<tt::tt_metal::jit_server::GeneratedFile> files;
+    std::vector<tt::jit_build::GeneratedFile> files;
     if (!fs::is_directory(dir)) {
         return files;
     }

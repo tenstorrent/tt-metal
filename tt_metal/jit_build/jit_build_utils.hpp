@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "impl/jit_server/types.hpp"
+#include "jit_build/types.hpp"
 
 namespace tt::jit_build::utils {
 
@@ -34,7 +34,7 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path);
 // When |extensions| is non-empty, only files whose extension matches one of the
 // entries (e.g. ".h", ".cpp") are included.
 // Returns an empty vector if |dir| does not exist or is not a directory.
-std::vector<tt::tt_metal::jit_server::GeneratedFile> read_directory_files(
+std::vector<tt::jit_build::GeneratedFile> read_directory_files(
     const std::string& dir, std::span<const std::string> extensions = {});
 
 // An RAII wrapper that generates a temporary filename and renames the file on destruction.
