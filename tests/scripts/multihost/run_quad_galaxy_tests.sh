@@ -546,9 +546,9 @@ main() {
         return 0
     fi
 
-    if [[ -z "$TT_METAL_HOME" ]]; then
-        echo "Must provide TT_METAL_HOME in environment" 1>&2
-        exit 1
+    if [[ -z "${TT_METAL_HOME:-}" ]]; then
+        export TT_METAL_HOME="$(pwd -P)"
+        echo "TT_METAL_HOME not set; defaulting to current directory: ${TT_METAL_HOME}"
     fi
 
     _init_multihost_test_env
