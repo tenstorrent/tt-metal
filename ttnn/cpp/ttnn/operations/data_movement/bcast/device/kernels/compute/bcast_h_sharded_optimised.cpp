@@ -15,15 +15,11 @@ void kernel_main() {
     uint32_t batch_b = get_arg_val<uint32_t>(4);
     uint32_t Ht_per_batch_b = get_arg_val<uint32_t>(5);
 
-    constexpr auto cb_id_in0 = static_cast<tt::CBIndex>(cb_in0);
-    constexpr auto cb_id_in1 = static_cast<tt::CBIndex>(cb_in1);
-    constexpr auto cb_id_out = static_cast<tt::CBIndex>(cb_out);
+    experimental::CircularBuffer cb_src0(static_cast<tt::CBIndex>(cb_in0));
+    experimental::CircularBuffer cb_src1(static_cast<tt::CBIndex>(cb_in1));
+    experimental::CircularBuffer cb_dst(static_cast<tt::CBIndex>(cb_out));
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_id_in0, cb_id_in1, cb_id_out);
-
-    experimental::CircularBuffer cb_src0(cb_id_in0);
-    experimental::CircularBuffer cb_src1(cb_id_in1);
-    experimental::CircularBuffer cb_dst(cb_id_out);
+    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_src0.get_cb_id(), cb_src1.get_cb_id(), cb_dst.get_cb_id());
 
     cb_src0.wait_front(Wt * Ht);
     cb_dst.reserve_back(Wt * Ht);
@@ -35,8 +31,8 @@ void kernel_main() {
                 acquire_dst();
                 for (uint32_t htr = 0; htr < h_blk; htr++) {
                     uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
-                    BCAST_OP<BroadcastType::ROW>(cb_id_in0, cb_id_in1, current_index, 0, htr);
-                    pack_tile<true>(htr, cb_id_out, current_index);
+                    BCAST_OP<BroadcastType::ROW>(cb_src0.get_cb_id(), cb_src1.get_cb_id(), current_index, 0, htr);
+                    pack_tile<true>(htr, cb_dst.get_cb_id(), current_index);
                 }
                 release_dst();
             }
