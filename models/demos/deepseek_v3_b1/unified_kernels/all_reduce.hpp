@@ -216,11 +216,12 @@ private:
         constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
 
+        header->to_noc_fused_unicast_write_atomic_inc({dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
+
         auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SETUP");
-                header->to_noc_fused_unicast_write_atomic_inc(
-                    {dst_noc_base + chunk_offset, remote_sem_noc, 1, false}, payload_bytes);
+                header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
             }
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_WAIT_SLOT");
@@ -249,6 +250,9 @@ private:
         }
 
         if (chunk_idx < CTArgs::num_chunks) {
+            if constexpr (CTArgs::last_chunk_tiles != CTArgs::tiles_per_chunk) {
+                header->set_payload_size_bytes(last_payload_bytes);
+            }
             send_payload(offset, last_payload_bytes);
         }
 
