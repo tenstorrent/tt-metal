@@ -26,10 +26,10 @@ void kernel_main() {
     experimental::CircularBuffer cb(cb_id);
 
     constexpr uint32_t one_tile = 1;
-    uint32_t cb_addr = cb.get_write_ptr();
     auto pages = accessor_src.pages(start_page, end_page);
     for (const auto& page : pages) {
         cb.reserve_back(one_tile);
+        uint32_t cb_addr = cb.get_write_ptr();
         noc_async_read(page.noc_addr(), cb_addr, page_size);
         noc_async_read_barrier();
         cb.push_back(one_tile);
