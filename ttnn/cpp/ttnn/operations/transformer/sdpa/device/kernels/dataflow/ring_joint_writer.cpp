@@ -538,6 +538,31 @@ void kernel_main() {
                     stats_tile_bytes);
             };
 
+            // Flush deferred save — drains cb_out/cb_max_out/cb_sum_out to DRAM.
+            auto flush_deferred = [&]() {
+                constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
+                save_accumulators_with_trid(
+                    deferred_qi.is_joint_q ? joint_out_generator : out_generator,
+                    stats_writer,
+                    stats_tile_logical,
+                    deferred_nb,
+                    deferred_nq,
+                    Sq_chunk_t,
+                    deferred_qi.out_slice,
+                    all_tiles_valid,
+                    deferred_qi.stats_seq_start_tile,
+                    deferred_qi.stats_seq_end_tile,
+                    sum_offset,
+                    cb_out,
+                    cb_max_out,
+                    cb_sum_out,
+                    tile_bytes,
+                    stats_tile_bytes,
+                    out_subblock_h,
+                    deferred_trid);
+                deferred_pending = false;
+            };
+
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                 uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
 
@@ -554,32 +579,7 @@ void kernel_main() {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
                 }
 
-                // Flush deferred save helper — drains cb_out/cb_max_out/cb_sum_out to DRAM.
-                auto flush_deferred = [&]() {
-                    constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
-                    save_accumulators_with_trid(
-                        deferred_qi.is_joint_q ? joint_out_generator : out_generator,
-                        stats_writer,
-                        stats_tile_logical,
-                        deferred_nb,
-                        deferred_nq,
-                        Sq_chunk_t,
-                        deferred_qi.out_slice,
-                        all_tiles_valid,
-                        deferred_qi.stats_seq_start_tile,
-                        deferred_qi.stats_seq_end_tile,
-                        sum_offset,
-                        cb_out,
-                        cb_max_out,
-                        cb_sum_out,
-                        tile_bytes,
-                        stats_tile_bytes,
-                        out_subblock_h,
-                        deferred_trid);
-                    deferred_pending = false;
-                };
-
-                // Early flush (flush_before_prefetch): drain staging CBs before prefetch.
+                // 2. Early flush (flush_before_prefetch): drain staging CBs before prefetch.
                 // - total_valid_kv <= 1: compute's sole K chunk triggers save_to_staging on
                 //   K0, reserving staging CBs immediately — deadlock if they're still full.
                 // - q_per_core == 2: next Q == last Q whose deferred data isn't in DRAM yet,
@@ -592,7 +592,7 @@ void kernel_main() {
                     flush_deferred();
                 }
 
-                // 3. Prefetch next Q chunk for the upcoming ring iteration.
+                // 3. Prefetch next Q chunk's accumulators from DRAM.
                 // Intra-ring: issue reads for Q[q+1] during Q[q]'s K-loop.
                 // Only barrier when next Q's TRID hasn't been cleared yet this ring iter:
                 //   Q[0]: wB(TRID_INNER) — clears all prev-ring inner saves
@@ -608,14 +608,13 @@ void kernel_main() {
                         prefetch_q(global_q_chunk + 1);
                     }
                 }
-
-                // Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
+                // Cross-ring: Q[N-1] → Q[0] of next ring iter.
                 if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
                     noc_async_write_barrier_with_trid(TRID_FIRST);
                     prefetch_q(global_q_start);
                 }
 
-                // Late flush (>= 2 valid K chunks, q_per_core >= 3): flush during K-loop
+                // 4. Late flush (>= 2 valid K chunks, q_per_core >= 3): flush during K-loop
                 // window after prefetch, spreading DRAM writes to reduce bank contention.
                 if (deferred_pending) {
                     flush_deferred();
