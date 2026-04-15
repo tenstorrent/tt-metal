@@ -363,7 +363,11 @@ def unpack_mxfp4(
 ):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
+<<<<<<< HEAD
     Function is implemented based on the OCP MX specification and Tensix hardware documentation.
+=======
+    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
+>>>>>>> d46fee49454 (Added warnings and asserts to MxFp4 unpack and pack.)
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
       - 1 shared E8M0 scale (8 bits)
@@ -400,10 +404,15 @@ def unpack_mxfp4(
             f"{block_size}, got {num_elements}."
         )
 
+<<<<<<< HEAD
     # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
     scale_section_len = _align16(num_blocks)
     element_bytes_len = num_blocks * (block_size // 2)
     expected_len = scale_section_len + element_bytes_len
+=======
+    # Expected bytes = 1 scale byte per block + 32 FP4 elements packed as 2 per byte.
+    expected_len = num_blocks + (num_blocks * (block_size // 2))
+>>>>>>> d46fee49454 (Added warnings and asserts to MxFp4 unpack and pack.)
     if len(packed_bytes) != expected_len:
         raise ValueError(
             "Invalid packed_bytes length for MXFP4: got "
