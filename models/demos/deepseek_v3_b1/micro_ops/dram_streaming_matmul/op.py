@@ -199,7 +199,7 @@ class DRAMStreamingMatmul:
         assert Kt % subblock_k == 0, f"Kt ({Kt}) must be divisible by subblock_k ({subblock_k})"
         num_subblocks_k = Kt // subblock_k
 
-        # Determine subblock_n (N-columns per DRAM read block)
+        # subblock_n controls both DRAM read grouping and compute grouping
         if subblock_n is None:
             subblock_n = 1
         assert per_core_N % subblock_n == 0, f"per_core_N ({per_core_N}) must be divisible by subblock_n ({subblock_n})"
@@ -207,27 +207,6 @@ class DRAMStreamingMatmul:
             assert num_subblocks_k == 1, f"subblock_n > 1 requires num_subblocks_k == 1, got {num_subblocks_k}"
 
         logger.debug(f"Kt={Kt}, subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}, subblock_n={subblock_n}")
-
-        # Determine subblock_w based on fp32_dest_acc_en and per_core_N
-        # FP32 dest: 8 dest regs (full sync) or 4 (half sync)
-        # BF16/FP16 dest: 16 dest regs (full sync) or 8 (half sync)
-        dst_full_sync_en = False
-        if dst_full_sync_en and fp32_dest_acc_en:
-            max_dest = 8
-        elif dst_full_sync_en and not fp32_dest_acc_en:
-            max_dest = 16
-        elif not dst_full_sync_en and fp32_dest_acc_en:
-            max_dest = 4
-        elif not dst_full_sync_en and not fp32_dest_acc_en:
-            max_dest = 8
-        max_subblock_w = min(max_dest, per_core_N)
-
-        # Find largest subblock_w that evenly divides per_core_N
-        subblock_w = max_subblock_w
-        while subblock_w > 1 and per_core_N % subblock_w != 0:
-            subblock_w -= 1
-
-        logger.debug(f"subblock_w={subblock_w}, max_subblock_w={max_subblock_w}")
 
         # Data formats
         in1_dtype = input_b.dtype
@@ -490,7 +469,7 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_out", cb_id_mm_out),  # matmul output CB (4 or 8)
             ("dram_mm_subblock_k", subblock_k),
             ("dram_mm_per_core_n", per_core_N),
-            ("dram_mm_subblock_w", subblock_w),
+            ("dram_mm_subblock_n", subblock_n),
             ("dram_mm_num_subblocks_k", num_subblocks_k),
             ("dram_mm_tile_r_dim", in0_tile_shape[0]),
             ("dram_mm_fuse_silu", fuse_silu),

@@ -91,7 +91,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_cb_out"),
         get_named_compile_time_arg_val("dram_mm_subblock_k"),
         get_named_compile_time_arg_val("dram_mm_per_core_n"),
-        get_named_compile_time_arg_val("dram_mm_subblock_w"),
+        get_named_compile_time_arg_val("dram_mm_subblock_n"),
         get_named_compile_time_arg_val("dram_mm_num_subblocks_k"),
         get_named_compile_time_arg_val("dram_mm_tile_r_dim"),
         get_named_compile_time_arg_val("dram_mm_fuse_silu")>;

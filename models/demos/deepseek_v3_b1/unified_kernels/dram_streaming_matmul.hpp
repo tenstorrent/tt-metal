@@ -95,7 +95,7 @@ struct DRAMStreamingMatmul {
         uint32_t cb_out_,
         uint32_t subblock_k_,
         uint32_t per_core_n_,
-        uint32_t subblock_w_,
+        uint32_t subblock_n_,
         uint32_t num_subblocks_k_,
         uint32_t tile_r_dim_,
         uint32_t fuse_silu_,
@@ -106,7 +106,7 @@ struct DRAMStreamingMatmul {
         static constexpr uint32_t cb_out = cb_out_;
         static constexpr uint32_t subblock_k = subblock_k_;
         static constexpr uint32_t per_core_n = per_core_n_;
-        static constexpr uint32_t subblock_w = subblock_w_;
+        static constexpr uint32_t subblock_n = subblock_n_;
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t tile_r_dim = tile_r_dim_;
         static constexpr bool fuse_silu = fuse_silu_ == 1;
@@ -262,7 +262,7 @@ struct DRAMStreamingMatmul {
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
             // ================================================================
-            constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_w;
+            constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
             constexpr bool transpose = false;
             constexpr bool split_acc = true;
@@ -270,12 +270,12 @@ struct DRAMStreamingMatmul {
 
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out, CTArgs::subblock_n);
             } else {
                 reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out, CTArgs::subblock_n);
             }
 
             if constexpr (CTArgs::fuse_silu) {
@@ -285,11 +285,11 @@ struct DRAMStreamingMatmul {
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
-                cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_w);
+                cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_n);
 
                 if constexpr (CTArgs::fuse_silu) {
                     // Per-tile pipelining with SFPU overlap
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
+                    for (uint32_t w = 0; w < CTArgs::subblock_n; w++) {
                         tile_regs_acquire();
 
                         // Intermediate subblocks: finalize=false (partial accumulation)
@@ -333,39 +333,42 @@ struct DRAMStreamingMatmul {
                         tile_regs_release();
                     }
                 } else {
-                    // Batch processing
+                    // Batch processing: ct_dim = subblock_n computes subblock_n output tiles per call.
+                    // When subblock_n=1, this is equivalent to the original single-column path.
+                    constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
+                    cb_wait_front(CTArgs::cb_in1, tiles_per_block);
                     tile_regs_acquire();
 
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
-                        // Intermediate subblocks: finalize=false (partial accumulation)
-                        for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
-                            cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false>(
-                                CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
-                            cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        }
-                        // Final subblock: finalize=true
-                        cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true>(
+                    for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
+                        custom_mm_block<false>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
-                            (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
+                            sb_k * CTArgs::subblock_k,
                             0,
-                            w,
-                            CTArgs::subblock_k);
-                        cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                            0,
+                            CTArgs::subblock_k,
+                            CTArgs::subblock_n);
                     }
+                    custom_mm_block<true>(
+                        CTArgs::cb_in0,
+                        CTArgs::cb_in1,
+                        (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
+                        0,
+                        0,
+                        CTArgs::subblock_k,
+                        CTArgs::subblock_n);
 
+                    cb_pop_front(CTArgs::cb_in1, tiles_per_block);
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
+                    for (uint32_t w = 0; w < CTArgs::subblock_n; w++) {
                         pack_tile(w, CTArgs::cb_out, w);
                     }
                     tile_regs_release();
                 }
 
-                cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
+                cb_push_back(CTArgs::cb_out, CTArgs::subblock_n);
             }
             custom_mm_block_uninit<dense_packing>();
             // Reset FP32 accum mode if different from DST_ACCUM_MODE

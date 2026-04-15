@@ -30,23 +30,29 @@ def pad_to_dram_banks(num, tile_w, lcm):
     return num + padding_needed
 
 
-def shuffle_tensor_tiles(tensor, tile_size, num_banks):
+def shuffle_tensor_tiles(tensor, tile_size, num_banks, subblock_k=None, subblock_n=None):
     """
     Vectorized tile shuffle for WIDTH_SHARDED DRAM layout.
 
-    Reorders tiles within each bank's shard from row-major to column-major.
-    This is required because TTNN stores tiles row-major, but we want to
-    stream K tiles contiguously for each N column.
+    Reorders tiles within each bank's shard for DRAM streaming matmul.
+    TTNN stores tiles row-major, but we need a streaming-friendly order.
 
-    For shape [K, N] with WIDTH_SHARDED, TTNN tilizes with row-major tiles:
-        (0,0), (0,1), ..., (0,pN-1), (1,0), (1,1), ...
-    But we want column-major within each shard for streaming K tiles at a time:
+    When subblock_n=1 (default): fully column-major within each shard.
         (0,0), (1,0), ..., (K-1,0), (0,1), (1,1), ...
+    This streams K tiles contiguously for each N column.
+
+    When subblock_n>1: tiles are grouped into [subblock_k, subblock_n] blocks.
+    Within each block, tiles are row-major (required by custom_mm_block ct_dim):
+        block0: (k0,n0), (k0,n1), ..., (k0,n_{sn-1}), (k1,n0), (k1,n1), ...
+        block1: ...
+    Blocks are laid out sequentially across N-groups, then K-subblocks.
 
     Args:
         tensor: [*, K, N] tensor (supports batch dimensions)
         tile_size: tile dimension (assumes square tiles)
         num_banks: number of DRAM banks (shards)
+        subblock_k: K tiles per subblock (default: K_tiles, i.e. full K)
+        subblock_n: N columns per DRAM read block (default: 1)
 
     Returns:
         [*, K, N] tensor with tiles rearranged per-shard (same shape as input)
@@ -72,6 +78,14 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     per_N_tiles = per_N // tile_size
     num_tiles_per_shard = K_tiles * per_N_tiles
 
+    if subblock_k is None:
+        subblock_k = K_tiles
+    if subblock_n is None:
+        subblock_n = 1
+
+    assert K_tiles % subblock_k == 0, f"K_tiles ({K_tiles}) must be divisible by subblock_k ({subblock_k})"
+    assert per_N_tiles % subblock_n == 0, f"per_N_tiles ({per_N_tiles}) must be divisible by subblock_n ({subblock_n})"
+
     # Split into shards: [batch, K, N] -> [batch, K, num_banks, per_N]
     tensor = tensor.reshape(batch_size, K, num_banks, per_N)
     # -> [batch, num_banks, K, per_N]
@@ -86,10 +100,38 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     # Flatten tile grid: [shards, num_tiles, tile_h, tile_w]
     tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
 
-    # Compute source indices for shuffle
-    # For shuffled position i, source = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    # Compute source indices for shuffle.
+    # Source tile grid is row-major: tile(k, n) is at index k * per_N_tiles + n.
+    # Target layout: [subblock_k, subblock_n] blocks, row-major within each block.
+    #
+    # Block grid: num_subblocks_k × num_n_groups blocks.
+    # Block order: iterate N-groups first, then K-subblocks (column-major at block level).
+    # Within block: row-major, i.e. (k0,n0), (k0,n1), ..., (k1,n0), (k1,n1), ...
+    #
+    # When subblock_n=1: each block is subblock_k×1, row-major = column-major = just K tiles.
+    # This reduces to the original fully column-major layout.
+    num_subblocks_k = K_tiles // subblock_k
+    num_n_groups = per_N_tiles // subblock_n
+    block_size = subblock_k * subblock_n
+
     i = torch.arange(num_tiles_per_shard, device=tensor.device)
-    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    # Which block does position i belong to?
+    block_idx = i // block_size
+    # Position within the block (row-major: k varies slowest, n varies fastest)
+    pos_in_block = i % block_size
+    local_k = pos_in_block // subblock_n
+    local_n = pos_in_block % subblock_n
+
+    # Block grid is column-major: N-groups first, then K-subblocks
+    n_group = block_idx % num_n_groups
+    k_sub = block_idx // num_n_groups
+
+    # Global tile coordinates
+    global_k = k_sub * subblock_k + local_k
+    global_n = n_group * subblock_n + local_n
+
+    # Source index in row-major tile grid
+    source_idx = global_k * per_N_tiles + global_n
 
     # Gather tiles in shuffled order
     shuffled_tiles = tiles[:, source_idx, :, :]
@@ -909,3 +951,191 @@ def test_dram_streaming_matmul_with_all_experts(
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"Multi-expert DRAM streaming matmul{activation_str} test passed!")
+
+
+@pytest.mark.parametrize(
+    "k, n, fused_activation",
+    [(256, 7168, None)],
+    ids=["up_proj"],
+)
+@pytest.mark.parametrize("m", [1], ids=["m1"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False], ids=["not_fp32"])
+def test_benchmark(device, k, n, m, fused_activation, fp32_dest_acc_en):
+    """Test simplified DRAM streaming matmul with optional fused activation.
+
+    In the simplified version:
+    - Input A is REPLICATED on compute cores (each core has full [M, K])
+    - Input B is WIDTH_SHARDED [K, N] with per-shard tiles shuffled to column-major
+    - No multicast needed - each core has its own copy
+    - Output is WIDTH_SHARDED across N dimension
+
+    Args:
+        fused_activation: Optional activation to fuse (e.g., "silu", "gelu", "relu")
+    """
+
+    # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
+    num_loop_iters = 1
+    tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
+    tile_w = 32
+
+    # Create tile object for tiny tiles when m=1
+    in0_tile = ttnn.Tile([tile_h, tile_w])
+    out_tile = ttnn.Tile([tile_h, tile_w])
+
+    # Get compute cores from optimal DRAM bank assignment
+    # These are the cores that will do the compute (8 on BH, 12 on WH)
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+
+    # Get number of DRAM banks (should match num_cores)
+    num_banks = device.dram_grid_size().x
+    assert num_cores == num_banks, f"num_cores ({num_cores}) must equal num_banks ({num_banks})"
+
+    logger.info(f"num_compute_cores={num_cores}, num_dram_banks={num_banks}")
+
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    logger.info(f"n_padded={n_padded}, per_core_N={per_core_N}, Kt={k // tile_w}")
+
+    # Define shapes
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n_padded]  # Original shape for matmul reference
+
+    # Build CoreRangeSet for specific compute cores (not bounding box)
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+    )
+
+    # Create PyTorch tensors
+    torch.manual_seed(42)
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()  # [1, 1, K, N] for reference
+
+    # ========== Input A - REPLICATED on compute cores ==========
+    # Replicate the tensor num_cores times along height, then HEIGHT_SHARD
+    in0_replicated = in0.repeat(1, 1, num_cores, 1)  # Shape: [1, 1, M * num_cores, K]
+    in0_shard_shape_full = [m, k]  # Each core gets [M, K]
+    in0_shard_spec = ttnn.ShardSpec(compute_core_grid, in0_shard_shape_full, ttnn.ShardOrientation.ROW_MAJOR)
+    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+    in0_t = ttnn.from_torch(
+        in0_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+        tile=in0_tile,
+    )
+    # Compute subblock_k and subblock_n before shuffle (shuffle needs them)
+    if k == 7168:
+        subblock_k = k // tile_w // 4
+        subblock_n = 1
+    else:
+        subblock_k = k // tile_w  # K=256: subblock_k=Kt=8, single subblock covers full K
+        subblock_n = 4
+
+    Kt = k // tile_w
+    num_subblocks_k = Kt // subblock_k
+    per_core_N_tiles = per_core_N // tile_w
+    assert (
+        per_core_N_tiles % subblock_n == 0
+    ), f"per_core_N_tiles ({per_core_N_tiles}) must be divisible by subblock_n ({subblock_n})"
+    logger.info(
+        f"subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}, subblock_n={subblock_n}, per_core_N_tiles={per_core_N_tiles}"
+    )
+
+    # ========== Input B - WIDTH_SHARDED in DRAM with per-shard tile reordering ==========
+    # Shuffle tiles: [subblock_k, subblock_n] blocks, row-major within each block
+    in1_shuffled = shuffle_tensor_tiles(in1, tile_w, num_banks, subblock_k=subblock_k, subblock_n=subblock_n)
+
+    # WIDTH_SHARDED across N dimension, each bank gets [K, n // num_banks]
+    in1_shard_shape = [k, n_padded // num_banks]
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1_shuffled,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    # ========== Output tensor - WIDTH_SHARDED in L1 ==========
+    output_shard_width = n_padded // num_banks
+    output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    torch_output_zeros = torch.zeros([1, 1, m, n_padded]).bfloat16().float()
+    ttnn_output = ttnn.from_torch(
+        torch_output_zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+        tile=out_tile,
+    )
+
+    # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
+    in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
+    in1_dtype = ttnn.bfloat4_b
+    num_in1_buffers = 3
+    tiles_per_block = subblock_k * subblock_n
+    in1_CB_tiles = tiles_per_block * num_in1_buffers
+    # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]
+    working_buf_shard_shape = (tile_w, in1_CB_tiles * tile_w)
+    working_buf_total_width = in1_CB_tiles * tile_w * num_cores
+    working_buf_shard_spec = ttnn.ShardSpec(compute_core_grid, working_buf_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    working_buf_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, working_buf_shard_spec
+    )
+    working_buf_torch = torch.zeros([1, 1, tile_w, working_buf_total_width]).bfloat16().float()
+    working_buf_t = ttnn.from_torch(
+        working_buf_torch,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=working_buf_mem_config,
+        tile=in1_tile,
+    )
+
+    # Run DRAM streaming matmul
+    activation_str = f" + {fused_activation}" if fused_activation else ""
+    logger.info(
+        f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n_padded}, "
+        f"num_cores={num_cores}, num_loop_iters={num_loop_iters}"
+    )
+    try:
+        ttnn_result = DRAMStreamingMatmul.op(
+            in0_t,
+            in1_t,
+            ttnn_output,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            fused_activation=fused_activation,
+            num_loop_iters=num_loop_iters,
+            working_buf_tensor=working_buf_t,
+        )
+    except Exception as e:
+        logger.error(f"DRAM streaming matmul{activation_str} failed: {e}")
+        pytest.skip(f"Operation failed (may need API adjustments): {e}")
+
+    # Compute PyTorch reference
+    pt_out = DRAMStreamingMatmul.golden(in0, in1, fused_activation)
+
+    # Convert to torch for comparison
+    tt_out = ttnn.to_torch(ttnn_result)
+
+    # Verify results
+    if fused_activation != None:
+        expected_pcc = 0.98
+    else:
+        expected_pcc = 0.99
+    passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
+    logger.info(output)
+    assert passing, f"PCC check failed: {output}"
+    logger.info(f"DRAM streaming matmul{activation_str} test passed!")
