@@ -14,21 +14,18 @@ from loguru import logger
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
 
-# BH RTL-confirmed dead counters: signals that never produce useful data on BH silicon
-# (verified across 8 diverse workloads). Note: some RTL signals appear live in the RTL
-# source but are empirically dead on silicon (MATH_INSTRN_STARTED, SFPU_IDLE), and some
-# RTL signals appear dead but are empirically live (PACKER_DEST_READ_1, DEST_READ_GRANTED_1,
-# PACK_BANK6_GRANT). This list reflects the empirical truth, not just RTL analysis.
-# - PACK banks 2-3 req/grant: tied to 1'b0 (PACK_COUNT=1, only 1 packer engine)
-# - PACKER_BUSY_0/1/2: individual packer engine busy, tied to 1'b0 (PACK_COUNT=1)
-# - PACK_BANK7_GRANT: grant vector bit tied to 2'b00[0] (RTL dead, silicon confirmed)
-# - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 on BH (same as WH)
-# - MATH_INSTRN_STARTED: o_math_instrnbuf_rden inactive on BH silicon (despite RTL showing live)
-# - MATH_INSTRN_NOT_BLOCKED_SRC/INSTRN_2_HF_CYCLES: hf_cycles never 2'b11 or 2'b01 (fidelity off)
-# - INSTRN_1_HF_CYCLE: equals o_math_instrnbuf_rden on BH (hf_cycles==0 always true), dead because
-#   o_math_instrnbuf_rden is empirically dead
-# - SFPU_IDLE counters (sels 55-57): empirically 0 on BH silicon across all workloads
-# Note: PACK_BANK6_GRANT is RTL-predicted dead (2'b00[1]) but silicon-live (nonzero in 8/8 tests)
+# BH empirically-dead counters: signals that are NOT hardwired to 0 in RTL but
+# never produce useful data on BH silicon (verified across 8 diverse workloads).
+# RTL-hardwired-dead counters have been removed from the hw_counters.h arrays
+# entirely (FIDELITY_PHASE_STALLS, MATH_INSTRN_NOT_BLOCKED_SRC, INSTRN_2_HF_CYCLES,
+# PACK_BANK7_GRANT) and are not read from hardware.
+# The remaining entries here are empirically dead despite having live RTL signals:
+# - PACK banks 2-3 req/grant: PACK_COUNT=1 means only 1 packer engine active
+# - PACKER_BUSY_0/1/2: per-engine busy tied to 1'b0 (PACK_COUNT=1)
+# - DEST_READ_GRANTED_2/3: same (PACK_COUNT=1)
+# - MATH_INSTRN_STARTED: o_math_instrnbuf_rden never fires on BH silicon
+# - INSTRN_1_HF_CYCLE: equals o_math_instrnbuf_rden (also never fires)
+# - SFPU_IDLE counters (sels 55-57): 0 across all workloads including SFPU-heavy
 BH_RTL_DEAD_COUNTERS = frozenset(
     {
         "PACKER_DEST_READ_2",
@@ -38,11 +35,7 @@ BH_RTL_DEAD_COUNTERS = frozenset(
         "PACKER_BUSY_2",
         "DEST_READ_GRANTED_2",
         "DEST_READ_GRANTED_3",
-        "PACK_BANK7_GRANT",
-        "FIDELITY_PHASE_STALLS",
         "MATH_INSTRN_STARTED",
-        "MATH_INSTRN_NOT_BLOCKED_SRC",
-        "INSTRN_2_HF_CYCLES",
         "INSTRN_1_HF_CYCLE",
         "WAITING_FOR_SFPU_IDLE_0",
         "WAITING_FOR_SFPU_IDLE_1",
@@ -50,20 +43,9 @@ BH_RTL_DEAD_COUNTERS = frozenset(
     }
 )
 
-# WH RTL-confirmed dead counters: signals tied to constant 0 in Wormhole RTL.
-# - PACK_BANK6/7_GRANT: bank 6-7 grant tied to 2'b00
-# - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 (no multi-phase fidelity)
-# - MATH_INSTRN_NOT_BLOCKED_SRC: grant 256 = hf_cycles==2'b11, always 0 (fidelity off)
-# - INSTRN_2_HF_CYCLES: grant 257 = hf_cycles==2'b01, always 0 (fidelity off)
-WH_RTL_DEAD_COUNTERS = frozenset(
-    {
-        "PACK_BANK6_GRANT",
-        "PACK_BANK7_GRANT",
-        "FIDELITY_PHASE_STALLS",
-        "MATH_INSTRN_NOT_BLOCKED_SRC",
-        "INSTRN_2_HF_CYCLES",
-    }
-)
+# WH: all RTL-dead counters have been removed from the hw_counters.h arrays.
+# No filtering needed — every counter read from WH hardware produces live data.
+WH_RTL_DEAD_COUNTERS = frozenset()
 
 # Counter type enum from perf_counters.hpp — auto-generated, must match C++ enum order
 COUNTER_TYPE_NAMES = {

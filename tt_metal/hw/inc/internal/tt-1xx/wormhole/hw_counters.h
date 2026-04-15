@@ -7,17 +7,14 @@
 // Wormhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
-// WH: all 22 counters active.
-// Grant bank mapping differs from BH at banks 0 and 4-6:
-//   WH grant[0] (sel 256) = 4 HF cycles  (BH: math not blocked by src — dead)
-//   WH grant[4] (sel 260) = srcB not blocked by port
-//   WH grant[5] (sel 261) = srcA not blocked by overwrite
-//   WH grant[6] (sel 262) = srcA not blocked by port
-// Also: FIDELITY_PHASE_STALLS is always 0 (fidelity_phases_ongoing = 1'b0 on WH).
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+// WH TDMA_UNPACK: 11 req banks + 11 grant banks.
+// RTL-dead counters removed (not read from hardware):
+//   sel 2 req: fidelity_phases_ongoing = 1'b0 (always 0)
+//   sel 256 grant: hf_cycles==2'b11 (always false, fidelity off)
+//   sel 257 grant: hf_cycles==2'b01 (always false, fidelity off)
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 19> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -26,8 +23,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},  // WH: actually 4-HF-cycle counter (hf_cycles==2'b11)
-     {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
@@ -37,11 +32,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 22;
+constexpr size_t NUM_UNPACK_COUNTERS = 19;
 
-// WH: PACK_COUNT=4, all 16 counter_sels (8 req + 8 grant). Banks 6-7 grants
-// are tied to 2'b00 in RTL, so counter_sels 273-274 always read 0.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
+// WH TDMA_PACK: PACK_COUNT=4, 8 req + 6 grant (banks 6-7 grant tied to 2'b00, removed).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
@@ -55,10 +49,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272},
-     {PerfCounterType::PACK_BANK6_GRANT, 273},
-     {PerfCounterType::PACK_BANK7_GRANT, 274}}};
-constexpr size_t NUM_PACK_COUNTERS = 16;
+     {PerfCounterType::AVAILABLE_MATH, 272}}};
+constexpr size_t NUM_PACK_COUNTERS = 14;
 
 // Tensix L1 bank 0 counters
 // Tensix L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC
@@ -105,7 +97,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
-// WH INSTRN_THREAD: 90 counters
+// WH INSTRN_THREAD: 82 counters
 // Sel 27-38: shared stall conditions BROADCAST from thread 0 to all 3 slots (read slot 0 only)
 // Sel 39-65: per-thread stall reasons (9 types x 3 threads)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 82> instrn_counters = {

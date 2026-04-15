@@ -7,16 +7,18 @@
 // Blackhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
-// BH TDMA_UNPACK: 11 banks, 22 counter_sels (11 req + 11 grant).
+// BH TDMA_UNPACK: 11 req banks + 11 grant banks.
 // Grant banks 4-6 (sels 260-262) have IDENTICAL wiring on WH and BH (verified in RTL):
 //   grant[4] (sel 260) = srcB not blocked by write port   (dma_srcb_wr_port_avail)
 //   grant[5] (sel 261) = srcA not blocked by overwrite    (srca_write_ready)
 //   grant[6] (sel 262) = srcA not blocked by write port   (dma_srca_wr_port_avail)
-// fidelity_phases_ongoing = 1'b0 on BH, so FIDELITY_PHASE_STALLS (sel 2) is always 0.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+// RTL-dead counters removed (not read):
+//   sel 2: fidelity_phases_ongoing = 1'b0
+//   sel 256: hf_cycles==2'b11 always false (fidelity off)
+//   sel 257: hf_cycles==2'b01 always false (fidelity off)
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 19> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
@@ -25,27 +27,25 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},  // dead: hf_cycles never 2'b11
-     {PerfCounterType::INSTRN_2_HF_CYCLES, 257},           // dead: hf_cycles never 2'b01
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
-     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},   // RTL-verified: same wiring as WH
-     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},   // RTL-verified: same wiring as WH
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
      {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 22;
+constexpr size_t NUM_UNPACK_COUNTERS = 19;
 
-// BH TDMA_PACK: 8 banks, 16 counter_sels (8 req + 8 grant).
-// Empirically verified across 8 diverse workloads on BH silicon:
-//   LIVE:  11(DEST_READ_AVAIL), 12(DEST_READ_1*), 267(GRANTED_0), 268(GRANTED_1*),
-//          272(AVAILABLE_MATH), 273(BANK6_GRANT*)   (*RTL shows tied-to-0 but silicon disagrees)
-//   DEAD:  13-14(DEST_READ_2/3), 15-17(BUSY_0/1/2), 18(BUSY), 269-270(GRANTED_2/3), 274(BANK7)
-//   RTL-predicted-live but empirically dead: 18(PACKER_BUSY), 271(MATH_NOT_STALLED_DEST_WR_PORT)
-// 15 RTL-confirmed dead counters are filtered out in perf_counter_analysis.py.
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
+// BH TDMA_PACK: PACK_COUNT=1, 8 req + 8 grant.
+// RTL-dead removed: sel 274 (PACK_BANK7_GRANT, tied to 2'b00[0]).
+// PACK_BANK6_GRANT (sel 273) kept: RTL shows 2'b00[1] but silicon reads nonzero.
+// Empirically-dead counters (read but filtered in Python):
+//   PACKER_DEST_READ_2/3, PACKER_BUSY_0/1/2, DEST_READ_GRANTED_2/3 (PACK_COUNT=1)
+//   MATH_INSTRN_STARTED, INSTRN_1_HF_CYCLE (o_math_instrnbuf_rden empirically dead)
+//   WAITING_FOR_SFPU_IDLE_0/1/2 (empirically 0 across all workloads)
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 15> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
@@ -60,9 +60,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> pack_counters = {
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::AVAILABLE_MATH, 272},
-     {PerfCounterType::PACK_BANK6_GRANT, 273},
-     {PerfCounterType::PACK_BANK7_GRANT, 274}}};
-constexpr size_t NUM_PACK_COUNTERS = 16;
+     {PerfCounterType::PACK_BANK6_GRANT, 273}}};
+constexpr size_t NUM_PACK_COUNTERS = 15;
 
 // Tensix L1 bank 0 counters
 // Tensix L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
