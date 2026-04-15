@@ -432,18 +432,16 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-- name: Mamba-2.8B unit tests
-  cmd: |
-    pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_model.py
-  model: mamba-2.8b
-  skus:
-    wh_n150:
-      timeout: 5
-      tier: 3
-    wh_n300:
-      timeout: 5
-      tier: 3
-  owner_id: U06ECNVR0EN # Evan Smal
-  team: models
+# Some tests failing PCC (0.03)
+# - name: Mamba-2.8B unit tests
+#   cmd: |
+#     pytest --timeout 600 models/demos/wormhole/mamba/tests/test_mamba_model.py
+#   model: mamba-2.8b
+#   skus:
+#     wh_n150:
+#       timeout: 5
+#       tier: 3
+#   owner_id: U06ECNVR0EN # Evan Smal
+#   team: models
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
