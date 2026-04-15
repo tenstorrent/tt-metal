@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <array>
 #include <algorithm>
+#include <stdint.h>
 
 namespace detail {
 

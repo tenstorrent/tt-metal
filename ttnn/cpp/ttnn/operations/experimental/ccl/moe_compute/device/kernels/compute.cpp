@@ -30,6 +30,19 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 }
 
 template <MoEActivationFunction activation>
+inline void pack_init_activation() {};
+
+template <>
+inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
+};
+
+template <>
+inline void pack_init_activation<MoEActivationFunction::SILU>() {
+    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+};
+
+template <MoEActivationFunction activation>
 inline void pack_compute_activation() {};
 
 template <>
@@ -179,8 +192,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Initialize SFPU for SILU and eltwise multiply
-            PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(

@@ -325,6 +325,8 @@ def _get_pcc_threshold(activation_type):
         return SWIGLU_PCC_THRESHOLD
     elif activation_type == MoEActivationFunction.SILU:  # SILU
         return SILU_PCC_THRESHOLD
+    else:
+        raise TypeError("Invalid Activation type")
 
 
 def validate_matmul(
@@ -877,7 +879,7 @@ def compute_matmul_golden(
         # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
-        torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N/2)
+        torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
     else:
         raise ValueError(f"Unsupported activation type: {activation_type}")
 
