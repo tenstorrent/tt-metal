@@ -52,11 +52,12 @@ void kernel_main() {
     //   8: cb_signal_id                          - CB for reader->compute signalling (one page per batch)
     //   9: aligned_dispatched_buffer_page_size   - aligned page size of dispatched_buffer tensor
     //  10: max_dispatched_tokens_per_expert      - max tokens per expert
-    //  11: core_id                               - local index within the owning sender's idle group (0-based)
-    //  12: num_idle_cores                        - size of the owning sender's idle group (k_s)
-    //  13: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
-    //  14: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  15+: TensorAccessorArgs for dispatched_buffer
+    //  11: cb_factor                             - CB size reduction factor (1 for Blackhole, 4 for Wormhole)
+    //  12: core_id                               - local index within the owning sender's idle group (0-based)
+    //  13: num_idle_cores                        - size of the owning sender's idle group (k_s)
+    //  14: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
+    //  15: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
+    //  16+: TensorAccessorArgs for dispatched_buffer
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -68,13 +69,14 @@ void kernel_main() {
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(8);
     constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(9);
     constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(10);
-    constexpr uint32_t core_id = get_compile_time_arg_val(11);
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(12);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(14);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<15>();
+    constexpr uint32_t cb_factor = get_compile_time_arg_val(11);
+    constexpr uint32_t core_id = get_compile_time_arg_val(12);
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(13);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(14);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(15);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<16>();
 
-    constexpr uint32_t tiles_per_token = hidden_size / 32;
+    constexpr uint32_t tiles_per_batch = hidden_size / 32;
     constexpr uint32_t expert_stride_tile = ((max_dispatched_tokens_per_expert + 31) / 32) * (hidden_size / 32);
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
     // Byte offset past counter data where the sender appended receive_buf_addr
@@ -153,23 +155,12 @@ void kernel_main() {
                        << ENDL();
 
         for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_idle_cores) {
-            uint32_t batch_tile_start = start_page_tiled + batch_idx * tiles_per_token;
+            uint32_t batch_tile_start = start_page_tiled + batch_idx * tiles_per_batch;
 
             DPRINT_COMBINE << "Batch tile start: " << batch_tile_start << " (expert " << local_expert << ", tokens "
                            << expert_tokens << ")" << ENDL();
 
-            // 1. Speculatively read tiles (no waiting on sender)
-            cb_reserve_back(cb_dispatched_buffer_id, tiles_per_token);
-            for (uint32_t t = 0; t < tiles_per_token; t++) {
-                noc_async_read_page(
-                    batch_tile_start + t,
-                    dispatched_buffer_addr_gen,
-                    buffer_base + t * aligned_dispatched_buffer_page_size);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_dispatched_buffer_id, tiles_per_token);
-
-            // 2. Signal compute to untilize this batch
+            // 1. Signal compute to start untilizing this batch
             cb_reserve_back(cb_signal_id, 1);
             volatile tt_l1_ptr uint32_t* signal_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
@@ -177,6 +168,21 @@ void kernel_main() {
             cb_push_back(cb_signal_id, 1);
             DPRINT_COMBINE << "[core " << core_id << "] Untilize batch " << batch_idx << " for expert " << local_expert
                            << ENDL();
+
+            // 2. Reading tiles for this batch
+            constexpr uint32_t tiles_per_batch_per_cb = tiles_per_batch / cb_factor;
+            for (uint32_t cnt = 0; cnt < cb_factor; cnt++) {
+                uint32_t batch_tile = batch_tile_start + cnt * tiles_per_batch_per_cb;
+                cb_reserve_back(cb_dispatched_buffer_id, tiles_per_batch_per_cb);
+                for (uint32_t t = 0; t < tiles_per_batch_per_cb; t++) {
+                    noc_async_read_page(
+                        batch_tile + t,
+                        dispatched_buffer_addr_gen,
+                        buffer_base + t * aligned_dispatched_buffer_page_size);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_dispatched_buffer_id, tiles_per_batch_per_cb);
+            }
 
             // 3. Wait for compute to finish untilizing
             cb_wait_front(cb_untilize_id, read_batch_size);
