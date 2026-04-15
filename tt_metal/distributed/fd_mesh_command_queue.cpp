@@ -1099,21 +1099,27 @@ void FDMeshCommandQueue::record_end() {
     // trace to ensure they are equal at the end.
 
     // Calculate device ranges that have an identical set of programs that run on them (including no programs at all).
-    std::vector<MeshCoordinateRange> device_ranges{MeshCoordinateRange{mesh_device_->shape()}};
+    // Restrict to the local mesh partition so that multi-host traces only process locally-owned devices.
+    auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
+    std::vector<MeshCoordinateRange> device_ranges{local_mesh_range};
     for (auto& trace_node : trace_nodes_) {
         for (auto& [device_range, program] : trace_node.trace_nodes) {
+            auto local_device_range = local_mesh_range.intersection(device_range);
+            if (!local_device_range.has_value()) {
+                continue;
+            }
             bool intersection_found = false;
             std::vector<size_t> device_range_idxs_to_invalidate;
             for (size_t i = 0; i < device_ranges.size(); i++) {
                 auto& existing_range = device_ranges[i];
                 TT_FATAL(
-                    existing_range.dims() == device_range.dims(),
+                    existing_range.dims() == local_device_range->dims(),
                     "Invalid mismatching dimensions for existing {} vs device range {}",
                     existing_range.dims(),
-                    device_range.dims());
-                if (existing_range.intersects(device_range)) {
+                    local_device_range->dims());
+                if (existing_range.intersects(*local_device_range)) {
                     intersection_found = true;
-                    auto intersection = *existing_range.intersection(device_range);
+                    auto intersection = *existing_range.intersection(*local_device_range);
                     if (intersection != existing_range) {
                         auto complement = subtract(existing_range, intersection);
                         device_range_idxs_to_invalidate.push_back(i);
@@ -1135,7 +1141,7 @@ void FDMeshCommandQueue::record_end() {
                         device_ranges.end());
                 }
             } else {
-                device_ranges.push_back(device_range);
+                device_ranges.push_back(*local_device_range);
             }
         }
     }
