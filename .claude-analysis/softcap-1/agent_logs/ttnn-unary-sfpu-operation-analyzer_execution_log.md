@@ -1,25 +1,23 @@
 # Execution Log: ttnn-unary-sfpu-operation-analyzer
 
 ## Session Summary
-- **Operation**: swish
+- **Operation**: tanhshrink
 - **Start**: 2026-04-15
-- **Status**: SUCCESS
+- **Status**: COMPLETED (with critical findings -- operation is non-functional)
 
 ## Analysis Steps
 
-1. **Dispatch Research**: Read `unary_op_utils.cpp` to find SWISH maps to `SFPU_OP_SWISH_INCLUDE`, `swish_tile_init()` / `swish_tile({idst})`, compute kernel `eltwise_sfpu.cpp`, approx mode `false`.
+1. **Dispatch Research**: Read `unary_op_utils.cpp` -- TANHSHRINK is NOT in `get_op_init_and_func_default` (would TT_THROW), `get_op_approx_mode` returns false, `get_compute_kernel_path` returns default `eltwise_sfpu.cpp`.
 
-2. **API Header**: Read `swish.h` -- `swish_tile(idst)` calls `llk_math_eltwise_unary_sfpu_swish<APPROX>(idst)`.
+2. **Compute Kernel Discovery**: Found two dedicated compute kernels: `tanhshrink_kernel.cpp` (FPU subtraction variant) and `tanhshrink_sfpu_kernel.cpp` (SFPU subtraction variant). Neither uses `SFPU_OP_CHAIN_0`.
 
-3. **LLK Dispatch**: Read `llk_math_eltwise_unary_sfpu_swish.h` (WH and BH identical) -- dispatches via `_llk_math_eltwise_unary_sfpu_params_` with `calculate_swish<APPROXIMATE, 8>`.
+3. **Critical Finding -- tanh SFPU Missing**: `tanh_tile()` calls `llk_math_eltwise_unary_sfpu_tanh` which has NO definition in the codebase. No `ckernel_sfpu_tanh.h`, no `llk_math_eltwise_unary_sfpu_tanh.h` exist.
 
-4. **Core SFPU Kernel**: Read `ckernel_sfpu_swish.h` (WH and BH identical) -- SFPI-based kernel using piecewise polynomial+linear sigmoid approximation multiplied by x. Three v_if/v_endif blocks for the three sigmoid segments plus one for negative-x correction.
+4. **SFPU Binary Sub Trace**: Traced `sub_binary_tile()` through `eltwise_binary_sfpu.h` -> `llk_math_eltwise_binary_sfpu_binop.h` -> `_llk_math_eltwise_binary_sfpu_params_` -> `_calculate_sfpu_binary_<SUB>` in `ckernel_sfpu_binary.h`.
 
-5. **Parameters Dispatch**: Read `llk_math_eltwise_unary_sfpu_params.h` for both WH and BH -- VectorMode::RC loops 4 faces, SETRWC/inc_dst_addr between faces.
+5. **Core SFPU Kernel Analysis**: `_calculate_sfpu_binary_` with BinaryOp::SUB loads two tiles from DEST, computes `in0 - in1` via SFPMAD, stores result. 8 iterations per face, 4 faces via VectorMode::RC. ADDR_MOD_7 (all-zero increments).
 
-6. **Init/ADDR_MOD**: Read `llk_math_eltwise_unary_sfpu.h` for both WH and BH -- only ADDR_MOD_7 with all-zero increments configured for swish.
-
-7. **Verification**: All function names, file paths, and SFPU instruction references verified via grep.
+6. **Verification**: All function names, file paths, and SFPU instruction references verified via grep.
 
 ## Output
-- Analysis file: `.claude-analysis/softcap-1/swish_analysis.md`
+- Analysis file: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
