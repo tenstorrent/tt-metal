@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_wh_program_factory.hpp"
+#include "transpose_utils.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -258,6 +259,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
     }
 
     std::vector<uint32_t> reader_compile_time_args;
+    std::vector<uint32_t> reader_common_runtime_args;
     if (row_major) {
         reader_compile_time_args.push_back(ht);
         reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
@@ -269,9 +271,11 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
         reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    std::vector<uint32_t> writer_common_runtime_args;
     if (row_major) {
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
@@ -283,7 +287,8 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
         writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -293,6 +298,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
                     "reader_unary_transpose_wh_interleaved_start_id.cpp",
         total_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -302,6 +308,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         WriterDataMovementConfig(writer_compile_time_args));
+    SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     if (row_major) {
@@ -385,6 +392,15 @@ void TransposeWHProgramFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+
+    {
+        auto* src = tensor_args.input.buffer();
+        auto* dst = output_tensor.buffer();
+        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(*src, reader_args);
+        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(*dst, writer_args);
+    }
 
     if (shared_variables.is_row_major) {
         set_runtime_args_wh_rm(

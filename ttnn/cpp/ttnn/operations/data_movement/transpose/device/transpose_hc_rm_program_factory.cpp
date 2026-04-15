@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_rm_program_factory.hpp"
+#include "transpose_utils.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -166,17 +167,21 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
     CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args;
+    std::vector<uint32_t> reader_common_runtime_args;
     reader_compile_time_args.push_back(N);
     reader_compile_time_args.push_back(H);
     reader_compile_time_args.push_back(C);
     reader_compile_time_args.push_back(stick_size);
     reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
+    std::vector<uint32_t> writer_common_runtime_args;
     writer_compile_time_args.push_back(stick_size);
     writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -184,6 +189,7 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
         "reader_unary_transpose_hc_interleaved_partitioned_rm.cpp",
         total_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -191,6 +197,7 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
         "writer_unary_transpose_hc_interleaved_start_id_rm.cpp",
         total_cores,
         WriterDataMovementConfig(writer_compile_time_args));
+    SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     set_runtime_args_hc_rm(
         program,
@@ -225,6 +232,15 @@ void TransposeHCRMProgramFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+
+    {
+        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *tensor_args.input.buffer(), reader_args);
+        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *output_tensor.buffer(), writer_args);
+    }
 
     set_runtime_args_hc_rm(
         program,

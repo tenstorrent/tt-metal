@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_hc_tiled_interleaved_program_factory.hpp"
+#include "transpose_utils.hpp"
 
 #include "ttnn/operations/math.hpp"
 
@@ -172,6 +173,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     }
 
     std::vector<uint32_t> reader_compile_time_args = {};
+    std::vector<uint32_t> reader_common_runtime_args;
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"num_writes", num_writes},
         {"padding_val_packed", padding_val_packed},
@@ -183,7 +185,8 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         {"tile_height", 1u},
         {"tile_width", 1u},
     };
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -191,6 +194,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
         ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
 
     Buffer* dst_buffer = output_tensor.buffer();
     std::vector<uint32_t> writer_compile_time_args = {
@@ -204,7 +208,9 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         face_shape[0],
         face_shape[1],
         static_cast<uint32_t>(needs_padding)};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    std::vector<uint32_t> writer_common_runtime_args;
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -212,6 +218,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
         WriterDataMovementConfig(writer_compile_time_args));
+    SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
 
     set_runtime_args_hc_tiled_interleaved(
         program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true, total_cores);
@@ -226,6 +233,16 @@ void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+
+    {
+        auto* reader_args = GetCommonRuntimeArgs(program, shared_variables.reader_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *tensor_args.input.buffer(), reader_args);
+        auto* writer_args = GetCommonRuntimeArgs(program, shared_variables.writer_kernel_id).data();
+        ttnn::operations::data_movement::transpose::copy_transpose_common_runtime_args(
+            *output_tensor.buffer(), writer_args);
+    }
+
     auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
