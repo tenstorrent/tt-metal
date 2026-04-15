@@ -713,8 +713,10 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
     ui32 = flat.view(np.uint32)
 =======
 
-    # FULLY SEPARATED layout: all scales first, then all packed elements
-    return scales_e8m0 + packed_bytes.tolist()
+    # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )
 
 
 def _round_ties_even(
@@ -730,12 +732,8 @@ def _round_ties_even(
     rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
     mantissa_lsb = (input_mantissa >> shift_out) & 0x1
 
-    if rounded_msb and rounded_lsbs != 0:
-        round_inc = 1
-    elif rounded_msb:
-        round_inc = 1 if mantissa_lsb == 0x1 else 0
-    else:
-        round_inc = 0
+    # Round-to-nearest-even: increment on >0.5, or on exact 0.5 when the kept LSB is 1.
+    round_inc = 1 if (rounded_msb and (rounded_lsbs != 0 or mantissa_lsb == 0x1)) else 0
 
     if output_width == 0:
         round_inc = rounded_msb if rounded_lsbs != 0x0 else 0
