@@ -22,6 +22,15 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.buffer() == nullptr) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
+
+    // Reject dtype/layout combinations that would hard-fail during TensorSpec construction in compute_output_specs().
+    // These low-precision packed formats require tiled layout.
+    const bool output_dtype_requires_tile =
+        output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
+    if (output_dtype_requires_tile && input_tensor.layout() == Layout::ROW_MAJOR) {
+        return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
+    }
+
     // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
     // Use the normalized memory config for validation so that convertible ND specs are accepted.
     auto resolved_output_mem_config = output_mem_config;
@@ -64,14 +73,6 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     }
     if (!output_mem_config.is_sharded()) {
         return {false, "Output memory config must be sharded"};
-    }
-
-    // Reject dtype/layout combinations that would hard-fail during TensorSpec construction in
-    // compute_output_specs(). These low-precision packed formats require tiled layout.
-    const bool output_dtype_requires_tile =
-        output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
-    if (output_dtype_requires_tile && input_tensor.layout() == Layout::ROW_MAJOR) {
-        return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
     if (resolved_output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
