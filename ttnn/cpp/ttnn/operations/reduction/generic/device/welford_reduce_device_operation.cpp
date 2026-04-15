@@ -77,15 +77,31 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
     if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED || mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
         mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         // Grid and orientation are identical in both spec formats (nd_shard_spec and shard_spec)
-        // when both are populated. Pick whichever is available.
+        // when both are populated. Pick whichever is available from the output config,
+        // falling back to the input tensor's shard spec for backward compatibility.
         const auto& nd = operation_attributes.output_mem_config.nd_shard_spec();
         const auto& legacy = operation_attributes.output_mem_config.shard_spec();
-        TT_FATAL(
-            nd.has_value() || legacy.has_value(),
-            "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set",
-            mem_layout);
-        const CoreRangeSet& grid = nd ? nd->grid : legacy->grid;
-        ShardOrientation orientation = nd ? nd->orientation : legacy->orientation;
+        const auto& input_nd = tensor_args.memory_config().nd_shard_spec();
+        const auto& input_legacy = tensor_args.memory_config().shard_spec();
+        auto get_grid_and_orientation = [&]() -> std::pair<const CoreRangeSet&, ShardOrientation> {
+            if (nd) {
+                return {nd->grid, nd->orientation};
+            }
+            if (legacy) {
+                return {legacy->grid, legacy->orientation};
+            }
+            if (input_nd) {
+                return {input_nd->grid, input_nd->orientation};
+            }
+            if (input_legacy) {
+                return {input_legacy->grid, input_legacy->orientation};
+            }
+            TT_THROW(
+                "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set "
+                "on the output memory config or the input tensor",
+                mem_layout);
+        };
+        auto [grid, orientation] = get_grid_and_orientation();
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
@@ -104,10 +120,15 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
     }
 
     // ND sharding: adjust per-logical-dimension shard shape for reduced dims.
+    // Fall back to the input tensor's nd_shard_spec when the output config omits it.
     if (mem_layout == TensorMemoryLayout::ND_SHARDED) {
         const auto& nd_shard_spec = operation_attributes.output_mem_config.nd_shard_spec();
-        TT_FATAL(nd_shard_spec.has_value(), "ND_SHARDED memory layout requires nd_shard_spec to be set");
-        auto nd_shard_spec_copy = *nd_shard_spec;
+        const auto& input_nd_shard_spec = tensor_args.memory_config().nd_shard_spec();
+        TT_FATAL(
+            nd_shard_spec.has_value() || input_nd_shard_spec.has_value(),
+            "ND_SHARDED memory layout requires nd_shard_spec to be set "
+            "on the output memory config or the input tensor");
+        auto nd_shard_spec_copy = nd_shard_spec.has_value() ? *nd_shard_spec : *input_nd_shard_spec;
         if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::W ||
             operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
             nd_shard_spec_copy.shard_shape[-1] = 1;
