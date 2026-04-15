@@ -98,3 +98,62 @@
 - WH and BH implementations are identical
 - Three sequential v_if/v_endif blocks provide piecewise function selection via SFPU condition code stack
 - Each iteration processes 32 elements, 8 iterations per face, 4 faces per tile = 1024 elements
+
+---
+
+# Execution Log: ttnn-unary-sfpu-operation-analyzer (sinh)
+
+## Session Summary
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Operation**: sinh
+- **Final Status**: SUCCESS
+- **Output File**: `.claude-analysis/softcap-1/sinh_analysis.md`
+
+## Analysis Steps
+
+### 1. Dispatch Tracing
+- Read `unary_op_utils.cpp` to find SINH dispatch configuration
+- Compute kernel: `eltwise_sfpu.cpp` (default case)
+- Approx mode: `false` (default case in `get_op_approx_mode`)
+- Include guard: `SFPU_OP_SINH_INCLUDE`
+- SFPU_OP_CHAIN_0 expansion: `sinh_tile_init()` / `sinh_tile(idst)`
+
+### 2. Abstraction Layer Tracing
+- API header: `tt_metal/hw/inc/api/compute/eltwise_unary/sinh.h`
+  - `sinh_tile(idst)` -> `llk_math_eltwise_unary_sfpu_sinh<APPROX>(idst)`
+  - `sinh_tile_init()` -> `llk_math_eltwise_unary_sfpu_sinh_init<APPROX>()`
+- LLK dispatch: `llk_math_eltwise_unary_sfpu_sinh.h` (identical on WH and BH)
+  - Calls `_llk_math_eltwise_unary_sfpu_params_` with `calculate_sinh<APPROXIMATE, 8>` and `VectorMode::RC`
+- Core SFPU: `ckernel_sfpu_sinh.h` (identical on WH and BH)
+  - SFPI-style kernel using vFloat, vInt, dst_reg, v_if/v_endif, addexp, exexp, exman9, setexp, setsgn
+- Params dispatch: `llk_math_eltwise_unary_sfpu_params.h` (WH and BH variants)
+  - VectorMode::RC: loops 4 faces, calls sfpu_func once per face
+
+### 3. SFPU Kernel Analysis
+- **Algorithm**: sinh(x) = (exp(x) - exp(-x)) / 2
+  - Exponentiation via `exp_21f` helper: computes 2^z using Moroz et al. 2022 fast exp2 algorithm
+    - Scale z by 2^23 (addexp), add IEEE bias, decompose into exponent (exexp) and mantissa (exman9)
+    - Polynomial refinement on mantissa, then reconstruct via setexp
+  - Two calls to exp_21f: one for exp(x) via z_pos = x*log2(e), one for exp(-x) via z_neg = -z_pos
+  - Underflow clamping: z values clamped to >= -127 to prevent 2^z underflow
+  - Taylor fallback: for |x| < 0.5, uses sinh(x) ~ x + x^3/6 to avoid catastrophic cancellation
+  - Final output: converted to bfloat16 via float_to_fp16b for deterministic rounding
+- **Init function**: `sinh_init()` is empty -- no programmable constants needed
+- **Instructions emitted**: SFPLOAD, SFPSTORE, SFPMAD (arithmetic), SFPLOADI (constants), SFPDIVP2 (addexp), SFPEXEXP (extract exp), SFPEXMAN (extract mantissa), SFPSETEXP (reconstruct), SFPSETSGN (abs value), SFPCAST (int32_to_float), SFP_STOCH_RND (float_to_fp16b), SFPIADD (integer add), CC instructions (v_if/v_endif)
+- **Three v_if/v_endif blocks**: z_pos underflow clamp, z_neg underflow clamp, Taylor fallback for small |x|
+- **ADDR_MOD_7**: All-zero increments on both WH and BH
+- **Critical issue**: `_float_to_int32_positive_()` called twice in exp_21f but not defined anywhere in codebase
+
+### 4. Verification
+- All function names verified: `calculate_sinh` (2 matches WH/BH), `exp_21f` (2 matches WH/BH), `sinh_init` (2 matches WH/BH)
+- All file paths verified to exist
+- SFPI intrinsic-to-instruction mappings verified via `sfpi_lib.h`
+- `_float_to_int32_positive_` NOT found in any file outside ckernel_sfpu_sinh.h -- marked as [UNVERIFIED]
+
+## Key Findings
+- The sinh kernel implements a two-branch approach: exp-based for |x| >= 0.5, Taylor for |x| < 0.5
+- The exp_21f helper is a custom fast 2^z implementation (Moroz et al. 2022) using bit manipulation
+- APPROXIMATION_MODE template parameter is accepted but unused -- no `if constexpr (APPROXIMATION_MODE)` branches exist
+- WH and BH implementations are identical
+- **Missing dependency**: `_float_to_int32_positive_()` is called but not defined anywhere in the codebase, which would cause a compilation error
+- Each iteration processes 32 elements, 8 iterations per face, 4 faces per tile = 1024 elements
