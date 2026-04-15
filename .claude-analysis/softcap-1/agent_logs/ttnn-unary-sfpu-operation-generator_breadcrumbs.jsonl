@@ -24,3 +24,6 @@
 {"event":"phase_start","phase":4,"phase_name":"Testing","iteration":1,"ts":"2026-04-15T09:32:57+00:00"}
 {"event":"subagent_launched","agent_type":"ttnn-unary-sfpu-operation-tester","phase":4,"ts":"2026-04-15T09:32:57+00:00"}
 {"event":"iteration_decision","iteration":2,"reason":"JIT compile error: register spill (90 reload insns). SFPU kernel too complex.","action":"simplifying kernel to reduce register pressure","ts":"2026-04-15T10:07:04+00:00"}
+{"event":"subagent_completed","agent_type":"ttnn-unary-sfpu-operation-tester","status":"partial","result":"3/6 pass (bf16 pass, fp32 fail)","ts":"2026-04-15T10:16:45+00:00"}
+{"event":"phase_complete","phase":4,"phase_name":"Testing","status":"partial","bf16_pass":true,"fp32_pass":false,"issue":"SFPU bfloat16 intermediate precision limits fp32 accuracy to ~6000 ULP vs required 2 ULP","ts":"2026-04-15T10:16:45+00:00"}
+{"event":"phase_start","phase":5,"phase_name":"Documentation","ts":"2026-04-15T10:17:33+00:00"}

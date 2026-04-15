@@ -4,27 +4,32 @@
 softcap(x, cap) = cap * tanh(x / cap) where cap is a positive float scalar (default 50.0).
 
 ## Implementation Approach
-The implementation follows the standard SFPU kernel pattern used by swish, sinh, and other custom operations. The cap parameter is passed as a bfloat16-encoded uint32 through the parameterized dispatch chain.
-
-The SFPU kernel uses three regions for computing tanh:
+The implementation uses a three-region piecewise tanh approximation:
 1. **Saturation** (|y| >= 9): tanh(y) = sign(y)
-2. **Exp-based** (0.1 <= |y| < 9): tanh(y) = 1 - 2/(exp(2|y|) + 1) using a Cody-Waite range-reduced exp with degree-7 Horner polynomial
-3. **Taylor** (|y| < 0.1): tanh(y) = y - y^3/3 + 2y^5/15 - 17y^7/315
+2. **Exp-based** (0.6 <= |y| < 9): tanh(y) = 1 - 2/(exp(2|y|) + 1)
+   - Cody-Waite range-reduced exp with degree-7 Horner polynomial
+   - Newton-Raphson reciprocal (3 iterations)
+3. **Polynomial** (|y| < 0.6): tanh(y) = y * P(y^2) with Sollya minimax degree-4 polynomial
 
-Division by cap is implemented as multiplication by 1/cap where the reciprocal uses Newton-Raphson iteration (3 iterations for ~24-bit precision).
+Two parameters are passed from host: cap and 1/cap (pre-computed as full FP32 bit patterns), loaded via `sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(param))`.
+
+## Test Results
+- **BF16**: All 3 cap values PASS (ULP <= 2)
+- **FP32**: All 3 cap values FAIL (ULP ~6107) -- SFPU hardware computes in bfloat16 intermediate precision, limiting FP32 accuracy
 
 ## Reference Operations Used
-- **swish**: Template for custom SFPU kernel structure, SFPU_OP_CHAIN dispatch pattern
-- **sinh**: exp_21f helper function (adapted to Cody-Waite exp for higher accuracy)
-- **hardtanh**: Parameterized UnaryOpType pattern (is_parametrized_type, get_op_init_and_func_parameterized)
-- **atanh**: Polynomial coefficient initialization patterns
-- **tanhshrink**: tanh_tile usage pattern at compute kernel level
+- **swish**: Template for custom SFPU kernel structure and SFPU_OP_CHAIN dispatch
+- **sinh**: exp_21f helper pattern (adapted to Cody-Waite for higher accuracy)
+- **hardtanh**: Parameterized UnaryOpType pattern
+- **atanh**: Polynomial coefficient initialization, exponent manipulation
+- **tanhshrink**: tanh_tile usage patterns
 
 ## Key Design Decisions
-1. Used Cody-Waite range reduction with degree-7 polynomial for exp instead of the Moroz exp_21f - provides higher accuracy needed for ULP <= 2
-2. Used Newton-Raphson reciprocal instead of hardware division - more predictable precision
-3. Used bfloat16 parameter encoding (s2vFloat16b) matching the existing hardtanh pattern
-4. Three-region piecewise tanh avoids catastrophic cancellation near zero
+1. Cody-Waite range reduction for exp (higher accuracy than Moroz exp_21f)
+2. Full FP32 parameter encoding (not bfloat16) to preserve precision for host-side constants
+3. Sollya minimax polynomial for small |y| avoids cancellation in 2*sigmoid(2y)-1
+4. Specialized compute kernel (softcap_sfpu.cpp) to avoid missing include issues in eltwise_sfpu.cpp
+5. SfpuType enum extended for both Wormhole and Blackhole with required tt_llk values
 
 ### New Files
 tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_softcap.h
@@ -32,10 +37,6 @@ tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_softcap.h
 tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h
 tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h
 tt_metal/hw/inc/api/compute/eltwise_unary/softcap.h
-tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h
-tt_metal/hw/inc/api/compute/eltwise_unary/rpow.h
-tt_metal/hw/inc/api/compute/eltwise_unary/rdiv.h
-tt_metal/hw/inc/api/compute/eltwise_unary/fill.h
 ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/softcap_sfpu.cpp
 
 ### Modified Files
@@ -50,5 +51,6 @@ tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu_types.h
 tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h
 
 ## Known Limitations
-- The Newton-Raphson reciprocal has ~24-bit precision which may introduce slight error for extreme cap values
-- The Taylor series region boundary at |y| = 0.1 is conservative; could potentially be extended
+- FP32 precision is limited by SFPU bfloat16 intermediate arithmetic (~10 mantissa bits)
+- Achieving FP32 ULP <= 2 requires 23+ mantissa bits, fundamentally incompatible with SFPU vFloat precision
+- Newton-Raphson reciprocal gives ~24 bits but each subsequent multiply truncates to bfloat16
