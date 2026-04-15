@@ -73,10 +73,15 @@ inline void calculate_elu(uint slope) {
         constexpr float NEG_LN2_LO = -3.19461832987e-05f;
         const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
 
-        sfpi::vFloat tmp = orig_x * INV_LN2 + c231;
+        // Clamp input to prevent exponent underflow (k < -127 wraps setexp)
+        sfpi::vFloat cw_x = orig_x;
+        sfpi::vFloat lo = -87.0f;
+        sfpi::vec_min_max(lo, cw_x);
+
+        sfpi::vFloat tmp = cw_x * INV_LN2 + c231;
         sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
         sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * NEG_LN2_HI + orig_x;
+        sfpi::vFloat r = k_f * NEG_LN2_HI + cw_x;
         r = r + k_f * NEG_LN2_LO;
 
         // expm1(r) = r * h(r), Horner for h(r) degree 4
