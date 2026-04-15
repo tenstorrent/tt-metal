@@ -237,6 +237,10 @@ void kernel_main() {
     // Track K read count for K chain forwarding (batch-level, for MLA mode)
     uint32_t k_total_reads = 0;
 
+    constexpr bool c_skip_q_dram = false;
+    constexpr bool c_skip_k_dram = true;
+    constexpr bool c_skip_v_dram = true;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -426,15 +430,19 @@ void kernel_main() {
                 } else {
                     // Injector or non-participant: read K from DRAM
                     // For padded iterations, injector still reads K to broadcast to receivers
-                    read_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_in,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                    if constexpr (c_skip_k_dram) {
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                    } else {
+                        read_block(
+                            kv_chunk_is_joint ? joint_k_generator
+                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                            k_slice,
+                            end_seq_tile,
+                            cb_k_in,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
+                    }
                 }
 
                 // Forward K chunk via K chain (batch-level, for MLA mode)
@@ -501,24 +509,40 @@ void kernel_main() {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
                             Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            if constexpr (c_skip_q_dram) {
+                                const uint32_t src_rows = q_sub_slice.get_d2_size();
+                                const uint32_t src_cols = q_sub_slice.get_d3_size();
+                                const uint32_t num_tiles = src_rows * src_cols;
+                                cb_reserve_back(cb_q_in, num_tiles);
+                                cb_push_back(cb_q_in, num_tiles);
+                            } else {
+                                read_block(
+                                    is_joint_q ? joint_q_generator : q_generator,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/
+                                );
+                            }
+                        }
+                    } else {
+                        if constexpr (c_skip_q_dram) {
+                            const uint32_t src_rows = q_slice.get_d2_size();
+                            const uint32_t src_cols = q_slice.get_d3_size();
+                            const uint32_t num_tiles = src_rows * src_cols;
+                            cb_reserve_back(cb_q_in, num_tiles);
+                            cb_push_back(cb_q_in, num_tiles);
+                        } else {
                             read_block(
                                 is_joint_q ? joint_q_generator : q_generator,
-                                q_sub_slice,
+                                q_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
                                 false /*transpose*/
                             );
                         }
-                    } else {
-                        read_block(
-                            is_joint_q ? joint_q_generator : q_generator,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/
-                        );
                     }
                     q_pushed = true;
                 }
@@ -533,15 +557,19 @@ void kernel_main() {
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
                 } else {
-                    read_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_in,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
+                    if constexpr (c_skip_v_dram) {
+                        cb_push_back(cb_v_in, v_chunk_tiles);
+                    } else {
+                        read_block(
+                            kv_chunk_is_joint ? joint_v_generator
+                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                            v_slice,
+                            end_seq_tile,
+                            cb_v_in,
+                            v_tile_bytes,
+                            false /*transpose*/
+                        );
+                    }
                 }
 
                 // Forward V chunk via V chain (head-level) if applicable
