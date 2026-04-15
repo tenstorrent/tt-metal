@@ -300,6 +300,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
+    environment: mainline
     strategy:
       fail-fast: false
       matrix:
