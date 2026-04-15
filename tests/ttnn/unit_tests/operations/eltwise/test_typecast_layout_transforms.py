@@ -10,6 +10,8 @@ Validates that ttnn.typecast transparently handles arbitrary combinations of:
   - Input/output dtype (all supported typecast pairs)
 """
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -149,7 +151,7 @@ class TestTypecastLayoutTransforms:
         # TILE→RM works because pack_untilize_dest uses a different pack path.
         # Same-dtype RM→TILE works because no format conversion occurs.
         is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        if is_rm_to_tile and tt_input_dtype != tt_output_dtype:
+        if is_rm_to_tile and tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
             pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
         torch.manual_seed(0)
         _run_typecast_and_verify(
@@ -280,7 +282,7 @@ class TestTypecastCombinedTransforms:
         output_sharded,
     ):
         is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        if is_rm_to_tile and tt_input_dtype != tt_output_dtype:
+        if is_rm_to_tile and tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
             pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
@@ -387,7 +389,7 @@ class TestTypecastBfpLayoutTransform:
     @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", BFP_RM_TO_TILE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 32, 32], [1, 1, 128, 128]])
     def test_rm_to_bfp_tile(self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape):
-        if tt_input_dtype != tt_output_dtype:
+        if tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
             pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
         torch.manual_seed(0)
         _run_typecast_and_verify(

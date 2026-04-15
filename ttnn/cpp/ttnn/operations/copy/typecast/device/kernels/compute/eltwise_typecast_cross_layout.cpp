@@ -52,12 +52,14 @@ void kernel_main() {
         fp32_mode>(per_core_block_cnt);
 
     // Phase 2: typecast from intermediate_cb → output_cb.
-    // Disable fp32_dest before packing: the SFPU typecast runs with fp32_dest for
-    // correct conversion (unpack preserves fp32 precision), but pack_tile needs
-    // pack_src_format to match the non-fp32 DEST mode. On WH ttsim, mismatched
-    // intermediate_format vs late_from_format causes UndefinedBehavior.
+    // When fp32_dest is enabled (for 32-bit type conversions), we must decide whether
+    // to keep or disable it for Phase 2 packing:
+    //   - 32-bit output (Int32, UInt32, Float32): keep fp32_dest — DEST needs 32 bits
+    //     for correct representation, and pack_src_format matches 32-bit DEST mode.
+    //   - 16-bit output (bf16, fp16, uint16, etc.): disable fp32_dest — pack_tile needs
+    //     pack_src_format to match the 16-bit DEST mode.
     init_sfpu(intermediate_cb, output_cb);
-#if FP32_DEST_ACC_EN
+#if FP32_DEST_ACC_EN && !defined(TYPECAST_OUTPUT_32BIT)
     disable_fp32_dest_acc();
 #endif
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {

@@ -284,18 +284,26 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
         WriterDataMovementConfig(writer_ct_args));
 
     // ── Compute kernel ───────────────────────────────────────────────────
-    // For RM→TILE: Phase 1 tilize operates on input_cb (input dtype).
-    // Tilize with fp32_dest_acc + non-32-bit data hangs (hardware limitation).
-    const bool rm_to_tile_fp32_dest = false;
+    // For RM→TILE: Phase 1 tilize operates on input_cb (input dtype), Phase 2 typecast packs output.
+    // fp32_dest_acc is required when either input or output is a 32-bit type (Int32, UInt32, Float32)
+    // to give DEST registers enough precision. For 16-bit-only conversions (e.g. bf16↔uint16),
+    // fp32_dest is unnecessary and should be off.
+    const auto is_32bit_type = [](DataType dt) {
+        return dt == DataType::FLOAT32 || dt == DataType::INT32 || dt == DataType::UINT32;
+    };
+    const bool rm_to_tile_fp32_dest = is_32bit_type(input_dtype) || is_32bit_type(output_dtype);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (rm_to_tile_fp32_dest && args.preserve_fp32_precision) {
+    if (rm_to_tile_fp32_dest) {
         unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     std::map<std::string, std::string> compute_defines;
     compute_defines["TILIZE_INPUT"] = "1";
+    if (is_32bit_type(output_dtype)) {
+        compute_defines["TYPECAST_OUTPUT_32BIT"] = "1";
+    }
     compute_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
         static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
