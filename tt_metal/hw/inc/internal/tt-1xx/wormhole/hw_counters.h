@@ -100,7 +100,7 @@ constexpr size_t NUM_L1_1_COUNTERS = 16;
 // WH INSTRN_THREAD: 82 counters
 // Sel 27-38: shared stall conditions BROADCAST from thread 0 to all 3 slots (read slot 0 only)
 // Sel 39-65: per-thread stall reasons (9 types x 3 threads)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 82> instrn_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 113> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -186,5 +186,40 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 82> instrn_counters =
      {PerfCounterType::UNPACK_INSTRN_ISSUED_2, 276},
      {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
      {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
-     {PerfCounterType::PACK_INSTRN_ISSUED_2, 279}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 82;
+     {PerfCounterType::PACK_INSTRN_ISSUED_2, 279},
+     // Grant counters for shared stall conditions (grant = |inst_stall_thread)
+     // WH: broadcast sels 27,30,33,36 → grant sels 283,286,289,292
+     {PerfCounterType::STALL_GRANT_SRCA_CLEAR, 283},
+     {PerfCounterType::STALL_GRANT_SRCB_CLEAR, 286},
+     {PerfCounterType::STALL_GRANT_SRCA_VALID, 289},
+     {PerfCounterType::STALL_GRANT_SRCB_VALID, 292},
+     // Grant counters for per-thread stall reasons (grant = inst_stall_thread[th])
+     // WH: sels 39-65 → grant sels 295-321
+     {PerfCounterType::STALL_GRANT_THCON_0, 295},
+     {PerfCounterType::STALL_GRANT_THCON_1, 296},
+     {PerfCounterType::STALL_GRANT_THCON_2, 297},
+     {PerfCounterType::STALL_GRANT_UNPACK_0, 298},
+     {PerfCounterType::STALL_GRANT_UNPACK_1, 299},
+     {PerfCounterType::STALL_GRANT_UNPACK_2, 300},
+     {PerfCounterType::STALL_GRANT_PACK_0, 301},
+     {PerfCounterType::STALL_GRANT_PACK_1, 302},
+     {PerfCounterType::STALL_GRANT_PACK_2, 303},
+     {PerfCounterType::STALL_GRANT_MATH_0, 304},
+     {PerfCounterType::STALL_GRANT_MATH_1, 305},
+     {PerfCounterType::STALL_GRANT_MATH_2, 306},
+     {PerfCounterType::STALL_GRANT_SEM_ZERO_0, 307},
+     {PerfCounterType::STALL_GRANT_SEM_ZERO_1, 308},
+     {PerfCounterType::STALL_GRANT_SEM_ZERO_2, 309},
+     {PerfCounterType::STALL_GRANT_SEM_MAX_0, 310},
+     {PerfCounterType::STALL_GRANT_SEM_MAX_1, 311},
+     {PerfCounterType::STALL_GRANT_SEM_MAX_2, 312},
+     {PerfCounterType::STALL_GRANT_MOVE_0, 313},
+     {PerfCounterType::STALL_GRANT_MOVE_1, 314},
+     {PerfCounterType::STALL_GRANT_MOVE_2, 315},
+     {PerfCounterType::STALL_GRANT_MMIO_0, 316},
+     {PerfCounterType::STALL_GRANT_MMIO_1, 317},
+     {PerfCounterType::STALL_GRANT_MMIO_2, 318},
+     {PerfCounterType::STALL_GRANT_SFPU_0, 319},
+     {PerfCounterType::STALL_GRANT_SFPU_1, 320},
+     {PerfCounterType::STALL_GRANT_SFPU_2, 321}}};
+constexpr size_t NUM_INSTRN_COUNTERS = 113;
