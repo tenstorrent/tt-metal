@@ -592,38 +592,39 @@ void stop_perf_counter() {
 // profiler buffer to DRAM (via quick_push) between groups when the buffer fills up.
 // The perf counter debug registers are shared across all RISCs on the Tensix core,
 // so BRISC can read counter values that were started/stopped by TRISC1.
+//
+// Note: quick_push() is NOT called between groups here. The profiler L1 buffer
+// (500 custom slots) fits FPU+PACK+UNPACK+L1_0 data (~228 slots). The INSTRN
+// group (82 counters = 328 slots) may partially overflow — counters that don't
+// fit are silently dropped by bufferHasRoom() in timeStampedData. The dropped
+// counters are the tail of the instrn_counters array (grant/issued counts).
+// Calling quick_push() mid-read would re-send the profiler header sentinel,
+// creating phantom program execution starts that cause TT_FATAL on the host.
 void read_perf_counters() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
     read_single_group(PerfCounterGroup::FPU);
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
     read_single_group(PerfCounterGroup::PACK);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
     read_single_group(PerfCounterGroup::UNPACK);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
     read_single_group(PerfCounterGroup::L1_0);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
     read_single_group(PerfCounterGroup::L1_1);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     read_single_group(PerfCounterGroup::INSTRN);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if defined(ARCH_BLACKHOLE)
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
     read_single_group(PerfCounterGroup::L1_2);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
     read_single_group(PerfCounterGroup::L1_3);
-    if (!bufferHasRoom(0)) { quick_push(); }
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
     read_single_group(PerfCounterGroup::L1_4);

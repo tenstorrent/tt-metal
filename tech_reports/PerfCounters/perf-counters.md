@@ -40,12 +40,12 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix raw counters | 155 (3 RTL-dead filtered) | 207 (15 RTL-dead filtered) |
+| Tensix raw counters | 155 (5 RTL-dead filtered) | 207 (14 dead filtered) |
 | Derived metrics | 59 | 59 |
 
-**Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 3 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), and `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH). The TDMA_UNPACK grant bank 0 (counter_sel 256) measures 4-HF-cycle instructions on WH (vs math-not-blocked-by-src on BH). Grant banks 4-6 (counter_sels 260-262) map to srcB/srcA write-port and overwrite signals in a different order than BH. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
+**Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. 5 RTL-confirmed dead counters are automatically filtered: `PACK_BANK6_GRANT`, `PACK_BANK7_GRANT` (tied to `2'b00`), `FIDELITY_PHASE_STALLS` (`fidelity_phases_ongoing = 1'b0` — no multi-phase fidelity on WH), `MATH_INSTRN_NOT_BLOCKED_SRC` (grant sel 256 = `hf_cycles==2'b11`, always 0 since fidelity off), and `INSTRN_2_HF_CYCLES` (grant sel 257 = `hf_cycles==2'b01`, always 0). The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
-**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive on silicon. 15 RTL-confirmed dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have different signal wiring on BH silicon than on WH — the `unpack_counters` array uses separate `#if defined(ARCH_BLACKHOLE)` mappings for each. Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
+**Blackhole** has fewer active TDMA counters due to `PACK_COUNT=1` (single packer engine) and `o_math_instrnbuf_rden` being inactive on silicon. 14 dead counters are automatically filtered from BH output in `perf_counter_analysis.py`. Three metrics (Packer Efficiency, Math Pipeline Utilization, Math-to-Pack Handoff) use BH-specific fallback formulas since their WH denominators (`PACKER_BUSY`, `MATH_INSTRN_STARTED`) are always 0 on BH. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (5 vs 2 for Tensix, 4 vs 1 for Ethernet).
 
 **INSTRN_THREAD bank** — The `perf_cnt_instrn_thread` flat array (built from a Verilog concatenation in `tt_instruction_thread.sv`) has architecture-specific counter_sel mappings for sel 27+. On WH, the shared stall conditions (srcA/B valid/cleared) are broadcast to 3 slots (sels 27-38), while on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons (thcon, unpack, pack, math, sem_zero, sem_max, move, trisc_reg_access, sfpu) start at sel 39 on WH and sel 31 on BH. The `instrn_counters` array is split by `#if defined(ARCH_BLACKHOLE)` to handle this difference.
 
@@ -1017,14 +1017,15 @@ FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
 
 ### Dead Signals on Blackhole
 
-Empirically verified across 8 diverse workloads (matmul, eltwise binary, reduce sum, tilize, relu, sqrt, silu, concat). 15 counters are RTL-confirmed dead and filtered from BH output.
+Empirically verified across 8 diverse workloads (matmul, eltwise binary, reduce sum, tilize, relu, sqrt, silu, concat). 16 counters are dead and filtered from BH output.
 
 | Signal | Counter_sel | Reason | Status |
 |--------|------------|--------|--------|
 | `MATH_INSTRN_STARTED` | 3 | `o_math_instrnbuf_rden` inactive on BH | RTL dead, filtered |
 | `MATH_INSTRN_NOT_BLOCKED_SRC` | 256 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
 | `INSTRN_2_HF_CYCLES` | 257 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
-| `INSTRN_1_HF_CYCLE` | 258 | Gated by `o_math_instrnbuf_rden` | RTL dead, filtered |
+| `INSTRN_1_HF_CYCLE` | 258 | `o_math_instrnbuf_rden` empirically dead on BH | Empirically dead, filtered |
+| `FIDELITY_PHASE_STALLS` | 2 | `fidelity_phases_ongoing = 1'b0` on BH | RTL dead, filtered |
 | `PACKER_DEST_READ_2` | 13 | `PACK_COUNT=1`, bank 2 req tied to 0 | RTL dead, filtered |
 | `PACKER_DEST_READ_3` | 14 | `PACK_COUNT=1`, bank 3 req tied to 0 | RTL dead, filtered |
 | `PACKER_BUSY_0` | 15 | `PACK_COUNT=1`, per-engine busy tied to 0 | RTL dead, filtered |
@@ -1033,9 +1034,9 @@ Empirically verified across 8 diverse workloads (matmul, eltwise binary, reduce 
 | `DEST_READ_GRANTED_2` | 269 | `PACK_COUNT=1`, bank 2 grant tied to 0 | RTL dead, filtered |
 | `DEST_READ_GRANTED_3` | 270 | `PACK_COUNT=1`, bank 3 grant tied to 0 | RTL dead, filtered |
 | `PACK_BANK7_GRANT` | 274 | Bank 7 grant from `2'b00` in RTL | RTL dead, filtered |
-| `WAITING_FOR_SFPU_IDLE_0` | 58 | Out of bounds (RTL has 58 slices: 0-57) | RTL dead, filtered |
-| `WAITING_FOR_SFPU_IDLE_1` | 59 | Same | RTL dead, filtered |
-| `WAITING_FOR_SFPU_IDLE_2` | 60 | Same | RTL dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_0` | 55 | Empirically 0 across all BH workloads including SFPU-heavy | Empirically dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_1` | 56 | Same | Empirically dead, filtered |
+| `WAITING_FOR_SFPU_IDLE_2` | 57 | Same | Empirically dead, filtered |
 
 #### RTL-predicted-dead but silicon-live (3 counters)
 

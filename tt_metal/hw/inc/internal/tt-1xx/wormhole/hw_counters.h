@@ -108,7 +108,7 @@ constexpr size_t NUM_L1_1_COUNTERS = 16;
 // WH INSTRN_THREAD: 90 counters
 // Sel 27-38: shared stall conditions BROADCAST from thread 0 to all 3 slots (read slot 0 only)
 // Sel 39-65: per-thread stall reasons (9 types x 3 threads)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 90> instrn_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 82> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -195,4 +195,4 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 90> instrn_counters =
      {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
      {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
      {PerfCounterType::PACK_INSTRN_ISSUED_2, 279}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 90;
+constexpr size_t NUM_INSTRN_COUNTERS = 82;

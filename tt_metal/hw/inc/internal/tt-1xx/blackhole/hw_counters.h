@@ -8,12 +8,10 @@
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
 // BH TDMA_UNPACK: 11 banks, 22 counter_sels (11 req + 11 grant).
-// BH grant banks 4-6 (sels 260-262) have DIFFERENT wiring than WH despite identical RTL source.
-// Empirically verified on BH silicon — the original BH mapping is correct:
-//   grant[4] (sel 260) = srcA not blocked by overwrite
-//   grant[5] (sel 261) = srcA write actual (not blocked by port)
-//   grant[6] (sel 262) = srcB not blocked by port
-// On WH, these are swapped: 260=srcB port, 261=srcA overwrite, 262=srcA port.
+// Grant banks 4-6 (sels 260-262) have IDENTICAL wiring on WH and BH (verified in RTL):
+//   grant[4] (sel 260) = srcB not blocked by write port   (dma_srcb_wr_port_avail)
+//   grant[5] (sel 261) = srcA not blocked by overwrite    (srca_write_ready)
+//   grant[6] (sel 262) = srcA not blocked by write port   (dma_srca_wr_port_avail)
 // fidelity_phases_ongoing = 1'b0 on BH, so FIDELITY_PHASE_STALLS (sel 2) is always 0.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
@@ -31,9 +29,9 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::INSTRN_2_HF_CYCLES, 257},           // dead: hf_cycles never 2'b01
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
-     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},   // BH grant wiring differs from WH
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},             // empirically verified on BH silicon
-     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},   // RTL-verified: same wiring as WH
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},   // RTL-verified: same wiring as WH
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},

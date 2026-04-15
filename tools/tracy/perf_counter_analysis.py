@@ -17,15 +17,18 @@ DeviceOpsDict = Dict[int, List[OpDict]]
 # BH RTL-confirmed dead counters: signals that never produce useful data on BH silicon
 # (verified across 8 diverse workloads). Note: some RTL signals appear live in the RTL
 # source but are empirically dead on silicon (MATH_INSTRN_STARTED, SFPU_IDLE), and some
-# RTL signals appear dead but are empirically live (PACKER_DEST_READ_1, DEST_READ_GRANTED_1).
-# This list reflects the empirical truth, not just RTL analysis.
+# RTL signals appear dead but are empirically live (PACKER_DEST_READ_1, DEST_READ_GRANTED_1,
+# PACK_BANK6_GRANT). This list reflects the empirical truth, not just RTL analysis.
 # - PACK banks 2-3 req/grant: tied to 1'b0 (PACK_COUNT=1, only 1 packer engine)
 # - PACKER_BUSY_0/1/2: individual packer engine busy, tied to 1'b0 (PACK_COUNT=1)
-# - PACK_BANK6/7_GRANT: grant vector bits tied to 2'b00
+# - PACK_BANK7_GRANT: grant vector bit tied to 2'b00[0] (RTL dead, silicon confirmed)
 # - FIDELITY_PHASE_STALLS: fidelity_phases_ongoing = 1'b0 on BH (same as WH)
 # - MATH_INSTRN_STARTED: o_math_instrnbuf_rden inactive on BH silicon (despite RTL showing live)
-# - HF cycle counters: gated by hf_cycles which is always 0 (fidelity_phases_ongoing = 1'b0)
-# - SFPU_IDLE counters: empirically 0 on BH silicon across all workloads including SFPU-heavy
+# - MATH_INSTRN_NOT_BLOCKED_SRC/INSTRN_2_HF_CYCLES: hf_cycles never 2'b11 or 2'b01 (fidelity off)
+# - INSTRN_1_HF_CYCLE: equals o_math_instrnbuf_rden on BH (hf_cycles==0 always true), dead because
+#   o_math_instrnbuf_rden is empirically dead
+# - SFPU_IDLE counters (sels 55-57): empirically 0 on BH silicon across all workloads
+# Note: PACK_BANK6_GRANT is RTL-predicted dead (2'b00[1]) but silicon-live (nonzero in 8/8 tests)
 BH_RTL_DEAD_COUNTERS = frozenset(
     {
         "PACKER_DEST_READ_2",
@@ -35,7 +38,6 @@ BH_RTL_DEAD_COUNTERS = frozenset(
         "PACKER_BUSY_2",
         "DEST_READ_GRANTED_2",
         "DEST_READ_GRANTED_3",
-        "PACK_BANK6_GRANT",
         "PACK_BANK7_GRANT",
         "FIDELITY_PHASE_STALLS",
         "MATH_INSTRN_STARTED",
