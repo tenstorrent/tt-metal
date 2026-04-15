@@ -125,16 +125,19 @@ const std::string kernel_prefix = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/de
 
 std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     const BinaryNgParams& operation_attributes, const BinaryNgInputs& tensor_args) {
+    const auto& a = tensor_args.input_tensor_a;
+
     if (!operation_attributes.memory_config.is_dram()) {
         return "Memory config must be DRAM";
     }
-    if (!tensor_args.input_tensor_a.memory_config().is_dram()) {
+    if (!a.memory_config().is_dram()) {
         return "Input tensor A must be on DRAM";
     }
     if (!tensor_args.input_tensor_b.has_value()) {
         return "Input tensor B must be set";
     }
-    if (!tensor_args.input_tensor_b->memory_config().is_dram()) {
+    const auto& b = tensor_args.input_tensor_b.value();
+    if (!b.memory_config().is_dram()) {
         return "Input tensor B must be on DRAM";
     }
     if (!operation_attributes.rhs_activations.empty()) {
@@ -146,6 +149,31 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     if (!operation_attributes.post_activations.empty()) {
         return "Post activations are not supported";
     }
+
+    if (operation_attributes.sub_core_grids.has_value()) {
+        return "Sub core grids are not supported for DRAM optimized program";
+    }
+
+    // TODO: Fow now add support for interleaved tensors only
+    if (a.memory_config().is_sharded() || b.memory_config().is_sharded()) {
+        return "Sharded memory is not supported for DRAM optimized program";
+    }
+    // if ((a.memory_config().is_sharded() && !b.memory_config().is_sharded()) ||
+    //     (!a.memory_config().is_sharded() && b.memory_config().is_sharded())) {
+    //     return "Input tensors A and B must be either both sharded or both interleaved";
+    // }
+
+    // if (a.memory_config().is_sharded() && b.memory_config().is_sharded()) {
+    //     if (a.memory_config().shard_spec().has_value() && b.memory_config().shard_spec().has_value()) {
+    //         if (a.memory_config().shard_spec()->grid != b.memory_config().shard_spec()->grid) {
+    //             return "Input tensors A and B must have the same shard spec";
+    //         }
+    //     } else if (a.memory_config().nd_shard_spec().has_value() && b.memory_config().nd_shard_spec().has_value()) {
+    //         if (a.memory_config().nd_shard_spec()->grid != b.memory_config().nd_shard_spec()->grid) {
+    //             return "Input tensors A and B must have the same ND shard spec";
+    //         }
+    //     }
+    // }
 
     if (operation_attributes.is_where_op) {
         return "Where op is not supported for DRAM optimized program";
@@ -165,8 +193,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     auto* device = args.input_tensor_a.device();
 
-    // TODO: Worker core grid arg just ignored ?
-    // TODO: IF we shard across dram banks, we need to use subset of dram cores
     CoreRangeSet dram_optimal_cores =
         CoreRangeSet(device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0));
 
