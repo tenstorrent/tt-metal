@@ -267,10 +267,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
-        case UnaryOpType::ERFC:
-            return {
-                fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
         case UnaryOpType::RDIV: {
             uint32_t rounding_mode_value = params[1];
             static constexpr const char* rounding_mode_strs[] = {
