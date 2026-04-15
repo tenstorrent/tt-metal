@@ -8,95 +8,6 @@
 import pytest
 import torch
 from helpers.format_config import DataFormat
-
-
-def print_all_differences(golden_tensor, result_tensor, output_format):
-    """
-    Print detailed information about differences between golden and result tensors.
-
-    Args:
-        golden_tensor: Expected tensor values
-        result_tensor: Actual tensor values from hardware/simulator
-        output_format: DataFormat of the output
-    """
-    print("\n" + "=" * 80)
-    print("TEST FAILURE - Detailed Difference Analysis")
-    print("=" * 80)
-
-    # Convert to float32 for comparison to avoid dtype issues
-    golden = golden_tensor.float()
-    result = result_tensor.float()
-
-    # Calculate differences
-    abs_diff = torch.abs(golden - result)
-
-    # Avoid division by zero for relative error
-    rel_diff = torch.where(
-        torch.abs(golden) > 1e-10,
-        abs_diff / torch.abs(golden),
-        torch.zeros_like(abs_diff),
-    )
-
-    # Find mismatches
-    mismatch_mask = abs_diff > 1e-6  # Threshold for considering a mismatch
-    num_mismatches = mismatch_mask.sum().item()
-    total_elements = golden.numel()
-
-    print(f"\nOutput Format: {output_format}")
-    print(f"Total Elements: {total_elements}")
-    print(
-        f"Mismatches: {num_mismatches} ({100.0 * num_mismatches / total_elements:.2f}%)"
-    )
-
-    if num_mismatches > 0:
-        # Statistics on mismatches
-        mismatch_indices = torch.where(mismatch_mask)[0]
-        mismatch_abs_errors = abs_diff[mismatch_mask]
-        mismatch_rel_errors = rel_diff[mismatch_mask]
-
-        print(f"\nError Statistics (on mismatches):")
-        print(f"  Max Absolute Error: {mismatch_abs_errors.max().item():.8e}")
-        print(f"  Mean Absolute Error: {mismatch_abs_errors.mean().item():.8e}")
-        print(f"  Max Relative Error: {mismatch_rel_errors.max().item():.8e}")
-        print(f"  Mean Relative Error: {mismatch_rel_errors.mean().item():.8e}")
-
-        # Show first N mismatches in detail
-        max_to_show = num_mismatches
-        print(f"\nFirst {max_to_show} Mismatches:")
-        print(
-            f"{'Index':<8} {'Golden':<18} {'Result':<18} {'Abs Error':<14} {'Rel Error':<14}"
-        )
-        print("-" * 80)
-
-        for i in range(max_to_show):
-            idx = mismatch_indices[i].item()
-            g_val = golden[idx].item()
-            r_val = result[idx].item()
-            a_err = abs_diff[idx].item()
-            r_err = rel_diff[idx].item()
-
-            print(
-                f"{idx:<8} {g_val:<18.8e} {r_val:<18.8e} {a_err:<14.8e} {r_err:<14.8e}"
-            )
-
-        if num_mismatches > max_to_show:
-            print(f"... and {num_mismatches - max_to_show} more mismatches")
-
-    # Overall statistics
-    print(f"\nOverall Statistics:")
-    print(
-        f"  Golden - Min: {golden.min().item():.8e}, Max: {golden.max().item():.8e}, Mean: {golden.mean().item():.8e}"
-    )
-    print(
-        f"  Result - Min: {result.min().item():.8e}, Max: {result.max().item():.8e}, Mean: {result.mean().item():.8e}"
-    )
-    print(
-        f"  All Abs Errors - Max: {abs_diff.max().item():.8e}, Mean: {abs_diff.mean().item():.8e}"
-    )
-
-    print("=" * 80 + "\n")
-
-
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
     quantize_mx_tensor_chunked,
@@ -153,8 +64,8 @@ TILE_DIMENSIONS = [32, 32]
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
-            # DataFormat.MxFp8R,
-            # DataFormat.MxFp8P,
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
             DataFormat.MxFp4,
         ],
     ),
@@ -185,9 +96,12 @@ def test_eltwise_binary_reuse_dest_quasar(
     if math_fidelity != MathFidelity.LoFi:
         pytest.skip("Quasar reuse_dest eltwise binary supports LoFi only")
 
-    if mathop == MathOperation.Elwmul and formats.input_format.is_mx_format():
+    if mathop == MathOperation.Elwmul and (
+        formats.input_format == DataFormat.MxFp8R
+        or formats.input_format == DataFormat.MxFp8P
+    ):
         pytest.skip(
-            "Elwmul with MX input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+            "Elwmul with MxFp8R or MxFp8P input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
         )
 
     if mathop == MathOperation.Elwmul and formats.output_format == DataFormat.MxFp4:
@@ -289,8 +203,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         if eltwise_golden is not None
         else None
     )
-
-    debug_pre_quant_tile = None
 
     for out_t in range(tile_cnt_output):
         block_idx = out_t // output_tiles_in_block
@@ -404,7 +316,5 @@ def test_eltwise_binary_reuse_dest_quasar(
     test_passed = passed_test(
         golden_tensor, res_tensor, formats.output_format, print_errors=False
     )
-    if not test_passed:
-        print_all_differences(golden_tensor, res_tensor, formats.output_format)
 
     assert test_passed, "Assert against golden failed"

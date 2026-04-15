@@ -82,9 +82,9 @@ def generate_pool_type_and_math_fidelity_combinations():
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    implied_math_format=lambda format: (
+    implied_math_format=lambda formats: (
         [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not format.input_format.is_mx_format()
+        if not formats.input_format.is_mx_format()
         else [ImpliedMathFormat.Yes]
     ),
 )
@@ -172,7 +172,6 @@ def test_reduce_quasar(
         ),
         dest_acc=dest_acc,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        # This ensures Python-side format inference uses Float16_b for MX internal math
         disable_format_inference=(
             implied_math_format == ImpliedMathFormat.Yes
             and formats.input_format.is_mx_format()

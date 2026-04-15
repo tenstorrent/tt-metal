@@ -8,6 +8,7 @@ This module provides functionality to automatically infer data formats across
 the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
+import warnings
 from typing import List, Optional
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
@@ -478,6 +479,13 @@ def data_formats(
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
+
+    if input_format.is_mx_format() and not disable_format_inference:
+        warnings.warn(
+            f"Input format {input_format} is an MX format but disable_format_inference is False. "
+            "MX formats may not work correctly with automatic format inference enabled.",
+            UserWarning,
+        )
 
     if (
         disable_format_inference

@@ -1,0 +1,62 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0
+Test order randomisation NOT enabled. Enable with --random-order or --random-order-bucket=<bucket_type>
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/uvelimirovic/work_dir/tt-metal/tt_metal/tt-llk/tests/python_tests
+configfile: pytest.ini
+plugins: cov-6.1.1, forked-1.6.0, random-order-1.2.0, repeat-0.9.4, sugar-1.1.1, xdist-3.8.0, anyio-4.13.0, dash-2.15.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, split-0.10.0, timeout-2.4.0
+collected 1620 items / 864 deselected / 756 selected
+
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Max: 'MAX'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:No]
+-------------------------------- live log setup --------------------------------
+2026-04-15 09:34:36 | INFO     | helpers.exalens_server:start:70 - Starting tt-exalens server (port=5556, simulator=/proj_sw/user_dev/uvelimirovic/work_dir/tt-umd-simulators/build/emu-quasar-1x3/, NNG_SOCKET_ADDR=tcp://tensix-l-01:54353, NNG_SOCKET_LOCAL_PORT=5555)...
+2026-04-15 09:34:36 | INFO     | helpers.exalens_server:start:78 - tt-exalens output: /proj_sw/user_dev/uvelimirovic/work_dir/tt-metal/tt-exalens.log
+2026-04-15 09:34:36 | INFO     | helpers.exalens_server:_wait_until_ready:104 - Waiting for tt-exalens to become ready (timeout: 600s)...
+2026-04-15 09:34:46 | INFO     | helpers.exalens_server:_wait_until_ready:158 -     ... still waiting (10s elapsed)
+2026-04-15 09:34:56 | INFO     | helpers.exalens_server:_wait_until_ready:158 -     ... still waiting (20s elapsed)
+2026-04-15 09:35:06 | INFO     | helpers.exalens_server:_wait_until_ready:158 -     ... still waiting (30s elapsed)
+2026-04-15 09:35:12 | INFO     | helpers.exalens_server:_wait_until_ready:122 - tt-exalens ready (PID 313686, took ~36s)
+PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Max: 'MAX'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Max: 'MAX'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Max: 'MAX'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Sum: 'SUM'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.LoFi: 0>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi2: 2>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Full-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi3: 3>)-dest_sync_mode:Full-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Half-implied_math_format:No] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Half-implied_math_format:Yes] PASSED
+tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Float16_b->MxFp4-dest_acc:No-reduce_dim:Row-pool_type_and_math_fidelity:(<ReducePool.Average: 'AVG'>, <MathFidelity.HiFi4: 4>)-dest_sync_mode:Full-implied_math_format:No]
+---------------------------- live log sessionfinish ----------------------------
+2026-04-15 09:36:24 | INFO     | helpers.exalens_server:stop:229 - Stopping tt-exalens (PID 313686)...
+2026-04-15 09:36:25 | INFO     | helpers.exalens_server:stop:255 - tt-exalens stopped.
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/threading.py:320: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+================ 34 passed, 864 deselected in 108.99s (0:01:48) ================
