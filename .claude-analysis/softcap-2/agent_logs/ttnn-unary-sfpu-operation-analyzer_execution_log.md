@@ -43,3 +43,55 @@ Per `docs/sfpu_operations/wave2_instructions.md`, SOFTSHRINK was planned for Wav
 - **Status**: SUCCESS (analysis complete -- documented that no SFPU kernel exists)
 - **Output**: `.claude-analysis/softcap-2/softshrink_analysis.md`
 - **Breadcrumbs**: 6 events logged
+
+---
+
+## Session Info (xielu)
+- **Operation**: xielu
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Date**: 2026-04-15
+- **Output file**: `.claude-analysis/softcap-2/xielu_analysis.md`
+
+## Execution Timeline (xielu)
+
+### 1. Initialization
+- Initialized breadcrumbs at `.claude-analysis/softcap-2/agent_logs/`
+- Read reference files: `sfpu-hardware-model.md`, `sfpu-operation-analyzer.md` logging spec
+
+### 2. Dispatch Tracing
+- Read `unary_op_types.hpp`: Found `XIELU` at line 124
+- Read `unary_op_utils.hpp`: `is_parametrized_type(XIELU)` returns `false` -- XIELU not listed (only HARDTANH, SOFTSHRINK)
+- Read `unary_op_utils.cpp`: **NO case** for XIELU in `get_op_init_and_func_parameterized()` (hits `default: TT_THROW`) or `get_op_init_and_func_default()` (also `default: TT_THROW`)
+- Since `ttnn::xielu()` passes `{alpha_p, alpha_n}` as parameters, `params` is non-empty -> routes to `get_op_init_and_func_parameterized()` -> CRASH
+- `get_compute_kernel_path()` returns default `eltwise_sfpu.cpp` but is unreachable
+- `get_op_approx_mode()` returns `false` (default)
+- `get_macro_definition()` returns default `SFPU_OP_COMPUTE_KERNEL_API_INCLUDE` (XIELU has no explicit case)
+
+### 3. Kernel Source Search
+- Searched `tt_metal/` and `tt_metal/third_party/tt_llk/` for `xielu` -- **zero matches**
+- Searched all `compute_kernel_api/` headers for `xielu_tile` -- **zero matches**
+- No `ckernel_sfpu_xielu.h` file exists anywhere in the codebase
+
+### 4. Nanobind Status
+- `bind_xielu()` function exists in `unary_nanobind.cpp:966-1012`
+- It is inside `#if 0` block (started at line 913) with comment "disabled binding functions - reference nuked operations"
+- `bind_xielu()` is **never called** from `py_module()`
+- Python binding for `ttnn.xielu` is fully disabled
+
+### 5. Mathematical Formula (from docstring)
+xIELU: piecewise function with beta=0.5, eps=-1e-6:
+- x > 0: `alpha_p * x^2 + 0.5 * x`
+- x <= 0: `alpha_n * expm1(min(x, eps)) - alpha_n * x + 0.5 * x`
+
+### 6. Conclusion
+**XIELU has no SFPU kernel implementation.** Similar to SOFTSHRINK, it is a post-nuke stub:
+- Enum entry exists
+- C++ API function exists (`ttnn::xielu()`)
+- Nanobind binding definition exists but is disabled (`#if 0`)
+- Test exists but would fail (Python binding not registered)
+- BUT: No dispatch case, no tile-level API, no LLK function, no ckernel SFPU implementation
+
+## Final Status (xielu)
+- **Status**: FAILED (no SFPU kernel exists to analyze)
+- **Output**: `.claude-analysis/softcap-2/xielu_analysis.md` (documents unimplemented status)
+- **Breadcrumbs**: 6 events logged
