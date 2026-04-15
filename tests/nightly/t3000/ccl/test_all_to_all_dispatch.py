@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import socket
 import torch
 import pytest
 import random
@@ -13,6 +15,66 @@ from tests.ttnn.utils_for_testing import is_unsigned_tensor
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tracy import signpost
+
+
+def log_mesh_topology(mesh_device, mesh_shape):
+    """Log the mesh topology mapping to help diagnose host-to-mesh-side assignment issues."""
+    hostname = socket.gethostname()
+    mpi_rank = os.environ.get("OMPI_COMM_WORLD_RANK", "N/A")
+    mesh_id_env = os.environ.get("TT_MESH_ID", "N/A")
+    mesh_host_rank_env = os.environ.get("TT_MESH_HOST_RANK", "N/A")
+
+    logger.info(f"=== Mesh Topology Diagnostics ===")
+    logger.info(f"Hostname: {hostname}, MPI Rank: {mpi_rank}")
+    logger.info(f"TT_MESH_ID={mesh_id_env}, TT_MESH_HOST_RANK={mesh_host_rank_env}")
+    logger.info(f"Mesh shape: {mesh_shape}, Mesh device num_devices: {mesh_device.get_num_devices()}")
+
+    try:
+        system_mesh = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+        global_shape = tuple(system_mesh.shape())
+        local_shape = tuple(system_mesh.local_shape())
+        logger.info(f"SystemMesh global_shape={global_shape}, local_shape={local_shape}")
+    except Exception as e:
+        logger.warning(f"Could not access SystemMeshDescriptor: {e}")
+
+    rows, cols = mesh_shape
+    local_coords = []
+    remote_coords = []
+    for r in range(rows):
+        for c in range(cols):
+            coord = ttnn.MeshCoordinate(r, c)
+            try:
+                fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                device_id = mesh_device.get_device_id(coord)
+                linearized = r * cols + c
+                is_local = device_id in mesh_device.get_device_ids()
+                if is_local:
+                    local_coords.append((r, c, linearized, fabric_node_id, device_id))
+                else:
+                    remote_coords.append((r, c, linearized, fabric_node_id, device_id))
+            except Exception:
+                remote_coords.append((r, c, r * cols + c, None, None))
+
+    logger.info(f"Local devices ({len(local_coords)}):")
+    for r, c, lin, fid, did in local_coords[:8]:
+        logger.info(f"  coord=({r},{c}) linearized={lin} fabric_node_id={fid} device_id={did}")
+    if len(local_coords) > 8:
+        logger.info(f"  ... and {len(local_coords) - 8} more local devices")
+
+    if remote_coords:
+        logger.info(f"Remote devices ({len(remote_coords)}):")
+        for r, c, lin, fid, did in remote_coords[:4]:
+            logger.info(f"  coord=({r},{c}) linearized={lin} fabric_node_id={fid} device_id={did}")
+        if len(remote_coords) > 4:
+            logger.info(f"  ... and {len(remote_coords) - 4} more remote devices")
+
+    if local_coords:
+        local_cols = sorted(set(c for _, c, _, _, _ in local_coords))
+        local_rows = sorted(set(r for r, _, _, _, _ in local_coords))
+        logger.info(f"This host owns columns: {local_cols}")
+        logger.info(f"This host owns rows: {local_rows}")
+
+    logger.info(f"=== End Topology Diagnostics ===")
 
 
 def get_max_links(cluster_axis, fabric_config):
@@ -364,6 +426,8 @@ def run_all_to_all_dispatch_test(
     random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
+
+    log_mesh_topology(mesh_device, mesh_shape)
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
     mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
