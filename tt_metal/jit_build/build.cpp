@@ -160,7 +160,7 @@ void JitBuildEnv::init(
         auto gxx = (sfpi_roots[i] / "compiler/bin/riscv-tt-elf-g++").string();
         if (tt::filesystem::safe_exists(gxx).value_or(false)) {
             this->gpp_ += gxx + " ";
-            this->gpp_include_dir_ = (sfpi_roots[i] / "include").string();
+            this->gpp_include_dir_ = sfpi_roots[i] / "include";
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
             sfpi_found = true;
             break;
@@ -378,7 +378,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
         this->default_compile_opt_level_ = "O3";
         this->default_linker_opt_level_ = "O3";
-        this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
+        this->includes_ += "-I" + env_.gpp_include_dir_.string() + " ";
         this->process_defines_at_compile_ = false;
     } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
         // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",

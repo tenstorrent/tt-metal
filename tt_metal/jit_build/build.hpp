@@ -93,7 +93,7 @@ private:
 
     // Tools
     std::string gpp_;
-    std::string gpp_include_dir_;
+    std::filesystem::path gpp_include_dir_;
 
     // Compilation options
     std::string cflags_;
