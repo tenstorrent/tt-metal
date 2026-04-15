@@ -15,7 +15,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config, sanitize_output_memory_config
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
 
@@ -63,6 +62,15 @@ def mesh_device_fixture():
         del device
 
 
+def _is_sharded(memory_config):
+    """Check if a memory config uses sharded memory layout."""
+    if memory_config is None:
+        return False
+    if hasattr(memory_config, "is_sharded"):
+        return memory_config.is_sharded()
+    return False
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -90,12 +98,17 @@ def run(
         output_memory_config = memory_config
 
     # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
+    # the input's sharded memory_config which may become invalid after transposing
+    # dimensions (e.g., shard grid may exceed available cores for the output shape).
+    # Always provide an explicit output memory_config for sharded inputs to avoid this.
     if output_memory_config is not None and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", output_memory_config)
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
+    elif _is_sharded(input_a_memory_config) and "memory_config" not in op_kwargs:
+        # Sharded input but no explicit output memory_config — use DRAM interleaved
+        # to avoid the transposed output inheriting an incompatible shard spec.
+        op_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -107,22 +120,9 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Sanitize traced memory configs against the actual device
-    safe_input_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape, input_a_layout)
-
-    # For the output memory config, transpose swaps dimensions — the output shard spec
-    # may require more shards than the device has cores. Validate it separately.
-    # Compute expected output shape after transpose for validation.
-    output_shape = list(shape)
-    if 0 <= dim0 < len(output_shape) and 0 <= dim1 < len(output_shape):
-        output_shape[dim0], output_shape[dim1] = output_shape[dim1], output_shape[dim0]
-    output_shape = tuple(output_shape)
-
-    if "memory_config" in op_kwargs and not is_host:
-        op_kwargs["memory_config"] = sanitize_output_memory_config(
-            op_kwargs["memory_config"], device, output_shape, input_a_layout
-        )
-
+    # Create tensor using interleaved→sharded for sharded memory configs.
+    # Direct from_torch with sharded config triggers TilizeDeviceOperation which
+    # can clash with L1 circular buffers.
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -130,16 +130,25 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                safe_input_mem,
+                input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif _is_sharded(input_a_memory_config):
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=safe_input_mem,
+                memory_config=input_a_memory_config,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)

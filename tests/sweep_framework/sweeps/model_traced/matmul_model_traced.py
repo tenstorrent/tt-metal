@@ -15,10 +15,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
-from tests.sweep_framework.sweep_utils.traced_config_utils import (
-    sanitize_memory_config,
-    tile_align_matmul_shapes,
-)
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -83,6 +79,42 @@ def mesh_device_fixture():
         del device
 
 
+def _tile_align(dim):
+    """Round up to the nearest multiple of 32 (tile size)."""
+    return ((dim + 31) // 32) * 32
+
+
+def _is_sharded(memory_config):
+    """Check if a memory config uses sharded memory layout."""
+    if memory_config is None:
+        return False
+    if hasattr(memory_config, "is_sharded"):
+        return memory_config.is_sharded()
+    return False
+
+
+def _create_tensor(torch_tensor, dtype, layout, device, memory_config, is_host, is_mesh_device, tensor_placement):
+    """Create a ttnn tensor, using interleaved→sharded for sharded memory configs.
+
+    Direct from_torch with sharded config triggers TilizeDeviceOperation which
+    can clash with L1 circular buffers. The two-step approach avoids this while
+    placing the tensor in the exact same sharded memory layout from the JSON.
+    """
+    if is_host:
+        return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
+
+    if is_mesh_device and tensor_placement:
+        return create_tensor_on_mesh(torch_tensor, device, dtype, layout, memory_config, tensor_placement)
+
+    if _is_sharded(memory_config):
+        tensor = ttnn.from_torch(
+            torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.interleaved_to_sharded(tensor, memory_config)
+
+    return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -126,8 +158,21 @@ def run(
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a
 
-    # Align inner matmul dimensions when tile layout pads to multiples of 32
-    shape_a, shape_b = tile_align_matmul_shapes(shape_a, shape_b, input_a_layout, input_b_layout)
+    # Tile layout pads last two dims to multiples of 32.  Align the inner matmul
+    # dimension (A.width == B.height) so both sides agree after tile padding.
+    # This covers both mixed-layout (one TILE, one ROW_MAJOR) and same-layout
+    # cases where the original shapes aren't tile-aligned.
+    a_is_tile = input_a_layout == ttnn.TILE_LAYOUT
+    b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
+
+    if (a_is_tile or b_is_tile) and len(shape_a) >= 2 and len(shape_b) >= 2:
+        inner_a = shape_a[-1]   # A's width
+        inner_b = shape_b[-2]   # B's height
+        aligned = _tile_align(max(inner_a, inner_b))
+        if inner_a != aligned:
+            shape_a = tuple(list(shape_a[:-1]) + [aligned])
+        if inner_b != aligned:
+            shape_b = tuple(list(shape_b[:-2]) + [aligned, shape_b[-1]])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -159,48 +204,24 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Sanitize traced memory configs against the actual device
-    safe_a_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
-    safe_b_mem = input_b_memory_config if is_host else sanitize_memory_config(input_b_memory_config, device, shape_b, input_b_layout)
-
     # When a program_config is present (e.g. MatmulMultiCoreReuseProgramConfig), the
     # kernel may expect input_b in its traced memory layout (including sharded).
     # Only force input_b to interleaved when there is NO program_config.
-    input_b_is_sharded = (
-        hasattr(safe_b_mem, "shard_spec")
-        and safe_b_mem.shard_spec is not None
-        and safe_b_mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    )
+    input_b_is_sharded = _is_sharded(input_b_memory_config)
     has_program_config = "program_config" in op_kwargs
 
-    if input_b_is_sharded and not has_program_config:
-        safe_b_mem = ttnn.DRAM_MEMORY_CONFIG
+    effective_b_mem = ttnn.DRAM_MEMORY_CONFIG if (input_b_is_sharded and not has_program_config) else input_b_memory_config
 
-    # Create tensor A
-    if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            input_tensor_a = create_tensor_on_mesh(
-                torch_input_tensor_a, device, input_a_dtype, input_a_layout, safe_a_mem, input_a_tensor_placement,
-            )
-        else:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=safe_a_mem,
-            )
-    else:
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
-
-    # Create tensor B
-    if not is_host:
-        if is_mesh_device and input_b_tensor_placement:
-            input_tensor_b = create_tensor_on_mesh(
-                torch_input_tensor_b, device, input_b_dtype, input_b_layout, safe_b_mem, input_b_tensor_placement,
-            )
-        else:
-            input_tensor_b = ttnn.from_torch(
-                torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout, device=device, memory_config=safe_b_mem,
-            )
-    else:
-        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
+    # Create tensors using interleaved→sharded for sharded configs to avoid
+    # TilizeDeviceOperation L1 circular buffer clashes
+    input_tensor_a = _create_tensor(
+        torch_input_tensor_a, input_a_dtype, input_a_layout, device,
+        input_a_memory_config, is_host, is_mesh_device, input_a_tensor_placement,
+    )
+    input_tensor_b = _create_tensor(
+        torch_input_tensor_b, input_b_dtype, input_b_layout, device,
+        effective_b_mem, is_host, is_mesh_device, input_b_tensor_placement,
+    )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)

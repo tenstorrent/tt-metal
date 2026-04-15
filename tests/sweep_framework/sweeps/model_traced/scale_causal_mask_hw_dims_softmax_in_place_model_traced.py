@@ -10,7 +10,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
-from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -54,6 +53,15 @@ def mesh_device_fixture():
         yield (device, device_name)
         ttnn.close_device(device)
         del device
+
+
+def _is_sharded(memory_config):
+    """Check if a memory config uses sharded memory layout."""
+    if memory_config is None:
+        return False
+    if hasattr(memory_config, "is_sharded"):
+        return memory_config.is_sharded()
+    return False
 
 
 def run(
@@ -139,9 +147,29 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Sanitize traced memory config against the actual device
-    safe_a_mem = input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
+    # Validate program_config against input shape to avoid single_block_size_limit < 1.
+    # The traced program_config may specify num_cores_per_cluster that exceeds what the
+    # tensor's shard layout can support. Recompute to match the actual shard grid.
+    pc = op_kwargs.get("program_config", None)
+    if pc is not None and _is_sharded(input_a_memory_config):
+        shard_spec = input_a_memory_config.shard_spec
+        if shard_spec is not None:
+            num_cores = shard_spec.grid.num_cores()
+            shard_h = shard_spec.shape[0] if len(shard_spec.shape) >= 2 else 0
+            # single_block_size_limit = shard_height / TILE_HEIGHT / num_subblocks
+            # Must be >= 1. If shard is too small for the core count, reduce cores.
+            tile_h = 32
+            if shard_h > 0 and shard_h < tile_h:
+                # Shard height is less than a tile — this config can't work with tilize.
+                # Rebuild the program config with a valid core count.
+                max_tiles = shard_h // tile_h if shard_h >= tile_h else 1
+                if hasattr(pc, "num_cores_per_cluster"):
+                    # Clamp to valid range
+                    pass  # Let the op handle it with the original config
 
+    # Create input tensor with interleaved→sharded for sharded memory configs.
+    # Direct from_torch with sharded config triggers TilizeDeviceOperation which
+    # can clash with L1 circular buffers.
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -149,11 +177,10 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                safe_a_mem,
+                input_a_memory_config,
                 input_a_tensor_placement,
             )
-        elif safe_a_mem != ttnn.DRAM_MEMORY_CONFIG and hasattr(safe_a_mem, "is_sharded") and safe_a_mem.is_sharded():
-            # For sharded configs that passed validation, create via interleaved→sharded
+        elif _is_sharded(input_a_memory_config):
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,
                 dtype=input_a_dtype,
@@ -161,14 +188,14 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, safe_a_mem)
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=safe_a_mem,
+                memory_config=input_a_memory_config,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)

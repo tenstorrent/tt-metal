@@ -14,7 +14,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
-from tests.sweep_framework.sweep_utils.traced_config_utils import sanitize_memory_config
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -78,6 +77,15 @@ def mesh_device_fixture():
         del device
 
 
+def _is_sharded(memory_config):
+    """Check if a memory config uses sharded memory layout."""
+    if memory_config is None:
+        return False
+    if hasattr(memory_config, "is_sharded"):
+        return memory_config.is_sharded()
+    return False
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -119,13 +127,11 @@ def run(
 
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Sanitize traced memory config against the actual device to avoid
-    # L1 CB clash and shard grid incompatibility errors at runtime.
-    safe_input_a_memory_config = (
-        input_a_memory_config if is_host else sanitize_memory_config(input_a_memory_config, device, shape_a, input_a_layout)
-    )
-
     # Create tensor A
+    # For sharded memory configs, use interleaved→sharded two-step creation.
+    # Direct from_torch with sharded config triggers TilizeDeviceOperation which
+    # can clash with L1 circular buffers. The two-step approach avoids this while
+    # placing the tensor in the exact same sharded memory layout from the JSON.
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
@@ -133,16 +139,25 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                safe_input_a_memory_config,
+                input_a_memory_config,
                 input_a_tensor_placement,
             )
+        elif _is_sharded(input_a_memory_config):
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=safe_input_a_memory_config,
+                memory_config=input_a_memory_config,
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
