@@ -7,6 +7,10 @@ Kernel Debug Print
 Overview
 --------
 
+``DPRINT`` is deprecated in favor of the new ``DEVICE_PRINT`` system, which has more features and flexibility.
+For users who still want to use ``DPRINT``, it remains supported during the deprecation period but will be removed in a future release.
+For more info about ``DEVICE_PRINT``, see the `device_print` tool documentation.
+
 The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
 addresses, and Circular Buffer data from kernels running on the device. Device-side prints are controlled through API
 calls; the host-side is controlled through environment variables.
@@ -40,7 +44,7 @@ An example with the different features available is shown below:
 
     void kernel_main() {
         // Supported scalar types: bool (prints 0/1), char, all fixed-width integer types
-        // (uint8_t–uint64_t, int8_t–int64_t), float, and const char*.
+        // (uint8_t-uint64_t, int8_t-int64_t), float, and const char*.
         DPRINT << "Test string" << 'a' << 5 << 0.123456f << ENDL();
         // bool prints as 0 or 1
         bool flag = true;

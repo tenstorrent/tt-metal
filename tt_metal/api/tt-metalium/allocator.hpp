@@ -18,8 +18,6 @@ struct Statistics {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    // addresses (relative to bank) that can hold the largest_free_block_bytes
-    std::vector<uint32_t> largest_free_block_addrs;
 };
 
 class Buffer;

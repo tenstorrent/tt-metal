@@ -22,6 +22,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 
@@ -242,13 +243,17 @@ class SFTTrainer:
             micro_losses = []
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
+                profiler_marker(None, "dataloader_step_done")
+
                 loss = self._compute_loss(batch)
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                profiler_marker(None, "forward_pass_done")
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
+                profiler_marker(None, "backward_pass_done")
 
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
@@ -256,8 +261,12 @@ class SFTTrainer:
             if cfg.max_grad_norm > 0:
                 ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
+            profiler_marker(None, "gradient_sync_done")
+
             self._optimizer.step()
             self.step += 1
+
+            profiler_marker(None, "optimizer_step_done")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
@@ -287,6 +296,10 @@ class SFTTrainer:
                         self.step,
                         os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
                     )
+
+            profiler_marker(None, f"iteration_{self.step}", dump_results=True)
+            if self.step == 1:
+                profiler_marker(None, "compilation_finished")
 
         for cb in self._callbacks:
             cb.on_train_end(self)
