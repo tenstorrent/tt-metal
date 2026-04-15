@@ -50,12 +50,12 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
 
-    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
-    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr, q_tile_bytes);
-    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr, k_tile_bytes);
-    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
+    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
     const auto input_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);

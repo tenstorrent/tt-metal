@@ -14,7 +14,7 @@ void kernel_main() {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
-            volatile auto tensor_accessor = TensorAccessor(args, 0, 1024);
+            volatile auto tensor_accessor = TensorAccessor(args, 0);
             (void)tensor_accessor;
         }
     }

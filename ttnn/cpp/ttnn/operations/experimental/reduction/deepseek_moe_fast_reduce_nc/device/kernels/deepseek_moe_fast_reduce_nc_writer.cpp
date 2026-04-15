@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr auto output_slice_tensor_accessor_args_tuple =
         make_tensor_accessor_args_tuple<num_output_tensors, initial_ct_idx + num_output_tensors>();
     const auto output_slice_tensor_accessor_tuple =
-        make_tensor_accessor_tuple(output_slice_tensor_accessor_args_tuple, arg_idx, initial_ct_idx);
+        make_tensor_accessor_tuple(output_slice_tensor_accessor_args_tuple, arg_idx);
     const auto output_slice_tensor_accessors =
         make_abstract_tensor_accessor_wrappers(output_slice_tensor_accessor_tuple);
     arg_idx += num_output_tensors;

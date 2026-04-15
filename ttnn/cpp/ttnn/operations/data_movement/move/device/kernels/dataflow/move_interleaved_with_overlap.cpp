@@ -45,8 +45,8 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = get_tile_size(cb_id);
 
-    const auto src_addrgen = TensorAccessor(src_args, src_addr, tile_bytes);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto src_addrgen = TensorAccessor(src_args, src_addr);
+    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
     // read a ublock of tiles from src to CB
     cb_reserve_back(cb_id, num_tiles);

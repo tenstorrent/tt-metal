@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     uint32_t end_stick_id = start_stick_id + num_sticks_to_write;
 

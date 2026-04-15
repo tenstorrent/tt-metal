@@ -45,10 +45,10 @@ void kernel_main() {
 
     constexpr uint32_t ct_idx = 0;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
-    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 
     uint32_t sem_target = 0;
 

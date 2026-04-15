@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_block_row = get_compile_time_arg_val(7);
 
     constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     constexpr uint32_t in_width = width / scale_w;
     constexpr uint32_t in_height = height / scale_h;

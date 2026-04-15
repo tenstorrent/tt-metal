@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t burst_size = get_compile_time_arg_val(10);
 
     constexpr auto src_args = TensorAccessorArgs<11>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes_unaligned);
+    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
 
     uint32_t fill_stick_addr = get_write_ptr(fill_cb_index);
     if constexpr (fill_is_zero) {

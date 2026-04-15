@@ -105,7 +105,7 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
     // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
@@ -141,8 +141,7 @@ void kernel_main() {
     noc_semaphore_set(barrier_sem_ptr, 0);
 
     // Read expert token counts
-    const auto experts_tok_counter_addr_gen =
-        TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr, aligned_experts_tok_counter_page_size);
+    const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);
     cb_reserve_back(cb_experts_tok_counter_id, experts_tok_counter_pages);
     uint32_t counter_base_addr = get_write_ptr(cb_experts_tok_counter_id);
     for (uint32_t i = 0; i < experts_tok_counter_pages; i++) {
@@ -168,10 +167,8 @@ void kernel_main() {
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
 
-    const auto dispatched_buffer_addr_gen =
-        TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
-    const auto dispatched_metadata_addr_gen =
-        TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
+    const auto dispatched_buffer_addr_gen = TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr);
+    const auto dispatched_metadata_addr_gen = TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr);
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
 

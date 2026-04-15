@@ -19,10 +19,8 @@ void kernel_main() {
     const auto cb_id_one = cb_id++;
     const auto cb_id_mask_h = cb_id++;
 
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-
     constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s = TensorAccessor(input_args, input_addr);
 
     Scalar one;
     one.f = 1.0f;

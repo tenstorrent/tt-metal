@@ -20,8 +20,7 @@ void kernel_main() {
     const auto cb_id_input_grad = cb_id++;
 
     // input_grad
-    const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
-    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr);
 
     const auto input_grad_l1_read_ptr = get_read_ptr(cb_id_input_grad);
     uint32_t input_grad_tile_idx;

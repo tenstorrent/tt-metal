@@ -7,7 +7,6 @@
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Constexpr
@@ -38,7 +37,7 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t stick_id = 0;
 

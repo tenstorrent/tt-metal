@@ -140,7 +140,7 @@ void kernel_main() {
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
 
-    auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr, embedding_page_size);
+    auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = {};

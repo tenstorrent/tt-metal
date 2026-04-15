@@ -49,7 +49,6 @@ void kernel_main() {
     uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t output_row_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // NOTE: Row major layout only supports bfp16
@@ -62,7 +61,7 @@ void kernel_main() {
                       : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
-    const auto s = TensorAccessor(dst_args, dst_addr, output_row_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {

@@ -30,15 +30,10 @@ void kernel_main() {
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t input_tile_bytes = get_tile_size(cb_input);
     const auto input_data_format = get_dataformat(cb_input);
 
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
-
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const auto weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t divisor_tile_bytes = get_tile_size(cb_divisor);
     const auto divisor_data_format = get_dataformat(cb_divisor);
 
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -46,14 +41,14 @@ void kernel_main() {
     constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
     constexpr auto divisor_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 
-    const auto addrg_input = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_input = TensorAccessor(input_args, input_addr);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     constexpr uint32_t onetile = 1;
 
 #if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr);
 
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif

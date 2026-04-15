@@ -31,10 +31,8 @@ void kernel_main() {
     const auto output_reduced_base_addr = get_arg_val<uint32_t>(3);
     const auto reduce_start_idx = get_arg_val<uint32_t>(4);
 
-    const auto output_mapping_addrgen = TensorAccessor(
-        output_mapping_args, output_mapping_base_addr, output_mapping_page_size_bytes);
-    const auto output_reduced_addrgen = TensorAccessor(
-        output_reduced_args, output_reduced_base_addr,output_reduced_page_size_bytes);
+    const auto output_mapping_addrgen = TensorAccessor(output_mapping_args, output_mapping_base_addr);
+    const auto output_reduced_addrgen = TensorAccessor(output_reduced_args, output_reduced_base_addr);
 
     // scratch space for mapping
     cb_reserve_back(output_mapping_cb_id, 1);

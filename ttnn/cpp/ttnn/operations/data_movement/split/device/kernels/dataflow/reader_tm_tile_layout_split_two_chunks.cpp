@@ -28,11 +28,10 @@ void kernel_main() {
 
     constexpr uint32_t out_num_tensors = 1;
     constexpr uint32_t cb_id_in0 = 0;
-    uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;

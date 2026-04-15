@@ -56,6 +56,8 @@ void kernel_main() {
     const uint32_t outND = cND;
 
     const uint32_t page_size_a = align(page_size_a_arg, alignment_a);
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
 
     cb_src_b.reserve_back(1);

@@ -34,16 +34,15 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const auto s0 = TensorAccessor(input_args, src_addr, input_tile_bytes);
+    const auto s0 = TensorAccessor(input_args, src_addr);
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
+    const auto s1 = TensorAccessor(cos_args, cos_addr);
 
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+    const auto s2 = TensorAccessor(sin_args, sin_addr);
 
-    const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
-    const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
+    const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
 
     uint32_t trans_mat_curr_idx = 0;
 

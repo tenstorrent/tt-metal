@@ -17,10 +17,7 @@ void kernel_main() {
     uint32_t combine_addr = get_arg_val<uint32_t>(0);
     uint32_t token_start_idx = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t tile_size = get_tile_size(cb_combine_input);
-    constexpr uint32_t combine_page_size = emb_dim_tiles * tile_size;
-
-    const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr, combine_page_size);
+    const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
 
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
