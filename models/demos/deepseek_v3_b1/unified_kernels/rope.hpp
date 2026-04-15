@@ -11,13 +11,11 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+#include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reg_api.h"
-
-using namespace compute_kernel_lib;
 #endif
 
 namespace deepseek_b1_ops {
@@ -85,7 +83,6 @@ struct Rope {
         uint32_t cos_sin_cb;
         uint32_t trans_mat_cb;
         uint32_t rotated_in_interm_cb;
-        uint32_t cos_sin_interm_cb;
         uint32_t out_cb;
         uint32_t trans_mat_address_override = 0;  // byte address; overrides trans_mat read ptr if > 0
     };
@@ -161,10 +158,12 @@ struct Rope {
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
                 reconfig_data_format_srca<false, true>(args.trans_mat_cb);
+                mm_init_short(args.in_cb, args.trans_mat_cb);
 
                 // Reserve intermediate and output buffers
+                // TODO: If we have bcast with dest reuse, we can get rid of rotated_in_interm_cb
+                // Currently it doesn't look like there is too much cost for this since it's overlapped with cos mul
                 cb_reserve_back(args.rotated_in_interm_cb, Wt);
-                cb_reserve_back(args.cos_sin_interm_cb, Wt * 2);
                 cb_reserve_back(args.out_cb, Wt);
 
                 cb_wait_front(args.in_cb, Wt);
@@ -172,10 +171,10 @@ struct Rope {
                 // ============================================================
                 // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
                 // ============================================================
-                auto rope_cfg = MatmulConfig::tile(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
-                matmul_init_short<TILE>(rope_cfg);
                 tile_regs_acquire();
-                matmul_accumulate<TILE>(rope_cfg, 0, 0, 0, Wt, 1, 0, 1);
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -183,59 +182,35 @@ struct Rope {
                 }
                 tile_regs_release();
                 cb_push_back(args.rotated_in_interm_cb, Wt);
-                cb_wait_front(args.rotated_in_interm_cb, Wt);
 
+                // multiply does dest accum by default, so we add sin and cos by writing to same dest regs
                 // ============================================================
-                // Step 2: sin_interm = rotated * sin (broadcast multiply)
+                // Step 2: cos_interm = input * cos (broadcast multiply)
                 // ============================================================
-                reconfig_data_format_srca<false, true>(args.rotated_in_interm_cb);
-                mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.cos_sin_cb);
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.cos_sin_cb, j, Wt + j, j);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.cos_sin_interm_cb);
-                }
-                tile_regs_release();
-                cb_push_back(args.cos_sin_interm_cb, Wt);
-                cb_pop_front(args.rotated_in_interm_cb, Wt);
-
-                // ============================================================
-                // Step 3: cos_interm = input * cos (broadcast multiply)
-                // ============================================================
+                reconfig_data_format_srca<false, true>(args.in_cb);
+                mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, j, j, j);
                 }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.cos_sin_interm_cb);
-                }
-                tile_regs_release();
-                cb_push_back(args.cos_sin_interm_cb, Wt);
-                cb_pop_front(args.in_cb, Wt);
 
                 // ============================================================
-                // Step 4: output = cos_interm + sin_interm (add)
+                // Step 3: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
-                cb_wait_front(args.cos_sin_interm_cb, Wt * 2);
-                add_tiles_init(args.cos_sin_interm_cb, args.cos_sin_interm_cb);
-                tile_regs_acquire();
+                cb_wait_front(args.rotated_in_interm_cb, Wt);
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    add_tiles(args.cos_sin_interm_cb, args.cos_sin_interm_cb, j, Wt + j, j);
+                    mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.cos_sin_cb, j, Wt + j, j);
                 }
+
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.out_cb, j);
+                    pack_tile(j, args.out_cb);
                 }
                 tile_regs_release();
                 cb_push_back(args.out_cb, Wt);
-                cb_pop_front(args.cos_sin_interm_cb, Wt * 2);
+                cb_pop_front(args.in_cb, Wt);
+                cb_pop_front(args.rotated_in_interm_cb, Wt);
             }
 
             // ================================================================

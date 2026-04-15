@@ -5,9 +5,7 @@
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
-
-using namespace compute_kernel_lib;
+#include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -34,7 +32,6 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // For synchronization with tilize cores
-    constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 
     // Run-time arguments
@@ -50,17 +47,17 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
-    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -131,20 +128,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+    // Read per-expert token counts from CB
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
 
-    uint32_t num_active_tokens[2];
-
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-        num_active_tokens[expert_id] = num_tokens;
     }
 
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
@@ -167,8 +159,8 @@ void kernel_main() {
             PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
             // Initialize matmul for W0
-            auto w0_w1_cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, 4, 1, 1);
-            matmul_init<BLOCK>(w0_w1_cfg);
+            mm_block_init(
+                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
@@ -176,13 +168,6 @@ void kernel_main() {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
-
-            // for (uint32_t i = 0; i < 224; ++i) {
-            //                 if (i % 2 == 0) {
-            //                     const uint32_t idx = (use_second_half_buffer)? num_w0_w1_tiles_h+i:i;
-            //                     PACK((print_tile_rows(cb_s2c_in, idx, true, 0, num_active_tokens[expert_id])));
-            //                 }
-            //             }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -194,8 +179,18 @@ void kernel_main() {
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
-                    matmul_accumulate<BLOCK>(w0_w1_cfg, in0_index, 0, 0, w0_w1_tiles_per_block / 4, 1, 4, 0);
-                    in0_index += w0_w1_tiles_per_block / 4;
+                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        matmul_block(
+                            cb_s2c_in,
+                            cb_r2c_w0_w1,
+                            in0_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                    }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
 
@@ -234,24 +229,49 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
-            auto w2_cfg = MatmulConfig::block(cb_s2c_in2, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+                uint32_t dm1_step = 0;
+                uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
                 cb_wait_front(cb_w2c_rdy, 1);
-                MoeDm1State dm1{0, moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0], 0, 0, 0};
+
+                uint32_t in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
-                matmul_moe_w2_accumulate_with_dm1_linear<BLOCK>(
-                    w2_cfg,
-                    dm1,
-                    w2_blocks_per_four_mm2_tile,
-                    w2_tiles_per_block,
-                    4,
-                    cb_w2c_rdy,
-                    tiles_per_step,
-                    &moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0],
-                    4);
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                        // The last block has only 4 tiles of interest, so we exit early.
+                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            break;
+                        }
+
+                        if (dm1_tiles_remaining == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            cb_wait_front(cb_w2c_rdy, 1);
+                            dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
+                            in2_offset += tiles_per_step;
+                            in2_index = in2_offset;
+                        }
+                        dm1_tiles_remaining--;
+
+                        matmul_block(
+                            cb_s2c_in2,
+                            cb_r2c_w2,
+                            in2_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                    }
+                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                }
+
                 tile_regs_commit();
 
                 tile_regs_wait();

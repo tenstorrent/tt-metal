@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+#include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "experimental/circular_buffer.h"
@@ -12,7 +12,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 using std::uint32_t;
-using namespace compute_kernel_lib;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
@@ -41,8 +40,7 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    auto cfg = MatmulConfig::tile(cb_in0, cb_in1, cb_intermed0, static_cast<bool>(transpose_hw));
-    matmul_init<TILE>(cfg);
+    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -50,8 +48,23 @@ void kernel_main() {
             {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; ++tile_row_id) {
                     tile_regs_acquire();
-                    matmul_accumulate_attn<TILE>(cfg, Kt, tile_row_id == 0);
-                    matmul_pack_to_cb(cb_intermed0, onetile);
+                    for (uint32_t kt = 0; kt < Kt; ++kt) {
+                        if (tile_row_id == 0) {
+                            cb_in0_obj.wait_front(kt + 1);
+                        }
+                        cb_in1_obj.wait_front(onetile);
+
+                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
+
+                        cb_in1_obj.pop_front(onetile);
+                    }
+                    tile_regs_commit();
+
+                    cb_intermed0_obj.reserve_back(onetile);
+                    tile_regs_wait();
+                    pack_tile(0, cb_intermed0);
+                    tile_regs_release();
+                    cb_intermed0_obj.push_back(onetile);
 
                     // untilize tile and write to CBIndex::c_25 with reconfiguration
                     compute_kernel_lib::untilize<
@@ -62,7 +75,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    matmul_init_short_with_dt<TILE>(cfg, cb_intermed0);
+                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
                 }
                 cb_in0_obj.pop_front(Kt);
 

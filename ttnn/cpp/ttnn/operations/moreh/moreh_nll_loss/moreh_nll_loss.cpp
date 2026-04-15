@@ -9,7 +9,6 @@
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn {
 
@@ -40,17 +39,14 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        // Use ttnn::sum instead of moreh_sum for the divisor — moreh_sum has a
-        // tile-padding bug that produces wrong results for small tensors.
-        Tensor divisor_computed = ttnn::sum(step1_result, std::nullopt, false, memory_config);
-        std::optional<Tensor> divisor_opt = divisor_computed;
+        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
             target_tensor,
             reduction,
             weight_tensor,
-            divisor_opt,
+            divisor_tensor,
             output_tensor,
             ignore_index,
             memory_config,

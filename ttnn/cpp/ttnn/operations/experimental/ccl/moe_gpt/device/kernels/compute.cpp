@@ -5,9 +5,7 @@
 #include "moe_gpt_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
-
-using namespace compute_kernel_lib;
+#include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
@@ -141,12 +139,8 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
-    // Initialize matmul for W0/W1 data path
-    auto w0_w1_data_cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, 4, 1, 1);
-    matmul_init<BLOCK>(w0_w1_data_cfg);
-
-    // Bias matmul: ones_tile @ bias_row (same ct/rt/kt, different in0 CB)
-    auto w0_w1_bias_cfg = MatmulConfig::block(cb_c2c_ones_tile, cb_r2c_w0_w1, cb_s2c_in2, 4, 1, 1);
+    // Initialize matmul for W0
+    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init<true>()));
@@ -204,14 +198,42 @@ void kernel_main() {
                 uint32_t in0_index = in0_base;
 
                 tile_regs_acquire();
-                matmul_moe_accumulate_with_bias<BLOCK>(
-                    w0_w1_data_cfg,
-                    w0_w1_bias_cfg,
-                    in0_index,
-                    w0_w1_blocks_per_two_elt_tile,
-                    w0_w1_tiles_per_block,
-                    4,
-                    num_w0_w1_tiles_h);
+                uint32_t k_tracker = 0;
+                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                    cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                    uint32_t last_k_index = 0;
+                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        if (k_tracker == num_w0_w1_tiles_h) {
+                            last_k_index = k;
+                            break;
+                        }
+                        matmul_block(
+                            cb_s2c_in,
+                            cb_r2c_w0_w1,
+                            in0_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                        k_tracker++;
+                    }
+                    if (k_tracker == num_w0_w1_tiles_h) {
+                        // Bias addition: matmul(ones_tile, bias_row)
+                        matmul_block(
+                            cb_c2c_ones_tile,
+                            cb_r2c_w0_w1,
+                            0,
+                            /*in1_index=*/last_k_index,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                    }
+                    cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                }
 
                 tile_regs_commit();
 
@@ -237,9 +259,6 @@ void kernel_main() {
             cb_push_back(cb_c2w_rdy, 1);
 
             // W2 matmul + untilize (dm1 does A2A ring, compute does W2) (with bias)
-            auto w2_data_cfg = MatmulConfig::block(cb_s2c_in2, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
-            auto w2_bias_cfg = MatmulConfig::block(cb_c2c_ones_tile, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
-
             cb_reserve_back(cb_c2s_out, moe_gpt_ring::TOKENS_PER_CHUNK);  // 32 pages
             constexpr uint32_t w2_bias_blocks_per_iter_fused = w2_blocks_per_expert / num_a2a_iters;
 
@@ -247,22 +266,62 @@ void kernel_main() {
             pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/source_width_tiles>(cb_c2s_out);
 
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+                uint32_t dm1_step = 0;
+                uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
                 cb_wait_front(cb_w2c_rdy, 1);
-                MoeDm1State dm1_fused{0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
+
+                // 6-buffer cycling: each A2A step uses buf (step % 6)
+                uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
-                matmul_moe_w2_accumulate_with_dm1_cycling<BLOCK>(
-                    w2_data_cfg,
-                    w2_bias_cfg,
-                    dm1_fused,
-                    w2_bias_blocks_per_iter_fused,
-                    w2_tiles_per_block,
-                    4,
-                    num_w0_w1_tiles_h,
-                    cb_w2c_rdy,
-                    tiles_per_step,
-                    6,
-                    &moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0]);
+                uint32_t k_tracker = 0;
+
+                for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter_fused; ++block_id) {
+                    cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                    uint32_t last_k_index = 0;
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                        if (k_tracker == num_w0_w1_tiles_h) {
+                            last_k_index = k;
+                            break;
+                        }
+                        if (dm1_tiles_remaining == 0) {
+                            cb_pop_front(cb_w2c_rdy, 1);
+                            cb_wait_front(cb_w2c_rdy, 1);
+                            dm1_tiles_remaining =
+                                moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                            in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
+                            in2_offset = in2_buf * tiles_per_step;
+                            in2_index = in2_offset;
+                        }
+                        dm1_tiles_remaining--;
+
+                        matmul_block(
+                            cb_s2c_in2,
+                            cb_r2c_w2,
+                            in2_index++,
+                            /*in1_index=*/k,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                        k_tracker++;
+                    }
+                    if (k_tracker == num_w0_w1_tiles_h) {
+                        // Bias addition: matmul(ones_tile, bias_row)
+                        matmul_block(
+                            cb_c2c_ones_tile,
+                            cb_r2c_w2,
+                            0,
+                            /*in1_index=*/last_k_index,
+                            /*idst=*/0,
+                            /*transpose=*/false,
+                            /*ct_dim=*/4,
+                            /*rt_dim=*/1,
+                            /*kt_dim=*/1);
+                    }
+                    cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+                }
 
                 cb_pop_front(cb_w2c_rdy, 1);
 
@@ -304,13 +363,42 @@ void kernel_main() {
             uint32_t in0_index = expert_id * num_w0_w1_tiles_h;
 
             tile_regs_acquire();
-            mm_data.moe_accumulate_with_bias(
-                mm_bias,
-                in0_index,
-                w0_w1_blocks_per_two_elt_tile,
-                w0_w1_tiles_per_block,
-                4,
-                moe_gpt_ring::NUM_W0_W1_TILES_H);
+            uint32_t k_tracker = 0;
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+                uint32_t last_k_index = 0;
+                for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                    if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
+                        last_k_index = k;
+                        break;
+                    }
+                    matmul_block(
+                        cb_s2c_in,
+                        cb_r2c_w0_w1,
+                        in0_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    k_tracker++;
+                }
+                if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
+                    // Bias addition: matmul(ones_tile, bias_row)
+                    matmul_block(
+                        cb_c2c_ones_tile,
+                        cb_r2c_w0_w1,
+                        0,
+                        /*in1_index=*/last_k_index,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+                cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+            }
 
             tile_regs_commit();
             PACK(TTI_SEMWAIT(
@@ -333,28 +421,61 @@ void kernel_main() {
         cb_push_back(cb_c2w_rdy, 1);
 
         // Compute in2 @ W2 with bias
-        auto w2_data_cfg_nf = MatmulConfig::block(cb_s2c_in2, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
-        auto w2_bias_cfg_nf = MatmulConfig::block(cb_c2c_ones_tile, cb_r2c_w2, cb_c2s_out, 4, 1, 1);
-
         uint32_t out_tile_index = expert_id * num_w0_w1_tiles_h;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
+            uint32_t dm1_step = 0;
+            uint32_t dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
             cb_wait_front(cb_w2c_rdy, 1);
-            constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
-            MoeDm1State dm1_nonfused{0, moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0], 0, 0, 0};
+
+            uint32_t in2_buf = 0, in2_offset = 0, in2_index = 0;
 
             tile_regs_acquire();
-            matmul_moe_w2_accumulate_with_dm1_cycling<BLOCK>(
-                w2_data_cfg_nf,
-                w2_bias_cfg_nf,
-                dm1_nonfused,
-                w2_bias_blocks_per_iter,
-                w2_tiles_per_block,
-                4,
-                moe_gpt_ring::NUM_W0_W1_TILES_H,
-                cb_w2c_rdy,
-                tiles_per_step,
-                6,
-                &moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0]);
+            uint32_t k_tracker = 0;
+            constexpr uint32_t w2_bias_blocks_per_iter = w2_blocks_per_expert / num_a2a_iters;
+            for (uint32_t block_id = 0; block_id < w2_bias_blocks_per_iter; ++block_id) {
+                cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
+                uint32_t last_k_index = 0;
+                for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
+                    if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
+                        last_k_index = k;
+                        break;
+                    }
+                    if (dm1_tiles_remaining == 0) {
+                        cb_pop_front(cb_w2c_rdy, 1);
+                        cb_wait_front(cb_w2c_rdy, 1);
+                        dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
+                        in2_buf = (in2_buf >= 5) ? 0 : in2_buf + 1;  // 6 buffers: cycle 0..5
+                        in2_offset = in2_buf * tiles_per_step;
+                        in2_index = in2_offset;
+                    }
+                    dm1_tiles_remaining--;
+                    matmul_block(
+                        cb_s2c_in2,
+                        cb_r2c_w2,
+                        in2_index++,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    k_tracker++;
+                }
+                if (k_tracker == moe_gpt_ring::NUM_W0_W1_TILES_H) {
+                    // Bias addition: matmul(ones_tile, bias_row)
+                    matmul_block(
+                        cb_c2c_ones_tile,
+                        cb_r2c_w2,
+                        0,
+                        /*in1_index=*/last_k_index,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+                cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
+            }
 
             cb_pop_front(cb_w2c_rdy, 1);
 

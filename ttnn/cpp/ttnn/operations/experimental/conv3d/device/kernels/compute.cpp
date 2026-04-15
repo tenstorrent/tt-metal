@@ -7,14 +7,13 @@
 
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
+#include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
-
-using namespace compute_kernel_lib;
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -34,29 +33,42 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    auto cfg = MatmulConfig::block(in0_cb, in1_cb, out_cb, subblock_w, subblock_h, in0_block_w, transpose);
-    matmul_init_short<BLOCK>(cfg);
+    mm_block_init_short(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
+    uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
-    uint32_t in0_index_subblock_offset = 0;
+    uint32_t in0_index_offset = 0;
 
     reconfig_data_format(in1_cb, in0_cb);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_subblock_offset = 0;
+        uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            matmul_accumulate_and_pack<BLOCK>(
-                cfg,
-                in0_index_subblock_offset,
-                in1_index_subblock_offset,
-                in0_block_w,
-                N,
-                out_cb,
-                out_subblock_num_tiles);
-            in1_index_subblock_offset += subblock_w;
+            tile_regs_acquire();
+
+            uint32_t dst_index = 0;
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                in0_index++;
+                in1_index += N;
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(out_cb, out_subblock_num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+            cb_push_back(out_cb, out_subblock_num_tiles);
+            in1_index_offset += subblock_w;
         }
-        in0_index_subblock_offset += in0_subblock_num_tiles;
+        in0_index_offset += subblock_h * in0_block_w;
     }
 }
 
@@ -153,8 +165,7 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
 
-    auto mm_cfg = MatmulConfig::block(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled, 1, 1, 1);
-    matmul_init<BLOCK>(mm_cfg);
+    mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
     // Load range parameters
     uint32_t argidx = 0;
