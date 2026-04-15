@@ -12,7 +12,6 @@ from models.demos.rvc.torch_impl.vc.pipeline import Pipeline
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RVC Nano inference from a wav file.")
-    parser.add_argument("-i", "--input", required=True, help="Input audio path (wav).")
     parser.add_argument("-o", "--output", required=True, help="Output audio path (wav).")
     parser.add_argument("--speaker-id", type=int, default=0, help="Speaker ID (default: 0).")
     parser.add_argument("--f0-method", default="rapt", choices=["rapt", "dio"], help="F0 method.")
