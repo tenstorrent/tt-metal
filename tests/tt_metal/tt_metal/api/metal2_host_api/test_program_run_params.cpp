@@ -15,6 +15,7 @@
 // fix this for ProgramSpec / Metal 2.0.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -32,6 +33,8 @@ namespace {
 using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorker;
 
@@ -525,6 +528,67 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     });
 
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+}
+
+// ============================================================================
+// SECTION 5: Gen1 (WH/BH) Tests
+// ============================================================================
+// The RTA validation logic in SetProgramRunParameters is arch-agnostic; these
+// tests verify the full roundtrip works on gen1 programs and that validation
+// still fires when it should.
+
+// Test fixture for ProgramRunParams on Wormhole - uses WORMHOLE_B0 mock device
+class ProgramRunParamsTestGen1 : public ::testing::Test {
+protected:
+    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+    void TearDown() override { experimental::disable_mock_mode(); }
+};
+
+// Create a gen1 ProgramSpec with a specified RTA schema on the DM kernel
+inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& node, size_t num_per_node_rtas, size_t num_common_rtas) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, num_per_node_rtas}};
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = num_common_rtas;
+
+    spec.kernels[1].runtime_arguments_schema.num_runtime_args_per_node = {{node, 0}};
+    spec.kernels[1].runtime_arguments_schema.num_common_runtime_args = 0;
+
+    return spec;
+}
+
+TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_ZeroRTAs) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeGen1SpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(spec);
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestGen1, SetRunParamsSucceeds_PerNodeAndCommonRTAs) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
+    Program program = MakeProgramFromSpec(spec);
+
+    auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {10, 20});
+
+    EXPECT_NO_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestGen1, WrongRuntimeArgsCountFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
+    Program program = MakeProgramFromSpec(spec);
+
+    // Provide wrong count (2 instead of 3)
+    auto params = MakeRunParamsForMinimalSpec(node, {1, 2}, {});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 3 runtime args, but 2 were provided")));
 }
 
 }  // namespace

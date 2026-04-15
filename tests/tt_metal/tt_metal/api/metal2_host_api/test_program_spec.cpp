@@ -13,6 +13,7 @@
 //   6. Aggregate type enforcement (designated initializers)
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <type_traits>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -31,6 +32,8 @@ using test_helpers::BindDFBToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorker;
 
@@ -313,7 +316,6 @@ TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-// Remove once WH/BH is implemented
 TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     NodeCoord node{0, 0};
 
@@ -1427,6 +1429,147 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
         .producer_consumer_map = {{NodeCoord{0, 0}, NodeCoord{1, 0}}},
     };
     EXPECT_EQ(remote_info.producer_consumer_map.size(), 1u);
+}
+
+// ============================================================================
+// SECTION 7: Gen1 (WH/BH) Tests
+// ============================================================================
+
+// Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
+class ProgramSpecTestGen1 : public ::testing::Test {
+protected:
+    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+    void TearDown() override { experimental::disable_mock_mode(); }
+};
+
+TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
+    // Two DM kernels on different processors (RISCV_0 producer, RISCV_1 consumer)
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "dm_only_program";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb", node);
+
+    BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"producer", "consumer"}, {"dfb"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
+    // RISCV_0 and RISCV_1 on the same node — should succeed
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "two_dm_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", node, DataMovementProcessor::RISCV_1);
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestGen1, MultiThreadedDMKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", node);
+    kernel.num_threads = 2;
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support multi-threaded kernels")));
+}
+
+TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalComputeKernel("compute_kernel", node);
+    kernel.num_threads = 2;
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"compute_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support multi-threaded kernels")));
+}
+
+TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
+    // On gen1, a DM kernel that only has Gen2DataMovementConfig must be rejected
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config
+    auto kernel = MakeMinimalDMKernel("dm_kernel", node);
+
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must specify a Gen1 DM config")));
+}
+
+TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
+    // Two DM kernels both targeting RISCV_0 on the same node
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", node, DataMovementProcessor::RISCV_0);  // conflict
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"k0", "k1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
+    // Structural validation (CollectSpecData) must catch this on gen1 too
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("dm_kernel", node, DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("dm_kernel", node, DataMovementProcessor::RISCV_1);  // duplicate name
+
+    spec.kernels = {k0, k1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
 }
 
 }  // namespace
