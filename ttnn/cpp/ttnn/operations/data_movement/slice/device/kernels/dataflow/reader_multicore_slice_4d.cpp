@@ -42,6 +42,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
@@ -83,6 +85,9 @@ void kernel_main() {
 
     // Set up TensorAccessor for input data - use row size as page size
     const auto s0 = TensorAccessor(src_args, src_addr, input_bytes_per_row);
+
+    // Create experimental CircularBuffer for Device 2.0 API
+    experimental::CircularBuffer cb_out(cb_id_out);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)
@@ -141,8 +146,8 @@ void kernel_main() {
                     input_row_idx = n * input_d * input_h + d * input_h + h;
                 }
 
-                cb_reserve_back(cb_id_out, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_out);
+                cb_out.reserve_back(1);
+                uint32_t l1_write_addr = cb_out.get_write_ptr();
 
                 // Read the full input row first
                 uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s0);
@@ -167,7 +172,7 @@ void kernel_main() {
                     }
                 }
 
-                cb_push_back(cb_id_out, 1);
+                cb_out.push_back(1);
                 rows_processed++;
                 current_logical_row++;
 

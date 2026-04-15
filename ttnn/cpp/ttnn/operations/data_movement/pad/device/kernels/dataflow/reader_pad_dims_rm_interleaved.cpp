@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_with_val_async(
     const uint64_t in_noc_addr,
@@ -57,9 +58,10 @@ void kernel_main() {
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb(cb_id);
 
     // calculate the offset for alignment of padding in rows/sticks
-    uint32_t l1_addr_partial = get_write_ptr(cb_id) + unpadded_X_nbytes;
+    uint32_t l1_addr_partial = cb.get_write_ptr() + unpadded_X_nbytes;
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
@@ -74,8 +76,8 @@ void kernel_main() {
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                cb_reserve_back(cb_id, 1);
-                uint32_t l1_addr = get_write_ptr(cb_id);
+                cb.reserve_back(1);
+                uint32_t l1_addr = cb.get_write_ptr();
                 if (y >= num_local_unpadded_Y || z >= num_unpadded_Z || w >= num_unpadded_W) {
                     // this is fully padding
                     fill_with_val_async(
@@ -100,7 +102,7 @@ void kernel_main() {
                     ++src_stick_id;
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_id, 1);
+                cb.push_back(1);
             }
         }
     }
