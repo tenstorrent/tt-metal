@@ -27,6 +27,9 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+MESH_GRAPH_DESC_1x32 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_ring_mesh_graph_descriptor.textproto"
+)
 MESH_GRAPH_DESC_8x4 = "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 
 
@@ -669,6 +672,23 @@ def run_all_to_all_dispatch_metadata_test(
                 reason=f"8x4 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_8x4}",
             ),
             id="8x4",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+                "trace_region_size": 500000,
+            },
+            (1, 32),
+            (1, 32),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x32),
+                reason=f"1x32 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x32}",
+            ),
+            id="1x32",
         ),
     ],
     indirect=["device_params", "mesh_device"],
