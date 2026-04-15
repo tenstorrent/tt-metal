@@ -277,7 +277,11 @@ def get_4d_causal_mask(attention_mask, ignore_padding=False):
         #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00, -1.0000e+38, -1.0000e+38],
         #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00, -1.0000e+38],
         #         [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00]])
-        return torch.where(torch.tril(torch.ones(attention_mask.shape[-1], attention_mask.shape[-1])) == 1, 0, -1e38)
+        return (
+            torch.where(torch.tril(torch.ones(attention_mask.shape[-1], attention_mask.shape[-1])) == 1, 0, -1e38)
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
     else:
         from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 
