@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t output_tile_size = get_tile_size(cb_output);
 
     const auto weight_addrg = TensorAccessor(weight_accessor_args, weight_addr);
-    const auto output_addrg = TensorAccessor(output_accessor_args, output_addr, output_tile_size);
+    const auto output_addrg = TensorAccessor(output_accessor_args, output_addr);
 
     // Phase 1: Stream one weight per expert per token (matching expert-by-expert compute).
     for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CORE; ++token_idx) {
