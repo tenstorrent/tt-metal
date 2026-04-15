@@ -94,3 +94,37 @@ def test_min_row_major(device, input_shape, dim, keepdim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (32, 32, 32, 32, 32),
+        (3, 6, 40, 64, 32),
+        (3, 6, 40, 63, 20),
+    ],
+)
+def test_min_multi_dim(device, input_shape):
+    """Test from issue #40854: ttnn.min produces incorrect results for certain tensor shapes and dimensions."""
+    dims = (-2, -1)
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.amin(torch_input_tensor, dim=dims, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+
+    output_tensor = ttnn.min(input_tensor, dim=dims, keepdim=True)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
