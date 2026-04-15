@@ -192,7 +192,10 @@ class WeightWorkItem:
         prefix = "fd" if self.dispatch_mode == DispatchMode.FAST else "sd"
         return f"{prefix}:{self.name}"
 
-    def execute(self, tracker: PhaseTracker | None = None) -> None:
+    def execute(
+        self,
+        tracker: PhaseTracker | None = None,
+    ) -> None:
         if tracker is not None:
             tracker.phase(self.phase_name)
         self.result = self.prepare_fn()
@@ -438,11 +441,10 @@ class CacheWeightProvider(PerformanceTrackingWeightProvider):
             dispatch_mode=DispatchMode.FAST,
             prepare_fn=lambda: prepare_embedding_weights(self._state_dict, device, cache_config=cache_config),
         )
-        tracker.phase("fast_dispatch_enable")
+        tracker.phase("fast_dispatch_enter")
         with ttnn.device.setup_fast_dispatch(device):
             work_item.execute(tracker)
-        tracker.phase("fast_dispatch_disable")
-        ttnn.enable_asynchronous_slow_dispatch(device)
+            tracker.phase("fast_dispatch_exit")
         result = work_item.result
         assert isinstance(result, DeepSeekV3EmbeddingLayerWeights)
         total_s, phases = tracker.finish()
@@ -458,11 +460,10 @@ class CacheWeightProvider(PerformanceTrackingWeightProvider):
             dispatch_mode=DispatchMode.FAST,
             prepare_fn=lambda: prepare_lm_head_weights(self._state_dict, device, cache_config=cache_config),
         )
-        tracker.phase("fast_dispatch_enable")
+        tracker.phase("fast_dispatch_enter")
         with ttnn.device.setup_fast_dispatch(device):
             work_item.execute(tracker)
-        tracker.phase("fast_dispatch_disable")
-        ttnn.enable_asynchronous_slow_dispatch(device)
+            tracker.phase("fast_dispatch_exit")
         result = work_item.result
         assert isinstance(result, DeepSeekV3LMHeadWeights)
         total_s, phases = tracker.finish()
@@ -561,11 +562,11 @@ class CacheWeightProvider(PerformanceTrackingWeightProvider):
         fd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.FAST]
         sd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.SLOW]
 
-        tracker.phase("fast_dispatch_enable")
+        tracker.phase("fast_dispatch_enter")
         with ttnn.device.setup_fast_dispatch(device):
             for item in fd_queue:
                 item.execute(tracker)
-        tracker.phase("fast_dispatch_disable")
+            tracker.phase("fast_dispatch_exit")
 
         for item in sd_queue:
             item.execute(tracker)
@@ -687,12 +688,11 @@ class CacheWeightProvider(PerformanceTrackingWeightProvider):
         ]
         fd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.FAST]
         sd_queue = [item for item in work_items if item.dispatch_mode == DispatchMode.SLOW]
-        tracker.phase("fast_dispatch_enable")
+        tracker.phase("fast_dispatch_enter")
         with ttnn.device.setup_fast_dispatch(device):
             for item in fd_queue:
                 item.execute(tracker)
-        tracker.phase("fast_dispatch_disable")
-        ttnn.enable_asynchronous_slow_dispatch(device)
+            tracker.phase("fast_dispatch_exit")
         for item in sd_queue:
             item.execute(tracker)
         tracker.phase("assemble")
