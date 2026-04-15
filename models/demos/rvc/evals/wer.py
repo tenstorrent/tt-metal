@@ -6,9 +6,11 @@
 
 Example:
     ./python_env/bin/python models/demos/rvc/scripts/eval_wer.py \
+      --source-audio ./models/demos/rvc/data/sample-speech.wav \
+      --generated-audio ./models/demos/rvc/data/output/output_ttnn.wav \
       --device cpu
 
-This runs ASR on the fixed RVC demo audio and reports:
+This runs ASR on both files and reports:
     WER(source_transcript, generated_transcript)
 """
 
@@ -16,16 +18,14 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
 
 DEFAULT_ASR_BACKEND = "transformers_whisper"
 DEFAULT_ASR_MODEL = "openai/whisper-small.en"
-BASE_DIRECTORY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-FIXED_AUDIO_FILE = "sample-speech.wav"
 
 
 class ASRBackendError(RuntimeError):
@@ -34,6 +34,8 @@ class ASRBackendError(RuntimeError):
 
 @dataclass(frozen=True)
 class WERResult:
+    source_audio_path: str
+    generated_audio_path: str
     backend: str
     model_id: str
     source_transcript: str
@@ -41,7 +43,7 @@ class WERResult:
     wer: float
 
 
-def _load_audio_16khz_mono() -> np.ndarray:
+def _load_audio_16khz_mono(audio_path: str | Path) -> np.ndarray:
     if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
         raise ASRBackendError(
             "Audio loading for WER requires optional dependencies. " "Install them with: pip install librosa soundfile"
@@ -50,13 +52,11 @@ def _load_audio_16khz_mono() -> np.ndarray:
     import librosa
     import soundfile as sf
 
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, FIXED_AUDIO_FILE))
-    if not my_path.startswith(BASE_DIRECTORY):
-        raise FileNotFoundError(f"Audio file does not exist: {my_path}")
-    if not os.path.exists(my_path) or not os.path.isfile(my_path):
-        raise FileNotFoundError(f"Audio file does not exist: {my_path}")
+    path = Path(audio_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Audio file does not exist: {path}")
 
-    audio, sample_rate = sf.read(my_path)
+    audio, sample_rate = sf.read(path)
     if audio.ndim == 2:
         audio = np.mean(audio, axis=1)
     audio = np.asarray(audio, dtype=np.float32)
@@ -101,6 +101,7 @@ def _load_transformers_whisper(model_id: str, device: str):
 
 
 def transcribe_audio(
+    audio_path: str | Path,
     *,
     backend: str = DEFAULT_ASR_BACKEND,
     model_id: str = DEFAULT_ASR_MODEL,
@@ -110,7 +111,7 @@ def transcribe_audio(
         raise ValueError(f"Unsupported ASR backend: {backend}")
 
     processor, model = _load_transformers_whisper(model_id=model_id, device=device)
-    waveform = _load_audio_16khz_mono()
+    waveform = _load_audio_16khz_mono(audio_path)
     inputs = processor(
         waveform,
         sampling_rate=16000,
@@ -128,6 +129,8 @@ def transcribe_audio(
 
 
 def compute_wer(
+    source_audio_path: str | Path,
+    generated_audio_path: str | Path,
     *,
     backend: str = DEFAULT_ASR_BACKEND,
     model_id: str = DEFAULT_ASR_MODEL,
@@ -139,11 +142,13 @@ def compute_wer(
     import jiwer
 
     source_transcript = transcribe_audio(
+        source_audio_path,
         backend=backend,
         model_id=model_id,
         device=device,
     )
     generated_transcript = transcribe_audio(
+        generated_audio_path,
         backend=backend,
         model_id=model_id,
         device=device,
@@ -153,6 +158,8 @@ def compute_wer(
     wer = float(jiwer.wer(normalized_source, normalized_generated))
 
     return WERResult(
+        source_audio_path=str(source_audio_path),
+        generated_audio_path=str(generated_audio_path),
         backend=backend,
         model_id=model_id,
         source_transcript=source_transcript,
@@ -162,7 +169,11 @@ def compute_wer(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compute WER using the fixed RVC demo audio input.")
+    parser = argparse.ArgumentParser(
+        description="Compute content-preservation WER between the original source audio and generated RVC audio."
+    )
+    parser.add_argument("--source-audio", required=True, help="Original source audio file.")
+    parser.add_argument("--generated-audio", required=True, help="Generated audio file from the RVC pipeline.")
     parser.add_argument(
         "--backend",
         default=DEFAULT_ASR_BACKEND,
@@ -181,6 +192,8 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     result = compute_wer(
+        source_audio_path=args.source_audio,
+        generated_audio_path=args.generated_audio,
         backend=args.backend,
         model_id=args.model_id,
         device=args.device,
