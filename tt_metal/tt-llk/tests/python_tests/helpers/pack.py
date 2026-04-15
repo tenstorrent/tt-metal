@@ -475,6 +475,7 @@ def pack_mxfp4(
 ):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
+    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
     - 1 shared E8M0 scale (8 bits)
@@ -596,7 +597,7 @@ def _round_ties_even(
 
     if rounded_msb and rounded_lsbs != 0:
         round_inc = 1
-    elif rounded_msb and rounded_lsbs == 0:
+    elif rounded_msb:
         round_inc = 1 if mantissa_lsb == 0x1 else 0
     else:
         round_inc = 0
@@ -610,7 +611,7 @@ def _round_ties_even(
 
 
 def _float_to_fp4_bits_storage(value: float) -> int:
-    """Quantize to FP4 E2M1 using storage.py rules (round-to-nearest-even)."""
+    """Quantize to FP4 E2M1 (round-to-nearest-even)."""
     if np.isnan(value):
         return 0x0
     if np.isinf(value):
@@ -655,7 +656,7 @@ def _float_to_fp4_bits_storage(value: float) -> int:
 
 
 def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
-    """Quantize scaled values to FP4 nibbles using storage.py conversion rules."""
+    """Quantize scaled values to FP4 nibbles."""
     flat = scaled_blocks.astype(np.float32).ravel()
     out = np.empty_like(flat, dtype=np.uint8)
     for i, v in enumerate(flat):

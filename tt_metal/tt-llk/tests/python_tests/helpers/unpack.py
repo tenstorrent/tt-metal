@@ -364,6 +364,7 @@ def unpack_mxfp4(
 ):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
+    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
       - 1 shared E8M0 scale (8 bits)
@@ -393,6 +394,20 @@ def unpack_mxfp4(
     block_size = MX_FORMAT_BLOCK_SIZE
     num_elements = face_r_dim * FACE_C_DIM * num_faces
     num_blocks = num_elements // block_size
+
+    if num_elements % block_size != 0:
+        raise ValueError(
+            "Invalid MXFP4 tile geometry: num_elements must be a multiple of "
+            f"{block_size}, got {num_elements}."
+        )
+
+    # Expected bytes = 1 scale byte per block + 32 FP4 elements packed as 2 per byte.
+    expected_len = num_blocks + (num_blocks * (block_size // 2))
+    if len(packed_bytes) != expected_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MXFP4: got "
+            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
+        )
 
     scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
     packed_u8 = np.frombuffer(bytes(packed_bytes[num_blocks:]), dtype=np.uint8)
