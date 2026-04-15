@@ -34,6 +34,29 @@ def _format_memory_view(view: ttnn._ttnn.device.MemoryView, label: str) -> str:
     )
 
 
+def _print_memory_stats(device, message=""):
+    # return
+    # Only log for device 0 in multi-device setup
+    if device.id() != 0:
+        return
+    memory_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+    free_per_bank = memory_view.total_bytes_free_per_bank
+    cont_free_per_bank = memory_view.largest_contiguous_bytes_free_per_bank
+    badly_allocated = free_per_bank - cont_free_per_bank
+    logger.debug("-" * 40)
+    logger.debug(f"At: '{message}'")
+    logger.debug(f"Total bytes per bank: {memory_view.total_bytes_per_bank}")
+    logger.debug(f"Allocated per bank: {memory_view.total_bytes_allocated_per_bank}")
+    logger.debug(f"Free per bank: {free_per_bank} ({round(free_per_bank / 1e6, 2)} MB)")
+    logger.debug(
+        f"Largest contiguous free: {cont_free_per_bank} ({round(cont_free_per_bank / 1e6, 2)} MB, {round(100*cont_free_per_bank / free_per_bank)}%)"
+    )
+    logger.debug(
+        f"Badly allocated: {badly_allocated} ({round(badly_allocated / 1e6, 2)} MB, {round(100*badly_allocated / free_per_bank)}%)"
+    )
+    logger.debug("-" * 40)
+
+
 def dump_ttnn_meminfo(mesh_device: ttnn.MeshDevice, header: str = "") -> None:
     """Dump DRAM memory usage of the mesh device to the log."""
     dram_view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
