@@ -137,6 +137,11 @@ def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
 
 
+@pytest.fixture()
+def workers_tensix_coordinates():
+    return TestConfig.TENSIX_LOCATION
+
+
 # Define the possible custom command line options
 def pytest_addoption(parser):
     parser.addoption(

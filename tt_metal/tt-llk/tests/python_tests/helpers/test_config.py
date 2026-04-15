@@ -1307,13 +1307,19 @@ class TestConfig:
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )
 
-    def run(self):
+    def run(self, tensix_location: str = None):
         self.generate_variant_hash()
+
+        location = (
+            tensix_location
+            if tensix_location is not None
+            else TestConfig.TENSIX_LOCATION
+        )
 
         logger.debug(
             "Running variant={} | location={}",
             self.variant_id[:12],
-            TestConfig.TENSIX_LOCATION,
+            location,
         )
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
@@ -1336,7 +1342,7 @@ class TestConfig:
             elif TestConfig.STIMULI_MODE == StimuliMode.LOAD_CACHED:
                 self.variant_stimuli.load_from_cache()
 
-            self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+            self.variant_stimuli.write(location)
 
         self.run_elf_files()
         self.wait_for_tensix_operations_finished()
@@ -1346,7 +1352,7 @@ class TestConfig:
 
         return TestOutcome(
             result=(
-                self.variant_stimuli.collect_results(TestConfig.TENSIX_LOCATION)
+                self.variant_stimuli.collect_results(location)
                 if self.variant_stimuli
                 else None
             ),
