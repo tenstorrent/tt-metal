@@ -361,9 +361,10 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         statistics["enable_trace"] = case["enable_trace"]
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": statistics,
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):
