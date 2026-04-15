@@ -356,14 +356,11 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
         output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
-        statistics = dict(results.get("statistics", {}))
-        statistics["sample_on_device"] = case["sample_on_device"]
-        statistics["enable_trace"] = case["enable_trace"]
 
         output_data = {
             "prompts": prompts if prompts else [],
             "generations": [],
-            "statistics": statistics,
+            "statistics": results.get("statistics", {}),
             "model_params": results.get("model_params", {}),
         }
 
