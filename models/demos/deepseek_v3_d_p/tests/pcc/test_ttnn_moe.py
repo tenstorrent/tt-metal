@@ -57,6 +57,10 @@ from tests.ttnn.utils_for_testing import comp_pcc
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, gate_fallback_mode, run_pcc_check",
     [
         # fmt: off
+        # TODO: Select appropriate tests and add needed
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False), # skip PCC validation; gate on device requires 256 experts.
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),  # run PCC validation; reduced isl per chip to 1600 and experts to 64 for faster execution.
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
