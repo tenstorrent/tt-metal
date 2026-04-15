@@ -77,7 +77,7 @@ def get_compute_kernel_config():
 def get_compute_kernel_config_hifi4():
     """Returns compute kernel config for highest fidelity computations."""
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,

@@ -89,17 +89,20 @@ class MLP(LightweightModule):
             in_features = int(weight_torch.shape[1])
             out_features = int(weight_torch.shape[0])
 
+            # DRAM (not L1): transpose/reshape compile matmul-scale programs with large circular
+            # buffers; L1 staging here overlaps allocator space with those CBs (Metal validate
+            # "clash with L1 buffers" during model init). Same pattern as Attention weight prep.
             weight_tt = ttnn.from_torch(
                 weight_torch,
                 device=device,
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_dram,
                 mesh_mapper=_mesh_mapper,
             )
-            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=_dram)
             ttnn.deallocate(weight_tt)
-            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=ttnn.L1_MEMORY_CONFIG)
+            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=_dram)
 
             # Read reshape output before freeing transpose input; reshape may alias weight_tx storage.
             weight_host = ttnn.to_torch(weight_4d).contiguous()
@@ -134,7 +137,7 @@ class MLP(LightweightModule):
         self.down_proj = _build_proj_weight(f"{layer_prefix}.mlp.down_proj.weight", "down_proj")
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
