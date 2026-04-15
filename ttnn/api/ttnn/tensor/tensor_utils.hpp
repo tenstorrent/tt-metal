@@ -10,13 +10,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
-namespace tt::tt_metal {
+// Exports symbols
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
-// Returns true if the logical tensor data matches the physical tensor data:
-// 1. Row major layout is used.
-// 2. Logical 2D shape matches physical shape.
-// Used for optimizing conversion operations.
-bool logical_matches_physical(const TensorSpec& tensor_spec);
+namespace tt::tt_metal {
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
