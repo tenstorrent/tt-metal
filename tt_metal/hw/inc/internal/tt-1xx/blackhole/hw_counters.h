@@ -26,7 +26,7 @@ constexpr size_t NUM_FPU_COUNTERS = 3;
 //   sel 2: fidelity_phases_ongoing = 1'b0
 //   sel 256: hf_cycles==2'b11 always false (fidelity off)
 //   sel 257: hf_cycles==2'b01 always false (fidelity off)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 19> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
@@ -37,7 +37,6 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 19> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
      {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
@@ -46,7 +45,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 19> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 19;
+constexpr size_t NUM_UNPACK_COUNTERS = 18;
 
 // BH TDMA_PACK: PACK_COUNT=1, 8 req + 8 grant.
 // RTL-dead removed: sel 274 (PACK_BANK7_GRANT, tied to 2'b00[0]).

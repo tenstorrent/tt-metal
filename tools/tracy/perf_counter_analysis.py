@@ -36,7 +36,6 @@ BH_RTL_DEAD_COUNTERS = frozenset(
         "DEST_READ_GRANTED_2",
         "DEST_READ_GRANTED_3",
         "MATH_INSTRN_STARTED",
-        "INSTRN_1_HF_CYCLE",
         "WAITING_FOR_SFPU_IDLE_0",
         "WAITING_FOR_SFPU_IDLE_1",
         "WAITING_FOR_SFPU_IDLE_2",
@@ -200,7 +199,6 @@ COUNTER_TYPE_NAMES = {
     138: "PACK_INSTRN_ISSUED_2",
     # TDMA_UNPACK grant counters
     139: "INSTRN_2_HF_CYCLES",
-    140: "INSTRN_1_HF_CYCLE",
     141: "SRCB_WRITE_ACTUAL",
     142: "SRCA_WRITE_NOT_BLOCKED_OVR",
     143: "SRCA_WRITE_ACTUAL",
@@ -487,19 +485,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "L1 Packer Port Backpressure Max (%)",
     "L1 Packer Port Backpressure Avg (%)",
     # Fidelity cycle breakdown
-    "HiFi2 Instrn Rate Min (%)",
-    "HiFi2 Instrn Rate Median (%)",
-    "HiFi2 Instrn Rate Max (%)",
-    "HiFi2 Instrn Rate Avg (%)",
-    "LoFi Instrn Rate Min (%)",
-    "LoFi Instrn Rate Median (%)",
-    "LoFi Instrn Rate Max (%)",
-    "LoFi Instrn Rate Avg (%)",
     # Math pipeline stall breakdown
-    "Math Src Data Ready Rate Min (%)",
-    "Math Src Data Ready Rate Median (%)",
-    "Math Src Data Ready Rate Max (%)",
-    "Math Src Data Ready Rate Avg (%)",
     "SrcA Write Port Blocked Rate Min (%)",
     "SrcA Write Port Blocked Rate Median (%)",
     "SrcA Write Port Blocked Rate Max (%)",
@@ -572,15 +558,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "SrcB Write Actual Efficiency Median (%)",
     "SrcB Write Actual Efficiency Max (%)",
     "SrcB Write Actual Efficiency Avg (%)",
-    # === NEW: Fidelity analysis ===
-    "HiFi4 Instrn Rate Min (%)",
-    "HiFi4 Instrn Rate Median (%)",
-    "HiFi4 Instrn Rate Max (%)",
-    "HiFi4 Instrn Rate Avg (%)",
-    "Fidelity Phase Overhead Min (%)",
-    "Fidelity Phase Overhead Median (%)",
-    "Fidelity Phase Overhead Max (%)",
-    "Fidelity Phase Overhead Avg (%)",
     # === NEW: Packer engine granularity (WH) ===
     "Packer Engine 0 Util Min (%)",
     "Packer Engine 0 Util Median (%)",
@@ -815,9 +792,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "L1 Unpacker Backpressure",
         "L1 Packer Port Backpressure",
         # Fidelity and math pipeline stall breakdown
-        "HiFi2 Instrn Rate",
-        "LoFi Instrn Rate",
-        "Math Src Data Ready Rate",
         "SrcA Write Port Blocked Rate",
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
@@ -834,9 +808,6 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "SrcB Write Port Blocked Rate",
         "SrcA Write Actual Efficiency",
         "SrcB Write Actual Efficiency",
-        # NEW: Fidelity analysis
-        "HiFi4 Instrn Rate",
-        "Fidelity Phase Overhead",
         # NEW: Packer engine granularity
         "Packer Engine 0 Util",
         "Packer Engine 1 Util",
@@ -1086,20 +1057,12 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         pack_eff = pd.Series(dtype=float)
 
-    # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0 (RTL dead).
-    # Fall back to FIDELITY_PHASE_STALLS / ref_cnt (compute_util_metric) which measures
-    # what % of time the math pipeline was actively executing (including HiFi phases).
+    # Math Pipeline Utilization: MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE.
+    # On BH, MATH_INSTRN_STARTED is empirically dead — metric will be empty.
     if math_instrn_started is not None and math_instrn_started.sum() > 0:
         math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace([float("inf"), -float("inf")], nan)
     else:
-        # Use FIDELITY_PHASE_STALLS as a proxy: it counts cycles where
-        # math_instrn_valid & fidelity_phases_ongoing, i.e. math pipeline active.
-        fidelity = get_counter_series("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
-        fidelity_ref = get_counter_ref_cnt("FIDELITY_PHASE_STALLS") if has_counter("FIDELITY_PHASE_STALLS") else None
-        if fidelity is not None and fidelity_ref is not None:
-            math_pipe_util = (fidelity / fidelity_ref * 100).replace([float("inf"), -float("inf")], nan)
-        else:
-            math_pipe_util = pd.Series(dtype=float)
+        math_pipe_util = pd.Series(dtype=float)
 
     # Math-to-Pack Handoff Efficiency: On BH, PACKER_BUSY is always 0.
     # Fall back to AVAILABLE_MATH / ref_cnt (% of time math not stalled by scoreboard).
@@ -1215,28 +1178,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         )
 
     # === Grant counter derived metrics ===
-    # Fidelity cycle breakdown
-    if has_counter("INSTRN_2_HF_CYCLES") and has_counter("MATH_INSTRN_STARTED"):
-        num = get_counter_series("INSTRN_2_HF_CYCLES")
-        den = get_counter_series("MATH_INSTRN_STARTED")
-        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["HiFi2 Instrn Rate"] = _group_to_stat_dict(ratio)
-    if has_counter("INSTRN_1_HF_CYCLE") and has_counter("MATH_INSTRN_STARTED"):
-        num = get_counter_series("INSTRN_1_HF_CYCLE")
-        den = get_counter_series("MATH_INSTRN_STARTED")
-        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["LoFi Instrn Rate"] = _group_to_stat_dict(ratio)
-
-    # Math source data readiness
-    # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) measures 4-HF-cycle instructions,
-    # not math-blocked-by-src. Only compute this metric on BH where it's the correct signal.
-    is_wh = device_arch.lower() in ("wormhole", "wormhole_b0")
-    if not is_wh and has_counter("MATH_INSTRN_NOT_BLOCKED_SRC") and has_counter("MATH_INSTRN_AVAILABLE"):
-        num = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
-        den = get_counter_series("MATH_INSTRN_AVAILABLE")
-        ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["Math Src Data Ready Rate"] = _group_to_stat_dict(ratio)
-
     # SrcA write port blocked rate
     if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
         avail = get_counter_series("SRCA_WRITE_AVAILABLE")
@@ -1351,29 +1292,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["SrcA Write Actual Efficiency"] = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
     if has_counter("SRCB_WRITE_ACTUAL") and has_counter("SRCB_WRITE_AVAILABLE"):
         per_op_stats["SrcB Write Actual Efficiency"] = compute_ratio_metric("SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE")
-
-    # === Fidelity analysis ===
-    if has_counter("MATH_INSTRN_STARTED") and has_counter("INSTRN_2_HF_CYCLES") and has_counter("INSTRN_1_HF_CYCLE"):
-        total = get_counter_series("MATH_INSTRN_STARTED")
-        hf2 = get_counter_series("INSTRN_2_HF_CYCLES")
-        hf1 = get_counter_series("INSTRN_1_HF_CYCLE")
-        # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) is actually the 4-HF-cycle
-        # counter (o_math_instrnbuf_rden & hf_cycles==2'b11). Use it directly when available.
-        # On BH, counter_sel 256 is dead (o_math_instrnbuf_rden inactive), so derive by subtraction.
-        if has_counter("MATH_INSTRN_NOT_BLOCKED_SRC"):
-            hf4_direct = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
-            # If the counter has data and total > 0, use it directly (WH).
-            # If it's all zeros (BH dead), fall back to derivation.
-            if hf4_direct is not None and hf4_direct.sum() > 0:
-                hf4 = hf4_direct
-            else:
-                hf4 = total - hf2 - hf1
-        else:
-            hf4 = total - hf2 - hf1
-        ratio = (hf4 / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
-        per_op_stats["HiFi4 Instrn Rate"] = _group_to_stat_dict(ratio)
-    if has_counter("FIDELITY_PHASE_STALLS"):
-        per_op_stats["Fidelity Phase Overhead"] = compute_util_metric("FIDELITY_PHASE_STALLS")
 
     # === Packer engine granularity ===
     if has_counter("PACKER_BUSY_0"):
@@ -1634,16 +1552,11 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Math Pipeline Utilization: On BH, MATH_INSTRN_STARTED is always 0.
-    # Fall back to FIDELITY_PHASE_STALLS / ref_cnt.
+    # Math Pipeline Utilization: MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE.
+    # On BH, MATH_INSTRN_STARTED is empirically dead — metric will be empty.
     if "value_MATH_INSTRN_STARTED" in eff_pivot.columns and eff_pivot["value_MATH_INSTRN_STARTED"].sum() > 0:
         eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)),
-            axis=1,
-        )
-    elif "value_FIDELITY_PHASE_STALLS" in eff_pivot.columns:
-        eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
-            lambda x: safe_div(x.get("value_FIDELITY_PHASE_STALLS", 0), x.get("ref_cnt_FIDELITY_PHASE_STALLS", 0)),
             axis=1,
         )
 
@@ -1988,24 +1901,6 @@ def compute_device_only_metrics(
     )
 
     # Fidelity analysis
-    def hifi4_rate_fn(x):
-        total = x.get("value_MATH_INSTRN_STARTED", 0)
-        if total <= 0:
-            return nan
-        # On WH, MATH_INSTRN_NOT_BLOCKED_SRC (counter_sel 256) is the 4-HF-cycle counter
-        hf4_direct = x.get("value_MATH_INSTRN_NOT_BLOCKED_SRC", 0)
-        if hf4_direct > 0:
-            return max(0.0, hf4_direct / total * 100)
-        hf2 = x.get("value_INSTRN_2_HF_CYCLES", 0)
-        hf1 = x.get("value_INSTRN_1_HF_CYCLE", 0)
-        return max(0.0, (total - hf2 - hf1) / total * 100)
-
-    eff_pivot["HiFi4 Instrn Rate"] = eff_pivot.apply(hifi4_rate_fn, axis=1)
-    eff_pivot["Fidelity Phase Overhead"] = eff_pivot.apply(
-        safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"),
-        axis=1,
-    )
-
     # Packer engine granularity (WH only — BH has PACK_COUNT=1, counters not collected)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
         eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
@@ -2248,9 +2143,6 @@ def compute_device_only_metrics(
         "NOC Ring 1 Incoming Backpressure",
         "L1 Unpacker Backpressure",
         "L1 Packer Port Backpressure",
-        "HiFi2 Instrn Rate",
-        "LoFi Instrn Rate",
-        "Math Src Data Ready Rate",
         "SrcA Write Port Blocked Rate",
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
@@ -2266,8 +2158,6 @@ def compute_device_only_metrics(
         "SrcB Write Port Blocked Rate",
         "SrcA Write Actual Efficiency",
         "SrcB Write Actual Efficiency",
-        "HiFi4 Instrn Rate",
-        "Fidelity Phase Overhead",
         "Packer Engine 0 Util",
         "Packer Engine 1 Util",
         "Packer Engine 2 Util",

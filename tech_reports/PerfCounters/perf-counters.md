@@ -333,29 +333,8 @@ Data Hazard Stall Rate = DATA_HAZARD_STALLS_MOVD2A / ref_cnt * 100
 
 ---
 
-**14. Fidelity Phase Overhead**
 
-Cycles spent on HiFi fidelity phases in the math pipeline.
-
-| | |
-|---|---|
-| **Architectures** | Blackhole only |
-| **Counter group** | UNPACK |
-
-```
-Fidelity Phase Overhead = FIDELITY_PHASE_STALLS / ref_cnt * 100
-```
-
-- **High value (>20%)**: Significant time spent on fidelity phases. Expected for HiFi4 matmul (30%).
-- **Low value (<5%)**: Minimal fidelity overhead. Expected for LoFi or non-math ops.
-
-**Not available on Wormhole**: `fidelity_phases_ongoing` is hardwired to `1'b0` in WH RTL, so `FIDELITY_PHASE_STALLS` is always 0. On WH, use `HiFi4 Instrn Rate` to analyze fidelity costs instead.
-
-**Use case:** Quantifies the cost of high-fidelity math. If too high, consider LoFi mode for better throughput.
-
----
-
-**15. SrcA Write Overwrite Blocked Rate**
+**14. SrcA Write Overwrite Blocked Rate**
 
 Fraction of srcA DMA write attempts blocked by overwrite protection (data not yet consumed by math).
 
@@ -378,7 +357,7 @@ On WH, `SRCA_WRITE_NOT_BLOCKED_OVR` (counter_sel 261) directly measures srcA DMA
 
 ---
 
-**16. SrcB Write Port Blocked Rate**
+**15. SrcB Write Port Blocked Rate**
 
 Fraction of srcB DMA write attempts blocked by port unavailability.
 
@@ -401,7 +380,7 @@ On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DM
 
 ---
 
-**17. Dest Read Backpressure**
+**16. Dest Read Backpressure**
 
 Fraction of packer destination register reads that were blocked.
 
@@ -422,7 +401,7 @@ Dest Read Backpressure = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) /
 
 ---
 
-**18. Math Dest Write Port Stall Rate**
+**17. Math Dest Write Port Stall Rate**
 
 Fraction of math cycles stalled by destination register write port contention.
 
@@ -445,7 +424,7 @@ Math Dest Write Port Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_STALLED_DEST_WR_P
 
 ---
 
-**19. Math Scoreboard Stall Rate**
+**18. Math Scoreboard Stall Rate**
 
 Fraction of math cycles stalled by FPU data hazard scoreboard.
 
@@ -468,7 +447,7 @@ Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) /
 
 ### Instruction Availability Rates
 
-**20. CFG/SYNC/THCON/MOVE/MATH/UNPACK/PACK Instrn Avail Rate**
+**19. CFG/SYNC/THCON/MOVE/MATH/UNPACK/PACK Instrn Avail Rate**
 
 Fraction of cycles each instruction type was available in its primary thread's instruction buffer.
 
@@ -498,7 +477,7 @@ Where TYPE is CFG, SYNC, THCON, MOVE (on T0), MATH (on T1), UNPACK (on T0), PACK
 
 ### Write Port Analysis
 
-**21. SrcA Write Actual Efficiency**
+**20. SrcA Write Actual Efficiency**
 
 Fraction of srcA write attempts that actually succeeded.
 
@@ -522,7 +501,7 @@ SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
 
 ### Additional Idle Waits
 
-**22. MMIO/SFPU/THCON/MOVE Idle Wait**
+**21. MMIO/SFPU/THCON/MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -545,7 +524,7 @@ MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 
 ---
 
-**23. RISC Core L1 Util**
+**22. RISC Core L1 Util**
 
 RISC core L1 memory access utilization.
 
@@ -567,7 +546,7 @@ RISC Core L1 Util = L1_1_RISC_CORE / ref_cnt * 100
 
 ### L1 Memory Utilization
 
-**24. L1 Unpacker/Packer Port Util**
+**23. L1 Unpacker/Packer Port Util**
 
 Fraction of cycles each L1 port had a transaction attempt.
 
@@ -588,7 +567,7 @@ L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100
 
 ---
 
-**25. L1 TDMA Bundle Util**
+**24. L1 TDMA Bundle Util**
 
 Average utilization of the two TDMA/RISC L1 ports.
 
@@ -608,7 +587,7 @@ L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / r
 
 ---
 
-**26. NOC Ring 0/1 Outgoing/Incoming Util**
+**25. NOC Ring 0/1 Outgoing/Incoming Util**
 
 Average utilization of NOC channels per ring.
 
@@ -631,7 +610,7 @@ NOC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, _1) / ref_cnt * 100
 
 ### L1 Backpressure
 
-**27. NOC Ring 0/1 Outgoing/Incoming Backpressure**
+**26. NOC Ring 0/1 Outgoing/Incoming Backpressure**
 
 Fraction of NOC transaction cycles where L1 was not ready.
 
@@ -651,7 +630,7 @@ NOC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100
 
 ---
 
-**28. L1 Unpacker/Packer Port Backpressure**
+**27. L1 Unpacker/Packer Port Backpressure**
 
 L1 port contention for unpacker and packer.
 
@@ -678,7 +657,7 @@ L1 Packer Port BP = (L1_0_PORT1 - L1_0_PORT1_GRANT) / L1_0_PORT1 * 100
 
 These metrics combine multiple counters to provide higher-level L1 insights.
 
-**29. L1 Total Bandwidth Util**
+**28. L1 Total Bandwidth Util**
 
 Overall L1 memory bandwidth saturation.
 
@@ -699,7 +678,7 @@ L1 Total BW Util = sum(all 8 port req counts) / (8 * ref_cnt) * 100
 
 ---
 
-**30. L1 Read vs Write Ratio**
+**29. L1 Read vs Write Ratio**
 
 Balance between read and write L1 traffic.
 
@@ -723,7 +702,7 @@ Write ports: Packer (writes results to L1), NOC Incoming (receives data from net
 
 ---
 
-**31. NOC Ring 0 Asymmetry**
+**30. NOC Ring 0 Asymmetry**
 
 Balance between outgoing and incoming NOC traffic.
 
@@ -744,7 +723,7 @@ NOC Asymmetry = NOC_Outgoing / (NOC_Outgoing + NOC_Incoming) * 100
 
 ---
 
-**32. L1 Contention Index**
+**31. L1 Contention Index**
 
 Average backpressure across all active L1 ports.
 
@@ -765,7 +744,7 @@ L1 Contention Index = avg(backpressure of Unpacker, NOC Out 0, NOC Out 1, NOC In
 
 ---
 
-**33. Unpacker L1 Efficiency**
+**32. Unpacker L1 Efficiency**
 
 When the unpacker is busy, how often does L1 actually serve it.
 
@@ -785,7 +764,7 @@ Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
 
 ---
 
-**34. Packer L1 Efficiency**
+**33. Packer L1 Efficiency**
 
 When the packer is busy, how often does L1 serve it.
 
@@ -805,7 +784,7 @@ Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
 
 ---
 
-**35. NOC vs Compute Balance**
+**34. NOC vs Compute Balance**
 
 Whether the operation is NOC-bound or compute-bound.
 
@@ -826,7 +805,7 @@ NOC vs Compute = (NOC_Out + NOC_In) / (FPU_COUNTER + NOC_Out + NOC_In) * 100
 
 ---
 
-**36. TDMA vs NOC L1 Share**
+**35. TDMA vs NOC L1 Share**
 
 Fraction of L1 bandwidth used by RISC/TDMA vs NOC.
 
@@ -846,7 +825,7 @@ TDMA vs NOC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NOC_Out + NOC_In) * 100
 
 ---
 
-**37. Stall Cause Overlap Factor T0/T1/T2**
+**36. Stall Cause Overlap Factor T0/T1/T2**
 
 Ratio of the sum of all 9 per-thread stall reason counters to the total thread stalls. Values >1.0 mean multiple stall conditions are active simultaneously.
 
@@ -866,7 +845,7 @@ Stall Overlap TN = sum(all 9 WAITING_FOR_*_N) / THREAD_STALLS_N
 
 ---
 
-**38. Packer Load Imbalance**
+**37. Packer Load Imbalance**
 
 Spread between the most and least utilized packer engines. WH only (PACK_COUNT=4).
 
@@ -886,7 +865,7 @@ Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
 
 ---
 
-**39. Compute-to-Unpack Ratio**
+**38. Compute-to-Unpack Ratio**
 
 Whether the operation is compute-bound or memory-bound.
 
@@ -911,7 +890,7 @@ Compute-to-Unpack Ratio = MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY) * 100
 
 Some of these metrics use BH-specific fallback formulas. Others are truly Wormhole-only (marked below) because the required hardware signal is inactive on Blackhole.
 
-**40. Math Pipeline Utilization**
+**39. Math Pipeline Utilization**
 
 Measures math instruction flow efficiency through the pipeline.
 
@@ -931,19 +910,9 @@ On Blackhole, `MATH_INSTRN_STARTED` is inactive. The BH fallback uses `FIDELITY_
 - **BH high value (>20%)**: Math pipeline is active (executing fidelity phases). Matmul shows 30%.
 - **Low value**: Math pipeline is mostly idle or stalled.
 
-**Use case:** Detects math pipeline stalls. On BH, compare with Fidelity Phase Overhead to distinguish active compute from fidelity overhead.
 
----
 
-**41. Math Src Data Ready Rate** *(Inactive)*
-
-This metric is currently inactive on all architectures. The counter it depends on (`MATH_INSTRN_NOT_BLOCKED_SRC`, grant sel 256 = `hf_cycles==2'b11`) is always 0 because `fidelity_phases_ongoing = 1'b0` on both WH and BH, making `hf_cycles` permanently `2'b00`. The counter has been removed from the hw_counters.h arrays.
-
-**Use case:** Identifies source data starvation as the cause of math pipeline stalls.
-
----
-
-**42. SrcB Write Actual Efficiency**
+**40. SrcB Write Actual Efficiency**
 
 Fraction of srcB write attempts that actually succeeded.
 
@@ -963,31 +932,8 @@ SrcB Write Actual Efficiency = SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE * 100
 
 ---
 
-**43. HiFi2/LoFi/HiFi4 Instrn Rate**
 
-Fraction of math instructions at each fidelity level.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole only |
-| **Counter group** | UNPACK |
-
-```
-HiFi2 Rate = INSTRN_2_HF_CYCLES / MATH_INSTRN_STARTED * 100
-LoFi Rate = INSTRN_1_HF_CYCLE / MATH_INSTRN_STARTED * 100
-HiFi4 Rate = (MATH_INSTRN_STARTED - HF2 - HF1) / MATH_INSTRN_STARTED * 100
-```
-
-- **HiFi4 dominant**: High precision math, more cycles per instruction.
-- **LoFi dominant**: Fast math, fewer cycles, lower precision.
-
-**Not available on Blackhole**: `MATH_INSTRN_STARTED` signal is inactive on BH.
-
-**Use case:** Confirms actual fidelity mode matches expectations. Unexpected HiFi4 when LoFi was intended wastes cycles.
-
----
-
-**44. Packer Engine 0/1/2 Util**
+**41. Packer Engine 0/1/2 Util**
 
 Per-engine packer utilization.
 
@@ -1006,7 +952,7 @@ Packer Engine N Util = PACKER_BUSY_N / ref_cnt * 100
 
 ---
 
-**45. Unpacker0/1 Write Efficiency**
+**42. Unpacker0/1 Write Efficiency**
 
 Source register write throughput per unpacker.
 
@@ -1029,7 +975,7 @@ Unpacker1 Efficiency = SRCB_WRITE / UNPACK1_BUSY_THREAD0 * 100
 
 ---
 
-**46. FPU Execution Efficiency**
+**43. FPU Execution Efficiency**
 
 FPU active cycles as fraction of math instruction availability.
 

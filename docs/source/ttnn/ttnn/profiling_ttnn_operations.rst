@@ -241,7 +241,6 @@ These metrics depend on hardware signals inactive on Blackhole and are automatic
 
 - **Math Pipeline Utilization (%)**: Math instruction flow efficiency (MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE). On Blackhole, falls back to ``FIDELITY_PHASE_STALLS / ref_cnt`` since ``MATH_INSTRN_STARTED`` is inactive.
 - **SrcB Write Actual Efficiency (%)**: Fraction of srcB write attempts that succeeded.
-- **HiFi2/LoFi/HiFi4 Instrn Rate (%)**: Fraction of math instructions at each fidelity level.
 - **Packer Engine 0/1/2/3 Util (%)**: Per-engine packer utilization (Wormhole has 4 packer engines).
 - **Packer Load Imbalance (%)**: Spread between most and least utilized pack engines.
 - **Unpacker0/1 Write Efficiency (%)**: Source register write throughput per unpacker.
