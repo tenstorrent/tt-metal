@@ -1,51 +1,61 @@
 # Execution Log: ttnn-unary-sfpu-operation-analyzer
 
-## Metadata
-- **Operation**: tanhshrink
+## Session Info
+- **Operation**: swish
 - **Agent**: ttnn-unary-sfpu-operation-analyzer
-- **Status**: COMPLETED (stub operation documented)
-- **Output file**: `.claude-analysis/softcap-1/tanhshrink_analysis.md`
+- **Start time**: 2026-04-15T10:43:30+00:00
+- **Status**: SUCCESS
 
-## Input Interpretation
-| Field | Value | Confidence |
-|-------|-------|------------|
-| Operation name | tanhshrink | HIGH |
-| UnaryOpType | TANHSHRINK | HIGH |
-| Output location | .claude-analysis/softcap-1/ | HIGH |
+## Analysis Steps
 
-## Execution Timeline
+1. **Read unary_op_utils.cpp** - Found SWISH dispatch: `swish_tile_init()` / `swish_tile(idst)`, compute kernel `eltwise_sfpu.cpp`, macro `SFPU_OP_SWISH_INCLUDE`, approx_mode=false.
+2. **Read API header** (`swish.h`) - Confirmed `swish_tile()` calls `llk_math_eltwise_unary_sfpu_swish<APPROX>(idst)`.
+3. **Read LLK dispatch** (`llk_math_eltwise_unary_sfpu_swish.h`) - Both WH and BH identical. Forwards to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_swish<APPROXIMATE, 8>`.
+4. **Read core SFPU kernel** (`ckernel_sfpu_swish.h`) - Both WH and BH identical. SFPI-based kernel. Piecewise sigmoid approximation: polynomial (|x|<=2.5), linear (2.5<|x|<=5), saturate (|x|>5). Then swish = x * sigmoid(x).
+5. **Read params dispatch** (`llk_math_eltwise_unary_sfpu_params.h`) - VectorMode::RC, 4 faces, standard DEST progression.
+6. **Read init/addrmod** (`llk_math_eltwise_unary_sfpu.h`) - SfpuType::swish has no special case; only ADDR_MOD_7 configured (zero increments).
+7. **Verified APPROX generation** (`genfiles.cpp`) - `constexpr bool APPROX = {math_approx_mode}` from JIT.
+8. **Verified all identifiers** - `calculate_swish`, `llk_math_eltwise_unary_sfpu_swish`, `llk_math_eltwise_unary_sfpu_swish_init` all found in both WH and BH ckernels. All file paths verified.
+9. **Wrote analysis** to `.claude-analysis/softcap-1/swish_analysis.md`.
 
-### Phase 1: Dispatch Research
-- Read `unary_op_utils.cpp` -- found no case for TANHSHRINK in `get_op_init_and_func_default()`, `get_op_approx_mode()`, or `get_compute_kernel_path()`
-- Confirmed TANHSHRINK enum exists in `unary_op_types.hpp:111`
-- Confirmed `REGISTER_UNARY_OPERATION(tanhshrink, TANHSHRINK)` in `unary.hpp:158`
-- Traced call chain: `ttnn::tanhshrink()` -> `detail::unary_impl()` -> `prim::unary()` -> factory -> `get_op_init_and_func_default()` -> `TT_THROW`
+## Key Findings
+- Swish is implemented entirely using SFPI abstractions (no raw TTI instructions)
+- The `APPROXIMATION_MODE` template parameter is accepted but never tested -- same code runs regardless
+- Sigmoid is approximated via a 3-segment piecewise approach: degree-3 polynomial, linear, and saturation
+- WH and BH implementations are identical at all layers
+- No special ADDR_MOD configuration needed (only ADDR_MOD_7 with zero increments)
 
-### Phase 2: Kernel Search
-- Searched for `ckernel_sfpu_tanhshrink` -- no file exists
-- Searched for `tanhshrink_tile` function -- does not exist
-- Searched for `tanhshrink` in entire `tt_metal/third_party/` -- no matches
-- Found comment in `unary_composite_op.cpp:501`: `// tanhshrink(x) = x - tanh(x)`
+## Output
+- **Analysis file**: `.claude-analysis/softcap-1/swish_analysis.md`
 
-### Phase 3: Binding Verification
-- Checked `unary_nanobind.cpp` -- tanhshrink forward is NOT bound
-- Only `tanhshrink_bw` (backward) is bound in `unary_backward_nanobind.cpp`
-- The .so binary contains `tanhshrink` (likely from previous build)
+---
 
-### Phase 4: Analysis Writing
-- Wrote stub analysis documenting the non-functional status
-- Documented all evidence of stub status
+## Session Info (atanh)
+- **Operation**: atanh
+- **Agent**: ttnn-unary-sfpu-operation-analyzer
+- **Start time**: 2026-04-15
+- **Status**: SUCCESS
 
-## Recovery Summary
-No errors to recover from. The operation was identified as a stub early in the analysis.
+## Analysis Steps (atanh)
 
-## Deviations
-- Standard SFPU analysis template sections (Annotated Source, Instructions Used, Register Usage, Address Mode) are populated with "N/A" explanations since no kernel exists
-- Added an extra "Evidence of Stub Status" section documenting why the operation is non-functional
+1. **Read unary_op_utils.cpp** - Found ATANH dispatch: `atanh_tile_init()` / `atanh_tile(idst)`, compute kernel `eltwise_sfpu.cpp`, macro `SFPU_OP_ATANH_INCLUDE`, approx_mode=false.
+2. **Read API header** (`atanh.h`) - Confirmed `atanh_tile()` calls `llk_math_eltwise_unary_sfpu_atanh<APPROX>(idst)`.
+3. **Read LLK dispatch** (`llk_math_eltwise_unary_sfpu_atanh.h`) - Both WH and BH identical. Forwards to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_atanh<APPROXIMATE, 8>`.
+4. **Read core SFPU kernel** (`ckernel_sfpu_atanh.h`) - Both WH and BH identical. SFPI-based kernel. Computes atanh(x) = 0.5*(ln(1+x)-ln(1-x)) via IEEE 754 decomposition and cubic minimax polynomial for ln(m).
+5. **Read params dispatch** (`llk_math_eltwise_unary_sfpu_params.h`) - VectorMode::RC, 4 faces, standard DEST progression.
+6. **Read init/addrmod** (`llk_math_eltwise_unary_sfpu.h`) - SfpuType::atanh has no special case; only ADDR_MOD_7 configured (zero increments).
+7. **Verified APPROX generation** (`genfiles.cpp`) - `constexpr bool APPROX = {math_approx_mode}` from JIT.
+8. **Verified all identifiers** - `calculate_atanh`, `atanh_init` found in both WH and BH ckernels. All SFPU instructions verified present in the kernel file. All file paths verified.
+9. **Wrote analysis** to `.claude-analysis/softcap-1/atanh_analysis.md`.
 
-## Artifacts
-- `.claude-analysis/softcap-1/tanhshrink_analysis.md` -- analysis file (new)
+## Key Findings (atanh)
+- Atanh is implemented entirely using SFPI abstractions (no raw TTI instructions, no CC manipulation)
+- The `APPROXIMATION_MODE` template parameter is accepted but never tested -- same code runs regardless
+- Natural log is computed via IEEE 754 decomposition: ln(y) = e*ln(2) + P(m), where P is a cubic minimax polynomial
+- The polynomial is evaluated twice per element (once for ln(1+x), once for ln(1-x))
+- SFPU instructions: SFPMAD (dominant, all arithmetic), SFPEXEXP (exponent extraction x2), SFPSETEXP (mantissa normalization x2), SFPCAST (int-to-float x2), SFPLOAD/SFPSTORE (I/O)
+- WH and BH implementations are identical at all layers
+- No special ADDR_MOD configuration needed (only ADDR_MOD_7 with zero increments)
 
-## Handoff Notes
-- `tanhshrink` is a stub operation. If a dedicated SFPU kernel is needed, it would implement `x - tanh(x)` using the existing `tanh` infrastructure (SFPNONLINEAR InstrMod=5 for hardware tanh, or the software tanh approximation) plus an SFPMAD subtraction.
-- The backward operation `tanhshrink_bw` IS functional and computes `tanh(x)^2 * grad`.
+## Output (atanh)
+- **Analysis file**: `.claude-analysis/softcap-1/atanh_analysis.md`
