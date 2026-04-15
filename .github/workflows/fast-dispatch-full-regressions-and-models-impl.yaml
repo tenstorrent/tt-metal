@@ -46,9 +46,34 @@ jobs:
           # ----- Catalogs -----
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
-          # Temporarily filtered to only SDXL for testing OOM fix
           STABLE='[
-            {"model":"stable_diffusion_xl_base","timeout": 120}
+            {"model":"bge_m3"},
+            {"model":"common_models"},
+            {"model":"functional_unet"},
+            {"model":"ttt-llama3.2-1B"},
+            {"model":"qwen25_vl-3B"},
+            {"model":"resnet50"},
+            {"model":"whisper"},
+            {"model":"openpdn_mnist"},
+            {"model":"vit"},
+            {"model":"sentence_bert"},
+            {"model":"swin_s"},
+            {"model":"swin_v2"},
+            {"model":"mobilenetv2"},
+            {"model":"mobilenetv3"},
+            {"model":"segformer"},
+            {"model":"vgg_unet"},
+            {"model":"vanilla_unet"},
+            {"model":"efficientnetb0"},
+            {"model":"efficientdetd0"},
+            {"model":"vovnet"},
+            {"model":"ssd512"},
+            {"model":"yunet"},
+            {"model":"retinanet"},
+            {"model":"ufld_v2"},
+            {"model":"ttt-mistral-7B-v0.3"},
+            {"model":"stable_diffusion_xl_base","timeout": 120},
+            {"model":"stable_diffusion","timeout":45}
           ]'
 
           # Stable set (CIv2)
@@ -145,7 +170,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    runs-on: tt-metal-ci-vm-168  # Hardcoded for testing, was: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
