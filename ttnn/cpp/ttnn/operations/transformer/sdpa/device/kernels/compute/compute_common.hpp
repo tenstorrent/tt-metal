@@ -1244,13 +1244,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t in0_num_subblocks = M;
 #endif
 
-    mm_block_init_short(out_cb, in1_cb, 0, subblock_w, subblock_h, N);
-    reconfig_data_format(in1_cb, out_cb);
-    cb_wait_front(in1_cb, N);
-    cb_wait_front(out_cb, M);
-
     auto cfg = compute_kernel_lib::MatmulConfig::block(out_cb, in1_cb, out_cb, subblock_w, subblock_h, N);
-    compute_kernel_lib::matmul_reduce_subblock_inplace<compute_kernel_lib::BLOCK>(cfg, in0_num_subblocks, subblock_h);
+    compute_kernel_lib::matmul_reduce_subblock_inplace<compute_kernel_lib::BLOCK>(
+        cfg, in0_num_subblocks, subblock_h, M);
 }
 
 /**

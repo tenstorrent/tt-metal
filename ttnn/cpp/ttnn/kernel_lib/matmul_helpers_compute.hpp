@@ -132,10 +132,12 @@ ALWI void matmul_accumulate_no_mop(
 /**
  * @brief Single matmul + PostComputeFn + pack to output CB.
  *
- * Sequence: reserve(out_cb,1) → acquire → matmul → post_compute(1) → commit →
- *           wait → pack(0, out_cb) → release → push(out_cb,1)
+ * Full lifecycle: init_short + reconfig + wait(in0,1) + wait(in1,1) +
+ * reserve(out_cb,1) → acquire → matmul → post_compute(1) → commit →
+ * wait → pack(0, out_cb) → release → push(out_cb,1) → pop(in0,1)
  *
- * Caller must: init matmul, wait on input CBs, pop input CBs after return.
+ * Caller must: ensure in1 tiles are produced (helper waits but does NOT pop in1).
+ * The helper pops 1 tile from in0 after packing.
  */
 template <MatmulMode mode, typename PostComputeFn = NoPostCompute>
 ALWI void matmul_single_and_pack(
@@ -144,11 +146,16 @@ ALWI void matmul_single_and_pack(
 /**
  * @brief SDPA reduce subblock inplace.
  *
- * Per-subblock: acquire → matmul(0,0,0) → commit → pop(out,n) →
- *               wait → pack(n) → release → push(n)
+ * Full lifecycle: init_short + reconfig + input CB waits +
+ * per-subblock (acquire → matmul(0,0,0) → commit → pop(out,n) →
+ *               wait → pack(n) → release → push(n))
+ *
+ * Caller must: ensure in1 (identity) tiles are produced, ensure out_cb has total_in0_tiles.
+ * The helper waits on both, pops/pushes out_cb per subblock, does NOT pop in1.
  */
 template <MatmulMode mode>
-ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles);
+ALWI void matmul_reduce_subblock_inplace(
+    const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles, uint32_t total_in0_tiles);
 
 // =============================================================================
 // SDPA Helpers: Absolute-offset packing patterns

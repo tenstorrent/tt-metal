@@ -84,6 +84,12 @@ template <MatmulMode mode, typename PostComputeFn>
 ALWI void matmul_single_and_pack(
     const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx,
     uint32_t out_cb, PostComputeFn post_compute) {
+    // Full lifecycle: init + reconfig + input CB wait + DST + output CB + input CB pop
+    matmul_init_short<mode>(cfg);
+    reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
+    cb_wait_front(cfg.in0_cb_id, 1);
+    cb_wait_front(cfg.in1_cb_id, 1);
+
     cb_reserve_back(out_cb, 1);
     tile_regs_acquire();
     detail::matmul_single<mode>(cfg, in0_idx, in1_idx, 0);
@@ -93,10 +99,19 @@ ALWI void matmul_single_and_pack(
     pack_tile(0, out_cb);
     tile_regs_release();
     cb_push_back(out_cb, 1);
+
+    cb_pop_front(cfg.in0_cb_id, 1);
 }
 
 template <MatmulMode mode>
-ALWI void matmul_reduce_subblock_inplace(const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles) {
+ALWI void matmul_reduce_subblock_inplace(
+    const MatmulConfig& cfg, uint32_t num_subblocks, uint32_t subblock_tiles, uint32_t total_in0_tiles) {
+    // Full lifecycle: init + reconfig + input CB waits + per-subblock DST + output CB
+    matmul_init_short<mode>(cfg);
+    reconfig_data_format(cfg.in1_cb_id, cfg.in0_cb_id);
+    cb_wait_front(cfg.in1_cb_id, 1);
+    cb_wait_front(cfg.out_cb_id, total_in0_tiles);
+
     for (uint32_t sub = 0; sub < num_subblocks; ++sub) {
         tile_regs_acquire();
         detail::matmul_single<mode>(cfg, 0, 0, 0);

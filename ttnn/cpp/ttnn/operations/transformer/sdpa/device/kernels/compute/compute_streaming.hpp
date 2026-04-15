@@ -486,17 +486,9 @@ void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
-            reconfig_data_format(col_identity_cb, cur_sum_cb);
-
-            cb_wait_front(col_identity_cb, N);
-            cb_wait_front(cur_sum_cb, 1);
-
             auto cfg = compute_kernel_lib::MatmulConfig::block(cur_sum_cb, col_identity_cb, scratch_cb, N, 1, N);
             compute_kernel_lib::matmul_single_and_pack<compute_kernel_lib::BLOCK>(
                 cfg, 0, 0, scratch_cb, RecipPostCompute{});
-
-            cb_pop_front(cur_sum_cb, 1);
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
