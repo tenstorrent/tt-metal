@@ -42,24 +42,26 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
 }
 
 std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
-    std::vector<uint16_t> result(in.size() * 2);
+    std::vector<uint16_t> result;
+    result.reserve(in.size() * 2);
     for (size_t i = 0; i < in.size(); i++) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
-        result[i * 2] = std::bit_cast<uint16_t>(two_bfloats.first);
-        result[(i * 2) + 1] = std::bit_cast<uint16_t>(two_bfloats.second);
+        result.push_back(std::bit_cast<uint16_t>(two_bfloats.first));
+        result.push_back(std::bit_cast<uint16_t>(two_bfloats.second));
     }
     return result;
 }
 
 std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
-    std::vector<uint32_t> result(in.size() / 2);
     TT_ASSERT(in.size() % 2 == 0);
+    std::vector<uint32_t> result;
+    result.reserve(in.size() / 2);
     for (size_t i = 0; i < in.size(); i += 2) {
         auto val1 = std::bit_cast<bfloat16>(in[i]);
         auto val2 = std::bit_cast<bfloat16>(in.at(i + 1));
         auto packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
-        result[i / 2] = packed;
+        result.push_back(packed);
     }
     return result;
 }
