@@ -159,8 +159,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     }
 }
 
-// Generate only the source/header files needed for compilation (no actual build).
-// These are the same files that generate_binaries() produces before calling jit_build.
+// Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
@@ -172,8 +171,7 @@ void generate_kernel_source_files(
     }
 }
 
-// Build a KernelCompileDescriptor for one kernel using the prepared
-// build_options and kernel state.
+// Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
@@ -1720,9 +1718,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                    tt::TargetDevice::Mock;
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
 
-    // Shared kernel prep: enrich build options, compute hash, assign name.
-    // Returns (build_options, kernel_hash).  Runs inline for the remote path
-    // and inside launch_build_step workers for the local path.
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
         JitBuildOptions build_options(build_env.build_env);
         kernel->set_build_options(build_options);
@@ -1744,8 +1739,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     };
 
     if (remote_enabled) {
-        // Remote path: prep and submit are sequential (cheap CPU work;
-        // the heavy lifting happens on the remote server in parallel).
+        // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
+        // server.
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
         RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
 
@@ -1770,7 +1765,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
         }
     } else {
-        // Local path: parallel build via thread pool (compilation is CPU-bound).
+        // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
@@ -1782,6 +1777,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             kernel->register_kernel_elf_paths_with_watcher(*device);
                             jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
                         } else {
+                            // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
