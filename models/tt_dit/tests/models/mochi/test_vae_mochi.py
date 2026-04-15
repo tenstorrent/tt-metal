@@ -179,7 +179,9 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_channels, nonlinearity):
+def create_random_resblock_models(
+    mesh_device, parallel_config, ccl_manager, in_channels, nonlinearity, dtype=ttnn.bfloat16
+):
     """Initialize both reference and TT models."""
     # Create reference model
     reference_model = MochiResnetBlock3D(in_channels=in_channels, act_fn=nonlinearity)
@@ -191,6 +193,7 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
+        dtype=dtype,
     )
     tt_model.load_torch_state_dict(reference_model.state_dict())
 
@@ -234,9 +237,14 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
+    "dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
+@pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
 )
-def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links):
+def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links, dtype):
     """Test complete forward pass of TtResBlock."""
     block_args = resblock_args.copy()
     block_args["channels"] = C
@@ -253,6 +261,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
         ccl_manager=ccl_manager,
         in_channels=block_args["channels"],
         nonlinearity=block_args["nonlinearity"],
+        dtype=dtype,
     )
 
     # Create input tensor
@@ -275,7 +284,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
