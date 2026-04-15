@@ -12,6 +12,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/bug_checker/ @stevendae @cmaryanTT @tenstorrent/codeowner-bypass
 .github/workflows/ttnn-run-sweeps*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
 .github/workflows/ttnn-model-trace-sweep-validation*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
+.github/workflows/ttnn-run-model-trace.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -95,13 +96,13 @@ tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/codeowner-byp
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @tenstorrent/codeowner-bypass
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
-tt_metal/impl/metal2_host_api/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
+tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/codeowner-bypass
 tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
-tt_metal/impl/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
+tt_metal/impl/tensor/ @akerteszTT @riverwuTT @aliaksei-sala @tenstorrent/codeowner-bypass
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/api/compute/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/api/compute/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
@@ -157,7 +158,7 @@ tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/me
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @aliaksei-sala @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @SeanNijjar @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
@@ -181,6 +182,7 @@ ttnn/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 # nanobind
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT @tenstorrent/codeowner-bypass
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/codeowner-bypass
+ttnn/ttnn/_experimental/moe_compute_utils.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/codeowner-bypass
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
@@ -371,6 +373,8 @@ models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeo
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
+models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @nardoTT @tt-asaigal @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass

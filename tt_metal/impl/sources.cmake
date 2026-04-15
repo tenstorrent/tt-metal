@@ -70,6 +70,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
@@ -123,4 +124,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
 )

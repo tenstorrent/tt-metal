@@ -590,7 +590,7 @@ def assert_numeric_metrics(
     # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
     if check_pcc and torch.numel(expected_result) != 1:
         passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
-        assert passing_pcc, pcc_message
+        assert passing_pcc, f"pcc={pcc_message}"
 
     # ULP-based comparison is stricter for floating-point representation differences.
     if check_ulp:
