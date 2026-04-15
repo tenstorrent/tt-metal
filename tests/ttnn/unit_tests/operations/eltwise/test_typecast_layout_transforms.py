@@ -146,13 +146,18 @@ class TestTypecastLayoutTransforms:
         input_layout,
         output_layout,
     ):
-        # RM→TILE with dtype change: Phase 2 typecast uses pack_tile which triggers
-        # ttsim pack_src_format mismatch (DEST format vs output format) on WH.
-        # TILE→RM works because pack_untilize_dest uses a different pack path.
-        # Same-dtype RM→TILE works because no format conversion occurs.
+        # RM→TILE with 32-bit output dtype: WH ttsim strict check rejects Dstacc vs In_data_format
+        # mismatch when fp32_dest_acc_en + Int32/Float32 output (JIT pack_src_format=Float32 but
+        # THCON In_data_format=Int32). Works on real hardware; ttsim-only limitation.
         is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        if is_rm_to_tile and tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
-            pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
+        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
+        if (
+            is_rm_to_tile
+            and tt_input_dtype != tt_output_dtype
+            and tt_output_dtype in _32bit_types
+            and os.environ.get("TT_METAL_SIMULATOR")
+        ):
+            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
         torch.manual_seed(0)
         _run_typecast_and_verify(
             device,
@@ -282,8 +287,14 @@ class TestTypecastCombinedTransforms:
         output_sharded,
     ):
         is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        if is_rm_to_tile and tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
-            pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
+        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
+        if (
+            is_rm_to_tile
+            and tt_input_dtype != tt_output_dtype
+            and tt_output_dtype in _32bit_types
+            and os.environ.get("TT_METAL_SIMULATOR")
+        ):
+            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
         sharded_mc = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
@@ -389,8 +400,13 @@ class TestTypecastBfpLayoutTransform:
     @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", BFP_RM_TO_TILE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 32, 32], [1, 1, 128, 128]])
     def test_rm_to_bfp_tile(self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape):
-        if tt_input_dtype != tt_output_dtype and os.environ.get("TT_METAL_SIMULATOR"):
-            pytest.skip("RM→TILE with dtype change triggers WH ttsim pack_src_format mismatch")
+        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
+        if (
+            tt_input_dtype != tt_output_dtype
+            and tt_output_dtype in _32bit_types
+            and os.environ.get("TT_METAL_SIMULATOR")
+        ):
+            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
         torch.manual_seed(0)
         _run_typecast_and_verify(
             device,
