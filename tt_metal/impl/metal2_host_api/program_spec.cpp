@@ -284,10 +284,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ----------------------------------------------------------------------------
 //
 // Validates that every NodeCoord referenced in kernels, DFBs, and semaphores
-// is a valid worker node on this device. Checks:
-//
-//   1. Out of bounds: the coord is outside the compute worker grid
-//   2. Dispatch node: the coord is reserved for dispatch
+// is within the compute worker grid on this device.
 //
 // NOTE: We're dealing in logical coordinates, so harvesting is handled
 // transparently at the UMD coordinate-translation layer.
@@ -295,46 +292,36 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
 // representative of every device in the mesh.
 
-void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
+void ValidateNodeBounds(const ProgramSpec& spec) {
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
     const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
-    // A default DispatchCoreConfig and 1 CQ is sufficient to figure out node boundaries and
-    // dispatch node reservations (and is available in mock mode)
+    // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
+    // from the YAML descriptor, and both are available in mock mode.
     DispatchCoreConfig dispatch_core_config{};
     uint8_t num_hw_cqs = 1;
     constexpr ChipId chip_id = 0;
 
     // But, best get the real dispatch_core_config and num_hw_cqs
-    // (Makes no difference now, but hardbaking that assumption would be brittle)
+    // (Makes no difference now, but hardbaking that assumption could be brittle)
     if (!is_mock) {
         auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
         num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     }
 
-    // Get the worker node grid size + reserved dispatch nodes info
+    // The compute_grid already accounts for the dispatch row/col
+    // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
-    const auto& dispatch_cores_vec =
-        tt::get_logical_dispatch_cores(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
-    const std::unordered_set<NodeCoord> dispatch_core_set(dispatch_cores_vec.begin(), dispatch_cores_vec.end());
 
-    // Target node checker lambda (good for kernels, DFBs, semaphores)
     auto check_target_nodes = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes,
                                   std::string_view entity_type,
                                   std::string_view entity_name) {
         const NodeRangeSet range_set = to_node_range_set(target_nodes);
         for (const NodeRange& range : range_set.ranges()) {
             for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    !dispatch_core_set.contains(node),
-                    "{} '{}' targets node ({},{}), which is reserved for dispatch firmware.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y);
                 TT_FATAL(
                     node.x < compute_grid.x && node.y < compute_grid.y,
                     "{} '{}' targets node ({},{}), which is out of bounds. "
@@ -360,11 +347,6 @@ void ValidateNodeBoundsGen1(const ProgramSpec& spec) {
     }
 }
 
-// TODO: Implement node bounds checking for Quasar.
-void ValidateNodeBoundsGen2(const ProgramSpec& spec) {
-    (void)spec;  // to placate clang-tidy
-}
-
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -377,17 +359,14 @@ void ValidateNodeBoundsGen2(const ProgramSpec& spec) {
 // Assumes CollectedSpecData is already built.
 
 void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+    // Sanity check for supported architecture.
+    TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
+
     //////////////////////////////
     // Node bounds checks
     //////////////////////////////
 
-    if (is_gen1_arch()) {
-        ValidateNodeBoundsGen1(spec);
-    } else if (is_gen2_arch()) {
-        ValidateNodeBoundsGen2(spec);
-    } else {
-        TT_FATAL(false, "Unknown architecture");
-    }
+    ValidateNodeBounds(spec);
 
     //////////////////////////////
     // Validate KernelSpecs
@@ -426,10 +405,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
                     kernel.unique_id,
                     QUASAR_TENSIX_ENGINES_PER_NODE);
-                // 3 threads is not allowed; the Quasar remapper doesn't support it.
+                // On Quasar, we're not allowing 3-thread compute kernels.
                 TT_FATAL(
                     kernel.num_threads != 3,
-                    "KernelSpec '{}' has 3 threads, which is not supported on Quasar. Legal values are 1, 2, and 4.",
+                    "KernelSpec '{}' has 3 threads, which is not supported for compute kernels. Legal values are 1, 2, "
+                    "and 4.",
                     kernel.unique_id);
             } else {
                 TT_FATAL(

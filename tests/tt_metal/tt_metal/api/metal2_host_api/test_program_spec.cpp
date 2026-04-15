@@ -1555,26 +1555,25 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
 }
 
 // WH N150 grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
-//   - compute_grid = 8x8 (valid compute nodes: x in [0,7], y in [0,7])
-//   - dispatch cores at row 8 (the last row of the 8x9 tensix grid): {0..7, 8}
-//   - OOB: any node with x >= 8 or y >= 8 that is not a dispatch core (e.g. {8, 0})
+//   - compute_grid = 8x8 (valid nodes: x in [0,7], y in [0,7])
+//   - OOB examples: {8, 0} (x too large), {0, 8} (y too large), {0, 100} (far OOB)
 //
 // These tests use the WH mock device, not real hardware.
 
-TEST_F(ProgramSpecTestGen1, KernelTargetsDispatchCoreFails) {
-    // {0, 8} is a dispatch core on WH N150 (row 8 = last tensix row, reserved for firmware).
-    const NodeCoord dispatch_node{0, 8};
+TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
+    // {0, 8}: y=8 is one past the 8-tall compute grid.
+    const NodeCoord oob_node{0, 8};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", dispatch_node);
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", oob_node);
     spec.kernels = {kernel};
-    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", dispatch_node, {"dm_kernel"})};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", oob_node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("reserved for dispatch firmware")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
