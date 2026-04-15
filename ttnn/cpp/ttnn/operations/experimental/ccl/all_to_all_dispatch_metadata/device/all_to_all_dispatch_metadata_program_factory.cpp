@@ -610,25 +610,6 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         for (auto v : neg_mcast_args) {
             reader_compile_time_args.push_back(v);
         }
-
-        log_debug(
-            tt::LogOp,
-            "pos_mcast_args: [{},{},{},{},{},{}]",
-            pos_mcast_args[0],
-            pos_mcast_args[1],
-            pos_mcast_args[2],
-            pos_mcast_args[3],
-            pos_mcast_args[4],
-            pos_mcast_args[5]);
-        log_debug(
-            tt::LogOp,
-            "neg_mcast_args: [{},{},{},{},{},{}]",
-            neg_mcast_args[0],
-            neg_mcast_args[1],
-            neg_mcast_args[2],
-            neg_mcast_args[3],
-            neg_mcast_args[4],
-            neg_mcast_args[5]);
     }
 
     const auto& writer_compile_time_args = reader_compile_time_args;
