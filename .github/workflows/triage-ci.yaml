@@ -59,16 +59,52 @@ jobs:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
 
+  # Inlined (not via uses:) so github.token is tt-metal's own token — avoids
+  # cross-repo reusable workflow token rescoping that causes 403 on branch creation.
   verify:
     if: inputs.fix-commit-sha != ''
-    uses: tenstorrent/tt-auto-triage/.github/workflows/verify-bug-escape-ci.yaml@ebanerjee/bug-escapes
-    with:
-      fix-commit-sha: ${{ inputs.fix-commit-sha }}
-      test-pipeline: ${{ inputs.verify-test-pipeline }}
-      test-job: ${{ inputs.verify-test-job }}
-      test-name: ${{ inputs.verify-test-name }}
-      poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
-      max-wait-minutes: "120"
-    secrets:
-      # RETRY_WORKFLOW_TOKEN is a PAT with repo+actions scope — not rescoped like GITHUB_TOKEN
-      GITHUB_WRITE_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout tt-auto-triage (verify scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/bug-escapes
+          path: triage
+
+      - name: Checkout tt-metal (for YAML discovery and branch creation)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal
+          ref: main
+          fetch-depth: 0
+          path: tt-metal
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Run verification
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIX_COMMIT_SHA: ${{ inputs.fix-commit-sha }}
+          TEST_PIPELINE: ${{ inputs.verify-test-pipeline }}
+          TEST_JOB: ${{ inputs.verify-test-job }}
+          TEST_NAME: ${{ inputs.verify-test-name }}
+          REPO_DIR: ${{ github.workspace }}/tt-metal
+          POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+          MAX_WAIT_MINUTES: "120"
+          OWNER_REPO: tenstorrent/tt-metal
+        run: |
+          set -euo pipefail
+          chmod +x triage/bug-escapes/verify/verify.sh
+          triage/bug-escapes/verify/verify.sh
+
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-result
+          path: triage/bug-escapes/verify/output/
+          retention-days: 30
+          if-no-files-found: warn
