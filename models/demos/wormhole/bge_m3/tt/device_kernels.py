@@ -16,10 +16,11 @@ NOTE: Do not combine smaller SDPA K tiles with disabled FP32 matmul dest acc (pr
 **MLP:** the encoder MLP uses ``ttnn.linear(..., activation="gelu")`` on the Wi projection so GELU fuses
 into the matmul (fewer device ops / less DRAM traffic than a separate ``ttnn.gelu``).
 
-**Perf (compile-time ``max_seq_len`` ≤ ``BGE_M3_L1_LINEAR_MAX_SEQ_LEN``):** encoder matmul **activations**
-use ``L1_MEMORY_CONFIG`` plus ``ttnn.CoreGrid`` from the device compute grid (BERT-style multicore writes to
-L1). **Weights** stay in DRAM via ``bge_m3_weight_dram_memory_config``. Long ``max_seq_len`` keeps DRAM to
-avoid the all-L1-interleaved regression seen on large activations.
+**Perf:** ``bge_m3_linear_activation_memory_config`` selects **L1 vs DRAM** for encoder activations (matmul,
+SDPA, LayerNorm, MLP, attention WO) using ``max_seq_len`` and ``max_batch_size * max_seq_len`` (threshold
+``BGE_M3_L1_LINEAR_MAX_SEQ_LEN``). **Do not** use L1 for large batch×seq on only some of these: mixed layouts
+hit L1 bank OOM or ``validate_circular_buffer_region`` (``program.cpp:1145``) on Wormhole. **MLP Wi** may
+force DRAM for mid-seq; see ``bge_m3_mlp_wi_output_memory_config``.
 
 Encoder SDPA picks the largest **Q** and **K** chunk in ``(256, 128, 64, 32)`` that divides ``seq_len``
 (capped at 256 to avoid oversized K tiles), with ``exp_approx_mode`` **False**, to reduce tiling
@@ -39,8 +40,11 @@ from ttnn.device import is_wormhole_b0 as ttnn_is_wormhole_b0
 
 import ttnn
 
-# When ``ModelArgs.max_seq_len`` is at or below this, use L1 + core_grid for linear **outputs** (not weights).
+# Encoder seq cap for L1 on short-seq paths and for ``batch * max_seq_len`` matmul envelope (see module doc).
 BGE_M3_L1_LINEAR_MAX_SEQ_LEN = 512
+
+# Wormhole-only: MLP Wi may use DRAM for ``max_seq_len`` in (MATMUL_SHORT, this] when still on L1 elsewhere.
+BGE_M3_WORMHOLE_MLP_WI_DRAM_MAX_SEQ_LEN = 127
 
 # Runtime ``seq_len`` at or below this triggers a **capped** matmul ``core_grid`` height (see
 # ``bge_m3_matmul_core_grid``). Tuned vs a single-row grid which increased total device time.
@@ -80,11 +84,38 @@ def bge_m3_weight_dram_memory_config() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
-def bge_m3_linear_activation_memory_config(max_seq_len: int | None) -> ttnn.MemoryConfig:
-    """Interleaved L1 for matmul activations when compile-time max sequence is modest; else DRAM."""
-    if max_seq_len is not None and max_seq_len <= BGE_M3_L1_LINEAR_MAX_SEQ_LEN:
-        return ttnn.L1_MEMORY_CONFIG
-    return ttnn.DRAM_MEMORY_CONFIG
+def bge_m3_linear_activation_memory_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None = None,
+) -> ttnn.MemoryConfig:
+    """Encoder activations (matmul, SDPA, LayerNorm, WO, MLP): L1 when ``max_seq_len`` and ``batch*max_seq_len`` ≤512."""
+    s = 0 if max_seq_len is None else int(max_seq_len)
+    if s > BGE_M3_L1_LINEAR_MAX_SEQ_LEN:
+        return ttnn.DRAM_MEMORY_CONFIG
+    b = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if b * s > BGE_M3_L1_LINEAR_MAX_SEQ_LEN:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
+def bge_m3_mlp_wi_output_memory_config(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    mesh_device: ttnn.MeshDevice | None,
+) -> ttnn.MemoryConfig:
+    """Output memory for MLP ``Wi`` (fused GELU). Uses DRAM when matmul envelope does, or WH mid-seq L1 clash band."""
+    base = bge_m3_linear_activation_memory_config(max_seq_len, max_batch_size)
+    if base == ttnn.DRAM_MEMORY_CONFIG:
+        return base
+    if (
+        mesh_device is not None
+        and is_wormhole_family_device(mesh_device)
+        and max_seq_len is not None
+        and max_seq_len > BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN
+        and max_seq_len <= BGE_M3_WORMHOLE_MLP_WI_DRAM_MAX_SEQ_LEN
+    ):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return base
 
 
 def bge_m3_matmul_core_grid(
