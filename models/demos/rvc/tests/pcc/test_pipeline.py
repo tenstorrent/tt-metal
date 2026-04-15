@@ -47,7 +47,7 @@ def test_pipeline_real_file_usage(device) -> None:
     common_kwargs = dict(
         speaker_id=0,
         f0_up_key=0,
-        f0_method="pm",
+        f0_method="rapt",
         index_rate=0.75,
         rms_mix_rate=0.25,
         protect=0.33,

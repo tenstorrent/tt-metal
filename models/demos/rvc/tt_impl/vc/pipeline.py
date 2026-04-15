@@ -293,7 +293,7 @@ class Pipeline:
             if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
                 f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
         else:
-            raise ValueError("f0_method must be 'rapt'")
+            raise ValueError(f"Unsupported f0_method: {self.f0_method}")
 
         f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()

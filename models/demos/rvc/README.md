@@ -56,7 +56,7 @@ from models.demos.rvc.torch_impl.vc.pipeline import Pipeline
 import soundfile as sf
 
 pipe = Pipeline(if_f0=True, version="v1", num="48k")
-audio = pipe.infer("./models/demos/rvc/data/sample-speech.wav", speaker_id=0, f0_method="pm")
+audio = pipe.infer("./models/demos/rvc/data/sample-speech.wav", speaker_id=0, f0_method="rapt")
 sf.write("./models/demos/rvc/data/output/output.wav", audio, pipe.tgt_sr, subtype="PCM_16")
 ```
 

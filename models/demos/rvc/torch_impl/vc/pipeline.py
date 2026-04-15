@@ -7,11 +7,10 @@ import math
 import os
 
 import librosa
-import parselmouth
+import numpy as np
 import torch
 import torch.nn.functional as F
-
-# import torchcrepe
+from pysptk import sptk
 from safetensors.torch import load_file
 from scipy import signal
 
@@ -158,58 +157,33 @@ class Pipeline:
         self.t_max = self.sr * x_max
         self.device = config.device
 
-    def _get_f0(self, audio, num_frames, f0_up_key, f0_method):
+    def _get_f0(self, audio, num_frames):
         f0_min = 50
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
-        if f0_method == "pm":
-            f0 = (
-                parselmouth.Sound(audio, self.sr)
-                .to_pitch_ac(
-                    time_step=self.window / self.sr,
-                    voicing_threshold=0.6,
-                    pitch_floor=f0_min,
-                    pitch_ceiling=f0_max,
-                )
-                .selected_array["frequency"]
+        if self.f0_method == "rapt":
+            audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
+            audio_scaled = np.clip(audio_np * 32767, -32768, 32767)
+            rapt_threshold = 0.525
+            voice_bias = -0.6 + rapt_threshold * (0.7 - (-0.6))
+            f0 = sptk.rapt(
+                audio_scaled,
+                self.sr,
+                self.window,
+                min=f0_min,
+                max=f0_max,
+                voice_bias=voice_bias,
+                otype="f0",
             )
             f0 = torch.from_numpy(f0)
             pad_size = (num_frames - len(f0) + 1) // 2
             if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
                 f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
-        elif f0_method == "crepe":
-            model = "full"
-            batch_size = 512
-            audio = torch.tensor(np.copy(x))[None].float()
-            f0, pd = torchcrepe.predict(
-                audio,
-                self.sr,
-                self.window,
-                f0_min,
-                f0_max,
-                model,
-                batch_size=batch_size,
-                device=self.device,
-                return_periodicity=True,
-            )
-            pd = torchcrepe.filter.median(pd, 3)
-            f0 = torchcrepe.filter.mean(f0, 3)
-            f0[pd < 0.1] = 0
-            f0 = f0[0].cpu().numpy()
-        elif f0_method == "rmvpe":
-            if not hasattr(self, "model_rmvpe"):
-                from rvc.lib.rmvpe import RMVPE
-
-                self.model_rmvpe = RMVPE(
-                    f"{os.environ['rmvpe_root']}/rmvpe.pt",
-                    device=self.device,
-                )
-            f0 = self.model_rmvpe.infer_from_audio(x, thred=0.03)
         else:
-            raise ValueError("f0_method must be 'pm', 'crepe', or 'rmvpe'.")
+            raise ValueError(f"Unsupported f0_method: {self.f0_method}")
 
-        f0 *= pow(2, f0_up_key / 12)
+        f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()
         f0_mel = 1127 * torch.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
@@ -280,8 +254,6 @@ class Pipeline:
         self,
         audio,
         speaker_id,
-        f0_up_key,
-        f0_method,
         file_index,
         index_rate,
         rms_mix_rate,
@@ -337,8 +309,6 @@ class Pipeline:
             pitch, pitchf = self._get_f0(
                 audio_padded,
                 p_len,
-                f0_up_key,
-                f0_method,
             )
         for idx_s, idx_e in idx_list:
             chunk_end = min(idx_e + self.t_pad2 // self.window, pitch.shape[1]) if pitch is not None else idx_e
@@ -372,7 +342,7 @@ class Pipeline:
         audio_path: str,
         speaker_id: int,
         f0_up_key: int = 0,
-        f0_method: str = "pm",
+        f0_method: str = "rapt",
         index_file: str | None = None,
         index_rate: float = 0.75,
         rms_mix_rate: float = 0.25,
@@ -386,11 +356,12 @@ class Pipeline:
         if audio_max > 1:
             audio /= audio_max
 
+        self.f0_up_key = f0_up_key
+        self.f0_method = f0_method
+
         result = self._run_pipeline(
             audio,
             speaker_id,
-            f0_up_key,
-            f0_method,
             index_file,
             index_rate,
             rms_mix_rate,
