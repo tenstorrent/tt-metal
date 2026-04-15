@@ -286,10 +286,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
     // ── Compute kernel ───────────────────────────────────────────────────
     // For RM→TILE: Phase 1 tilize operates on input_cb (input dtype).
     // Tilize with fp32_dest_acc + non-32-bit data hangs (hardware limitation).
-    // Enable fp32_dest only when input dtype is 32-bit (same logic as regular tilize).
-    const bool input_is_32bit =
-        (input_dtype == DataType::FLOAT32 || input_dtype == DataType::INT32 || input_dtype == DataType::UINT32);
-    const bool rm_to_tile_fp32_dest = args.fp32_dest_acc_en && input_is_32bit;
+    const bool rm_to_tile_fp32_dest = false;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (rm_to_tile_fp32_dest && args.preserve_fp32_precision) {
