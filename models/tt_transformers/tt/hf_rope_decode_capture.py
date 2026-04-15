@@ -83,7 +83,16 @@ def _tensor_shape_digest(tt: ttnn.Tensor) -> Dict[str, Any]:
     out["logical_shape"] = logical_val
     out["logical_shape_source"] = logical_shape_source
     out["memory"] = tensor_memory_config_shard_digest(tt)
+    dtype = getattr(tt, "dtype", None)
+    out["dtype"] = str(dtype) if dtype is not None else None
+    layout = getattr(tt, "layout", None)
+    out["layout"] = str(layout) if layout is not None else None
     return out
+
+
+def tensor_device_layout_digest(tt: ttnn.Tensor) -> Dict[str, Any]:
+    """Public alias for :func:`_tensor_shape_digest` (replay / sweep parity logging)."""
+    return _tensor_shape_digest(tt)
 
 
 def maybe_log_hf_rope_decode_tensor_shapes(
