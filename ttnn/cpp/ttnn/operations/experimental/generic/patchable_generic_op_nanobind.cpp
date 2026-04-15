@@ -106,7 +106,6 @@ class FusionDispatchState {
     // after dispatch) and a Python-list reference for reading constants.
     std::vector<std::optional<Tensor>> inputs_;
     std::vector<PyListRef> py_refs_;  // where to read non-dirty slots from Python
-    size_t n_inputs_;
 
     // Set by set_input(), cleared by dispatch().
     bool ready_ = false;
@@ -134,7 +133,6 @@ public:
             }
         }
         TT_FATAL(!init_tensors.empty(), "ops_input_tensors must contain at least one tensor");
-        n_inputs_ = init_tensors.size();
 
         // 2. Convert output specs.
         output_specs_.reserve(output_specs_py.size());
@@ -152,7 +150,7 @@ public:
 
         // 5. All slots start empty (nullopt).  Volatile slots are populated by
         //    set_input(); constant slots are read from Python via py_refs_.
-        inputs_.resize(n_inputs_, std::nullopt);
+        inputs_.resize(py_refs_.size(), std::nullopt);
     }
 
     void set_input(size_t dedup_idx, const Tensor& t) {
@@ -168,8 +166,8 @@ public:
 
         // 2. Build io_tensors: populated slots from C++ inputs_, empty slots from Python.
         std::vector<Tensor> io_tensors;
-        io_tensors.reserve(n_inputs_ + outputs.size());
-        for (size_t i = 0; i < n_inputs_; ++i) {
+        io_tensors.reserve(py_refs_.size() + outputs.size());
+        for (size_t i = 0; i < py_refs_.size(); ++i) {
             if (inputs_[i].has_value()) {
                 io_tensors.push_back(*inputs_[i]);
             } else {
