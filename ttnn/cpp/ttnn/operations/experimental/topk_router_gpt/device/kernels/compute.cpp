@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,8 @@
 //            insertion-sort topk → softmax → pack final output
 
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
+#include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-
-using namespace compute_kernel_lib;
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/reconfig_data_format.h"
@@ -81,8 +79,14 @@ void kernel_main() {
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
     // must NOT be mixed with tile_regs_* in half-sync mode.
-    auto cfg = MatmulConfig::block(cb_input, cb_weight, cb_local_out, 1, 1, 1);
-    matmul_init<BLOCK>(cfg);
+    mm_block_init(
+        cb_input,
+        cb_weight,
+        cb_local_out,
+        /*transpose=*/0,
+        /*ct_dim=*/1,
+        /*rt_dim=*/1,
+        /*kt_dim=*/1);
     tile_regs_acquire();
 
     uint32_t tiles_done = 0;
@@ -95,7 +99,18 @@ void kernel_main() {
         cb_wait_front(cb_input, block);
         cb_wait_front(cb_weight, block);
 
-        detail::matmul_accumulate<BLOCK>(cfg, 0, 0, 0, block, 1, 1, 0);
+        for (uint32_t k = 0; k < block; k++) {
+            matmul_block(
+                cb_input,
+                cb_weight,
+                /*in0_tile_index=*/k,
+                /*in1_tile_index=*/k,
+                /*idst=*/0,
+                /*transpose=*/false,
+                /*ct_dim=*/1,
+                /*rt_dim=*/1,
+                /*kt_dim=*/1);
+        }
 
         cb_pop_front(cb_input, block);
         cb_pop_front(cb_weight, block);

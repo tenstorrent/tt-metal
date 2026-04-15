@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,7 @@
 #include "tt-metalium/constants.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
-
-using namespace compute_kernel_lib;
+#include "api/compute/matmul.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -58,8 +56,7 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    auto cfg = MatmulConfig::block(cb_s2c_in, cb_r2c_w, cb_c2w_out, 7, 1, 1);
-    matmul_init<BLOCK>(cfg);
+    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //---------------------------------------------------------------------
     // Compute in @ W
@@ -78,8 +75,18 @@ void kernel_main() {
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
             cb_wait_front(cb_r2c_w, w_tiles_per_block);
 
-            detail::matmul_accumulate<BLOCK>(cfg, in0_index, 0, 0, w_tiles_per_block / 7, 1, 7, 0);
-            in0_index += w_tiles_per_block / 7;
+            for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
+                matmul_block(
+                    cb_s2c_in,
+                    cb_r2c_w,
+                    in0_index++,
+                    /*in1_tile_index=*/k,
+                    /*idst=*/0,
+                    /*transpose=*/false,
+                    /*ct_dim=*/7,
+                    /*rt_dim=*/1,
+                    /*kt_dim=*/1);
+            }
             cb_pop_front(cb_r2c_w, w_tiles_per_block);
         }
 

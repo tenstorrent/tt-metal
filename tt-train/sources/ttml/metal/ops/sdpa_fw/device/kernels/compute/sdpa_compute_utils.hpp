@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,11 +14,9 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers_compute.hpp"
-
-using namespace compute_kernel_lib;
 
 constexpr uint32_t onetile = 1U;
 
@@ -142,13 +140,19 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    auto qkv_cfg = MatmulConfig::tile(cb_qk_result, cb_value, cb_cur_mm_out);
-    matmul_init_short<TILE>(qkv_cfg);
+    mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
     pack_reconfig_data_format(cb_cur_mm_out);
     reconfig_data_format(cb_qk_result, cb_value);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
-        matmul_accumulate<TILE>(qkv_cfg, 0, tile_idx, 0, block_size, 0, 1, 1);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            matmul_tiles(
+                cb_qk_result,
+                cb_value,
+                /* tile_idx */ 0,
+                /* tile_idx */ tile_idx + block_idx,
+                block_idx);
+        }
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -261,9 +265,8 @@ void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_matmul_reduce);  // reconfig data format to precise
     tile_regs_acquire();
 
-    auto reduce_cfg = MatmulConfig::tile(cb_in_idx, cb_matmul_reduce, cb_identity_scaler);
-    matmul_init<TILE>(reduce_cfg);
-    matmul_single<TILE>(reduce_cfg, 0, 0, reduce_dst_idx);
+    mm_init(cb_in_idx, cb_matmul_reduce, cb_identity_scaler, 0);
+    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
 
     recip_tile_init();
     recip_tile(reduce_dst_idx);
