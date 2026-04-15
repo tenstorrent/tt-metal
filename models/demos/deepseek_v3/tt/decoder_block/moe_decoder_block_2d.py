@@ -166,6 +166,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hidden_size = cfg["moe"]["hidden_size"]
         tp_size = cfg["moe"]["mesh_device"].shape[1]
         x_dim = x.shape[-1]
+        num_tokens_per_row = x.shape[-2]
 
         if x_dim == hidden_size // tp_size:
             # Input is TP-sharded, need to gather
@@ -196,7 +197,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
 
-            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
+            if (
+                cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING
+                and tp_size == 8
+                and num_tokens_per_row == ttnn.TILE_SIZE
+            ):
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
