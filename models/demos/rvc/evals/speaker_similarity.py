@@ -20,7 +20,6 @@ import argparse
 import importlib.util
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -56,14 +55,7 @@ def cosine_similarity(reference_embedding: np.ndarray, candidate_embedding: np.n
     return float(np.dot(reference, candidate) / denom)
 
 
-def _resolve_audio_path(audio_filename: str) -> Path:
-    my_path = os.path.abspath(os.path.join(BASE_DIRECTORY, audio_filename))
-    if my_path.startswith(BASE_DIRECTORY):
-        return Path(my_path)
-    raise ValueError(f"Audio file must be located under {BASE_DIRECTORY}")
-
-
-def _load_audio_16khz_mono(audio_path: Path) -> torch.Tensor:
+def _load_audio_16khz_mono(audio_filename: str) -> torch.Tensor:
     if importlib.util.find_spec("librosa") is None or importlib.util.find_spec("soundfile") is None:
         raise SpeakerEmbeddingBackendError(
             "Audio loading for speaker similarity requires optional dependencies. "
@@ -73,8 +65,12 @@ def _load_audio_16khz_mono(audio_path: Path) -> torch.Tensor:
     import librosa
     import soundfile as sf
 
-    if not audio_path.exists() or not audio_path.is_file():
-        raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
+    audio_path = os.path.abspath(os.path.join(BASE_DIRECTORY, audio_filename))
+    if audio_path.startswith(BASE_DIRECTORY):
+        with open(audio_path, "rb") as audio_file:
+            audio, sample_rate = sf.read(audio_file)
+    else:
+        raise ValueError(f"Audio file must be located under {BASE_DIRECTORY}")
 
     with audio_path.open("rb") as audio_file:
         audio, sample_rate = sf.read(audio_file)
@@ -128,8 +124,7 @@ def compute_speaker_embedding(
     model_id: str = DEFAULT_SPEAKER_ENCODER,
     device: str = "cpu",
 ) -> np.ndarray:
-    resolved_audio_path = _resolve_audio_path(audio_filename)
-    waveform = _load_audio_16khz_mono(resolved_audio_path)
+    waveform = _load_audio_16khz_mono(audio_filename)
 
     if backend == "speechbrain_ecapa":
         classifier = _load_speechbrain_encoder(model_id=model_id, device=device)
