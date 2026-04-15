@@ -512,77 +512,39 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
     }
 }
 
-// Use preprocessor #if to select groups at compile time, avoiding
-// runtime loop optimization issues with the RISC-V compiler.
+// Counter groups and their corresponding enable bitmask bits.
+constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] = {
+    {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
+    {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
+    {PerfCounterGroup::UNPACK, PROFILE_PERF_COUNTERS_UNPACK},
+    {PerfCounterGroup::L1_0, PROFILE_PERF_COUNTERS_L1_0},
+    {PerfCounterGroup::L1_1, PROFILE_PERF_COUNTERS_L1_1},
+    {PerfCounterGroup::INSTRN, PROFILE_PERF_COUNTERS_INSTRN},
+    {PerfCounterGroup::L1_2, PROFILE_PERF_COUNTERS_L1_2},
+    {PerfCounterGroup::L1_3, PROFILE_PERF_COUNTERS_L1_3},
+    {PerfCounterGroup::L1_4, PROFILE_PERF_COUNTERS_L1_4},
+};
+constexpr uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
+
 void start_perf_counter() {
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
-    start_single_group(PerfCounterGroup::FPU);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
-    start_single_group(PerfCounterGroup::PACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
-    start_single_group(PerfCounterGroup::UNPACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
-    start_single_group(PerfCounterGroup::L1_0);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
-    start_single_group(PerfCounterGroup::L1_1);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
-    start_single_group(PerfCounterGroup::INSTRN);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
-    start_single_group(PerfCounterGroup::L1_2);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
-    start_single_group(PerfCounterGroup::L1_3);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
-    start_single_group(PerfCounterGroup::L1_4);
-#endif
+    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            start_single_group(counter_group_flags[i].first);
+        }
+    }
 }
 
 // stop_perf_counter: stops all enabled counter groups (freezes hardware counters).
 // Called from TRISC1 at the end of the compute kernel scope.
 // Does NOT read counter values — that happens on BRISC which has NOC access for DRAM push.
 void stop_perf_counter() {
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
-    stop_single_group(PerfCounterGroup::FPU);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
-    stop_single_group(PerfCounterGroup::PACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
-    stop_single_group(PerfCounterGroup::UNPACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
-    stop_single_group(PerfCounterGroup::L1_0);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
-    stop_single_group(PerfCounterGroup::L1_1);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
-    stop_single_group(PerfCounterGroup::INSTRN);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
-    stop_single_group(PerfCounterGroup::L1_2);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
-    stop_single_group(PerfCounterGroup::L1_3);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
-    stop_single_group(PerfCounterGroup::L1_4);
-#endif
+    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            stop_single_group(counter_group_flags[i].first);
+        }
+    }
 };
 
-// read_perf_counters: reads all enabled counter groups and writes markers to the profiler buffer.
-// Called from BRISC after wait_ncrisc_trisc() — BRISC has NOC access so it can push the L1
-// profiler buffer to DRAM (via quick_push) between groups when the buffer fills up.
-// The perf counter debug registers are shared across all RISCs on the Tensix core,
-// so BRISC can read counter values that were started/stopped by TRISC1.
-//
 // Flush perf counter data from L1 to DRAM without touching the header.
 // Sends ONLY custom markers (from CUSTOM_MARKERS to wIndex). The header
 // (sentinel + guaranteed markers) is reserved at the start of DRAM and
@@ -644,47 +606,21 @@ __attribute__((noinline)) void perf_counter_flush() {
 #endif
 }
 
-// Flush BEFORE each group (starting from 2nd) to ensure the buffer has room
-// for the full group. Flushing after is too late — timeStampedData silently
-// drops counters when bufferHasRoom returns false mid-group. Each group
-// needs at most ~330 uint32_t (INSTRN with 82 counters × 4), and the
-// buffer has 500 custom slots, so a fresh buffer always fits any single group.
+// read_perf_counters: reads all enabled counter groups and writes markers to the profiler buffer.
+// Called from BRISC after wait_ncrisc_trisc() — BRISC has NOC access so it can push the L1
+// profiler buffer to DRAM (via perf_counter_flush) between groups when the buffer fills up.
+// Flush BEFORE each group (starting from 2nd) to ensure the buffer has room.
 void read_perf_counters() {
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
-    read_single_group(PerfCounterGroup::FPU);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::PACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::UNPACK);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::L1_0);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::L1_1);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::INSTRN);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_2)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::L1_2);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_3)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::L1_3);
-#endif
-#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
-    perf_counter_flush();
-    read_single_group(PerfCounterGroup::L1_4);
-#endif
+    bool first_group = true;
+    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            if (!first_group) {
+                perf_counter_flush();
+            }
+            read_single_group(counter_group_flags[i].first);
+            first_group = false;
+        }
+    }
 };
 
 // TRISC1: RAII wrapper that starts counters in constructor and stops in destructor.
