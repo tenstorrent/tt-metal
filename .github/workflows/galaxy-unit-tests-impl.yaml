@@ -132,6 +132,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
+      - ${{ matrix.test-group.mlperf && 'pipeline-perf' || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
