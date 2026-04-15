@@ -406,7 +406,7 @@ class MLA1D(AbstractModule):
     ) -> SavedWeight:
         return shard_and_save(
             path,
-            torch_metaweight.transpose(-2, -1),
+            torch_metaweight.transpose(-2, -1).contiguous(),
             shard_dims=dims,
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
@@ -1110,6 +1110,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=2,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            subdevice_id=ttnn.SubDeviceId(0),
             use_broadcast=True,
         )
 
