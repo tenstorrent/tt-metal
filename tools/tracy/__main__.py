@@ -284,7 +284,8 @@ def main():
                 "Please choose one L1 bank per run."
             )
 
-        # Reject BH-only groups on non-BH architectures
+        # Reject BH-only groups on non-BH architectures.
+        # Detect arch from env vars or by querying the device at runtime.
         bh_only_groups = {"l1_2", "l1_3", "l1_4"}
         requested_groups = {group.lower() for group in options.perf_counter_groups}
         requested_bh_only = sorted(requested_groups & bh_only_groups)
@@ -297,12 +298,21 @@ def main():
                 ),
                 None,
             )
-            is_blackhole = declared_arch is not None and declared_arch.strip().lower() == "blackhole"
+            # If no env var is set, detect from the actual device
+            if declared_arch is None:
+                try:
+                    import ttnn
+                    device = ttnn.open_device(device_id=0)
+                    declared_arch = str(device.arch()).split(".")[-1]
+                    ttnn.close_device(device)
+                except Exception:
+                    pass
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
             if not is_blackhole:
                 arch_desc = declared_arch if declared_arch is not None else "undeclared"
                 raise ValueError(
                     f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
-                    f"but device arch is {arch_desc}. Set a Blackhole arch declaration before enabling these groups."
+                    f"but device arch is {arch_desc}."
                 )
 
         if bitfield > 0:

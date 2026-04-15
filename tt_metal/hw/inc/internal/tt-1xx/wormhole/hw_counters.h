@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <utility>
+
 // Wormhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
