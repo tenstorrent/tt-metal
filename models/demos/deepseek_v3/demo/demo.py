@@ -800,6 +800,8 @@ def run_demo(
                 os.fsync(checkpoint_fh.fileno())
 
             statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
+            statistics["sample_on_device"] = sample_on_device
+            statistics["enable_trace"] = enable_trace
             return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
