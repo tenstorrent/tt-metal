@@ -108,7 +108,11 @@ def _create_tensor(torch_tensor, dtype, layout, device, memory_config, is_host, 
 
     if _is_sharded(memory_config):
         tensor = ttnn.from_torch(
-            torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return ttnn.interleaved_to_sharded(tensor, memory_config)
 
@@ -166,8 +170,8 @@ def run(
     b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
 
     if (a_is_tile or b_is_tile) and len(shape_a) >= 2 and len(shape_b) >= 2:
-        inner_a = shape_a[-1]   # A's width
-        inner_b = shape_b[-2]   # B's height
+        inner_a = shape_a[-1]  # A's width
+        inner_b = shape_b[-2]  # B's height
         aligned = _tile_align(max(inner_a, inner_b))
         if inner_a != aligned:
             shape_a = tuple(list(shape_a[:-1]) + [aligned])
@@ -210,17 +214,31 @@ def run(
     input_b_is_sharded = _is_sharded(input_b_memory_config)
     has_program_config = "program_config" in op_kwargs
 
-    effective_b_mem = ttnn.DRAM_MEMORY_CONFIG if (input_b_is_sharded and not has_program_config) else input_b_memory_config
+    effective_b_mem = (
+        ttnn.DRAM_MEMORY_CONFIG if (input_b_is_sharded and not has_program_config) else input_b_memory_config
+    )
 
     # Create tensors using interleaved→sharded for sharded configs to avoid
     # TilizeDeviceOperation L1 circular buffer clashes
     input_tensor_a = _create_tensor(
-        torch_input_tensor_a, input_a_dtype, input_a_layout, device,
-        input_a_memory_config, is_host, is_mesh_device, input_a_tensor_placement,
+        torch_input_tensor_a,
+        input_a_dtype,
+        input_a_layout,
+        device,
+        input_a_memory_config,
+        is_host,
+        is_mesh_device,
+        input_a_tensor_placement,
     )
     input_tensor_b = _create_tensor(
-        torch_input_tensor_b, input_b_dtype, input_b_layout, device,
-        effective_b_mem, is_host, is_mesh_device, input_b_tensor_placement,
+        torch_input_tensor_b,
+        input_b_dtype,
+        input_b_layout,
+        device,
+        effective_b_mem,
+        is_host,
+        is_mesh_device,
+        input_b_tensor_placement,
     )
 
     start_time = start_measuring_time()
