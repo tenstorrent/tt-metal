@@ -135,6 +135,19 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
+      - name: Set trace alloc artifact name
+        if: ${{ !cancelled() && contains(matrix.test-group.model, 'llama') }}
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '-')
+          echo "TRACE_ALLOC_ARTIFACT_NAME=trace-alloc-info-${{ matrix.test-group.sku }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+      - name: Upload trace allocation info
+        timeout-minutes: 5
+        if: ${{ !cancelled() && contains(matrix.test-group.model, 'llama') }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.TRACE_ALLOC_ARTIFACT_NAME }}
+          path: /work/generated/trace_alloc/
+          if-no-files-found: ignore
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
