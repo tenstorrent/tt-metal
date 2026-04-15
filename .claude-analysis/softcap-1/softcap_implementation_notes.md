@@ -32,6 +32,11 @@ tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_softcap.h
 tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h
 tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_softcap.h
 tt_metal/hw/inc/api/compute/eltwise_unary/softcap.h
+tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h
+tt_metal/hw/inc/api/compute/eltwise_unary/rpow.h
+tt_metal/hw/inc/api/compute/eltwise_unary/rdiv.h
+tt_metal/hw/inc/api/compute/eltwise_unary/fill.h
+ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/softcap_sfpu.cpp
 
 ### Modified Files
 ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp

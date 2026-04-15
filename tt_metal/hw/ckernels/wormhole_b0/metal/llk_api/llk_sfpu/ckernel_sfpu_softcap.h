@@ -10,6 +10,22 @@
 
 namespace ckernel::sfpu {
 
+// Convert positive float to int32 (for exp scaling).
+sfpi_inline sfpi::vInt softcap_float_to_int32_pos(sfpi::vFloat in) {
+    sfpi::vInt result;
+    sfpi::vInt exp = exexp(in);
+    v_if(exp < 0) { result = 0; }
+    v_elseif(exp > 30) { result = 0x7FFFFFFF; }
+    v_else {
+        sfpi::vInt man = exman8(in);
+        sfpi::vInt shift = exp - 23;
+        man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
+        result = man;
+    }
+    v_endif;
+    return result;
+}
+
 // Newton-Raphson reciprocal: returns 1/|in| (always positive).
 // Adapted from _reciprocal_compat_ in ckernel_sfpu_rsqrt_compat.h.
 template <int max_iter = 3>
@@ -63,7 +79,7 @@ sfpi_inline sfpi::vFloat softcap_exp(sfpi::vFloat t) {
     p = p * r + sfpi::vConst1;                        // 1 + r*(...)
 
     // Scale by 2^n: exp(t) = exp(r) * 2^n
-    sfpi::vInt n_int = _float_to_int32_positive_(n_float);
+    sfpi::vInt n_int = softcap_float_to_int32_pos(n_float);
     sfpi::vFloat two_to_n = sfpi::setexp(sfpi::vConst1, sfpi::vInt(127) + n_int);
 
     return p * two_to_n;
