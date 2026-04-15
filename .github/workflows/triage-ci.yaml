@@ -45,6 +45,7 @@ on:
 permissions:
   contents: write
   actions: write
+  workflows: write
 
 jobs:
   detect:
@@ -71,4 +72,3 @@ jobs:
       max-wait-minutes: "120"
     secrets:
       GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
