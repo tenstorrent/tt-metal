@@ -209,7 +209,10 @@ ALWI void unpack_tilizeA_B_block(
 // clang-format on
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE_B0)
+    // Reinit packer to clear tilize mode. Without this, the packer remains in
+    // tilize configuration after tilize_uninit, causing issues when subsequent
+    // operations (e.g. typecast) need the packer in normal (non-tilize) mode.
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
 #endif
 }
