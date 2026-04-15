@@ -96,6 +96,13 @@ class Generator(WarmupForwardMixin):
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
+    def _get_sampling_contract(self, model_id: int):
+        sampling_module = getattr(self.model[model_id], "sampling", None)
+        sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
+        group_batch = sampling_module.tt_sampling.max_batch_size if sampling_module is not None else None
+        total_sampling_batch = group_batch * sampling_dp if group_batch is not None else None
+        return sampling_module, sampling_dp, group_batch, total_sampling_batch
+
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         ret = dict()
         ret["tokens"] = torch.zeros(batch_size, seq_len, dtype=torch.long)
@@ -487,6 +494,14 @@ class Generator(WarmupForwardMixin):
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
 
+        if use_batched_prefill and sampling_on_device_requested:
+            sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
+            if sampling_module is not None and sampling_dp > 1:
+                # NOTE: Batched prefill disabled: on-device sampling
+                # must fall back to sequential prefill until a row-sharded
+                # batched-prefill sampling contract is implemented.
+                use_batched_prefill = False
+
         if use_batched_prefill:
             padded_batch = next(
                 (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
@@ -662,8 +677,9 @@ class Generator(WarmupForwardMixin):
                 if sampling_enabled:
                     sampling_executed = True
 
-                    sampling_module = self.model[model_id].sampling
-                    sampling_batch = sampling_module.tt_sampling.max_batch_size
+                    sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
+                    assert sampling_module is not None
+                    assert sampling_batch is not None
                     combined_params = format_sampling_params(sampling_params, sampling_batch)
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
@@ -671,13 +687,12 @@ class Generator(WarmupForwardMixin):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
 
-                    sampling_module.reset_sampling_params(combined_params)
-                    if getattr(combined_params, "seed", None) is not None:
-                        sampling_module.seed_manager.reset_seed(combined_params.seed, empty_slots)
-                    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=False)
-                    if combined_prompt_tokens is not None:
-                        sampling_module.reset_prompt_tokens(combined_prompt_tokens)
-                    sampling_module.reset_output_state()
+                    sampling_module.apply_prefill_state(
+                        sampling_params=combined_params,
+                        prompt_tokens=combined_prompt_tokens,
+                        empty_slots=empty_slots,
+                        replicate_seeds=False,
+                    )
 
                     user_hidden = self.model[model_id].extract_last_tokens_batched_prefill(
                         logits,
@@ -687,7 +702,7 @@ class Generator(WarmupForwardMixin):
                         target_batch=sampling_batch,
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}"
+                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
                     if enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
@@ -2372,7 +2387,10 @@ class Generator(WarmupForwardMixin):
                 for trace_key, trace_id in self.trace_id_prefill_sampling.items():
                     if trace_id is not None:
                         parts = trace_key.split("_")
-                        m_id = int(parts[-1]) if len(parts) >= 2 else 0
+                        if parts and parts[0] == "sampling" and len(parts) >= 3:
+                            m_id = int(parts[2])
+                        else:
+                            m_id = int(parts[-1]) if len(parts) >= 2 else 0
                         try:
                             ttnn.release_trace(self.model_args[m_id].mesh_device, trace_id)
                         except Exception:
