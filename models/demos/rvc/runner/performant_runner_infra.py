@@ -23,7 +23,7 @@ class RVCInferenceConfig:
     num_secs: float
     speaker_id: int = 0
     f0_up_key: int = 0
-    f0_method: str = "pm"
+    f0_method: str = "rapt"
     index_rate: float = 0.75
     rms_mix_rate: float = 0.25
     protect: float = 0.33

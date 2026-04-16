@@ -386,7 +386,6 @@ class Pipeline:
         feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
 
         feats = ttnn.to_layout(feats, ttnn.ROW_MAJOR_LAYOUT)
-        num_frames = feats.shape[1] * 2
 
         if self.protect < 0.5 and pitch is not None and pitchf is not None:
             protected_features = _interpolate_1d(feats, scale_factor=2, mode="linear")
@@ -400,6 +399,7 @@ class Pipeline:
             feats = index_features * self.index_rate + (1 - self.index_rate) * feats
 
         feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
+        num_frames = feats.shape[1]
 
         if pitch is not None and pitchf is not None:
             pitch = pitch[:, :num_frames]
@@ -437,10 +437,7 @@ class Pipeline:
         output = output_torch[:, :, 0].contiguous()
         return output
 
-    def _run_pipeline(
-        self,
-        audio,
-    ):
+    def _run_pipeline(self, audio):
         assert audio.dim() == 2, audio.dim()
         index = big_npy = None
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
