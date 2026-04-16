@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
-from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import create_prompt_of_length, system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
@@ -61,6 +61,8 @@ def _demo_case(
     expect_full_length: bool,
     case_id: str,
     marks=None,
+    max_seq_len: int | None = None,
+    target_prompt_tokens: int | None = None,
 ):
     return pytest.param(
         {
@@ -75,6 +77,8 @@ def _demo_case(
             "profile_decode": profile_decode,
             "stop_at_eos": stop_at_eos,
             "expect_full_length": expect_full_length,
+            "max_seq_len": max_seq_len,
+            "target_prompt_tokens": target_prompt_tokens,
         },
         id=case_id,
         marks=marks,
@@ -82,17 +86,19 @@ def _demo_case(
 
 
 # Test matrix:
-# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | id               | max_prompts | max_users_per_row | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
-# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | tg_stress        | 56          | 32                | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
-# | tg_upr8          | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
-# | dual_full_demo   | 256         | 32                | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
-# | dual_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
-# | quad_full_demo   | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
-# | quad_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
-# | profile_decode   | 1           | 32                | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
-# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# +---------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+---------------------------+----------------+-------------+--------------------+-------------+----------------------+
+# | id                  | max_prompts | max_users_per_row | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name             | profile_decode | stop_at_eos | expect_full_length | max_seq_len | target_prompt_tokens |
+# +---------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+---------------------------+----------------+-------------+--------------------+-------------+----------------------+
+# | tg_stress           | 56          | 32                | 2              | 128            | 5                   | False        | True             | None                      | False          | False       | True               | None        | None                 |
+# | tg_upr8             | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                      | False          | False       | True               | None        | None                 |
+# | dual_full_demo      | 256         | 32                | 1              | 129            | None                | True         | True             | dual_demo_full_results    | False          | None        | False              | None        | None                 |
+# | dual_stress_demo    | 56          | 32                | 20             | 129            | None                | True         | True             | dual_demo_stress_results  | False          | False       | True               | None        | None                 |
+# | quad_full_demo      | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results    | False          | None        | False              | None        | None                 |
+# | quad_stress_demo    | 56          | 32                | 20             | 129            | None                | True         | True             | quad_demo_stress_results  | False          | False       | True               | None        | None                 |
+# | profile_decode      | 1           | 32                | 1              | 13             | 5                   | True         | True             | None                      | True           | False       | True               | None        | None                 |
+# | quad_long_ctx_65k   | 1           | 8                 | 1              | 129            | None                | True         | True             | None                      | False          | False       | True               | 65536       | 64512                |
+# | quad_long_ctx_131k  | 1           | 8                 | 1              | 129            | None                | True         | True             | None                      | False          | False       | True               | 131072      | 130048               |
+# +---------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+---------------------------+----------------+-------------+--------------------+-------------+----------------------+
 
 
 @pytest.mark.parametrize(
@@ -264,14 +270,49 @@ def _demo_case(
             case_id="profile_decode",
             marks=pytest.mark.timeout(1800),
         ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_65k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
+            max_seq_len=65536,
+            target_prompt_tokens=65536 - 1024,
+        ),
+        _demo_case(
+            max_prompts=1,
+            max_users_per_row=8,
+            repeat_batches=1,
+            max_new_tokens=32,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_long_ctx_131k",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(7200)],
+            max_seq_len=131072,
+            target_prompt_tokens=131072 - 1024,
+        ),
     ],
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool):
-    # Path to the external JSON file containing prompts
-    json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
-
-    # Load prompts from JSON file
-    prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
+    # Long-context cases generate a synthetic prompt; all others load from JSON.
+    if (case["target_prompt_tokens"] is not None) and ("_long_ctx_" in case["case_id"]):
+        prompts = [create_prompt_of_length(case["target_prompt_tokens"], MODEL_PATH)] * case["max_prompts"]
+    else:
+        json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
+        prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
 
     # Run demo
     run_kwargs = dict(
@@ -292,6 +333,8 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["override_num_layers"] = case["override_num_layers"]
     if case["stop_at_eos"] is not None:
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
+    if case["max_seq_len"] is not None:
+        run_kwargs["max_seq_len"] = case["max_seq_len"]
 
     results = run_demo(**run_kwargs)
 
