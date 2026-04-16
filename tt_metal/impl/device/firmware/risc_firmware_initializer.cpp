@@ -425,6 +425,13 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
                     try {
                         cluster_.assert_risc_reset_at_core(
                             tt_cxy_pair(id_and_cores.first, virtual_core), tt::umd::RiscType::ALL);
+                        // De-assert reset so the ERISC returns to running base/legacy UMD firmware.
+                        // initialize_firmware() for WH cooperative active ETH sends a go message and
+                        // requires the ERISC to be running (not halted) to pick up the new firmware.
+                        // Without this, the ERISC stays in hardware reset, ETH PHY links go down,
+                        // and concurrent topology discovery / dispatch fabric operations hang or crash.
+                        cluster_.deassert_risc_reset_at_core(
+                            tt_cxy_pair(id_and_cores.first, virtual_core), tt::umd::RiscType::ALL);
                     } catch (const std::exception& reset_err) {
                         log_warning(
                             tt::LogAlways,
