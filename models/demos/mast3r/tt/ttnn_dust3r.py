@@ -331,16 +331,15 @@ def full_encoder(
     cache_key = id(state)
     if not hasattr(full_encoder, "_cache") or full_encoder._cache_key != cache_key:
         full_encoder._cache = [_preload_enc_block_weights(state, i, device) for i in range(depth)]
+        full_encoder._enc_norm_g = _t2d(state["enc_norm.weight"].reshape(1, 1, -1), device)
+        full_encoder._enc_norm_b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
         full_encoder._cache_key = cache_key
 
     tt_x = _t2d(x, device)
     for i in range(depth):
         tt_x = encoder_block_device_pre(tt_x, pos, full_encoder._cache[i], device)
 
-    # Final enc_norm on device.
-    g = _t2d(state["enc_norm.weight"].reshape(1, 1, -1), device)
-    b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
-    tt_x = ttnn.layer_norm(tt_x, weight=g, bias=b, epsilon=1e-6)
+    tt_x = ttnn.layer_norm(tt_x, weight=full_encoder._enc_norm_g, bias=full_encoder._enc_norm_b, epsilon=1e-6)
     return ttnn.to_torch(tt_x)
 
 
