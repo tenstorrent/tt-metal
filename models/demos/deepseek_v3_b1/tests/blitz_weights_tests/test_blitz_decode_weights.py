@@ -449,14 +449,14 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         logger.info(f"Device {device_idx} (TP={tp_group}): o_proj, gate_mm, gammas overlap passed")
 
 
-@pytest.mark.parametrize("o_proj_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
+def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
 
     Uses :func:`fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a` (all nine tensors
@@ -500,8 +500,8 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
         q_b_raw,
         kv_raw,
         submesh,
-        o_proj_dtype=o_proj_dtype,
-        mla_proj_dtype=o_proj_dtype,
+        o_proj_dtype=dtype,
+        mla_proj_dtype=dtype,
     )
     o_proj = fused["o_proj"]
     gate_mm = fused["gate_mm"]
