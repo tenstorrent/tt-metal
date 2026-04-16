@@ -2,9 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import functools, operator
+import functools, operator, os, re
 from typing import Iterable
 import ttml
+
+
+_current_mesh: Mesh | None = None
 
 
 def prod(x: Iterable[int]) -> int:
@@ -31,7 +34,7 @@ class Mesh:
         return name in self._axis_map
 
     def axis_size(self, name: str) -> int:
-        return self.shape[idx] if (idx := self._axis_map.get(name)) is not None else 0
+        return self.shape[self.axis_pos(name)]
 
     def axis_pos(self, name: str) -> int:
         if not name in self._axis_map:
@@ -43,13 +46,84 @@ class Mesh:
             raise RuntimeError(msg)
         return self._axis_map[name]
 
-    def axis_mapper(self, name: str, dim: int):
+    def axis_mapper(self, name: str, tdim: int):
         dev = ttml.autograd.AutoContext.get_instance().get_device()
         cluster_axis = self.axis_pos(name)
-        return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, dim, cluster_axis)
+        return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
 
 
-_current_mesh: Mesh | None = None
+# Mirrors get_max_dimensions_for_architecture() in tt_metal/fabric/mesh_graph_descriptor.cpp
+_ARCH_MAX_DIMS = {"WORMHOLE_B0": 2, "BLACKHOLE": 3}
+
+
+def _validate_mgd(mesh: Mesh) -> None:
+    mgd_path = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if not mgd_path:
+        print("WARNING: TT_MESH_GRAPH_DESC_PATH not set, skipping MGD validation")
+        return
+    if not os.path.isfile(mgd_path):
+        print(f"WARNING: MGD file not found: {mgd_path}, skipping validation")
+        return
+
+    with open(mgd_path) as f:
+        content = f.read()
+
+    # Multi-host MGDs have multiple mesh_descriptors blocks; per-mesh dims don't
+    # represent the full cluster topology, so validation would be misleading.
+    mesh_descriptor_count = content.count("mesh_descriptors {")
+    if mesh_descriptor_count > 1:
+        print(
+            f"WARNING: MGD file has {mesh_descriptor_count} mesh_descriptors "
+            f"(multi-host config); per-mesh validation not supported, skipping."
+        )
+        return
+
+    dims_match = re.search(r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content)
+    if not dims_match:
+        print(f"WARNING: Could not parse dims from MGD file: {mgd_path}")
+        return
+
+    mgd_dims = [int(d) for d in (d.strip() for d in dims_match.group(1).split(",")) if d]
+    if list(mgd_dims) != list(mesh.shape):
+        raise RuntimeError(
+            f"Mesh shape mismatch!\n"
+            f"  Requested mesh shape: {list(mesh.shape)}\n"
+            f"  MGD device_topology dims: {mgd_dims}\n"
+            f"Please ensure your mesh dimensions match the MGD file."
+        )
+
+    arch_match = re.search(r"\barch\s*:\s*(\w+)", content)
+    if arch_match:
+        arch = arch_match.group(1)
+        max_dims = _ARCH_MAX_DIMS.get(arch)
+        if max_dims is not None and len(mesh.shape) > max_dims:
+            raise RuntimeError(
+                f"Mesh has {len(mesh.shape)} dimensions but arch {arch} "
+                f"supports at most {max_dims}.\n"
+                f"  Mesh shape: {list(mesh.shape)}\n"
+                f"  MGD file: {mgd_path}"
+            )
+
+    types_match = re.search(r"device_topology\s*\{[^}]*dim_types\s*:\s*\[\s*([A-Z_,\s]+)\]", content)
+    if types_match:
+        dim_types = [t for t in (t.strip() for t in types_match.group(1).split(",")) if t]
+        if len(dim_types) != len(mgd_dims):
+            raise RuntimeError(
+                f"Malformed MGD: dim_types has {len(dim_types)} entries "
+                f"but dims has {len(mgd_dims)}.\n"
+                f"  MGD file: {mgd_path}"
+            )
+        if mesh.has_axis("dp"):
+            dp_axis = mesh.axis_pos("dp")
+            if dp_axis < len(dim_types) and dim_types[dp_axis] != "RING":
+                raise RuntimeError(
+                    f"DDP axis (axis {dp_axis}) expected RING topology, "
+                    f"but MGD has '{dim_types[dp_axis]}'.\n"
+                    f"  MGD dim_types: {dim_types}\n"
+                    f"  MGD file: {mgd_path}"
+                )
+
+    print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
 def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
@@ -59,21 +133,21 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
         device_ids = ()
 
     if mesh.num_devices() > 1:
+        _validate_mgd(mesh)
         ttml.core.distributed.enable_fabric(mesh.num_devices())
 
-    ttnn_shape = list(mesh.shape) + [1] * max(0, 2 - len(mesh.shape))
-    ttml.autograd.AutoContext.get_instance().open_device(ttnn_shape, list(device_ids))
+    ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
 
     global _current_mesh
     _current_mesh = mesh
 
 
-def current_mesh() -> Mesh | None:
+def maybe_current_mesh() -> Mesh | None:
     global _current_mesh
     return _current_mesh
 
 
-def current_mesh_or_raise() -> Mesh:
+def current_mesh() -> Mesh:
     global _current_mesh
     if _current_mesh is None:
         msg = (

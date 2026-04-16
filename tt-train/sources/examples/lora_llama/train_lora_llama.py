@@ -324,7 +324,7 @@ def main():
     # ── Data mapper ────────────────────────────────────────────────────────────
     mapper = None
     if use_ddp:
-        mapper = ttml.current_mesh_or_raise().axis_mapper("dp", 0)
+        mapper = ttml.current_mesh().axis_mapper("dp", tdim=0)
 
     # ── Data chunks ─────────────────────────────────────────────────────────
     n_chunks = (len(train_ids) - 1) // seq_len
@@ -379,7 +379,7 @@ def main():
         autograd_ctx.reset_graph()
 
         if use_ddp:
-            dp_axis = ttml.current_mesh_or_raise().axis_pos("dp")
+            dp_axis = ttml.current_mesh().axis_pos("dp")
             ttml.core.distributed.synchronize_gradients(model.parameters(), [dp_axis])
 
         optimizer.step()

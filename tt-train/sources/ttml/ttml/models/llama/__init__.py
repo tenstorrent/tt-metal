@@ -73,8 +73,7 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
-            mesh = ttml.current_mesh_or_raise()
-            tp_size = mesh.axis_size("tp")
+            tp_size = ttml.current_mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
                 raise ValueError(
                     "Number of attention heads must be divisible by TP size. "

@@ -54,7 +54,7 @@ class DDPCallback(TrainerCallback):
     """Synchronise gradients across all DDP devices before the optimiser step."""
 
     def on_before_optimizer_step(self, trainer):
-        dp_axis = ttml.current_mesh_or_raise().axis_pos("dp")
+        dp_axis = ttml.current_mesh().axis_pos("dp")
         ttml.core.distributed.synchronize_gradients(trainer.model.parameters(), [dp_axis])
 
 
@@ -320,7 +320,7 @@ def main():
 
     mapper = None
     if use_ddp:
-        mapper = ttml.current_mesh_or_raise().axis_mapper("dp", 0)
+        mapper = ttml.current_mesh().axis_mapper("dp", tdim=0)
 
     # ── Model ─────────────────────────────────────────────────────────────────
 

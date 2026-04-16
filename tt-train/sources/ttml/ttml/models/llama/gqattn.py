@@ -41,7 +41,7 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Store LOCAL head/group counts (divided by tp_size when TP is active)
         if use_tp:
-            tp_size = ttml.current_mesh_or_raise().axis_size("tp")
+            tp_size = ttml.current_mesh().axis_size("tp")
             self.num_heads = num_heads // tp_size
             self.num_groups = num_groups // tp_size
         else:

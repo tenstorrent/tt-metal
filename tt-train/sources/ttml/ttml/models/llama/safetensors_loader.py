@@ -87,7 +87,7 @@ def _make_tp_mapper(shard_type):
     if shard_type is None:
         return None
     dim = 2 if shard_type == "col_w" else 3
-    return ttml.current_mesh_or_raise().axis_mapper("tp", dim)
+    return ttml.current_mesh().axis_mapper("tp", tdim=dim)
 
 
 def load_from_safetensors(
@@ -125,7 +125,7 @@ def load_from_safetensors(
     ignored_hf: set[str] = set()
 
     use_tp = config.use_tp
-    tp_size = ttml.current_mesh_or_raise().axis_size("tp") if use_tp else 1
+    tp_size = ttml.current_mesh().axis_size("tp") if use_tp else 1
 
     num_heads = config.num_attention_heads
     num_kv_heads = config.num_key_value_heads

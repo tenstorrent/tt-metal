@@ -99,7 +99,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.out_features = out_features
         self.gather_output = gather_output
         self.axis_name = axis_name
-        self.cluster_axis = ttml.current_mesh_or_raise().axis_pos(axis_name)
+        self.cluster_axis = ttml.current_mesh().axis_pos(axis_name)
 
         if weight_init is None:
             k = math.sqrt(1.0 / in_features)
@@ -109,12 +109,12 @@ class ColumnParallelLinear(AbstractModuleBase):
             bias_init = ttml.init.uniform(-k, k)
 
         weight_shape = (1, 1, out_features, in_features)
-        weight_mapper = ttml.current_mesh_or_raise().axis_mapper(axis_name, 2)
+        weight_mapper = ttml.current_mesh().axis_mapper(axis_name, tdim=2)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
 
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
-            bias_mapper = ttml.current_mesh_or_raise().axis_mapper(axis_name, 3)
+            bias_mapper = ttml.current_mesh().axis_mapper(axis_name, tdim=3)
             self.bias = Parameter(bias_init(bias_shape, mapper=bias_mapper))
         else:
             self.bias = None
@@ -149,7 +149,7 @@ class RowParallelLinear(AbstractModuleBase):
         # TODO: use ttnn.Tensor.tensor_topology() once CCL ops will properly update this property
         self.input_is_parallel = input_is_parallel
         self.axis_name = axis_name
-        self.cluster_axis = ttml.current_mesh_or_raise().axis_pos(axis_name)
+        self.cluster_axis = ttml.current_mesh().axis_pos(axis_name)
 
         if weight_init is None:
             k = math.sqrt(1.0 / in_features)
@@ -159,7 +159,7 @@ class RowParallelLinear(AbstractModuleBase):
             bias_init = ttml.init.uniform(-k, k)
 
         weight_shape = (1, 1, out_features, in_features)
-        weight_mapper = ttml.current_mesh_or_raise().axis_mapper(axis_name, 3)
+        weight_mapper = ttml.current_mesh().axis_mapper(axis_name, tdim=3)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
 
         if has_bias:
