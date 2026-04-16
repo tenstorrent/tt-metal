@@ -487,7 +487,7 @@ void kernel_main() {
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
         if constexpr (SdpaReduceWorkerCTArgs::position_enabled) {
-            sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.global_pos = 0;
             sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -1122,7 +1122,7 @@ void kernel_main() {
         1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
     deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args;
     if constexpr (Core::is_sdpa_worker_core) {
-        sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.global_pos = 0;
         sdpa_reduce_worker_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -1993,16 +1993,6 @@ void kernel_main() {
         }
 #endif
 
-        // SP position handling.
-        // Read the global position from L1 and decide whether this device has
-        // work / owns the current KV-cache slot. The normalized (device-local)
-        // local_cur_pos is used for kv cache update and flash mla.
-        invalidate_l1_cache();
-        uint32_t cur_pos = pos_ptr[0];
-
-        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
         // The first mcast is also used to synchronize downstream ccls, so must always run.
         // Can revisit this later
@@ -2035,6 +2025,16 @@ void kernel_main() {
             noc_semaphore_set(ccl_sync_sem, INVALID);
 #endif
         }
+
+        // SP position handling.
+        // Read the global position from L1 and decide whether this device has
+        // work / owns the current KV-cache slot. The normalized (device-local)
+        // local_cur_pos is used for kv cache update and flash mla.
+        invalidate_l1_cache();
+        uint32_t cur_pos = pos_ptr[0];
+
+        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
         if (!skip_attention) {
             // ====================================================================
@@ -2225,6 +2225,7 @@ void kernel_main() {
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
+                sdpa_reduce_worker.set_global_pos(sdpa_reduce_worker_args, cur_pos);
                 sdpa_reduce_worker(sdpa_reduce_worker_args);
             }
             if constexpr (Core::is_sdpa_forwarder_core) {

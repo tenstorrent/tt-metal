@@ -103,6 +103,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
+    DPRINT << "D2D EXCHANGE MULTIPLE UPSTREAMS KERNEL START" << ENDL();
 
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection =
@@ -117,12 +118,15 @@ void kernel_main() {
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
+    DPRINT << "SENDER SOCKET PAGE SIZE: " << page_size << ENDL();
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+    DPRINT << "UPSTREAM PAGE SIZE: " << upstream_page_size << ENDL();
 
     SocketReceiverInterface receiver_sockets[num_upstream_sockets];
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
+        DPRINT << "SOCKET " << i << " PAGE SIZE: " << upstream_page_size << ENDL();
     }
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
@@ -177,7 +181,9 @@ void kernel_main() {
     bool terminated = false;
 
     while (!terminated) {
+        DPRINT << "RESERVE PAGES" << ENDL();
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "RESERVE PAGES DONE" << ENDL();
 
         invalidate_l1_cache();
         if (termination_semaphore[0] == 1) {
@@ -191,6 +197,7 @@ void kernel_main() {
         while (remaining > 0) {
             invalidate_l1_cache();
             if (termination_semaphore[0] == 1) {
+                DPRINT << "TERMINATION SEMAPHORE TRIGGERED" << ENDL();
                 terminated = true;
                 break;
             }
@@ -198,6 +205,7 @@ void kernel_main() {
             if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
                 uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
                 uint64_t dst_addr = dst_addr_base + worker_idx * upstream_page_size;
+                DPRINT << "WORKER_IDX: " << worker_idx << " WRITE_SIZE: " << upstream_page_size << ENDL();
 
                 if constexpr (use_fabric_on_sender) {
                     send_worker_data_over_fabric(
@@ -226,6 +234,7 @@ void kernel_main() {
                 processed_mask |= (1 << worker_idx);
                 current_link = (current_link + 1) % 2;
                 remaining--;
+                DPRINT << "REMAINING: " << remaining << ENDL();
             }
 
             worker_idx = (worker_idx + 1) % num_upstream_sockets;

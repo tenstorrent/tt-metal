@@ -348,6 +348,8 @@ struct ReduceToOneB1 {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                     if (args.socket_config_addr != 0) {
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
+                        DPRINT << "shard_idx: " << args.shard_idx << " useful_per_shard: " << useful_per_shard
+                               << ENDL();
                         set_sender_socket_page_size(sender_socket, useful_per_shard);
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
@@ -358,12 +360,15 @@ struct ReduceToOneB1 {
                             sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
                         noc_async_write(src_addr, fifo_dst, useful_per_shard);
                         noc_async_writes_flushed();
+                        DPRINT << "PUSH" << ENDL();
 
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
                         noc_async_write_barrier();
+                        DPRINT << "SOCKET BARRIER" << ENDL();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
+                        DPRINT << "UPDATE SOCKET CONFIG" << ENDL();
                     }
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
