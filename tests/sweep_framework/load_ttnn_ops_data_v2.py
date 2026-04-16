@@ -81,8 +81,10 @@ def _append_registry_entries(entries, path):
     """
     _require_yaml()
     with open(path, "a") as f:
-        f.write("\n")
         for entry in entries:
+            # Blank line separator before each appended entry (keeps a single
+            # trailing newline at end-of-file so end-of-file-fixer stays happy).
+            f.write("\n")
             f.write(f"  - trace_id: {entry['trace_id']}\n")
             f.write(f"    status: {entry['status']}\n")
             models = entry.get("models", [])
@@ -110,7 +112,6 @@ def _append_registry_entries(entries, path):
             notes_escaped = notes.replace("'", "''")
             f.write(f"    loaded_at: '{loaded_at_escaped}'\n")
             f.write(f"    notes: '{notes_escaped}'\n")
-            f.write("\n")
 
 
 DEFAULT_SCHEMA = "ttnn_ops_v6"
