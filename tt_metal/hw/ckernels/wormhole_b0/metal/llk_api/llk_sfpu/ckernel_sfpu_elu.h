@@ -66,7 +66,8 @@ inline void calculate_elu(uint slope) {
         sfpi::vFloat p = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::exexp_nodebias(sfpi::vConst1) + k_int);
+        // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
         sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
         result = alpha * result;
 

@@ -60,7 +60,8 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
         sfpi::vFloat p = r * h;
 
         // Reconstruct: exp(xr)-1 = (2^k - 1) + 2^k * expm1(r)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::exexp_nodebias(sfpi::vConst1) + k_int);
+        // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
         sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
         result = alpha * result;
 
