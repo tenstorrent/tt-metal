@@ -2,9 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TT-NN Gaze-LLE: moves the 12-layer DINOv2 backbone encoder onto a single
-Blackhole p150a. Patch embedding and the small gaze decoder stay on CPU for
-this first port; subsequent iterations migrate them onto device.
+TT-NN Gaze-LLE on a single Blackhole p150a chip.
+
+Device placement:
+  * DINOv2 ViT-B/14 encoder (12 blocks + final LayerNorm) — bfp8_b weights + LoFi.
+  * 1x1 projection 768->256, gaze pos/head conditioning, 3 gaze decoder blocks,
+    register/CLS slice — all on device.
+
+Host (torch CPU):
+  * Patch embedding nn.Conv2d(3->768, k=14, s=14).
+  * CLS/REG token prepend + DINOv2 pos_embed add.
+  * Per-frame pos_embed + head_map*head_token fusion (one upload).
+  * Small ConvTranspose heatmap head + in/out MLP + interpolate.
 """
 
 from __future__ import annotations
