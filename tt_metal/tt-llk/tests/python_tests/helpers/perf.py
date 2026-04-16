@@ -356,6 +356,13 @@ class PerfConfig(TestConfig):
     def run(self, perf_report: PerfReport, run_count=2):
         results = []
         code_sizes = {}
+        import sys
+
+        print(
+            f"[PERF_DBG] MODE={TestConfig.MODE} run_configs={len(self.run_configs)} SOL={TestConfig.SPEED_OF_LIGHT}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -370,7 +377,21 @@ class PerfConfig(TestConfig):
                     self.templates = templates
                     self.runtimes = runtimes
                 self.generate_variant_hash()
-                self.build_elfs()
+                print(
+                    f"[PERF_DBG] Building ELFs for run_type={run_type}...",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                try:
+                    self.build_elfs()
+                    print(f"[PERF_DBG] Build OK", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(
+                        f"[PERF_DBG] Build FAILED: {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    raise
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
@@ -410,7 +431,17 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
 
-                # TODO You add additional data collections you want here
+                # Profiler data collected
+                print(
+                    f"[PERF] {run_type.name} R{run_index}:\n{profiler_data.df.to_string()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(
+                    f"[PERF] {run_type.name} Run {run_index}:\n{profiler_data.df.to_string()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index

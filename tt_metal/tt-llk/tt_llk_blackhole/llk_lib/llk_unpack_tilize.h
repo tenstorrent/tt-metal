@@ -449,3 +449,168 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format,
     TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_NOP;
 }
+
+// ============================================================================
+// BH Fast-Tilize Unpack
+//
+// Software tilization via UNPACR address modes. Processes 4 tiles at a time
+// (unit_dim=4). Each UNPACR reads 128 datums (4 tile widths) into 8 SrcA rows.
+// CH1_Z stride = 256 bytes (8 contiguous SrcA rows per read).
+// MASK_LOOP MOP with zmask=0x80808080 fires dvalid every 8th read
+// (32 reads total, 4 dvalids per unit).
+// ============================================================================
+
+inline void _llk_unpack_fast_tilize_mop_config_()
+{
+    // addr_mode: CH0_Z+=1 (next L1 row), CH1_Z+=1 (next SrcA dest with gap)
+    constexpr std::uint8_t ADDRMOD = 0b00'01'00'01;
+
+    ckernel_unpack_template tmp = ckernel_unpack_template(
+        false,                                 // unpackB
+        false,                                 // unpackHalo
+        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD, 0), // A0: read, no dvalid
+        TT_OP_NOP,
+        TT_OP_NOP,
+        TT_OP_NOP,
+        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD, 1), // skipA: read WITH dvalid
+        TT_OP_NOP,
+        TT_OP_NOP);
+    tmp.program();
+}
+
+inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim, const std::uint32_t init_unit_dim = 4)
+{
+    // Unconditionally force unpack config context 0. The matmul or other operations may
+    // change the hardware context state without updating unp_cfg_context (software tracking).
+    // Always resetting ensures the hardware matches what fast-tilize expects.
+    // The STALLWAIT is required: without it, the SETC16 is in the coprocessor queue but
+    // subsequent config writes (RDCFG/WRCFG) can execute before the context switch propagates,
+    // causing the saved state to come from the wrong context. Confirmed on silicon via DPRINT
+    // Heisenbug — the bug disappears when debug prints add sufficient pipeline delay.
+    unp_cfg_context = 0;
+    TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
+    // Save state
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+
+    // Tile_x_dim = 32, Tile_y_dim = ct_dim, Tile_z_dim = 16
+    TT_SETDMAREG(0, TILE_C_DIM, 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, TILE_C_DIM, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+
+    TT_SETDMAREG(0, ct_dim, 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, FACE_R_DIM, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+
+    // BH HW bug (AutoTTSync.md †): TileDescriptor words 1-3 (YDim, ZDim) are not
+    // tracked as unpacker resources. Explicit stall ensures the write completes.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
+    // X counter end = unit_dim tile widths per read.
+    // CH1_Z stride stays at 4-wide (8 SrcA rows) regardless of unit_dim.
+    // This creates natural gaps in SrcA for unit_dim < 4, preserving the DEST layout.
+    TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
+
+    // CH1 Z stride: controls SrcA dest address gap between reads
+    const std::uint32_t ch1_x_stride = (unpack_dst_format == (std::uint32_t)DataFormat::Float32 || unpack_dst_format == (std::uint32_t)DataFormat::Int32 ||
+                                        unpack_dst_format == (std::uint32_t)DataFormat::Tf32)
+                                           ? 4
+                                           : 2;
+    // stride = 4 * 32 * 2 = 256 bytes = 8 contiguous SrcA rows per read
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(4 * TILE_C_DIM * ch1_x_stride);
+
+    _llk_unpack_fast_tilize_mop_config_();
+}
+
+// Reconfigure X counter for a different unit_dim without full reinit.
+// CH1_Z stride and MOP stay unchanged — only the read width changes.
+inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
+{
+    TT_SETADCXX(p_setadc::UNP_A, unit_dim * TILE_C_DIM - 1, 0x0);
+}
+
+inline void _llk_unpack_fast_tilize_block_(
+    [[maybe_unused]] const std::uint32_t base_address,
+    [[maybe_unused]] const std::uint32_t tile_index,
+    [[maybe_unused]] const std::uint32_t unpack_src_format,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units,
+    const std::uint32_t ct_dim,
+    [[maybe_unused]] const std::uint32_t num_faces = 4,
+    const std::uint32_t col_start                  = 0)
+{
+    // ALL L1 addressing via CH0 counters. ZERO config writes in this function.
+    // Base_address must be set by caller (once, before first call).
+    // CH0 address: ((W*ZDim + Z)*YDim + Y)*XDim + X, where:
+    //   Y selects tile within row (Y+=unit_dim per unit)
+    //   Z selects tensor row (0..31 per unit)
+    //   W selects tile-row (W+=2 per row, stride = ct_dim*1024 datums)
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011); // reset CH0_X=0, CH0_Y=0
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111); // reset all Z,W = 0
+
+    // Position at col_start (for tail units after prefix).
+    // INCADCXY Ch0_Y field is 3 bits (max 7), so loop for larger offsets.
+    {
+        std::uint32_t remaining = col_start;
+        while (remaining > 0)
+        {
+            std::uint32_t inc = (remaining > 7) ? 7 : remaining;
+            TT_INCADCXY(p_setadc::UNP_A, 0, 0, inc, 0);
+            remaining -= inc;
+        }
+    }
+
+    // Hoist zmask high 16 bits — they persist in mop_zmask_hi16 until changed.
+    constexpr std::uint32_t ZMASK = 0x80808080;
+    TT_MOP_CFG(ZMASK >> 16);
+
+    const std::uint32_t units_per_row = ct_dim / unit_dim;
+    const std::uint32_t num_rows      = num_units / units_per_row;
+
+    for (std::uint32_t row = 0; row < num_rows; row++)
+    {
+        if (row > 0)
+        {
+            // New row: reset Y via CR, advance W by 2, reset Z via CR.
+            TTI_ADDRCRXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0010);
+            TTI_ADDRCRZW(p_setadc::UNP_A, 0, 0, 2, 0, 0b0111);
+        }
+
+        for (std::uint32_t col = 0; col < units_per_row; col++)
+        {
+            if (col > 0)
+            {
+                // Same row, next unit: reset Z, advance Y by unit_dim.
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
+                std::uint32_t y_remaining = unit_dim;
+                while (y_remaining > 0)
+                {
+                    std::uint32_t inc = (y_remaining > 7) ? 7 : y_remaining;
+                    TT_INCADCXY(p_setadc::UNP_A, 0, 0, inc, 0);
+                    y_remaining -= inc;
+                }
+            }
+
+            // TT_MOP only — zmask hi16 already set above.
+            TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
+        }
+    }
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void _llk_unpack_fast_tilize_uninit_()
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, 0, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, 0, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
+}

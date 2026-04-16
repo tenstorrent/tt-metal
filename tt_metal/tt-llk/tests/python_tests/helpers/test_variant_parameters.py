@@ -463,6 +463,17 @@ class TILE_COUNT(RuntimeParameter):
 
 
 @dataclass
+class NUM_GUARD_TILES(RuntimeParameter):
+    count: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t NUM_GUARD_TILES = {self.count};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t NUM_GUARD_TILES;", "I"
+
+
+@dataclass
 class INPUT_TILE_CNT(RuntimeParameter):
     tile_cnt: int = 0
 
