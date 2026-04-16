@@ -176,14 +176,14 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
@@ -503,10 +503,16 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (dtype == DataType::FLOAT32) {
                 return {"lt_binary_tile_init();", "lt_binary_tile"};
             }
+            else if (dtype == DataType::UINT16) {
+                return {"lt_uint16_tile_init();", "lt_uint16_tile"};
+            }
             return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT:
             if (dtype == DataType::FLOAT32) {
                 return {"gt_binary_tile_init();", "gt_binary_tile"};
+            }
+            else if (dtype == DataType::UINT16) {
+                return {"gt_uint16_tile_init();", "gt_uint16_tile"};
             }
             return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE:

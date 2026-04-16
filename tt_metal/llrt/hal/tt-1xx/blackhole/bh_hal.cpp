@@ -12,6 +12,7 @@
 #include <umd/device/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
+#include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
@@ -209,6 +210,12 @@ public:
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
             enable_2_erisc_mode_) {
             cflags += "-Werror=stack-usage=1912 ";
+        }
+        // We need to disable -mtt-fix-whbhebreak for asserts using ebreak.
+        // After asserts, we don't want to continue code execution, so we don't need 8 nops after ebreak (as it will
+        // unnecessarily grow code size).
+        if (params.rtoptions.get_lightweight_kernel_asserts() || params.rtoptions.get_llk_asserts()) {
+            cflags += "-mno-tt-fix-whbhebreak ";
         }
         return cflags;
     }
