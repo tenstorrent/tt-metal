@@ -420,7 +420,6 @@ class DRAMStreamingMatmulCompressed:
             ("cb_out", cb_out),
             ("num_tiles_k", Kt),
             ("subblock_k", subblock_k),
-            ("per_core_n", per_core_N),
             ("num_subblocks_k", num_subblocks_k),
             ("fmt_l1_addr", fmt_l1_addr),
         ]
