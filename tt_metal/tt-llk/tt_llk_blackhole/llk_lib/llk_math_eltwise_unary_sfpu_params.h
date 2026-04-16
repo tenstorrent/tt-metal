@@ -16,7 +16,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
 {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
 
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_(dst_index);
 
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 

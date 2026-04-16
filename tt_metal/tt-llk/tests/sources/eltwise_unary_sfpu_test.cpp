@@ -89,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // calculation of sfpu operation on dest
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
-            test_utils::call_unary_sfpu_operation<DST_SYNC, APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
+            test_utils::call_unary_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
                 SFPU_UNARY_OPERATION, block_tile, formats.math);
         }
 

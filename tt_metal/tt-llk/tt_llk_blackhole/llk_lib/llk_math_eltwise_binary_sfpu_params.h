@@ -23,7 +23,7 @@ inline void _llk_math_eltwise_binary_sfpu_params_(
     LLK_ASSERT((dst_index_in1 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_in1 exceeds max dest tiles");
     LLK_ASSERT((dst_index_out < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_out exceeds max dest tiles");
 
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(0);
+    _llk_math_eltwise_binary_sfpu_start_(0);
 
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 
