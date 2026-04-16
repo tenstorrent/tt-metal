@@ -634,44 +634,42 @@ def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
 
 
 @pytest.mark.parametrize(
-    "hw, kernel, stride, pad",
+    "batch, channels, hw, kernel, stride, pad",
     [
-        ((64, 64), (2, 2), (2, 2), 0),
-        ((32, 32), (3, 3), (2, 2), 1),
+        (1, 1, (64, 64), (2, 2), (2, 2), 0),
+        (1, 1, (32, 32), (3, 3), (2, 2), 1),
+        (1, 40, (8, 8), (2, 2), (2, 2), 0),
+        (1, 40, (8, 8), (3, 3), (2, 2), 1),
     ],
 )
-def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel, stride, pad):
+def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, batch, channels, hw, kernel, stride, pad):
     """
     Tests avg_pool2d followed by to_layout(TILE) on the avg_pool2d output.
-    This isolates and validates the to_layout(TILE) step on the avg_pool2d result against a PyTorch avg_pool2d reference.
+    channels=1 exercises the single partial-tile path (in_ntiles_c==1).
+    channels=40 exercises the general partial-tile reinit path (in_ntiles_c==2, last tile has 1 face).
     """
     h, w = hw
     kh, kw = kernel
     sh, sw = stride
 
-    torch_input = torch.randn(1, 1, h, w, dtype=torch.bfloat16)
+    torch_input = torch.randn(batch, channels, h, w, dtype=torch.bfloat16)
     ref = torch.nn.functional.avg_pool2d(
         torch_input, kernel_size=(kh, kw), stride=(sh, sw), padding=pad, count_include_pad=True
     )
 
     mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    nhwc_input = torch_input.permute(0, 2, 3, 1).contiguous().reshape(1, 1, batch * h * w, channels)
     x_tt = ttnn.from_torch(
-        torch_input.reshape(h, w),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_cfg,
+        nhwc_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
-    x_flat = ttnn.reshape(x_tt, [1, 1, h * w, 1], memory_config=mem_cfg)
-    x_rm = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT, None, memory_config=None)
 
     y = ttnn.avg_pool2d(
-        x_rm,
-        1,
+        x_tt,
+        batch,
         h,
         w,
-        1,
+        channels,
         [kh, kw],
         [sh, sw],
         [pad, pad],
@@ -687,15 +685,11 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
 
     y_torch_before_tile = ttnn.to_torch(y)
 
-    y_tiled = ttnn.to_layout(
-        y, ttnn.TILE_LAYOUT, None, memory_config=None
-    )  # This should call tilize_with_val_padding internally
-
+    y_tiled = ttnn.to_layout(y, ttnn.TILE_LAYOUT, None, memory_config=None)
     y_torch_after_tile = ttnn.to_torch(y_tiled)
 
     assert_with_pcc(y_torch_before_tile, y_torch_after_tile, pcc=0.999)
 
-    ref_flat = ref.reshape(-1)
-    result_flat = y_torch_after_tile.reshape(-1)[: ref_flat.numel()]
-
-    assert_with_pcc(ref_flat, result_flat, pcc=0.999)
+    ref_nhwc = ref.permute(0, 2, 3, 1).contiguous().reshape(-1)
+    result_flat = y_torch_after_tile.reshape(-1)[: ref_nhwc.numel()]
+    assert_with_pcc(ref_nhwc, result_flat, pcc=0.999)
