@@ -7,9 +7,6 @@ from typing import Iterable
 import ttml
 
 
-_current_mesh: Mesh | None = None
-
-
 def prod(x: Iterable[int]) -> int:
     return functools.reduce(operator.mul, x, 1)
 
@@ -144,6 +141,9 @@ def _validate_mgd(mesh: Mesh) -> None:
                 )
 
     print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
+
+
+_current_mesh: Mesh | None = None
 
 
 def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
