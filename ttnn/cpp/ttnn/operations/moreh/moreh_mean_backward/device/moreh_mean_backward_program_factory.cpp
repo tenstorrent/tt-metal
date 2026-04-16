@@ -62,7 +62,7 @@ ProgramDescriptor MorehMeanBackwardOperation::create_descriptor(
     const auto& output_grad = tensor_args.output_grad;
     const auto& input_grad = output;
     auto keepdim = operation_attributes.keepdim;
-    auto dims = operation_attributes.dims;
+    const auto& dims = operation_attributes.dims;
     auto compute_kernel_config =
         init_device_compute_kernel_config(output_grad.device()->arch(), operation_attributes.compute_kernel_config);
 
