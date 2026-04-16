@@ -1696,8 +1696,6 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         consecutive_timeouts = 0;
         std::vector<uint32_t> sync_data(kSyncPageWords);
         dev_state.socket->read(sync_data.data(), 1);
-        int64_t host_after = TracyGetCpuTime() - host_start_time;
-
         // Extract device timestamp and echoed host timestamp
         uint64_t device_time = (static_cast<uint64_t>(sync_data[0]) << 32) | sync_data[1];
         uint32_t echoed_host_time = sync_data[2];
@@ -1708,10 +1706,13 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
             continue;
         }
 
-        // Verify echo matches and marker is valid; use midpoint of host bracket
+        // Verify echo matches and marker is valid; use host_before directly
+        // (not midpoint) because the H2D PCIe write (~2µs) and D2H socket
+        // return (~50-80µs) have vastly different latencies, making the
+        // midpoint biased. host_before is ~2µs before the device captures
+        // its wall clock, giving consistent ~2µs accuracy.
         if (marker == REALTIME_PROFILER_SYNC_MARKER_ID && echoed_host_time == host_time_id) {
-            int64_t host_time = (host_before + host_after) / 2;
-            samples.push_back({host_time, device_time});
+            samples.push_back({host_before, device_time});
         }
     }
 
