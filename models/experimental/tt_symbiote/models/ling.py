@@ -2,12 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ling-mini-2.0 model setup for TTNN backend.
-
-Centralizes module replacement tables, weight preprocessing, paged KV
-cache creation, and forward-patching so that tests and demos import a
-single entry point instead of duplicating setup logic.
-"""
+"""Ling-mini-2.0 model setup and module replacement for TTNN."""
 
 import torch
 from torch import nn
@@ -79,10 +74,7 @@ def preprocess_weights(modules, mesh_device):
 
 
 def load_model(mesh_device, model_name=DEFAULT_MODEL_NAME, batch_size=1):
-    """Load, convert, and prepare a Ling model for TTNN inference.
-
-    Returns (model, tokenizer, paged_cache).
-    """
+    """Load and prepare a Ling model for TTNN inference."""
     print(f"Loading {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)

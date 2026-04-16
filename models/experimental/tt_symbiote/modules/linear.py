@@ -155,6 +155,8 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
 
 class TTNNLinearLmHeadBf8(TTNNLinearIColShardedWRowSharded):
+    """IColShardedWRowSharded with bfloat8_b weights for reduced memory bandwidth."""
+
     def move_weights_to_device_impl(self):
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(

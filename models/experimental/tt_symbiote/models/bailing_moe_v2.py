@@ -298,6 +298,8 @@ class TTNNBailingMoeV2Model(TTNNModule):
 
 
 class TTNNBailingMoeV2ForCausalLM(TTNNModule):
+    """On-device pre/post processing wrapper for BailingMoeV2."""
+
     @staticmethod
     def from_torch(causal_lm):
         new = TTNNBailingMoeV2ForCausalLM()
@@ -346,6 +348,7 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         print("=========================================\n")
 
     def preprocess_input_tokens(self, input_ids, attention_mask, position_ids):
+        """Convert inputs to device tensors and run embedding lookup."""
         device = self.device
         multi_device = device.get_num_devices() > 1
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if multi_device else None
@@ -378,6 +381,7 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         return tt_input_ids, inputs_embeds, attention_mask, position_ids
 
     def postprocess_logits(self, hidden_states):
+        """Run lm_head and distributed argmax on device, return sparse logits."""
         if isinstance(hidden_states, ttnn.Tensor):
             shape = list(hidden_states.shape)
             if len(shape) >= 2 and shape[-2] > 1:
@@ -426,7 +430,6 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         position_ids=None,
         past_key_values=None,
         inputs_embeds=None,
-        labels=None,
         use_cache=None,
         output_attentions=None,
         output_hidden_states=None,
@@ -528,6 +531,7 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
 
     @staticmethod
     def patch_forward(causal_lm, mesh_device):
+        """Replace causal_lm.forward with the on-device wrapper."""
         wrapper = TTNNBailingMoeV2ForCausalLM.from_torch(causal_lm)
         wrapper._device = mesh_device
         causal_lm.forward = wrapper.call
