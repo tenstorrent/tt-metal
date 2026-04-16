@@ -47,12 +47,12 @@ class _BlockParams:
         # MLP
         self.norm2_w = _to_device(block.norm2.weight.unsqueeze(0), device)
         self.norm2_b = _to_device(block.norm2.bias.unsqueeze(0), device)
-        self.fc1_w = _to_device(block.mlp.fc1.weight.T.contiguous(), device)
+        self.fc1_w = _to_device(block.mlp.fc1.weight.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.fc1_b = _to_device(block.mlp.fc1.bias.unsqueeze(0), device)
         ls2 = block.ls2.scale_factor.detach()
         fc2_w = block.mlp.fc2.weight.detach() * ls2.unsqueeze(-1)
         fc2_b = block.mlp.fc2.bias.detach() * ls2
-        self.fc2_w = _to_device(fc2_w.T.contiguous(), device)
+        self.fc2_w = _to_device(fc2_w.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.fc2_b = _to_device(fc2_b.unsqueeze(0), device)
 
 
