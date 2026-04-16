@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.weights.prepare import get_layer_raw_tensors
+from models.demos.deepseek_v3_b1.weights.prepare import (
+    get_layer_raw_tensors,
+    prepare_dense_layer_weights,
+    prepare_moe_layer_weights,
+)
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -360,6 +364,15 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    logger.info("Preparing layer weights on device...")
+    layer_weights = prepare_moe_layer_weights(
+        submesh,
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        num_routed_experts=effective_num_routed_experts,
+        move_to_device=True,
+    )
+
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
         submesh,
@@ -368,11 +381,9 @@ def test_decoder(
         sender_row,
         sender_col,
         position_id,
-        state_dict,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
         max_seq_len=max_seq_len,
+        weights=layer_weights,
         is_moe=True,
-        num_routed_experts=effective_num_routed_experts,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
     )
@@ -846,6 +857,9 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    logger.info("Preparing dense layer weights on device...")
+    layer_weights = prepare_dense_layer_weights(submesh, state_dict, DENSE_LAYER_IDX, move_to_device=True)
+
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(
         submesh,
@@ -854,9 +868,8 @@ def test_decoder_mlp(
         sender_row,
         sender_col,
         position_id,
-        state_dict,
-        layer_idx=DENSE_LAYER_IDX,
         max_seq_len=max_seq_len,
+        weights=layer_weights,
         is_moe=False,
     )
 
