@@ -559,6 +559,71 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
     }
 
+    // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
+    //
+    // Without this wait, the next dispatch op can arrive while the MUX is still in its
+    // startup path (waiting for ERISC, opening the EDM connection, etc.).  The dispatch
+    // relay kernel calls wait_for_fabric_endpoint_ready(mux) — an unbounded spin on
+    // device — and hangs if the MUX hasn't written READY_FOR_TRAFFIC yet.
+    //
+    // Use the same bounded-poll + force-reset pattern as Phase 2 so a stuck MUX can
+    // never hang the host indefinitely.
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+        auto config = tensix_config.get_config(core_id);
+        uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+        auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+
+        std::vector<uint32_t> status_buf(1, 0);
+        const auto start = std::chrono::steady_clock::now();
+        constexpr uint32_t timeout_ms = 5000;
+        constexpr uint32_t kSpinsBetweenSleeps = 64;
+        uint32_t spin_counter = 0;
+        bool ready = false;
+        while (true) {
+            detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+            if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+                ready = true;
+                break;
+            }
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            if (elapsed > timeout_ms) {
+                break;
+            }
+            if (++spin_counter >= kSpinsBetweenSleeps) {
+                spin_counter = 0;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            } else {
+                ttsl::pause();
+            }
+        }
+
+        if (!ready) {
+            log_warning(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
+                "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core",
+                this->id(),
+                eth_chan_id,
+                status_buf[0]);
+            try {
+                const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    this->id(), mux_core, CoreType::WORKER);
+                env_impl.get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                    "eth_chan {}: {}",
+                    this->id(),
+                    eth_chan_id,
+                    e.what());
+            }
+        }
+    }
+
     log_info(tt::LogMetal, "Fabric MUX workers restarted on Device {}", this->id_);
 }
 
