@@ -130,15 +130,15 @@ void TestContext::wait_for_programs_with_progress() {
             }
 
             // Phase 4: MPI exchange and report generation
-            auto all_wire_records = monitor.exchange_hung_records();
+            auto all_wire_records = monitor.exchange_hung_records(flow_descriptors_);
 
             using namespace tt::tt_metal::distributed::multihost;
             const auto& dist_ctx = DistributedContext::get_current_world();
             int my_rank = *dist_ctx->rank();
 
             if (my_rank == 0 && !all_wire_records.empty()) {
-                monitor.write_summary_report(progress_config_.summary_file, all_wire_records, flow_descriptors_);
-                monitor.write_detailed_report(progress_config_.detail_file, all_wire_records, flow_descriptors_);
+                monitor.write_summary_report(all_wire_records, flow_descriptors_);
+                monitor.write_detailed_report(all_wire_records, flow_descriptors_);
             }
 
             if (progress_config_.wait_on_hang) {
@@ -148,16 +148,12 @@ void TestContext::wait_for_programs_with_progress() {
                 }
             }
 
-            auto report_dir = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-                              std::string(tt::tt_fabric::fabric_tests::OUTPUT_DIR);
             TT_THROW(
                 "Test aborted: {} endpoint(s) confirmed hung. "
-                "Reports written to: {}/{}  {}/{}",
+                "Reports written to: {}  {}",
                 records.size(),
-                report_dir.string(),
-                progress_config_.summary_file,
-                report_dir.string(),
-                progress_config_.detail_file);
+                monitor.get_summary_report_path().string(),
+                monitor.get_detail_report_path().string());
         }
 
         log_info(tt::LogTest, "All endpoints complete, waiting for programs to finish...");

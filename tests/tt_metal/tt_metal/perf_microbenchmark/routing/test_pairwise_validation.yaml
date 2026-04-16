@@ -32,3 +32,23 @@ Tests:
 
     patterns:
       - type: neighbor_exchange
+
+  # Heavy all-to-all traffic that runs long enough for the progress monitor
+  # to poll mid-flight. Use with aggressive hang detection thresholds to
+  # exercise report generation:
+  #   --show-progress --show-progress-detail \
+  #   --progress-interval 1 --hung-threshold 3 --hung-confirmation-rounds 1
+  - name: "PairwiseValidation_HeavyTraffic"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 2
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all

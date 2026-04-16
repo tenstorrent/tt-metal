@@ -21,8 +21,22 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+static std::filesystem::path resolve_report_path(const std::string& filename) {
+    std::filesystem::path root =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path dir = root / std::string(OUTPUT_DIR);
+    if (!std::filesystem::exists(dir)) {
+        std::filesystem::create_directories(dir);
+    }
+    return dir / filename;
+}
+
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
-    ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {
+    ctx_(ctx),
+    config_(config),
+    hung_threshold_(config.hung_threshold_seconds),
+    summary_report_path_(resolve_report_path(config.summary_file)),
+    detail_report_path_(resolve_report_path(config.detail_file)) {
     auto* device_info = ctx_->get_device_info_provider();
 
     for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
@@ -133,6 +147,8 @@ bool TestProgressMonitor::poll_until_complete() {
 MonitorResult TestProgressMonitor::poll_until_complete_or_hung() {
     start_time_ = std::chrono::steady_clock::now();
     last_poll_time_ = start_time_;
+    auto last_log_time = start_time_;
+    uint32_t poll_count = 0;
 
     while (!all_endpoints_resolved()) {
         auto now = std::chrono::steady_clock::now();
@@ -141,6 +157,31 @@ MonitorResult TestProgressMonitor::poll_until_complete_or_hung() {
         poll_endpoints();
         check_for_hung_endpoints();
         display_granular_progress(elapsed);
+        poll_count++;
+
+        auto since_last_log = std::chrono::duration_cast<std::chrono::seconds>(now - last_log_time);
+        if (since_last_log.count() >= 10) {
+            uint64_t total_current = 0, total_target = 0;
+            for (const auto& [eid, eps] : endpoint_states_) {
+                total_current += eps.packets_processed;
+                total_target += eps.packets_expected;
+            }
+            double pct = total_target > 0 ? 100.0 * total_current / total_target : 0.0;
+            auto total_elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - start_time_);
+            log_info(
+                tt::LogTest,
+                "Granular monitor: {:.1f}% ({}/{} packets) | {}/{} endpoints done | "
+                "{} hung | {:.0f}s elapsed | {} polls",
+                pct,
+                total_current,
+                total_target,
+                completed_endpoints_,
+                total_endpoints_,
+                confirmed_hung_endpoints_,
+                total_elapsed.count(),
+                poll_count);
+            last_log_time = now;
+        }
 
         last_poll_time_ = now;
 
@@ -159,28 +200,12 @@ MonitorResult TestProgressMonitor::poll_until_complete_or_hung() {
 
 void TestProgressMonitor::poll_endpoints() {
     auto* device_info = ctx_->get_device_info_provider();
-    const auto* fixture = ctx_->get_fixture();
-    TT_FATAL(fixture != nullptr, "Fixture unavailable for batched reads");
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     uint32_t result_addr = ctx_->get_sender_memory_map().get_result_buffer_address();
     uint32_t result_buf_size = ctx_->get_sender_memory_map().get_result_buffer_size();
-
-    struct DeviceReadOp {
-        MeshCoordinate coord;
-        FabricNodeId node_id;
-        const TestDevice* test_device;
-        std::vector<CoreCoord> sender_cores;
-        std::vector<CoreCoord> receiver_cores;
-        TestFixture::ReadBufferOperation sender_op;
-        TestFixture::ReadBufferOperation receiver_op;
-        bool has_senders = false;
-        bool has_receivers = false;
-
-        DeviceReadOp(const MeshCoordinate& c, FabricNodeId nid, const TestDevice* td) :
-            coord(c), node_id(nid), test_device(td) {}
-    };
-
-    std::vector<DeviceReadOp> read_ops;
 
     for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
         FabricNodeId node_id = test_device.get_node_id();
@@ -188,40 +213,24 @@ void TestProgressMonitor::poll_endpoints() {
             continue;
         }
 
-        DeviceReadOp op(coord, node_id, &test_device);
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
 
+        auto read_core_results = [&](CoreCoord logical_core) -> std::vector<uint32_t> {
+            CoreCoord virtual_core = device_info->get_virtual_core_from_logical_core(logical_core);
+            return cluster.read_core<uint32_t>(physical_chip_id, virtual_core, result_addr, result_buf_size);
+        };
+
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> sender_data;
         for (const auto& [core, _] : test_device.get_senders()) {
-            op.sender_cores.push_back(core);
+            sender_data[core] = read_core_results(core);
         }
+        process_sender_read_results(node_id, test_device, sender_data);
+
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> receiver_data;
         for (const auto& [core, _] : test_device.get_receivers()) {
-            op.receiver_cores.push_back(core);
+            receiver_data[core] = read_core_results(core);
         }
-
-        if (!op.sender_cores.empty()) {
-            op.has_senders = true;
-            op.sender_op =
-                fixture->initiate_read_buffer_from_cores(coord, op.sender_cores, result_addr, result_buf_size);
-        }
-        if (!op.receiver_cores.empty()) {
-            op.has_receivers = true;
-            op.receiver_op =
-                fixture->initiate_read_buffer_from_cores(coord, op.receiver_cores, result_addr, result_buf_size);
-        }
-
-        read_ops.push_back(std::move(op));
-    }
-
-    fixture->barrier_reads();
-
-    for (const auto& op : read_ops) {
-        if (op.has_senders) {
-            auto sender_data = fixture->complete_read_buffer_from_cores(op.sender_op);
-            process_sender_read_results(op.node_id, *op.test_device, sender_data);
-        }
-        if (op.has_receivers) {
-            auto receiver_data = fixture->complete_read_buffer_from_cores(op.receiver_op);
-            process_receiver_read_results(op.node_id, *op.test_device, receiver_data);
-        }
+        process_receiver_read_results(node_id, test_device, receiver_data);
     }
 }
 
@@ -658,7 +667,8 @@ std::optional<double> TestProgressMonitor::estimate_eta(
 // Wire record conversion
 // =====================================================================
 
-HungEndpointWireRecord to_wire_record(const HungEndpointRecord& rec, uint32_t rank) {
+HungEndpointWireRecord to_wire_record(
+    const HungEndpointRecord& rec, uint32_t rank, const std::vector<FlowDescriptor>& flow_descriptors) {
     HungEndpointWireRecord wire{};
     wire.flow_uid = rec.flow_uid;
     wire.role = static_cast<uint8_t>(rec.endpoint_id.role);
@@ -672,6 +682,16 @@ HungEndpointWireRecord to_wire_record(const HungEndpointRecord& rec, uint32_t ra
     wire.stall_seconds = rec.stall_seconds;
     wire.confirmation_rounds = rec.confirmation_rounds;
     wire.host_rank = rank;
+
+    if (rec.flow_uid < flow_descriptors.size()) {
+        const auto& fd = flow_descriptors[rec.flow_uid];
+        wire.src_mesh_id = *fd.src_node_id.mesh_id;
+        wire.src_chip_id = fd.src_node_id.chip_id;
+        if (!fd.dst_node_ids.empty()) {
+            wire.dst_mesh_id = *fd.dst_node_ids[0].mesh_id;
+            wire.dst_chip_id = fd.dst_node_ids[0].chip_id;
+        }
+    }
     return wire;
 }
 
@@ -694,7 +714,8 @@ HungEndpointRecord from_wire_record(const HungEndpointWireRecord& wire) {
 // Phase 4: MPI exchange of hung records
 // =====================================================================
 
-std::vector<HungEndpointWireRecord> TestProgressMonitor::exchange_hung_records() {
+std::vector<HungEndpointWireRecord> TestProgressMonitor::exchange_hung_records(
+    const std::vector<FlowDescriptor>& flow_descriptors) {
     using namespace tt::tt_metal::distributed::multihost;
     const auto& ctx = DistributedContext::get_current_world();
     int my_rank = *ctx->rank();
@@ -702,11 +723,11 @@ std::vector<HungEndpointWireRecord> TestProgressMonitor::exchange_hung_records()
 
     uint32_t local_count = static_cast<uint32_t>(local_hung_records_.size());
 
-    // Convert local records to wire format
+    // Each rank converts its local records using its own flow_descriptors (flow_uid is rank-local)
     std::vector<HungEndpointWireRecord> local_wire;
     local_wire.reserve(local_count);
     for (const auto& rec : local_hung_records_) {
-        local_wire.push_back(to_wire_record(rec, static_cast<uint32_t>(my_rank)));
+        local_wire.push_back(to_wire_record(rec, static_cast<uint32_t>(my_rank), flow_descriptors));
     }
 
     if (world_size <= 1) {
@@ -766,24 +787,11 @@ static std::string get_timestamp_string() {
     return ss.str();
 }
 
-static std::filesystem::path resolve_report_path(const std::string& filename) {
-    std::filesystem::path root =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-    std::filesystem::path dir = root / std::string(OUTPUT_DIR);
-    if (!std::filesystem::exists(dir)) {
-        std::filesystem::create_directories(dir);
-    }
-    return dir / filename;
-}
-
 void TestProgressMonitor::write_summary_report(
-    const std::string& filename,
-    const std::vector<HungEndpointWireRecord>& all_records,
-    const std::vector<FlowDescriptor>& flow_descriptors) {
-    auto report_path = resolve_report_path(filename);
-    std::ofstream ofs(report_path);
+    const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors) {
+    std::ofstream ofs(summary_report_path_);
     if (!ofs.is_open()) {
-        log_warning(tt::LogTest, "Failed to open summary report file: {}", report_path.string());
+        log_warning(tt::LogTest, "Failed to open summary report file: {}", summary_report_path_.string());
         return;
     }
 
@@ -817,33 +825,17 @@ void TestProgressMonitor::write_summary_report(
         for (const auto& [flow_uid, records] : by_flow) {
             ofs << "  [" << flow_idx++ << "] Flow UID: " << flow_uid << "\n";
 
-            if (flow_uid < flow_descriptors.size()) {
-                const auto& fd = flow_descriptors[flow_uid];
-                ofs << "      Source:      " << format_device_label(fd.src_node_id) << " core ("
-                    << fd.src_logical_core.x << "," << fd.src_logical_core.y << ")"
-                    << " link=" << fd.link_id << "\n";
-                ofs << "      Destination: ";
-                for (size_t i = 0; i < fd.dst_node_ids.size(); i++) {
-                    if (i > 0) {
-                        ofs << ", ";
-                    }
-                    ofs << format_device_label(fd.dst_node_ids[i]);
-                }
-                ofs << " core (" << fd.dst_logical_core.x << "," << fd.dst_logical_core.y << ")\n";
-                ofs << "      Traffic:     " << fd.num_packets << " packets x " << fd.payload_size_bytes << "B"
-                    << " vc=" << static_cast<int>(fd.vc_id) << "\n";
+            const auto* first_rec = records.front();
+            FabricNodeId src_node_id(MeshId{first_rec->src_mesh_id}, first_rec->src_chip_id);
+            FabricNodeId dst_node_id(MeshId{first_rec->dst_mesh_id}, first_rec->dst_chip_id);
+            ofs << "      Source:      " << format_device_label(src_node_id) << "\n";
+            ofs << "      Destination: " << format_device_label(dst_node_id) << "\n";
 
-                try {
-                    auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(fd.src_node_id);
-                    auto src_host = psd.get_host_name_for_asic(src_asic_id);
-                    auto src_tray = psd.get_tray_id(src_asic_id);
-                    auto src_loc = psd.get_asic_location(src_asic_id);
-                    ofs << "      Src Physical: host=" << src_host << " tray=" << *src_tray << " asic=" << *src_loc
-                        << "\n";
-                } catch (...) {
-                    ofs << "      Src Physical: (unavailable)\n";
-                }
-            }
+            auto src_asic_id = control_plane.get_asic_id_from_fabric_node_id(src_node_id);
+            auto src_host = psd.get_host_name_for_asic(src_asic_id);
+            auto src_tray = psd.get_tray_id(src_asic_id);
+            auto src_loc = psd.get_asic_location(src_asic_id);
+            ofs << "      Src Physical: host=" << src_host << " tray=" << *src_tray << " asic=" << *src_loc << "\n";
 
             for (const auto* rec : records) {
                 const char* role_str =
@@ -860,7 +852,7 @@ void TestProgressMonitor::write_summary_report(
     ofs << "CLUSTER HEALTH: " << hung_flow_count << "/" << total_flows << " flows have hung endpoints\n";
     ofs << "================================================================\n";
     ofs.close();
-    log_info(tt::LogTest, "Summary report written to: {}", report_path.string());
+    log_info(tt::LogTest, "Summary report written to: {}", summary_report_path_.string());
 }
 
 // =====================================================================
@@ -868,13 +860,10 @@ void TestProgressMonitor::write_summary_report(
 // =====================================================================
 
 void TestProgressMonitor::write_detailed_report(
-    const std::string& filename,
-    const std::vector<HungEndpointWireRecord>& all_records,
-    const std::vector<FlowDescriptor>& flow_descriptors) {
-    auto report_path = resolve_report_path(filename);
-    std::ofstream ofs(report_path);
+    const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors) {
+    std::ofstream ofs(detail_report_path_);
     if (!ofs.is_open()) {
-        log_warning(tt::LogTest, "Failed to open detailed report file: {}", report_path.string());
+        log_warning(tt::LogTest, "Failed to open detailed report file: {}", detail_report_path_.string());
         return;
     }
 
@@ -908,12 +897,7 @@ void TestProgressMonitor::write_detailed_report(
     }
 
     for (const auto& [rank, records] : by_rank) {
-        std::string hostname;
-        try {
-            hostname = psd.get_hostname_for_rank(rank);
-        } catch (...) {
-            hostname = "rank-" + std::to_string(rank);
-        }
+        std::string hostname = psd.get_hostname_for_rank(rank);
 
         ofs << "--- Host: " << hostname << " (Rank " << rank << ") ---\n\n";
         ofs << "HUNG ENDPOINTS (" << records.size() << "):\n\n";
@@ -922,37 +906,26 @@ void TestProgressMonitor::write_detailed_report(
         for (const auto* rec : records) {
             const char* role_str = (rec->role == static_cast<uint8_t>(EndpointRole::Sender)) ? "Sender" : "Receiver";
             FabricNodeId node_id(MeshId{rec->mesh_id}, rec->chip_id);
+            FabricNodeId src_node_id(MeshId{rec->src_mesh_id}, rec->src_chip_id);
+            FabricNodeId dst_node_id(MeshId{rec->dst_mesh_id}, rec->dst_chip_id);
 
             ofs << "  [" << entry_idx++ << "] " << role_str << " endpoint\n";
             ofs << "      flow_uid: " << rec->flow_uid << "\n";
+            ofs << "      Configured: " << format_device_label(src_node_id) << " -> "
+                << format_device_label(dst_node_id) << "\n";
 
-            if (rec->flow_uid < flow_descriptors.size()) {
-                const auto& fd = flow_descriptors[rec->flow_uid];
-                ofs << "      Configured: " << format_device_label(fd.src_node_id) << " -> ";
-                for (size_t i = 0; i < fd.dst_node_ids.size(); i++) {
-                    if (i > 0) {
+            auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+            if (!fwd_chans.empty()) {
+                ofs << "      Eth Chans (src->dst): ";
+                bool first = true;
+                for (const auto& chan : fwd_chans) {
+                    if (!first) {
                         ofs << ", ";
                     }
-                    ofs << format_device_label(fd.dst_node_ids[i]);
+                    ofs << "ch" << static_cast<unsigned>(chan);
+                    first = false;
                 }
                 ofs << "\n";
-
-                try {
-                    auto eth_channels = control_plane.get_active_fabric_eth_channels(fd.src_node_id);
-                    if (!eth_channels.empty()) {
-                        ofs << "      Eth Chans: ";
-                        bool first = true;
-                        for (const auto& [chan, dir] : eth_channels) {
-                            if (!first) {
-                                ofs << ", ";
-                            }
-                            ofs << "ch" << chan;
-                            first = false;
-                        }
-                        ofs << "\n";
-                    }
-                } catch (...) {
-                }
             }
 
             ofs << "      Core: (" << rec->core_x << "," << rec->core_y << ") | config_idx: " << rec->config_idx
@@ -961,15 +934,11 @@ void TestProgressMonitor::write_detailed_report(
                 << " | Stalled for: " << rec->stall_seconds << "s | Confirmed: " << rec->confirmation_rounds
                 << " rounds\n";
 
-            try {
-                auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node_id);
-                auto tray_id = psd.get_tray_id(asic_id);
-                auto asic_loc = psd.get_asic_location(asic_id);
-                auto asic_host = psd.get_host_name_for_asic(asic_id);
-                ofs << "      Physical: host=" << asic_host << " tray=" << *tray_id << " asic=" << *asic_loc << "\n";
-            } catch (...) {
-                ofs << "      Physical: (unavailable)\n";
-            }
+            auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node_id);
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_loc = psd.get_asic_location(asic_id);
+            auto asic_host = psd.get_host_name_for_asic(asic_id);
+            ofs << "      Physical: host=" << asic_host << " tray=" << *tray_id << " asic=" << *asic_loc << "\n";
             ofs << "\n";
         }
     }
@@ -982,7 +951,7 @@ void TestProgressMonitor::write_detailed_report(
     ofs << " Total flows:                   " << flow_descriptors.size() << "\n";
     ofs << "================================================================\n";
     ofs.close();
-    log_info(tt::LogTest, "Detailed report written to: {}", report_path.string());
+    log_info(tt::LogTest, "Detailed report written to: {}", detail_report_path_.string());
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

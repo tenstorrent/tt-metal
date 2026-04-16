@@ -400,6 +400,15 @@ public:
         return mesh_adjacency_map;
     }
 
+    uint32_t get_max_connections_per_device() const override {
+        static constexpr uint32_t MAX_Z_NEIGHBORS = 2;
+        auto arch = tt::tt_metal::hal::get_arch();
+        switch (arch) {
+            case tt::ARCH::BLACKHOLE: return 4 + MAX_Z_NEIGHBORS;  // N, S, E, W + up to 2 Z destinations
+            default: return 4;                                     // N, S, E, W
+        }
+    }
+
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -1407,7 +1416,7 @@ public:
                     z_neighbors.empty(),
                     "NeighborExchange sync does not support Z-link topologies. "
                     "Device {} has {} Z-link neighbor(s). "
-                    "Disable sync (--sync false) or use host-driven monitoring.",
+                    "Disable sync (in test yaml) or use host-driven monitoring.",
                     src_device,
                     z_neighbors.size());
                 multi_directional_hops = this->get_hops_to_nearest_neighbors(src_device);

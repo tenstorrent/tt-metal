@@ -55,6 +55,7 @@ public:
     virtual uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const = 0;
     virtual bool is_multi_mesh() const = 0;
     virtual std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const = 0;
+    virtual uint32_t get_max_connections_per_device() const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(

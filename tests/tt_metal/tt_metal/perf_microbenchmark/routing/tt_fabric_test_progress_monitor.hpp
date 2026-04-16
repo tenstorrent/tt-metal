@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
@@ -131,12 +132,17 @@ struct HungEndpointWireRecord {
     uint32_t stall_seconds;
     uint32_t confirmation_rounds;
     uint32_t host_rank;
+    uint32_t src_mesh_id;
+    uint32_t src_chip_id;
+    uint32_t dst_mesh_id;
+    uint32_t dst_chip_id;
 };
 static_assert(
     std::is_trivially_copyable_v<HungEndpointWireRecord>,
     "HungEndpointWireRecord must be trivially copyable for MPI serialization");
 
-HungEndpointWireRecord to_wire_record(const HungEndpointRecord& rec, uint32_t rank);
+HungEndpointWireRecord to_wire_record(
+    const HungEndpointRecord& rec, uint32_t rank, const std::vector<FlowDescriptor>& flow_descriptors);
 HungEndpointRecord from_wire_record(const HungEndpointWireRecord& wire);
 
 // Parse per-config results from a result buffer readback
@@ -176,15 +182,14 @@ public:
     const std::vector<HungEndpointRecord>& get_hung_records() const { return local_hung_records_; }
 
     // Phase 4: MPI exchange and report generation
-    std::vector<HungEndpointWireRecord> exchange_hung_records();
+    std::vector<HungEndpointWireRecord> exchange_hung_records(const std::vector<FlowDescriptor>& flow_descriptors);
     void write_summary_report(
-        const std::string& path,
-        const std::vector<HungEndpointWireRecord>& all_records,
-        const std::vector<FlowDescriptor>& flow_descriptors);
+        const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors);
     void write_detailed_report(
-        const std::string& path,
-        const std::vector<HungEndpointWireRecord>& all_records,
-        const std::vector<FlowDescriptor>& flow_descriptors);
+        const std::vector<HungEndpointWireRecord>& all_records, const std::vector<FlowDescriptor>& flow_descriptors);
+
+    const std::filesystem::path& get_summary_report_path() const { return summary_report_path_; }
+    const std::filesystem::path& get_detail_report_path() const { return detail_report_path_; }
 
 private:
     // --- Device-level polling (non-granular) ---
@@ -241,6 +246,10 @@ private:
     uint32_t total_endpoints_ = 0;
     uint32_t completed_endpoints_ = 0;
     uint32_t confirmed_hung_endpoints_ = 0;
+
+    // Resolved report file paths (computed once at construction)
+    std::filesystem::path summary_report_path_;
+    std::filesystem::path detail_report_path_;
 };
 
 }  // namespace tt::tt_fabric::fabric_tests
