@@ -1,25 +1,18 @@
 # TTSim Skip List
-# Tests that are not compatible with TTSim simulator
+# Tests that currently do not work on TTSim simulator
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
-  - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
-  - tests/ttnn/unit_tests/base_functionality/test_expand.py
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_replicated_tensor
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
-  - tests/ttnn/unit_tests/base_functionality/test_roll.py
-  - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
-  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
@@ -27,22 +20,20 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
-  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
+  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
-  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
-  - tests/ttnn/unit_tests/operations/pool/test_rotate.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
-  - tests/ttnn/unit_tests/operations/reduce/test_intimg.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
-  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
@@ -54,6 +45,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
   # ERROR: UndefinedBehavior: tensix_execute_pacr: intermediate_format=5 mismatches late_from_format=0
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
@@ -69,6 +61,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # MOVD2B failures
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
