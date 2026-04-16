@@ -296,7 +296,7 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
         bool is_equal = (golden_in1_read_output == in1_read_output);
         if (!is_equal) {
             log_error(
-                tt::LogTest, "Core {}: in1 read output does not match golden output!", matmul_cores_list[i].str());
+                tt::LogTest, "Core {}: in1 read output does not match golden output!", i.str());
             log_info(tt::LogTest, "Golden vector");
             print_vector(unpack_vector<bfloat16, uint32_t>(in1_input));
             log_info(tt::LogTest, "Packed Output vector");
