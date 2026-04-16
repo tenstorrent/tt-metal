@@ -294,13 +294,13 @@ class TestFastDeviceToHost:
         ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
         def _convert_and_transfer():
-            tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
-            tt_scaled = ttnn.multiply(tt_tile, 255.0)
-            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
-            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
-            tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
+            # tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+            # tt_scaled = ttnn.multiply(tt_tile, 255.0)
+            # tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+            # tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
+            # tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
             return fast_device_to_host(
-                tt_uint8,
+                tt_tensor,
                 mesh_device,
                 concat_dims,
                 ccl_manager=ccl_manager,
