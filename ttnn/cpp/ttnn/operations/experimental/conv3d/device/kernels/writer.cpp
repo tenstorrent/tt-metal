@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/device_print.h"
 #include "hostdevcommon/common_values.hpp"
 #if defined(PROFILE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -100,6 +101,7 @@ void kernel_main() {
         cb_push_back(cb_zero_tiled, 1);
     }
 
+    DEVICE_PRINT("[CONV3D-WR] start is_red={} nw={}\n", is_reducer, num_workers);
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
@@ -257,4 +259,5 @@ void kernel_main() {
         }
     }
     noc_async_atomic_barrier();
+    DEVICE_PRINT("[CONV3D-WR] DONE\n");
 }

@@ -114,7 +114,11 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address);
+#if defined(NP_PROGRESS_SEM)
+    const uint32_t outer_dim_offset_start_t = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab));
+#endif
+
+    const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
 
     // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
     uint32_t recv_buf_base = 0;
@@ -427,7 +431,7 @@ void kernel_main() {
 
 #if defined(NP_PROGRESS_SEM)
         if constexpr (progress_t_batch_size > 0) {
-            if ((outer_dim + 1) % progress_t_batch_size == 0) {
+            if ((outer_dim_offset_start_t + outer_dim + 1) % progress_t_batch_size == 0) {
                 noc_async_write_barrier();
                 if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
                     DEVICE_PRINT(
@@ -460,7 +464,7 @@ void kernel_main() {
     // Tail signal: if outer_dim_size is not a multiple of progress_t_batch_size,
     // the last partial T-batch was not signaled inside the loop.  Fire it now.
     if constexpr (progress_t_batch_size > 0) {
-        if (outer_dim_size % progress_t_batch_size != 0) {
+        if ((outer_dim_offset_start_t + outer_dim_size) % progress_t_batch_size != 0) {
             DEVICE_PRINT("[NP-W] H-writer tail signal targets={}\n", num_phase2_signal_targets);
             if (num_phase2_signal_targets > 0 && !is_w_fabric_writer) {
                 for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {

@@ -582,12 +582,18 @@ void kernel_main() {
         shard_noc_base = get_noc_addr(shard_l1_base);
     }
 
+    DEVICE_PRINT("[CONV3D-RD] start N={} T={} H={} W={}\n", N, T_in, H_in, W_in);
 #if defined(CONV3D_INPUT_PROGRESS_SEM)
+    DEVICE_PRINT("[CONV3D-RD] waiting progress_sem count={}\n", input_progress_signal_count);
     if (input_progress_signal_count > 0) {
         noc_semaphore_wait_min(progress_sem_ptr, input_progress_signal_count);
     }
+    DEVICE_PRINT("[CONV3D-RD] progress_sem done\n");
+#else
+    DEVICE_PRINT("[CONV3D-RD] no progress_sem\n");
 #endif
 
+    DEVICE_PRINT("[CONV3D-RD] entering main loop\n");
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
         const uint32_t batch_page_base = batch_idx * T_in_H_in_W_in;
@@ -791,4 +797,5 @@ void kernel_main() {
             }
         }
     }
+    DEVICE_PRINT("[CONV3D-RD] DONE\n");
 }

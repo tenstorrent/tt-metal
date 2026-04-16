@@ -143,10 +143,6 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_links = static_cast<uint32_t>(op.np_num_links);
     uint32_t pad2_num_links = static_cast<uint32_t>(op.np_pad2_num_links);
-    num_links = 1;
-    if (is_2d) {
-        pad2_num_links = 1;
-    }
 
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;
     uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
@@ -352,6 +348,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     // Set per-core runtime args for H fabric cores
     uint32_t link_offset_start_id = 0;
     uint32_t writer_link_offset_start_id = 0;
+    uint32_t link_t_offset = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t link_dims_to_read = 0;
 
@@ -445,21 +442,25 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             }
             // fabric_only mode: override writer rt_args to index into the compact halo buffer
             {
-                uint32_t top_halo_sticks = outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim;
+                uint32_t link_t_start = (output_num_sticks_per_halo_dim > 0)
+                                            ? (writer_link_offset_start_id / output_num_sticks_per_halo_dim)
+                                            : 0u;
+                uint32_t top_halo_total = outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim;
+                uint32_t h_top_link_start = link_t_start * op.np_padding_h * num_sticks_per_halo_dim;
+                uint32_t h_bot_link_start = top_halo_total + link_t_start * op.np_padding_h * num_sticks_per_halo_dim;
                 uint32_t padding_this_dir = direction ? op.np_padding_h : op.np_padding_h;
-                writer_rt_args[0] = direction ? top_halo_sticks : 0;  // outer_dim_offset_start_id
+                writer_rt_args[0] = direction ? h_bot_link_start : h_top_link_start;  // per-link offset
                 writer_rt_args[1] = 0;                                // stick_start_id (no W-offset in compact)
                 writer_rt_args[3] = padding_this_dir;                 // output_halo_dim_size (compact)
                 writer_rt_args[6] = 0;                                // padding_left (no W-offset in compact)
                 writer_rt_args[8] = num_sticks_per_halo_dim;          // stride = W_dev, not padded W
-                // arg[40] = num_phase2_signal_targets — already set correctly above
-                // (is_2d ? num_w_fabric_cores : 0 at index 14+2*8=30... wait, let's recalculate)
-                // The 14 fixed args (indices 0-13) + is_2d targets at index 14:
-                // [0..13] = 14 fixed args, [14] = num_targets, [15..30] = 8 pairs
-                // writer_rt_args[14] = 0 when !is_2d (already set correctly)
+            }
+            if (conv_config.input_progress_t_batch_size > 0) {
+                writer_rt_args.push_back(link_t_offset);
             }
             SetRuntimeArgs(program, h_writer_kernel_id, {core}, writer_rt_args);
         }
+        link_t_offset += link_dims_to_read;
         link_offset_start_id += (link_dims_to_read * num_sticks_per_halo_dim);
         writer_link_offset_start_id += (link_dims_to_read * output_num_sticks_per_halo_dim);
     }
