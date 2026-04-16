@@ -398,24 +398,18 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
         for (uint32_t i = 0; i < num_cores_total; ++i) {
             const auto& core = cores[i];
             if (!core_group_1.contains(core)) {
-                std::vector<uint32_t> zero_args = {0, 0, 0};
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args.begin(), zero_args.end()});
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args.begin(), zero_args.end()});
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args.begin(), zero_args.end()});
+                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(3, 0));
+                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(3, 0));
+                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(3, 0));
                 continue;
             }
             uint32_t in_tiles = in_shard_pages(core);
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
-            std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), in_tiles, out_start_id};
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
-
-            std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), o_tiles, out_start_id};
-            writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
-
-            std::vector<uint32_t> compute_runtime_args = {o_tiles, packed_scalar1, packed_scalar2};
-            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
+            writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
         }
     } else {
         if (zero_start_grid) {
@@ -447,48 +441,26 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
             } else if (core_group_2.contains(core)) {
                 npc = num_tiles_per_core_group_2;
             } else {
-                std::vector<uint32_t> zero_args_8 = {0, 0, 0, 0, 0, 0, 0, 0};
-                std::vector<uint32_t> zero_args_3 = {0, 0, 0};
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args_8.begin(), zero_args_8.end()});
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args_8.begin(), zero_args_8.end()});
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{zero_args_3.begin(), zero_args_3.end()});
+                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(8, 0));
+                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(8, 0));
+                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(3, 0));
                 continue;
             }
 
             if (rm_interleaved) {
-                std::vector<uint32_t> reader_runtime_args = {
-                    input.buffer()->address(),
-                    npc,
-                    start_tile_id,
-                    chunks_per_row,
-                    input_chunk_size,
-                    input_last_chunk_size,
-                    rows_per_tile,
-                    total_rows};
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
-
-                std::vector<uint32_t> writer_runtime_args = {
-                    output.buffer()->address(),
-                    npc,
-                    start_tile_id,
-                    chunks_per_row,
-                    output_chunk_size,
-                    output_last_chunk_size,
-                    rows_per_tile,
-                    total_rows};
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
-
-                std::vector<uint32_t> compute_runtime_args = {npc * chunks_per_row, packed_scalar1, packed_scalar2};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{
+                    input.buffer()->address(), npc, start_tile_id,
+                    chunks_per_row, input_chunk_size, input_last_chunk_size,
+                    rows_per_tile, total_rows});
+                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{
+                    output.buffer()->address(), npc, start_tile_id,
+                    chunks_per_row, output_chunk_size, output_last_chunk_size,
+                    rows_per_tile, total_rows});
+                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
             } else {
-                std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u};
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
-
-                std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u};
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
-
-                std::vector<uint32_t> compute_runtime_args = {npc, packed_scalar1, packed_scalar2};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
             }
 
             start_tile_id += npc;
