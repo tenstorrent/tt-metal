@@ -21,9 +21,12 @@ Read-only git commands are allowed (`git rev-parse`, `git log`, `git status`, `g
 
 You will receive:
 - **ISSUE_NUMBER** — the GitHub issue number
-- **ISSUE_TITLE** — the issue title
-- **ISSUE_BODY** — the full issue description (error messages, reproduction steps, etc.)
+- **ISSUE_TITLE** — the issue title (verbatim from GitHub)
+- **ISSUE_BODY** — the full issue description (verbatim — error messages, reproduction steps, code snippets, etc.)
 - **ISSUE_LABELS** — labels (e.g., blackhole, P2, LLK)
+- **ISSUE_COMMENTS** — all comments in full (verbatim — follow-up context, clarifications, stack traces, etc.)
+
+**CRITICAL: Never alter, summarize, paraphrase, or truncate any issue content.** Pass the raw title, body, and comments as-is to every subagent you spawn.
 
 ---
 
@@ -71,11 +74,15 @@ Agent tool:
     Issue body:
     {ISSUE_BODY}
     Issue labels: {ISSUE_LABELS}
+    Issue comments:
+    {ISSUE_COMMENTS}
 
     Output your analysis to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
 
     LOG_DIR: {LOG_DIR}
 ```
+
+**Note to orchestrator as reminder:** The `{ISSUE_TITLE}`, `{ISSUE_BODY}`, and `{ISSUE_COMMENTS}` placeholders above must be substituted with the raw GitHub content verbatim — no summarizing, paraphrasing, or truncating. The agent depends on exact error messages and code snippets to do its work.
 
 Wait for completion. **Verify** that `codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md` exists.
 
