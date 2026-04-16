@@ -260,4 +260,41 @@ ALWI void matmul_block(
     }
 }
 
+ALWI void matmul_reduce_inplace(
+    uint32_t in_out_cb,
+    uint32_t in1_cb,
+    uint32_t num_subblocks,
+    uint32_t subblock_h,
+    uint32_t subblock_w,
+    uint32_t block_kt) {
+
+    const uint32_t subblock_tiles = subblock_h * subblock_w;
+    const uint32_t total_in_tiles = num_subblocks * subblock_tiles;
+
+    // Init + reconfig + input waits. in1_cb holds a single column-identity tile
+    // (fronted for the life of the helper); in_out_cb must have the full input
+    // population fronted before the reduce begins.
+    mm_block_init_short(in_out_cb, in1_cb, /*transpose=*/false, subblock_w, subblock_h, block_kt);
+    reconfig_data_format(in1_cb, in_out_cb);
+    cb_wait_front(in1_cb, 1);
+    cb_wait_front(in_out_cb, total_in_tiles);
+
+    for (uint32_t sub = 0; sub < num_subblocks; ++sub) {
+        tile_regs_acquire();
+        ckernel::matmul_block(
+            in_out_cb, in1_cb, 0, 0, 0,
+            /*transpose=*/false, subblock_w, subblock_h, block_kt);
+        tile_regs_commit();
+        // Pop must happen after commit and before the back-pack so the read pointer
+        // advances past the tiles we just consumed, making room for the write.
+        cb_pop_front(in_out_cb, subblock_tiles);
+        tile_regs_wait();
+        for (uint32_t i = 0; i < subblock_tiles; i++) {
+            pack_tile(i, in_out_cb);
+        }
+        tile_regs_release();
+        cb_push_back(in_out_cb, subblock_tiles);
+    }
+}
+
 }  // namespace compute_kernel_lib

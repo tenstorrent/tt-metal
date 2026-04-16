@@ -112,6 +112,36 @@ ALWI void matmul_block(
     PreKBlockFn pre_k_block = {},
     bool retain_in0 = false);
 
+/**
+ * matmul_reduce_inplace: in-place reduce via matmul using a single-tile column identity.
+ *
+ * Consumes subblock_h×subblock_w tiles from the front of `in_out_cb`, computes
+ *   DST = matmul(in_out_cb[0..subblock_h], in1_cb[0]) × block_kt accumulation
+ * and packs back onto `in_out_cb` — repeated num_subblocks times to reduce the CB in
+ * place. This pattern breaks the standard in0_cb != out_cb invariant that `matmul_block`
+ * enforces, so it lives in a dedicated helper; SDPA uses this to fold partial-sum
+ * results along M via a column-identity tile in in1_cb.
+ *
+ * The helper absorbs mm_block_init_short + reconfig_data_format + wait_front on both
+ * CBs — the caller only needs to have produced the requisite tiles.
+ *
+ * ── Runtime Parameters ─────────────────────────────────────────────────────
+ *
+ *   in_out_cb       CB serving as both input and output (in-place).
+ *   in1_cb          CB with the single column-identity tile (kept fronted, not popped).
+ *   num_subblocks   Number of subblock iterations (= rows / subblock_h).
+ *   subblock_h      Subblock height in tiles (matmul rt_dim).
+ *   subblock_w      Subblock width in tiles (matmul ct_dim; typically 1).
+ *   block_kt        K dimension in tiles for each matmul call (typically 1 = subblock_w).
+ */
+ALWI void matmul_reduce_inplace(
+    uint32_t in_out_cb,
+    uint32_t in1_cb,
+    uint32_t num_subblocks,
+    uint32_t subblock_h,
+    uint32_t subblock_w = 1,
+    uint32_t block_kt = 1);
+
 }  // namespace compute_kernel_lib
 
 #include "matmul_block_helpers.inl"
