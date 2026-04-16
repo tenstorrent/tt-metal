@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -57,25 +58,37 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
+
+    experimental::Noc noc;
+    experimental::CB cb_out0(cb_id_out0);
+
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
 #ifdef DEBUG
-    uint32_t base_src_l1_addr = get_read_ptr(cb_id_out0);
+    uint32_t base_src_l1_addr = cb_out0.get_read_ptr();
 #endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_wait_front(cb_id_out0, num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(num_read_per_barrier);
+        uint32_t src_buffer_l1_addr = cb_out0.get_read_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
 #ifdef UNPAD_INPUT_WIDTH
             if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-                noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
+                noc.async_write(
+                    experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr),
+                    s0,
+                    noc_write_size,
+                    {},
+                    {.page_id = dst_stick_id});
             }
 #else
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-            noc_async_write(src_buffer_l1_addr + page_offset, dst_noc_addr, noc_write_size);
+            noc.async_write(
+                experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr),
+                s0,
+                noc_write_size,
+                {.offset_bytes = page_offset},
+                {.page_id = dst_stick_id});
 #endif
 #ifdef DEBUG
             DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
@@ -103,7 +116,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_read_per_barrier);
+        noc.async_write_barrier();
+        cb_out0.pop_front(num_read_per_barrier);
     }
 }

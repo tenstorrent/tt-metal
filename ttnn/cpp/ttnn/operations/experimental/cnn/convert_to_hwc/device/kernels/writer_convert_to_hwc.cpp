@@ -3,19 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 constexpr uint32_t TILE_SIZE = 32;
 
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
-FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
-    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
+FORCE_INLINE void copy_padded_sticks(experimental::Noc noc, uint32_t l1_read_addr, uint32_t& l1_write_addr) {
+    experimental::set_read_state<StickSize>(noc, l1_read_addr);
     for (uint32_t row = 0; row < NumSticks; row++) {
-        noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+        experimental::read_with_state(noc, l1_write_addr, l1_read_addr);
         l1_read_addr += PaddedStickSize;
         l1_write_addr += StickSize;
     }
 }
-
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
@@ -45,13 +45,19 @@ void kernel_main() {
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
     constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
 
-    const uint32_t base_l1_write_addr = get_write_ptr(cb_out) + initial_l1_write_addr_offset;
+    experimental::Noc noc;
+    experimental::CB cb_in_obj(cb_in);
+    experimental::CB cb_in_batch_obj(cb_in_batch);
+    experimental::CB cb_in_transpose_obj(cb_in_transpose);
+    experimental::CB cb_out_obj(cb_out);
+
+    const uint32_t base_l1_write_addr = cb_out_obj.get_write_ptr() + initial_l1_write_addr_offset;
     uint32_t l1_output_write_addr = base_l1_write_addr;
 
     // Process each blocked transfer group
     for (uint32_t block_id = 0; block_id < num_blocks && block_id < input_num_blocks; block_id++) {
         if constexpr (is_reader) {
-            cb_reserve_back(cb_in_batch, input_block_size_sticks_per_core);
+            cb_in_batch_obj.reserve_back(input_block_size_sticks_per_core);
 
             // Process all transfers in this group
             const uint32_t group_size = args[args_idx++];
@@ -68,26 +74,26 @@ void kernel_main() {
                     // For DRAM, use bank_id to compute NOC address from bank_id
                     src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
                 } else {
-                    src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_in));
+                    src_addr_base = get_noc_addr(src_x, src_y, cb_in_obj.get_read_ptr());
                 }
 
                 // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
-                const uint32_t dst_addr = get_write_ptr(cb_in_batch) + dst_offset_bytes;
+                const uint32_t dst_addr = cb_in_batch_obj.get_write_ptr() + dst_offset_bytes;
                 noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
             }
 
-            noc_async_read_barrier();
-            cb_push_back(cb_in_batch, input_block_size_sticks_per_core);
+            noc.async_read_barrier();
+            cb_in_batch_obj.push_back(input_block_size_sticks_per_core);
         }
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {
-            cb_wait_front(cb_in_transpose, 1);
+            cb_in_transpose_obj.wait_front(1);
 
-            const uint32_t l1_read_addr = get_read_ptr(cb_in_transpose);
+            const uint32_t l1_read_addr = cb_in_transpose_obj.get_read_ptr();
 
-            copy_padded_sticks<channel_size, tile_size_stick_bytes, TILE_SIZE>(l1_read_addr, l1_output_write_addr);
-            noc_async_read_barrier();
-            cb_pop_front(cb_in_transpose, 1);
+            copy_padded_sticks<channel_size, tile_size_stick_bytes, TILE_SIZE>(noc, l1_read_addr, l1_output_write_addr);
+            noc.async_read_barrier();
+            cb_in_transpose_obj.pop_front(1);
 
             // Stride by a number of sticks when splitting writers across cores
             l1_output_write_addr += l1_write_output_addr_stride;

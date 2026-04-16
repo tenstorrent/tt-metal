@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -85,22 +86,31 @@ void kernel_main() {
     // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
+
+    experimental::Noc noc;
+    experimental::CB cb_in(cb_id_in);
+    experimental::CB cb_out(cb_id_out);
+
     uint32_t dst_stick_id = start_id;
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
     uint32_t sticks_written = 0;
 #ifdef DEBUG
-    uint32_t base_src_l1_addr = get_read_ptr(cb_id_in);
+    uint32_t base_src_l1_addr = cb_in.get_read_ptr();
 #endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_written < num_sticks_per_core; ++iter) {
 #ifdef LAST_DIM_STRIDED
         // read output rows in batches if striding on last dim
-        cb_reserve_back(cb_id_out, num_read_per_barrier);
+        cb_out.reserve_back(num_read_per_barrier);
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint32_t l1_write_addr = get_write_ptr(cb_id_out);
-            uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            noc_async_read(src_noc_addr, l1_write_addr, output_stick_size);
+            uint32_t l1_write_addr = cb_out.get_write_ptr();
+            noc.async_read(
+                s0,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                output_stick_size,
+                {.page_id = src_stick_id},
+                {});
             l1_write_addr += output_stick_size;
             src_stick_id += rev_stride[1];
             for (uint32_t j = 0; j < num_dims; j++) {
@@ -113,20 +123,19 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_out, num_read_per_barrier);
+        noc.async_read_barrier();
+        cb_out.push_back(num_read_per_barrier);
 #endif
 
         // begin writing
-        cb_wait_front(cb_id_in, num_read_per_barrier);
+        cb_in.wait_front(num_read_per_barrier);
 #ifdef LAST_DIM_STRIDED
-        cb_wait_front(cb_id_out, num_read_per_barrier);
-        uint32_t output_l1_addr = get_read_ptr(cb_id_out);
+        cb_out.wait_front(num_read_per_barrier);
+        uint32_t output_l1_addr = cb_out.get_read_ptr();
 #endif
-        uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_in);
+        uint32_t src_buffer_l1_addr = cb_in.get_read_ptr();
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_written < num_sticks_per_core; ++i) {
             sticks_written++;
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
 #ifdef LAST_DIM_STRIDED
             // fill the read output row with the input with stride
             volatile tt_l1_ptr uint8_t* out_stick =
@@ -141,10 +150,20 @@ void kernel_main() {
                 }
                 out_index += rev_stride[0];
             }
-            noc_async_write(output_l1_addr, dst_noc_addr, output_stick_size);
+            noc.async_write(
+                experimental::CoreLocalMem<uint32_t>(output_l1_addr),
+                s0,
+                output_stick_size,
+                {},
+                {.page_id = dst_stick_id});
             output_l1_addr += output_stick_size;
 #else
-            noc_async_write(src_buffer_l1_addr + alignment_offset, dst_noc_addr + page_begins_offset, noc_write_size);
+            noc.async_write(
+                experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr + alignment_offset),
+                s0,
+                noc_write_size,
+                {},
+                {.page_id = dst_stick_id, .offset_bytes = page_begins_offset});
 #endif
 #ifdef DEBUG
             DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
@@ -173,7 +192,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_in, num_read_per_barrier);
+        noc.async_write_barrier();
+        cb_in.pop_front(num_read_per_barrier);
     }
 }

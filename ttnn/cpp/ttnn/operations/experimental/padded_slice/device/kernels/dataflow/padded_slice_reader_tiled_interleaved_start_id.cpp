@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(0);
@@ -31,6 +32,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<1>();
     const auto s0 = TensorAccessor(src_args, src_addr);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
@@ -69,12 +73,12 @@ void kernel_main() {
     DEVICE_PRINT(
         "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
 #endif
-    const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-    const uint64_t base_noc_addr = get_noc_addr(0, s0);
+    const uint32_t base_src_buffer_l1_addr = cb_in0.get_write_ptr();
     uint32_t num_tiles_pushed = 0;
     while (tiles_read < num_tiles_per_core) {
-        cb_reserve_back(cb_id_in0, num_tiles_per_barrier);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
+        cb_in0.reserve_back(num_tiles_per_barrier);
+        uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+        uint32_t l1_offset = 0;
 #ifdef DEBUG
         DPRINT << "Src Buffer L1 Addr: " << src_buffer_l1_addr << ENDL();
         DEVICE_PRINT("Src Buffer L1 Addr: {}\n", src_buffer_l1_addr);
@@ -97,27 +101,26 @@ void kernel_main() {
                     id_per_dim[3],
                     tiles_read);
 #endif
-                src_buffer_l1_addr += tile_size;
+                l1_offset += tile_size;
                 src_stick_id++;
 
             } else {
-                uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-                noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
+                noc.async_read(s0, cb_in0, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
 #ifdef DEBUG
-                DPRINT << "src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr
+                DPRINT << "src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr + l1_offset
                        << ", tiles_read: " << tiles_read << "id " << id_per_dim[0] << "," << id_per_dim[1] << ","
                        << id_per_dim[2] << "," << id_per_dim[3] << ENDL();
                 DEVICE_PRINT(
                     "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
                     src_stick_id,
-                    src_buffer_l1_addr,
+                    src_buffer_l1_addr + l1_offset,
                     tiles_read,
                     id_per_dim[0],
                     id_per_dim[1],
                     id_per_dim[2],
                     id_per_dim[3]);
 #endif
-                src_buffer_l1_addr += tile_size;
+                l1_offset += tile_size;
                 src_stick_id++;
             }
 
@@ -131,8 +134,8 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_tiles_per_barrier);
+        noc.async_read_barrier();
+        cb_in0.push_back(num_tiles_per_barrier);
         num_tiles_pushed += num_tiles_per_barrier;
     }
 }

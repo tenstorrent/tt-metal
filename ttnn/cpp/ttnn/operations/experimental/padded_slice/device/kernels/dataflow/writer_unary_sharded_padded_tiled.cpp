@@ -9,6 +9,8 @@
 #include "api/debug/dprint.h"
 #include "ckernel_defs.h"
 #include "tt-metalium/constants.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+
 uint32_t round_down(uint32_t value, uint32_t multiple) {
     if (value % multiple != 0) {
         value -= (value % multiple);
@@ -42,13 +44,18 @@ void kernel_main() {
 
     const volatile tt_l1_ptr uint32_t* const output_end = (tt_l1_ptr uint32_t*)(output_end_addr);
 
-    const uint32_t base_write_addr = get_write_ptr(cb_out_id);
+    experimental::Noc noc;
+    experimental::CB cb_untilized(cb_untilized_id);
+    experimental::CB cb_out(cb_out_id);
+    experimental::CB cb_padding(cb_padding_id);
+
+    const uint32_t base_write_addr = cb_out.get_write_ptr();
     uint32_t write_addr = base_write_addr;
     uint32_t rows_remaining = num_sticks_this_core;
     uint32_t tiles_read = 0;
-    uint32_t read_addr = get_read_ptr(cb_untilized_id);
+    uint32_t read_addr = cb_untilized.get_read_ptr();
     uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
-    const uint32_t pad_addr = get_read_ptr(cb_padding_id);
+    const uint32_t pad_addr = cb_padding.get_read_ptr();
     const uint32_t output_row_size_elems = output_row_size_bytes / output_elem_size;
 
     const uint32_t padded_channels_bytes = padded_channels_elems * output_elem_size;
@@ -67,7 +74,7 @@ void kernel_main() {
         }
     }
 
-    uint64_t pad_noc_addr = get_noc_addr(pad_addr + output_row_size_bytes - padded_channels_bytes);
+    const uint32_t pad_src_l1_addr = pad_addr + output_row_size_bytes - padded_channels_bytes;
 
 #ifdef DEBUG
     DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
@@ -82,10 +89,13 @@ void kernel_main() {
         block_row_size);
     DPRINT << "untilized CB ID: " << cb_untilized_id << " Out CB ID: " << cb_out_id << ENDL();
     DEVICE_PRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
-    DPRINT << "pad_addr : " << pad_addr << ", pad_noc_addr : " << pad_noc_addr
+    DPRINT << "pad_addr : " << pad_addr << ", pad_src_l1_addr : " << pad_src_l1_addr
            << ", padded_channels_elems: " << padded_channels_elems << ENDL();
     DEVICE_PRINT(
-        "pad_addr : {} pad_noc_addr : {} padded_channels_elems: {}\n", pad_addr, pad_noc_addr, padded_channels_elems);
+        "pad_addr : {} pad_src_l1_addr : {} padded_channels_elems: {}\n",
+        pad_addr,
+        pad_src_l1_addr,
+        padded_channels_elems);
     DPRINT << "Unaligned " << is_non_aligned << ENDL();
     DEVICE_PRINT("Unaligned {}\n", is_non_aligned);
     DPRINT << "Output Row Size Elems " << output_row_size_elems << " Bytes: " << output_row_size_bytes
@@ -99,6 +109,7 @@ void kernel_main() {
 
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
     uint32_t row_count = 0;
+    experimental::UnicastEndpoint self_ep;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {
         uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
         uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);
@@ -140,20 +151,29 @@ void kernel_main() {
 
 #endif
 
-        cb_wait_front(cb_untilized_id, num_tiles_per_read);
-        uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
+        cb_untilized.wait_front(num_tiles_per_read);
+        const uint32_t noc_read_src_base = cb_untilized.get_read_ptr() + read_start_offset * block_row_size;
 
-        noc_read_addr += read_start_offset * block_row_size;
         if constexpr (is_non_aligned) {
-            uint64_t current_noc_read_addr = noc_read_addr;
+            uint32_t current_src_l1 = noc_read_src_base;
             uint32_t current_write_addr = write_addr;
             for (uint32_t row = 0; row < read_rows_size; row++) {
-                noc_async_read(current_noc_read_addr + misalignment, current_write_addr, output_row_size_bytes);
-                current_noc_read_addr += block_row_size;
+                noc.async_read(
+                    self_ep,
+                    experimental::CoreLocalMem<uint32_t>(current_write_addr),
+                    output_row_size_bytes,
+                    experimental::local_addr(current_src_l1 + misalignment, noc.get_noc_id()),
+                    {});
+                current_src_l1 += block_row_size;
                 current_write_addr += output_row_size_bytes;
             }
         } else {
-            noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(write_addr),
+                read_rows_size * block_row_size,
+                experimental::local_addr(noc_read_src_base, noc.get_noc_id()),
+                {});
         }
         uint32_t pad_write_addr = write_addr + output_row_size_bytes - padded_channels_bytes;
         if (padded_channels_elems > 0) {
@@ -171,15 +191,21 @@ void kernel_main() {
             DPRINT << "Pad Write Addr : " << pad_write_addr << ENDL();
             DEVICE_PRINT("Pad Write Addr : {}\n", pad_write_addr);
 #endif
+            const auto pad_src = experimental::local_addr(pad_src_l1_addr, noc.get_noc_id());
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
-                noc_async_read(pad_noc_addr, pad_write_addr, padded_channels_elems * output_elem_size);
+                noc.async_read(
+                    self_ep,
+                    experimental::CoreLocalMem<uint32_t>(pad_write_addr),
+                    padded_channels_elems * output_elem_size,
+                    pad_src,
+                    {});
                 pad_write_addr += output_row_size_bytes;
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         write_addr += read_rows_size * output_row_size_bytes;
-        cb_pop_front(cb_untilized_id, num_tiles_per_read);
+        cb_untilized.pop_front(num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 
         // output_coord keeps track of the current position in the output tensor
@@ -194,5 +220,5 @@ void kernel_main() {
             }
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
