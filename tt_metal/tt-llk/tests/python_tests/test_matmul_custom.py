@@ -3,9 +3,7 @@
 
 from typing import List
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -83,12 +81,8 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 def test_matmul_custom(
     math_fidelity,
     format_dest_acc_and_dims,
-    workers_tensix_coordinates,
     boot_mode=BootMode.DEFAULT,
 ):
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE:
-        pytest.skip("Skipping matmul_custom_test.cpp for wormhole")
-
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
     formats = format_dest_acc_and_dims[0]
@@ -156,7 +150,7 @@ def test_matmul_custom(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
