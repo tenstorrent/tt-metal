@@ -4,7 +4,7 @@
 Profile a single Talker decoder layer for optimization analysis.
 
 Run with tracy:
-    python -m tracy -p -v -r models/demos/qwen3_tts/tests/profile_single_layer.py
+    python -m tracy -p -v -r --op-support-count 2600 --dump-device-data-mid-run models/demos/qwen3_tts/tests/profile_single_layer.py
 
 This generates a CSV with op timing data.
 """

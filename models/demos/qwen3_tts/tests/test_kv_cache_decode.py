@@ -15,7 +15,7 @@ import torch
 from scipy.stats import pearsonr
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 def pearson_correlation(x: torch.Tensor, y: torch.Tensor) -> float:
@@ -33,7 +33,10 @@ def device():
     ttnn.close_device(device)
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestKVCacheDecode:
     """Tests for decode mode with KV cache."""
 
@@ -274,7 +277,10 @@ class TestKVCacheDecode:
         print(f"KV cache list creation: PASS ({len(kv_caches)} layers)")
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestPrefillDecodeEquivalence:
     """Tests to verify prefill output matches incremental decode output."""
 

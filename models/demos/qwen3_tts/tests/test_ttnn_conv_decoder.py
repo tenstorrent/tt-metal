@@ -16,14 +16,18 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
 @pytest.fixture
 def device():
-    device = ttnn.open_device(device_id=0)
-    yield device
-    ttnn.close_device(device)
+    if is_blackhole():
+        d = ttnn.open_device(device_id=0, l1_small_size=32 * 1024)
+    else:
+        d = ttnn.open_device(device_id=0)
+    yield d
+    ttnn.close_device(d)
 
 
 class TestConv1d:
@@ -244,10 +248,7 @@ class TestDepthwiseConv1d:
 
     @pytest.mark.parametrize(
         "batch_size, channels, seq_len, kernel_size",
-        [
-            (1, 512, 100, 7),  # ConvNeXt dwconv
-            (1, 384, 800, 7),
-        ],
+        [(1, 512, 100, 7), (1, 384, 256, 7)] if is_blackhole() else [(1, 512, 100, 7), (1, 384, 800, 7)],
     )
     def test_depthwise_conv1d(self, device, batch_size, channels, seq_len, kernel_size):
         """Test depthwise conv1d with groups=channels."""
