@@ -348,7 +348,7 @@ struct MatmulExpertCompressedDRAM {
 
                 reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                compressed::custom_mm_compressed_block_init_short<true, 1, split_acc, dense_packing>(
+                compressed::custom_mm_compressed_block_init_short<true, CTArgs::subblock_n, split_acc, dense_packing>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
                 if constexpr (CTArgs::fuse_silu) {
@@ -416,11 +416,15 @@ struct MatmulExpertCompressedDRAM {
                                 uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
                                 constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
                                 if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
-                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                    compressed::custom_mm_compressed_block_runtime_dram<
+                                        CTArgs::subblock_k,
+                                        CTArgs::subblock_n,
+                                        false>(fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                                 } else {
-                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
-                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                    compressed::custom_mm_compressed_block_runtime_dram<
+                                        CTArgs::subblock_k,
+                                        CTArgs::subblock_n,
+                                        true>(fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                                 }
 
                                 addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
@@ -447,7 +451,7 @@ struct MatmulExpertCompressedDRAM {
                     PACK((llk_pack_reconfig_l1_acc(0)));
                 } else if constexpr (CTArgs::subblock_n > 1) {
                     // Batched path: subblock_n columns share one CB slot.
-                    // Single slot_base, fmt offsets accumulate across columns.
+                    // Single LLK call with CT_DIM = subblock_n produces subblock_n output tiles.
                     constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
                     constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
 
@@ -473,38 +477,39 @@ struct MatmulExpertCompressedDRAM {
                             uint32_t slot_base = 0;
                             UNPACK(({ slot_base = get_local_cb_interface(in1_operand_id).fifo_rd_ptr - 1; }));
 
-                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                cb_reserve_back(CTArgs::cb_out, 1);
-                                tile_regs_acquire();
+                            cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_n);
+                            tile_regs_acquire();
 
-                                uint32_t addr_in0_subblock = addr_in0;
-                                const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
-                                uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
-                                constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
+                            const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
+                            uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
+                            constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
 
-                                compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
-                                    fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                            compressed::
+                                custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, CTArgs::subblock_n, true>(
+                                    fmt_addr, addr_in0, slot_base, zeros_addr, in0_face_r_dim, 0);
 
-                                fmt_tile_offset += CTArgs::subblock_k;
+                            fmt_tile_offset += CTArgs::subblock_k * CTArgs::subblock_n;
 
-                                tile_regs_commit();
-                                if constexpr (CTArgs::fuse_silu) {
-                                    TTI_SEMWAIT(
-                                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                                        semaphore::t6_sem(semaphore::MATH_PACK),
-                                        p_stall::STALL_ON_ZERO);
-                                    PACK(TT_SETC16(
-                                        DEST_TARGET_REG_CFG_MATH_Offset_ADDR32,
-                                        ckernel::packer::get_packer_dest_offset()));
-                                    PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(0, (int)VectorMode::R)));
-                                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                                } else {
-                                    tile_regs_wait();
+                            tile_regs_commit();
+                            if constexpr (CTArgs::fuse_silu) {
+                                TTI_SEMWAIT(
+                                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                                    semaphore::t6_sem(semaphore::MATH_PACK),
+                                    p_stall::STALL_ON_ZERO);
+                                PACK(TT_SETC16(
+                                    DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                                for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                    PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(sn, (int)VectorMode::R)));
                                 }
-                                pack_tile(0, CTArgs::cb_out, 0);
-                                tile_regs_release();
-                                cb_push_back(CTArgs::cb_out, 1);
+                                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                            } else {
+                                tile_regs_wait();
                             }
+                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                pack_tile(sn, CTArgs::cb_out, 0);
+                            }
+                            tile_regs_release();
+                            cb_push_back(CTArgs::cb_out, CTArgs::subblock_n);
 
                             cb_pop_front(CTArgs::cb_in1, tiles_per_block);
                         }
@@ -545,11 +550,15 @@ struct MatmulExpertCompressedDRAM {
                                 uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
                                 constexpr uint32_t zeros_addr = compressed::ZEROS_ADDR_SHIFTED;
                                 if (sb_k < CTArgs::num_subblocks_k - 1) {
-                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, false>(
-                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                    compressed::custom_mm_compressed_block_runtime_dram<
+                                        CTArgs::subblock_k,
+                                        CTArgs::subblock_n,
+                                        false>(fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                                 } else {
-                                    compressed::custom_mm_compressed_block_runtime_dram<CTArgs::subblock_k, true>(
-                                        fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
+                                    compressed::custom_mm_compressed_block_runtime_dram<
+                                        CTArgs::subblock_k,
+                                        CTArgs::subblock_n,
+                                        true>(fmt_addr, addr_in0_subblock, slot_base, zeros_addr, in0_face_r_dim, 0);
                                 }
 
                                 addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;

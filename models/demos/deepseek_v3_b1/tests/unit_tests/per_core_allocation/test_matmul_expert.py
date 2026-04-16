@@ -569,7 +569,7 @@ def _build_dram_experts(
     )
     dram_cts = []
     for eidx in dram_expert_ids:
-        slices_shuffled = [shuffle_tensor_tiles(b, tile_w, num_banks) for b in torch_b_all[eidx]]
+        slices_shuffled = [shuffle_tensor_tiles(b, tile_w, num_banks, subblock_n=subblock_n) for b in torch_b_all[eidx]]
         b_4d = torch.stack(slices_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
         ct = CompressedTensor.from_torch(
             b_4d,
@@ -692,7 +692,7 @@ def _build_dram_experts_replicated(
     )
     dram_cts = []
     for eidx in dram_expert_ids:
-        b_shuffled = shuffle_tensor_tiles(torch_b_all[eidx][0], tile_w, num_banks)
+        b_shuffled = shuffle_tensor_tiles(torch_b_all[eidx][0], tile_w, num_banks, subblock_n=subblock_n)
         b_4d = b_shuffled.reshape(1, 1, K, N_dram_per_device)
         ct = CompressedTensor.from_torch(
             b_4d,
@@ -2013,7 +2013,7 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
 
 
 @pytest.mark.skip_post_commit
-def test_benchmark(device):
+def test_benchmark_down_proj(device):
     _run_hybrid_expert_multi_device(
         device,
         M=1,
@@ -2027,5 +2027,24 @@ def test_benchmark(device):
             ["bfp4", "bfp0"],
         ],
         subblock_n=4,
+        accum_experts=False,
+    )
+
+
+@pytest.mark.skip_post_commit
+def test_benchmark_up_proj(device):
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=1,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(1)),
+        active_expert_ids=[0],
+        formats_per_device=[
+            ["bfp4", "bfp0"],
+        ],
+        subblock_n=1,
         accum_experts=False,
     )

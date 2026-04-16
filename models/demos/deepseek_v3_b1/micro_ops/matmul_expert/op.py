@@ -17,10 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import (
-    _TILE_SIZES,
-    _compute_dram_start_offset,
-)
+from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT, pack_tile_pairs
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
 
@@ -68,36 +65,24 @@ def _compute_expert_subblock_metadata(
     #   for each K-subblock (num_subblocks_k):
     #     read subblock_n columns × subblock_k tiles = one block_size entry
     #
-    # Tile order in shard_assignment is column-major:
-    #   col0: [k0..k_{Kt-1}], col1: [k0..k_{Kt-1}], ...
+    # When subblock_n > 1: shard_assignment is already row-major (from shuffle_tensor_tiles).
+    #   Tiles per block are [k0_c0, k0_c1, ..., k1_c0, ...] — iterate sequentially.
+    # When subblock_n == 1: shard_assignment is column-major.
+    #   Each block is one column's K-subblock — also sequential.
+    tiles_per_block = subblock_k * subblock_n
     tile_idx = 0
     for _ng in range(per_core_n // subblock_n):
         for _sb_k in range(num_subblocks_k):
+            block_start = tile_idx
             iter_bytes = 0
-            # When subblock_n > 1, columns are packed contiguously in one CB slot.
-            # Fmt offsets accumulate so all addresses are relative to a single slot_base.
-            # When subblock_n == 1, each column has its own slot — offset is always 0.
-            slot_offset_shifted = 0
+            for _t in range(tiles_per_block):
+                fmt_idx = int(shard_assignment[tile_idx])
+                iter_bytes += _TILE_SIZES[fmt_idx]
+                tile_idx += 1
 
-            for _sn in range(subblock_n):
-                subblock_bytes = 0
-                subblock_start = tile_idx
-                for _t in range(subblock_k):
-                    fmt_idx = int(shard_assignment[tile_idx])
-                    subblock_bytes += _TILE_SIZES[fmt_idx]
-                    tile_idx += 1
-
-                iter_bytes += subblock_bytes
-
-                subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
-                tiles = pack_tile_pairs(
-                    subblock_slice, base_addr_shifted=slot_offset_shifted, zero_tile_addr=_ZERO_TILE_SENTINEL
-                )
-                tile_infos.extend(tiles)
-
-                if subblock_n > 1:
-                    slot_offset_shifted += subblock_bytes >> _CB_ADDR_SHIFT
-
+            block_slice = shard_assignment[block_start : block_start + tiles_per_block]
+            tiles = pack_tile_pairs(block_slice, base_addr_shifted=0, zero_tile_addr=_ZERO_TILE_SENTINEL)
+            tile_infos.extend(tiles)
             block_sizes.append(iter_bytes)
 
     return block_sizes, tile_infos
@@ -546,12 +531,17 @@ def create_dram_expert_metadata(
                 dram_cores = ttnn.corerange_to_cores(data_tensor.memory_config().shard_spec.grid)
                 shard_assignment = ct.get_assignment_per_shard(dram_cores[bank_idx], device_coord=device_coord)
 
-                core_assignment = np.concatenate(
-                    [
-                        shard_assignment[col * num_tiles_k : (col + 1) * num_tiles_k]
-                        for col in range(col_start, col_start + per_core_N)
-                    ]
-                )
+                # Tiles per n-group in shard layout: num_tiles_k × subblock_n.
+                # subblock_n=1 (column-major): one full column per group.
+                # subblock_n>1 (row-major blocks, num_subblocks_k must be 1): subblock_k×subblock_n.
+                # In both cases subblock_k * num_subblocks_k = num_tiles_k.
+                block_size_tiles = num_tiles_k * subblock_n
+                ng_start = col_start // subblock_n
+                num_core_ng = per_core_N // subblock_n
+                tile_start = ng_start * block_size_tiles
+                tile_end = tile_start + num_core_ng * block_size_tiles
+                core_assignment = shard_assignment[tile_start:tile_end]
+                dram_col_offset = sum(_TILE_SIZES[int(shard_assignment[t])] for t in range(tile_start))
 
                 block_sizes, tile_infos = _compute_expert_subblock_metadata(
                     core_assignment,
@@ -560,7 +550,6 @@ def create_dram_expert_metadata(
                     num_subblocks_k,
                     subblock_n,
                 )
-                dram_col_offset = _compute_dram_start_offset(shard_assignment, subblock_k, num_subblocks_k, col_start)
                 expert_in1_addr = data_tensor.buffer_address()
 
                 # Fuse tensor addr + col offset into one value.
