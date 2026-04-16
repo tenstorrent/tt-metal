@@ -469,27 +469,28 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
-        assert (
-            entry.output_specs is not None
-        ), "Hot-path cache hit but output_specs not cached — cold path failed to populate specs"
-        ops_inputs = [op.input_tensors for op in ops]
-        outputs = ttnn._ttnn.operations.experimental.patchable_generic_op(
-            ops_inputs,
-            entry.output_specs,
-            entry.shared_output_map,
-            entry.result_reorder,
-            entry.cached_descriptor,
-            entry.address_slots,
+        # Warm path: lightweight dispatch like the parent branch — reuse output
+        # tensors from ops, no allocation.  Safe because this container is either
+        # inline (discarded after one call, no pinning concern) or persistent on
+        # its first cache hit (second+ calls go through _cached_run above).
+        seen: Set[int] = set()
+        inputs: List = []
+        for op in ops:
+            for t in op.input_tensors:
+                tid = id(t)
+                if tid not in seen:
+                    inputs.append(t)
+                    seen.add(tid)
+        if entry.output_sources:
+            outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+        else:
+            outputs = list(ops[-1].output_tensors) if ops else []
+        io_tensors = inputs + outputs
+        ttnn._ttnn.operations.experimental.patchable_generic_op(
+            io_tensors, entry.cached_descriptor, entry.address_slots
         )
 
-        container._cached_run = (entry, ops_inputs)
-
-        default_results = (
-            _default_results_parallel_branches(container._items)
-            if surface_prefix == "P"
-            else _default_results(container._items)
-        )
-        return _filter_results(outputs, default_results, results)
+        container._cached_run = (entry, [op.input_tensors for op in ops])
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
@@ -670,12 +671,8 @@ class FusedOp:
             self.refresh_merged_io(list(branch_ops_override))
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
-        ttnn._ttnn.operations.experimental.patchable_generic_op(
-            list(self.input_tensors),
-            list(self.output_tensors),
-            self.descriptor,
-            self._address_slots,
-        )
+        io_tensors = list(self.input_tensors) + list(self.output_tensors)
+        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor, self._address_slots)
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:
