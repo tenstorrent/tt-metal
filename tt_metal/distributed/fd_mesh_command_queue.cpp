@@ -1497,7 +1497,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 i,
                 expected_num_workers_completed_[i],
                 reset_launch_msg_state,
-                in_use_);
+                in_use_.load());
         }
         // Per-device event-counter snapshot so a hang here can be correlated with
         // the quiesce-invariant asserts in MeshDeviceImpl::quiesce_devices. If
