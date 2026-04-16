@@ -39,7 +39,6 @@ inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode
 }
 
 // celu
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_celu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::celu>();
 }
@@ -58,7 +57,6 @@ inline void llk_math_eltwise_unary_sfpu_celu(
 }
 
 // softshrink
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_softshrink_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::softshrink>();
 }
@@ -70,7 +68,6 @@ inline void llk_math_eltwise_unary_sfpu_softshrink(uint dst_index, uint param0, 
 }
 
 // hardshrink
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardshrink_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::hardshrink>();
 }

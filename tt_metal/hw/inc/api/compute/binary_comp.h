@@ -49,13 +49,13 @@ ALWI void le_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_int32_init<APPROX>())); }
+ALWI void lt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_int32_init())); }
 
-ALWI void gt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_int32_init<APPROX>())); }
+ALWI void gt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_int32_init())); }
 
-ALWI void ge_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_int32_init<APPROX>())); }
+ALWI void ge_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_int32_init())); }
 
-ALWI void le_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_int32_init<APPROX>())); }
+ALWI void le_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_int32_init())); }
 
 // clang-format off
 /**
@@ -89,8 +89,8 @@ ALWI void gt_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for any_init.
  */
 
-ALWI void lt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_uint16_init<APPROX>())); }
+ALWI void lt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_uint16_init())); }
 
-ALWI void gt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_uint16_init<APPROX>())); }
+ALWI void gt_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_uint16_init())); }
 
 }  // namespace ckernel

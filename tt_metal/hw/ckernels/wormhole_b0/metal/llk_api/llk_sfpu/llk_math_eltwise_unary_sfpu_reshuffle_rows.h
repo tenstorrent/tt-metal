@@ -20,7 +20,6 @@ namespace ckernel {
  * from different input positions are accumulated into their corresponding embedding rows.
  *
  */
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows>();
 }
