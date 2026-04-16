@@ -128,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Unpack/Pack calls can be moved outside the loop by incorporating the loop into the auto-loop registers
         // Keeping them here for now since num_tiles is not a compile-time constant
-        _llk_unpack_srcs_unary_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
+        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
 
         // Pack is placed before SFPU because SFPU loop fills up and clogs the instruction buffer leading to hangs
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to write
