@@ -1089,6 +1089,7 @@ def _run_accum(
         num_dram_cores,
         cores_per_dram_bank,
         subblock_k,
+        subblock_n,
     )
 
     assert len(formats_per_device) == num_devices
@@ -1282,6 +1283,7 @@ def _run_slice_k(
         num_dram_cores,
         cores_per_dram_bank,
         subblock_k,
+        subblock_n,
     )
 
     assert len(formats_per_device) == num_devices
@@ -2027,7 +2029,7 @@ def test_benchmark_down_proj(device):
             ["bfp4", "bfp0"],
         ],
         subblock_n=4,
-        accum_experts=False,
+        accum_experts=True,
     )
 
 
