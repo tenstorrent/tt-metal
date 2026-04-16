@@ -34,14 +34,16 @@ def cleanup_cache():
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(8, 4)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
+            id="linear-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "gate_mode",

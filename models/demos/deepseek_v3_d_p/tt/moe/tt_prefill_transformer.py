@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@ but targeting the TT prefill path with SP+TP parallelism.
 No LM head — returns hidden states after final norm.
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -71,8 +72,6 @@ class TtPrefillTransformer(LightweightModule):
 
         # Log environment variables that define reference output cache and TTNN weights cache.
         # This is to prevent accidental cache creation at unusal places and fill disk space.
-        import os
-
         TT_DS_PREFILL_TTNN_CACHE = os.getenv("TT_DS_PREFILL_TTNN_CACHE", None)
         TT_DS_PREFILL_HOST_REF_CACHE = os.getenv("TT_DS_PREFILL_HOST_REF_CACHE", None)
 
@@ -150,13 +149,11 @@ class TtPrefillTransformer(LightweightModule):
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
-        ndim = len(tt_tensor.shape)
-        dims = (2, 3) if ndim == 4 else (1, 2)
         host = ttnn.to_torch(
             tt_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
         ).to(torch.bfloat16)
-        if ndim == 4:
+        if len(tt_tensor.shape) == 4:
             host = host.squeeze(0)
         return host
 

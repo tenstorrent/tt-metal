@@ -489,42 +489,6 @@ def weight_cache_path(model_path):
 
 
 @pytest.fixture
-def pretrained_weights(model_path, hf_config, state_dict):
-    """
-    Load pretrained weights from DeepSeek model (layer 0 only).
-
-    This fixture reuses the shared model_path, hf_config, and state_dict fixtures
-    to ensure consistent weight loading across all tests.
-
-    Returns:
-        Tuple of (config, weights_dict) or skips if not available
-    """
-    # Check if pretrained weights are available
-    if not _check_pretrained_available(model_path):
-        pytest.skip("Pretrained weights not available. Set DEEPSEEK_V3_HF_MODEL or download model.")
-
-    # Check if fixtures loaded successfully
-    if hf_config is None:
-        pytest.skip("Failed to load HF config. Check model path.")
-
-    if state_dict is None:
-        pytest.skip("Failed to load state dict. Check model path and weights.")
-
-    logger.info(f"Loading pretrained weights from: {model_path}")
-
-    # Extract layer 0 attention weights
-    layer_idx = 0
-    module_path = f"model.layers.{layer_idx}.self_attn"
-
-    layer_state_dict = sub_state_dict(state_dict, module_path + ".")
-    dequantized_weights = dequantize_state_dict(layer_state_dict, hf_config)
-
-    logger.info(f"Loaded {len(dequantized_weights)} pretrained weight tensors")
-
-    return hf_config, dequantized_weights
-
-
-@pytest.fixture
 def random_weights(config_only):
     """
     Generate random weights for testing using the config.

@@ -24,8 +24,8 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
-COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
@@ -173,7 +173,7 @@ class TtRoutedExpert(LightweightModule):
         torch_weights: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
     ):
@@ -258,77 +258,6 @@ class TtRoutedExpert(LightweightModule):
         if self.weight_cache_path is None or self.cache_name_prefix is None:
             return None
         return str(self.weight_cache_path / f"{self.cache_name_prefix}.{name}")
-
-    def _create_weight_from_torch_per_device(
-        self, torch_weights_per_device: list[torch.Tensor], name: str
-    ) -> ttnn.Tensor:
-        """
-        Convert list of torch weights to ttnn tensor with each device getting its own weight.
-
-        Args:
-            torch_weights_per_device: List of PyTorch weight tensors, one per device.
-                                      Each in HuggingFace format (out_features, in_features).
-            name: Weight name for logging
-
-        Returns:
-            TTNN tensor sharded so each device has its unique weight
-        """
-        # Stack weights and transpose for TTNN matmul
-        # Then reshape to match mesh topology: (mesh_rows, mesh_cols, in_features, out_features)
-        stacked = torch.stack([w.T.contiguous() for w in torch_weights_per_device], dim=0)
-        mesh_rows, mesh_cols = self.mesh_device.shape
-        in_features, out_features = stacked.shape[1], stacked.shape[2]
-        stacked = stacked.reshape(mesh_rows, mesh_cols, in_features, out_features)
-
-        mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
-
-        tt_weight = ttnn.as_tensor(
-            stacked,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            dtype=self.weights_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=self._cache_name(name),
-        )
-
-        # Remove the mesh dimensions: (1, 1, in_features, out_features) -> (in_features, out_features)
-        tt_weight = ttnn.squeeze(tt_weight, dim=0)
-        tt_weight = ttnn.squeeze(tt_weight, dim=0)
-
-        return tt_weight
-
-    def _create_weight_from_torch(self, torch_weight: torch.Tensor, name: str) -> ttnn.Tensor:
-        """
-        Convert torch weight to ttnn tensor replicated on all devices.
-
-        NOTE: This method is kept for backwards compatibility but is not used
-        when torch_weights are provided (see _create_weight_from_torch_per_device).
-
-        Args:
-            torch_weight: PyTorch weight tensor in HuggingFace format (out_features, in_features)
-            name: Weight name for logging
-
-        Returns:
-            TTNN tensor replicated on all devices
-        """
-        # HuggingFace format is (out_features, in_features)
-        # TTNN matmul expects (in_features, out_features) for x @ weight
-        torch_weight_t = torch_weight.T.contiguous()
-        logger.debug(f"Creating weight {name}: HF shape {torch_weight.shape} -> TTNN shape {torch_weight_t.shape}")
-
-        # Replicate on all devices (no sharding for routed expert weights)
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-
-        tt_weight = ttnn.from_torch(
-            torch_weight_t,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            dtype=self.weights_dtype,
-        )
-
-        return tt_weight
 
     def _create_random_weight(self, shape: tuple, name: str) -> ttnn.Tensor:
         """

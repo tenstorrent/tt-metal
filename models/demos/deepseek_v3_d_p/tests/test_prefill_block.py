@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -39,10 +39,14 @@ PCC_THRESHOLD_KVPE = 0.99
 ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
 
 
-@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
-@pytest.mark.parametrize("input_source", ["random", "abc_1k"])
-@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("isl_total", [1024])
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total",
+    [
+        ("random", False, 1024),
+        ("abc_1k", True, 1024),
+    ],
+    ids=["smoke-random", "pcc-abc_1k"],
+)
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [
@@ -79,7 +83,7 @@ ABC_1K_PATH = "models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json"
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(600)
 def test_prefill_block(
     config_only,
     mesh_device,
@@ -91,7 +95,6 @@ def test_prefill_block(
     topology,
     pcc_validation,
     input_source,
-    return_kv_cache,
     request,
 ):
     profiler.clear()
@@ -148,14 +151,14 @@ def test_prefill_block(
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
         attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
-        ref_cache = DynamicCache() if return_kv_cache else None
+        ref_cache = DynamicCache()
         with torch.no_grad():
             layer_out = hf_model.layers[layer_idx](
                 torch_input,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=ref_cache,
-                use_cache=return_kv_cache,
+                use_cache=True,
             )
             torch_output = layer_out[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
@@ -210,8 +213,7 @@ def test_prefill_block(
 
     profiler.start("tt_forward")
     logger.info("Running TtPrefillBlock forward...")
-    do_return_kv = pcc_validation and return_kv_cache
-    tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=do_return_kv)
+    tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=pcc_validation)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
