@@ -1077,6 +1077,7 @@ void kernel_main() {
             deepseek_b1_ops::Matmul::Op<Moe::Routed::GateMMCTArgs, Core::Routed::is_gate_mm_core, false, false> gate_mm;
             gate_mm(moe.routed.gate_mm_args);
         }
+#endif  // ENABLE_ROUTING
 
         // 3. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
         //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
