@@ -11,39 +11,25 @@
 
 namespace ckernel::sfpu {
 
-// ======================================================================
-// ELU via Cody-Waite range reduction + factored expm1 polynomial
-//
-// Algorithm: x = k*ln(2) + r, |r| <= ln(2)/2
-//   expm1(r) = r * h(r), h(r) = minimax degree 5 on [-ln2/2, ln2/2]
-//   exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-//
-// BF16 h degree 4: max abs error = 1.60e-7 (Sollya remez)
-// FP32 h degree 5: max abs error = 8.67e-9 (Sollya remez)
-// ======================================================================
-
-// Cody-Waite constants
-constexpr float CW_INV_LN2 = 1.4426950408889634f;
-constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
-constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_elu(uint slope) {
+inline void calculate_elu(uint32_t slope) {
+    constexpr float CW_INV_LN2 = 1.4426950408889634f;
+    constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
+    constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
+
     sfpi::vFloat alpha = Converter::as_float(slope);
+    sfpi::vFloat neg_alpha = sfpi::setsgn(alpha, 1);
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
-    // 0x4B400000 - 127 = 0x4B3FFF81: c231 int pre-biased by IEEE 754 exponent of 1.0f
-    // Fuses k_int ISUB + bias IADD into a single ISUB in the setexp call
-    const sfpi::vInt c231_bias = 0x4B3FFF81;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to prevent exponent underflow (k < -127 wraps setexp)
-        // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
+        // Clamp to prevent exponent underflow
         sfpi::vFloat lo = -87.0f;
         sfpi::vec_min_max(lo, x);
 
         // Cody-Waite range reduction: x = k*ln(2) + r
         sfpi::vFloat tmp = x * CW_INV_LN2 + c231;
+        sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
         sfpi::vFloat k_f = tmp - c231;
         sfpi::vFloat r = k_f * CW_NEG_LN2_HI + x;
         r = r + k_f * CW_NEG_LN2_LO;
@@ -62,12 +48,11 @@ inline void calculate_elu(uint slope) {
         sfpi::vFloat h = PolynomialEvaluator::eval(
             r, 1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
 #endif
-        h = r * h;
 
-        // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - c231_bias);
-        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
-        result = alpha * result;
+        // Reconstruct: exp(x) = 2^k * exp(r), result = alpha*exp(x) - alpha
+        sfpi::vFloat exp_r = r * h + sfpi::vConst1;
+        sfpi::vFloat exp_x = sfpi::setexp(exp_r, sfpi::exexp_nodebias(exp_r) + k_int);
+        sfpi::vFloat result = alpha * exp_x + neg_alpha;
 
         v_if(x >= 0.0f) { result = x; }
         v_endif;
