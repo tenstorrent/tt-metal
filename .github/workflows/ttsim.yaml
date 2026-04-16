@@ -312,25 +312,24 @@ jobs:
           echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug directory structure:"
-            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
+            echo "Found $LOG_COUNT ccache debug log files"
             echo ""
-            echo "All files in debug dir:"
-            find /tmp/ccache-debug -type f || true
-            echo ""
-            # Search recursively for all .txt files
-            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
-              if [ -f "$log" ]; then
-                echo "::group::$log"
-                cat "$log" || true
-                echo "::endgroup::"
-              fi
+            # Show first 5 log files as samples
+            echo "=== Sample Debug Logs (first 5) ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
+              echo "::group::$(basename $log)"
+              cat "$log" || true
+              echo "::endgroup::"
             done
-            # If no txt/log files, show what's there
-            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
-              echo "No .txt or .log files found. Directory contents:"
-              ls -lahR /tmp/ccache-debug/ || true
-            fi
+            echo ""
+            # Search for remote storage errors
+            echo "=== Searching for Remote Storage Errors ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
+              echo "::group::Errors in $(basename $log)"
+              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
+              echo "::endgroup::"
+            done
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
@@ -442,25 +441,24 @@ jobs:
           echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug directory structure:"
-            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
+            echo "Found $LOG_COUNT ccache debug log files"
             echo ""
-            echo "All files in debug dir:"
-            find /tmp/ccache-debug -type f || true
-            echo ""
-            # Search recursively for all .txt files
-            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
-              if [ -f "$log" ]; then
-                echo "::group::$log"
-                cat "$log" || true
-                echo "::endgroup::"
-              fi
+            # Show first 5 log files as samples
+            echo "=== Sample Debug Logs (first 5) ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
+              echo "::group::$(basename $log)"
+              cat "$log" || true
+              echo "::endgroup::"
             done
-            # If no txt/log files, show what's there
-            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
-              echo "No .txt or .log files found. Directory contents:"
-              ls -lahR /tmp/ccache-debug/ || true
-            fi
+            echo ""
+            # Search for remote storage errors
+            echo "=== Searching for Remote Storage Errors ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
+              echo "::group::Errors in $(basename $log)"
+              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
+              echo "::endgroup::"
+            done
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
@@ -556,25 +554,24 @@ jobs:
           echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug directory structure:"
-            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            LOG_COUNT=$(find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | wc -l)
+            echo "Found $LOG_COUNT ccache debug log files"
             echo ""
-            echo "All files in debug dir:"
-            find /tmp/ccache-debug -type f || true
-            echo ""
-            # Search recursively for all .txt files
-            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
-              if [ -f "$log" ]; then
-                echo "::group::$log"
-                cat "$log" || true
-                echo "::endgroup::"
-              fi
+            # Show first 5 log files as samples
+            echo "=== Sample Debug Logs (first 5) ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" 2>/dev/null | head -5 | while read log; do
+              echo "::group::$(basename $log)"
+              cat "$log" || true
+              echo "::endgroup::"
             done
-            # If no txt/log files, show what's there
-            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
-              echo "No .txt or .log files found. Directory contents:"
-              ls -lahR /tmp/ccache-debug/ || true
-            fi
+            echo ""
+            # Search for remote storage errors
+            echo "=== Searching for Remote Storage Errors ==="
+            find /tmp/ccache-debug -type f -name "*.ccache-log" -exec grep -l "remote storage" {} \; 2>/dev/null | head -3 | while read log; do
+              echo "::group::Errors in $(basename $log)"
+              grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
+              echo "::endgroup::"
+            done
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
