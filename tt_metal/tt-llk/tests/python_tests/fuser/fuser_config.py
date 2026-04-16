@@ -50,7 +50,7 @@ class FuserConfig(TestConfig):
         self.operand_registry = operand_registry
 
         if self.global_config.architecture is None:
-            self.global_config.architecture = get_chip_architecture()
+            self.global_config.architecture = self.CHIP_ARCH
 
         for operation in self.pipeline:
             if is_format_combination_outlier(
