@@ -392,6 +392,7 @@ def _validate_stacked_dequantized_checkpoint(model_path: Path, hf_config, *, num
 
 def _resolve_stacked_dequantized_model_path(model_path: Path, hf_config) -> Path:
     from models.demos.deepseek_v3.utils.hf_model_utils import (
+        STACKED_EXPERT_TENSOR_PATTERN,
         _load_model_weight_map,
         default_stacked_dequantized_model_path,
     )
@@ -399,19 +400,23 @@ def _resolve_stacked_dequantized_model_path(model_path: Path, hf_config) -> Path
     explicit_path = model_path.expanduser()
     default_path = default_stacked_dequantized_model_path(model_path).expanduser()
 
-    def _looks_like_quantized_source_checkpoint(path: Path) -> bool:
+    def _inspect_checkpoint_layout(path: Path) -> tuple[bool, bool] | None:
         try:
             weight_map, _ = _load_model_weight_map(path)
         except Exception:
-            return False
-        return any(key.endswith("_scale_inv") for key in weight_map)
+            return None
+        has_scale_inv = any(key.endswith("_scale_inv") for key in weight_map)
+        has_stacked_experts = any(STACKED_EXPERT_TENSOR_PATTERN.match(key) for key in weight_map)
+        return has_scale_inv, has_stacked_experts
 
     if explicit_path.exists():
         try:
             _validate_stacked_dequantized_checkpoint(explicit_path, hf_config)
             return explicit_path.resolve()
         except ValueError:
-            if not _looks_like_quantized_source_checkpoint(explicit_path):
+            checkpoint_layout = _inspect_checkpoint_layout(explicit_path)
+            explicit_named_export = explicit_path.name.endswith(("-dequantized", "-dequantized-stacked"))
+            if checkpoint_layout is None or explicit_named_export or checkpoint_layout[1] or not checkpoint_layout[0]:
                 raise
 
     if default_path != explicit_path and default_path.exists():

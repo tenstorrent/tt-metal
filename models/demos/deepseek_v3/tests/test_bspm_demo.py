@@ -642,6 +642,7 @@ def test_resolve_stacked_dequantized_model_path_rejects_quantized_stacked_checkp
     }
     safetensors.torch.save_file(tensors, str(shard))
     _write_index(stacked_path, {key: shard.name for key in tensors})
+    _write_stacked_expert_checkpoint(tmp_path / "custom-stacked-export-dequantized-stacked")
 
     with pytest.raises(ValueError, match="still contains quantized '\\*_scale_inv' tensors"):
         _resolve_stacked_dequantized_model_path(
@@ -1078,7 +1079,7 @@ def test_bspm_vs_uniform_5layers_decode(
 
     # Load from the dequantized (BF16) checkpoint — the raw HF checkpoint for
     # DeepSeek-R1-0528 uses float8_e4m3fn; convert_weights requires BF16 tensors.
-    deq_path = _resolve_stacked_checkpoint_for_bspm_demo(model_path, hf_config_5, num_layers=NUM_LAYERS)
+    deq_path = _resolve_stacked_checkpoint_for_bspm_demo(model_path, hf_config, num_layers=hf_config.num_hidden_layers)
     deq_state_dict_5 = sub_state_dict(LazyStateDict(deq_path), "", NUM_LAYERS)
     baseline_weight_cache_identity = f"bspm_demo_savedweight_{BSPM_DEMO_WEIGHT_CACHE_VERSION}_{deq_path.resolve()}"
     rebuild_savedweight_cache = True
