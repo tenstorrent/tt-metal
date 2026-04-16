@@ -37,7 +37,7 @@ inline void _llk_pack_srcs_config_()
 }
 
 /**
- * @brief Unpacks a single operand (unary) to SrcS. Each SrcS slice is only 8*16*16bit.
+ * @brief Unpacks a single operand to SrcS. Each SrcS slice is only 8*16*16bit.
  * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
@@ -46,7 +46,7 @@ inline void _llk_pack_srcs_config_()
  * that unpacker can start unpacking from
  */
 template <std::uint8_t INSTRN_COUNT>
-inline void _llk_unpack_srcs_unary_(
+inline void _llk_unpack_srcs_(
     const std::uint8_t buf_desc_id, const std::uint32_t start_l1_tile_idx
 
 )
@@ -58,39 +58,6 @@ inline void _llk_unpack_srcs_unary_(
     for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
         TT_UNPACR2_TILE_INC(0b0, 0b1 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
-    }
-}
-
-/**
- * @brief Unpacks two operands (binary) to SrcS from separate L1 buffers.
- * Both operands share the same L1 source counter. The first operand increments
- * the SrcS tile counter (to advance to the next slice) without incrementing L1
- * or setting dvalid. The second operand increments L1 and sets dvalid (which
- * also resets the SrcS tile counter).
- * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
- * be looped by INSTRN_LOOP_COUNT set in the hw_config
- * @param buf_desc_id_0: Buffer descriptor ID for the first operand (L1 buffer A)
- * @param buf_desc_id_1: Buffer descriptor ID for the second operand (L1 buffer B)
- * @param start_l1_tile_idx: The tile index into the l1 input buffer
- * that unpacker can start unpacking from (shared across both operands)
- */
-template <std::uint8_t INSTRN_COUNT>
-inline void _llk_unpack_srcs_binary_(
-    const std::uint8_t buf_desc_id_0, const std::uint8_t buf_desc_id_1, const std::uint32_t start_l1_tile_idx
-
-)
-{
-    // Set src (l1 input) counter to face index offset (shared for both operands)
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, start_l1_tile_idx);
-
-    for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
-    {
-        // First operand: increment SrcS tile counter (advance to next slice),
-        // no L1 increment, no dvalid
-        TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_0, 0b0 /*no dvalid*/);
-        // Second operand: no SrcS tile counter increment,
-        // L1 increment, set dvalid (also resets SrcS tile counter)
-        TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_1, 0b1 /*Set dvalid*/);
     }
 }
 
