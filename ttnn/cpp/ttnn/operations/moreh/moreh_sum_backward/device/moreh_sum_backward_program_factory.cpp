@@ -67,11 +67,10 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto output_grad = tensor_args.output_grad;
-    auto input = tensor_args.input;
+    const auto& output_grad = tensor_args.output_grad;
     const auto& input_grad = output_tensor;
 
-    auto dims = operation_attributes.dims;
+    const auto& dims = operation_attributes.dims;
     auto keepdim = operation_attributes.keepdim;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
