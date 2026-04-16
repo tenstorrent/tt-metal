@@ -37,6 +37,7 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -338,8 +339,8 @@ private:
 
             for (uint32_t i = 0; i < batch_size; ++i) {
                 add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i);
-                pack_tile(start_tile + i, cb_out);
             }
+            pack_block_contiguous(start_tile, cb_out, batch_size);
 
             if (batch == num_batches - 1) {
                 tile_regs_commit();
@@ -361,6 +362,7 @@ private:
 #if defined(COMPILE_FOR_TRISC)
         reconfig_data_format<false, true>(CTArgs::cb_local, CTArgs::cb_remote);
         pack_reconfig_data_format<true>(CTArgs::cb_out);
+        pack_block_contiguous_init(CTArgs::cb_out);
 
         // TODO: Fix this to account for actual dst size
         static_assert(CTArgs::num_tiles <= 8, "num_tiles must be less than or equal to 8");
