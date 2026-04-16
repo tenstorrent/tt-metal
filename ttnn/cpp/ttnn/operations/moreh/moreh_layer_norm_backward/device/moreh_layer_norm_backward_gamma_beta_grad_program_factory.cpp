@@ -13,19 +13,40 @@
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {
 
-inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_block_size) {
-    uint32_t divisor{1};
-    for (uint32_t current_divisor = max_block_size; current_divisor >= 1; current_divisor--) {
-        if (val % current_divisor == 0) {
-            divisor = current_divisor;
-            break;
-        }
+using namespace tt::tt_metal;
+using namespace tt::constants;
+
+static void push_cb(
+    ProgramDescriptor& desc,
+    uint32_t num_tiles,
+    const CoreRangeSet& cores,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t tile_size) {
+    if (num_tiles > 0) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_tiles * tile_size,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_index,
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
     }
-    return divisor;
 }
 
-MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::cached_program_t
-MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+    "reader_moreh_layer_norm_backward_gamma_beta_grad.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+    "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
+static constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+    "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp";
+
+ProgramDescriptor MorehLayerNormBackwardGammaBetaGradOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -42,12 +63,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
 
-    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = output_grad.device();
-    Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -64,7 +83,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layer_norm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const auto mean_rstd_shape = mean.padded_shape();
     const auto mean_rstd_shape_without_padding = mean.logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
@@ -84,7 +102,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_inner);
+            split_work_to_cores(grid, num_inner);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -110,66 +128,83 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const uint32_t im4_t = 1;  // x - mean
     const uint32_t im5_t = 1;  // dycopy
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    const auto single_tile_size = tt::tile_size(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
+    const auto intermed_single_tile_size = tt::tile_size(intermed_cb_format);
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
-            {tt::CBIndex::c_1, in1_t},                       // input(==x)
-            {tt::CBIndex::c_2, in2_t},                       // mean
-            {tt::CBIndex::c_3, in3_t},                       // rstd
-            {tt::CBIndex::c_4, in4_t},                       // scaler
-            {tt::CBIndex::c_5, in5_t},                       // mask_h
-            {tt::CBIndex::c_16, out0_t},                     // gamma_grad(==dgamma)
-            {tt::CBIndex::c_17, out1_t},                     // beta_grad(==dbeta)
-            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // output(==y)
-            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // y * dy
-            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Add[dy]
-            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Add[y * dy]
-            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // x - mean
-            {tt::CBIndex::c_29, im5_t, intermed_cb_format},  // dycopy
-        });
+    ProgramDescriptor desc;
+
+    push_cb(desc, in0_t, all_cores, tt::CBIndex::c_0, cb_data_format, single_tile_size);    // output_grad(==dy)
+    push_cb(desc, in1_t, all_cores, tt::CBIndex::c_1, cb_data_format, single_tile_size);    // input(==x)
+    push_cb(desc, in2_t, all_cores, tt::CBIndex::c_2, cb_data_format, single_tile_size);    // mean
+    push_cb(desc, in3_t, all_cores, tt::CBIndex::c_3, cb_data_format, single_tile_size);    // rstd
+    push_cb(desc, in4_t, all_cores, tt::CBIndex::c_4, cb_data_format, single_tile_size);    // scaler
+    push_cb(desc, in5_t, all_cores, tt::CBIndex::c_5, cb_data_format, single_tile_size);    // mask_h
+    push_cb(desc, out0_t, all_cores, tt::CBIndex::c_16, cb_data_format, single_tile_size);  // gamma_grad
+    push_cb(desc, out1_t, all_cores, tt::CBIndex::c_17, cb_data_format, single_tile_size);  // beta_grad
+    push_cb(desc, im0_t, all_cores, tt::CBIndex::c_24, intermed_cb_format, intermed_single_tile_size);  // y
+    push_cb(desc, im1_t, all_cores, tt::CBIndex::c_25, intermed_cb_format, intermed_single_tile_size);  // y*dy
+    push_cb(desc, im2_t, all_cores, tt::CBIndex::c_26, intermed_cb_format, intermed_single_tile_size);  // Add[dy]
+    push_cb(desc, im3_t, all_cores, tt::CBIndex::c_27, intermed_cb_format, intermed_single_tile_size);  // Add[y*dy]
+    push_cb(desc, im4_t, all_cores, tt::CBIndex::c_28, intermed_cb_format, intermed_single_tile_size);  // x-mean
+    push_cb(desc, im5_t, all_cores, tt::CBIndex::c_29, intermed_cb_format, intermed_single_tile_size);  // dycopy
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args{
+    KernelDescriptor::CompileTimeArgs reader_ct_args{
         static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(do_mask_h)};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(mean.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(rstd.buffer()).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(beta_grad_has_value)};
-    TensorAccessorArgs(gamma_grad.has_value() ? gamma_grad->buffer() : nullptr).append_to(writer_compile_time_args);
-    TensorAccessorArgs(beta_grad.has_value() ? beta_grad->buffer() : nullptr).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines{};
-    std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
+    KernelDescriptor::Defines reader_defines;
+    KernelDescriptor::Defines compute_defines;
+    compute_defines.emplace_back("REDUCE_OP", "PoolType::SUM");
+    compute_defines.emplace_back("REDUCE_DIM", "ReduceDim::REDUCE_COL");
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = "1";
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        reader_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
 
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-        "reader_moreh_layer_norm_backward_gamma_beta_grad.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-        "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.reserve(num_cores);
 
-    const auto reader_kernels_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    KernelDescriptor::CompileTimeArgs writer_ct_args{
+        static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(beta_grad_has_value)};
+    TensorAccessorArgs(gamma_grad.has_value() ? gamma_grad->buffer() : nullptr).append_to(writer_ct_args);
+    TensorAccessorArgs(beta_grad.has_value() ? beta_grad->buffer() : nullptr).append_to(writer_ct_args);
 
-    const std::vector<uint32_t> compute_args_group_1{
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = std::move(all_cores);
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      ComputeKernel SetUp
+    ////////////////////////////////////////////////////////////////////////////
+    ComputeConfigDescriptor compute_config{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {
         num_cols_per_core_group_1,
         origin_H,
         origin_W,
@@ -179,22 +214,16 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(beta_grad_has_value),
         static_cast<uint32_t>(is_lastdim_layer_norm),
         static_cast<uint32_t>(is_groupnorm)};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = compute_config;
 
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
-        "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp";
-
-    CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source = COMPUTE_KERNEL_PATH;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {
             num_cols_per_core_group_2,
             origin_H,
             origin_W,
@@ -204,16 +233,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
             static_cast<uint32_t>(beta_grad_has_value),
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
-
-        CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = compute_config;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -239,70 +260,36 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            output_grad_addr,
-            input_addr,
-            mean_addr,
-            rstd_addr,
-            num_cols_per_core,
-            num_outer,
-            num_inner,
-            tile_offset,
-            mask_h,
-            normalized_dims,
-            mean_rstd_height,
-            mean_rstd_width};
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
+        reader_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                output_grad_addr,
+                input_addr,
+                mean_addr,
+                rstd_addr,
+                num_cols_per_core,
+                num_outer,
+                num_inner,
+                tile_offset,
+                mask_h,
+                normalized_dims,
+                mean_rstd_height,
+                mean_rstd_width});
 
-        const std::vector<uint32_t> writer_runtime_args{
-            gamma_grad_addr, beta_grad_addr, num_cols_per_core, tile_offset};
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
+        writer_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{gamma_grad_addr, beta_grad_addr, num_cols_per_core, tile_offset});
 
         tile_offset += num_cols_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
-}
-
-void MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    auto* output_grad_buffer = tensor_args.output_grad.buffer();
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* mean_buffer = tensor_args.mean.buffer();
-    auto* rstd_buffer = tensor_args.rstd.buffer();
-
-    auto* gamma_grad_buffer = tensor_return_value.at(0).has_value() ? tensor_return_value.at(0)->buffer() : nullptr;
-    auto* beta_grad_buffer = tensor_return_value.at(1).has_value() ? tensor_return_value.at(1)->buffer() : nullptr;
-
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = output_grad_buffer->address();
-            runtime_args[1] = input_buffer->address();
-            runtime_args[2] = mean_buffer->address();
-            runtime_args[3] = rstd_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            if (gamma_grad_buffer != nullptr) {
-                runtime_args[0] = gamma_grad_buffer->address();
-            }
-            if (gamma_grad_buffer != nullptr) {
-                runtime_args[1] = beta_grad_buffer->address();
-            }
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
+
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad
