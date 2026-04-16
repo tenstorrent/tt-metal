@@ -70,16 +70,14 @@ run_profiling_test() {
 
     remove_default_log_locations
 
-    # Host-device correlation: verify 1:1 mapping between host TracyMessages
-    # and device-side real-time profiler records (requires Tracy but NOT device profiler)
-    pytest tests/ttnn/tracy/test_host_device_correlation.py --timeout 600
-
-    # Cross-reference real-time profiler durations against device profiler
-    # kernel durations (manages its own device; env vars set before open_device)
-    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_profiler_cross_reference.py --timeout 300
-
-    # Real-time profiler callback sanity: register callback, run matmul, verify records
-    pytest tests/ttnn/tracy/test_realtime_callback.py --timeout 120
+    # Consolidated real-time profiler test suite: callback smoke test, short-zone
+    # regression, host/device correlation, cross-reference vs device profiler,
+    # sync-accuracy check (and TG cross-reference, which auto-skips off-Galaxy).
+    # Each test runs its device-touching work in its own subprocess workload
+    # (so the pytest parent never takes the PCIe lock) and exports
+    # TT_METAL_DEVICE_PROFILER=1 itself when needed.  Per-test timeouts come
+    # from @pytest.mark.timeout decorators on the individual tests.
+    pytest tests/ttnn/tracy/test_realtime_profiler.py
 
     # Trace capture with real-time profiler: verify profiler works across trace replay
     pytest tests/ttnn/tracy/test_trace_runs.py --timeout 120
