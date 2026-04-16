@@ -238,9 +238,9 @@ class OperandRegistry:
     def add_output(
         self,
         name: str,
+        dimensions: Tuple[int, int],
+        data_format: DataFormat,
         address: int = None,
-        dimensions: Optional[Tuple[int, int]] = None,
-        data_format: Optional[DataFormat] = None,
     ) -> Operand:
         if name in self.operands:
             raise ValueError(f"Output operand '{name}' already exists")
