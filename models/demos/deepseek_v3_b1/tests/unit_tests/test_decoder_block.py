@@ -8,7 +8,16 @@ Tests decoder fused operation with full pipeline:
 - CCL Broadcast -> RMSNorm -> Matmul -> Gather -> RMSNorm2 -> Matmul2 (shuffled) -> Matmul3 (Qnope only) & RoPE (Qrope only) -> Interleaved Pre-SDPA Output
 - Qnope output: [64, 1, 512] after matmul3
 - Qrope output: [64, 1, 64] after RoPE
+
+Optional: set ``DECODER_BLOCK_USE_CACHE_WEIGHT_PROVIDER=1`` to load layer weights via
+:class:`~models.demos.deepseek_v3_b1.demo.weight_provider.CacheWeightProvider` (TensorCache +
+shard FD/SD). Requires real HF weights (``LazyStateDict``: ``DEEPSEEK_V3_HF_MODEL`` and
+``USE_RANDOM_WEIGHTS=False`` in ``conftest.py``). MoE tests need all 256 routed experts uploaded.
+Override cache dir with ``DECODER_BLOCK_TENSOR_CACHE_ROOT`` or ``CACHE_PERF_ROOT``.
 """
+
+import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -16,7 +25,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -29,7 +40,69 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     extract_routed_expert_output,
 )
-from models.demos.deepseek_v3_b1.weights.prepare import get_layer_raw_tensors
+from models.demos.deepseek_v3_b1.weights.prepare import NUM_ROUTED_EXPERTS, get_layer_raw_tensors
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _decoder_block_tensor_cache_root() -> Path:
+    raw = os.environ.get("DECODER_BLOCK_TENSOR_CACHE_ROOT", "").strip()
+    if raw:
+        return Path(raw).resolve()
+    base = Path(os.environ.get("CACHE_PERF_ROOT", "/tmp/deepseek_decoder_tensor_cache")).resolve()
+    return base / "decoder_block"
+
+
+def _maybe_preloaded_weights_via_cache_provider(
+    submesh,
+    layer_idx: int,
+    *,
+    is_moe: bool,
+    effective_num_routed_experts: int,
+    state_dict,
+):
+    """Load decoder layer weights through :class:`CacheWeightProvider` when enabled.
+
+    Set ``DECODER_BLOCK_USE_CACHE_WEIGHT_PROVIDER=1`` to exercise TensorCache + shard-level
+    FD/SD writes (same path as production ``CacheWeightProvider``).
+
+    Requirements:
+        - ``state_dict`` must be a :class:`LazyStateDict` over HuggingFace checkpoints
+          (set ``DEEPSEEK_V3_HF_MODEL`` and disable random weights in conftest).
+        - MoE: ``effective_num_routed_experts`` must equal ``NUM_ROUTED_EXPERTS`` (256).
+          Subset expert uploads (rigged modes with <256) are not supported on this path.
+
+    Cache directory: ``DECODER_BLOCK_TENSOR_CACHE_ROOT``, or
+    ``CACHE_PERF_ROOT/decoder_block`` (default under ``/tmp/...``).
+    """
+    if not _env_truthy("DECODER_BLOCK_USE_CACHE_WEIGHT_PROVIDER"):
+        return None
+    if not isinstance(state_dict, LazyStateDict):
+        pytest.skip(
+            "DECODER_BLOCK_USE_CACHE_WEIGHT_PROVIDER requires LazyStateDict (real HF weights). "
+            "Set DEEPSEEK_V3_HF_MODEL and USE_RANDOM_WEIGHTS=False in tests/unit_tests/conftest.py."
+        )
+    if is_moe and effective_num_routed_experts != NUM_ROUTED_EXPERTS:
+        pytest.skip(
+            "CacheWeightProvider MoE load uses full routed experts; "
+            f"need {NUM_ROUTED_EXPERTS}, got {effective_num_routed_experts}"
+        )
+    model_path = state_dict._model_path
+    cache_root = _decoder_block_tensor_cache_root()
+    cache_root.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Using CacheWeightProvider (cache_root={}, model_path={}, layer_idx={}, is_moe={})",
+        cache_root,
+        model_path,
+        layer_idx,
+        is_moe,
+    )
+    provider = CacheWeightProvider(cache_root, model_path)
+    if is_moe:
+        return provider.load_moe_layer(layer_idx, submesh)
+    return provider.load_dense_layer(layer_idx, submesh)
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -360,6 +433,14 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    preloaded_weights = _maybe_preloaded_weights_via_cache_provider(
+        submesh,
+        ROUTED_EXPERT_LAYER_IDX,
+        is_moe=True,
+        effective_num_routed_experts=effective_num_routed_experts,
+        state_dict=state_dict,
+    )
+
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
         submesh,
@@ -373,6 +454,7 @@ def test_decoder(
         max_seq_len=max_seq_len,
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
+        preloaded_weights=preloaded_weights,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
     )
@@ -846,6 +928,14 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    preloaded_weights = _maybe_preloaded_weights_via_cache_provider(
+        submesh,
+        DENSE_LAYER_IDX,
+        is_moe=False,
+        effective_num_routed_experts=0,
+        state_dict=state_dict,
+    )
+
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(
         submesh,
@@ -858,6 +948,7 @@ def test_decoder_mlp(
         layer_idx=DENSE_LAYER_IDX,
         max_seq_len=max_seq_len,
         is_moe=False,
+        preloaded_weights=preloaded_weights,
     )
 
     logger.info("Creating golden reference tensors...")
