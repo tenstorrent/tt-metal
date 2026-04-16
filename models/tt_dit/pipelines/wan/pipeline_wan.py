@@ -37,6 +37,7 @@ from ...utils.tensor import (
     bf16_tensor,
     fast_device_to_host,
     float32_tensor,
+    float_to_uint8,
     local_device_to_torch,
     typed_tensor_2dshard,
 )
@@ -1010,31 +1011,22 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
 
-            # On-device post-processing: [-1,1] → [0,1], optionally → uint8.
-            # VAE output is ROW_MAJOR; arithmetic ops require TILE_LAYOUT.
-            if output_type in ("np", "uint8"):
-                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
-                tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
-                tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
-                tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=1.0)
-                if output_type == "uint8":
-                    tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 255.0)
-                    tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=255.0)
-                    tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-                    tt_video_BCTHW = ttnn.typecast(tt_video_BCTHW, ttnn.uint8)
-                else:
-                    tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
             d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
+
+            if output_type == "uint8":
+                pre_fn = float_to_uint8
+            else:
+                pre_fn = None
 
             video_torch = fast_device_to_host(
                 tt_video_BCTHW,
                 self.mesh_device,
                 concat_dims,
                 ccl_manager=self.vae_ccl_manager,
+                pre_transfer_fn=pre_fn,
                 permute=d2h_permute,
             )
 
