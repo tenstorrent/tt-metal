@@ -107,6 +107,7 @@ class TrainingConfig(BaseTrainingConfig):
         # Extended fields not in base TrainingConfig
         self.project_name = tc.get("project_name", "tt_train_nano_gpt")
         self.data_path = tc.get("data_path", "")
+        self.tokenizer_type = tc.get("tokenizer_type", "char")
         self.scheduler_type = tc.get("scheduler_type", "identity")
         self.use_clip_grad_norm = tc.get("use_clip_grad_norm", False)
         self.clip_grad_norm_max_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
@@ -1034,7 +1035,7 @@ def main():
     parser = argparse.ArgumentParser(description="NanoGPT Example")
 
     # Default config path (relative to configs root)
-    default_config_path = "training_shakespeare_nanogpt.yaml"
+    default_config_path = "training_shakespeare_nanogpt_char.yaml"
 
     parser.add_argument(
         "-c",
@@ -1175,6 +1176,15 @@ def main():
         training_config = TrainingConfig()
         model_config = ModelConfig()
 
+    # Validate tokenizer_type vs vocab_size consistency
+    if training_config.tokenizer_type == "char" and model_config.vocab_size > 128:
+        raise ValueError(
+            f"Configuration mismatch: model config has vocab_size={model_config.vocab_size:,} "
+            f"but tokenizer_type='char'.\n"
+            f"Character tokenization uses small vocabulary (~68-96 tokens from Shakespeare text). "
+            f"If you want to use a larger vocabulary, use tokenizer_type='bpe' instead."
+        )
+
     # Override with command line args (only if provided)
     if args.data_path:
         training_config.data_path = args.data_path
@@ -1270,14 +1280,30 @@ def main():
 
         print("1. Loading and preparing data...")
         print(f"   - Data path: {training_config.data_path}")
+        print(f"   - Tokenizer: {training_config.tokenizer_type}")
 
-        # Load data
-        text = read_file_to_str(training_config.data_path)
         seq_len = model_config.max_sequence_length
 
-        # Create dataset
-        dataset, tokenizer = create_dataset_from_text(text, seq_len)
-        model_config.vocab_size = tokenizer.vocab_size
+        if training_config.tokenizer_type == "bpe":
+            import yaml
+
+            with open(training_config.data_path, "r") as f:
+                token_data = yaml.safe_load(f)
+            tokens = np.array(token_data["tokens"], dtype=np.uint32)
+            data_vocab_size = int(token_data["tokenizer_vocab_size"])
+            max_token_id = int(tokens.max())
+            if max_token_id >= model_config.vocab_size:
+                raise ValueError(
+                    f"Tokenized data contains token ID {max_token_id} but model vocab_size is "
+                    f"{model_config.vocab_size}. Use a tokenized dataset that matches the model's "
+                    f"vocabulary (data file reports tokenizer_vocab_size={data_vocab_size})."
+                )
+            dataset = InMemoryTokenDataset(tokens, seq_len)
+            tokenizer = None
+        else:
+            text = read_file_to_str(training_config.data_path)
+            dataset, tokenizer = create_dataset_from_text(text, seq_len)
+            model_config.vocab_size = tokenizer.vocab_size
 
         print(f"   - Vocabulary size: {model_config.vocab_size}")
         print(f"   - Dataset size: {len(dataset)} samples")

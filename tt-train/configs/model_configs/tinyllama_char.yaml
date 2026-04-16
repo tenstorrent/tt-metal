@@ -5,8 +5,8 @@ transformer_config:
   embedding_dim: 2048
   dropout_prob: 0.0
   num_blocks: 22
-  vocab_size: 32000
+  vocab_size: 128
   max_sequence_length: 2048
-  runner_type: memory_efficient
+  runner_type: default
   theta: 10000.0
   weight_tying: "disabled"
