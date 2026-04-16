@@ -111,6 +111,9 @@ def run_eval(
     max_new_tokens: int = 16,
     max_seq_len: int = 16384,
     max_frames: int = 8,
+    max_fps: Optional[float] = None,
+    video_fps: Optional[float] = None,
+    video_sampling_fps: Optional[float] = None,
     num_layers: Optional[int] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
@@ -133,7 +136,8 @@ def run_eval(
             ignored in exact JSONL mode (each row's ``max_tokens`` is used).
         max_seq_len: KV cache sequence length (16384 for video)
         max_frames: Max frames passed to HF ``preprocess_video`` (``num_frames``).
-            Other sampling options use HF ``Molmo2VideoProcessor`` defaults.
+        max_fps: HF ``max_fps`` cap; ``None`` omits the argument (HF processor default).
+        video_fps / video_sampling_fps: Optional HF ``fps`` / ``sampling_fps`` overrides.
         num_layers: Number of model layers (None = 36)
         use_trace: Enable prefill tracing
         use_decode_trace: Enable decode tracing
@@ -272,6 +276,9 @@ def run_eval(
                 first["local_path"],
                 warm_prompt,
                 num_frames=max_frames,
+                max_fps=max_fps,
+                fps=video_fps,
+                sampling_fps=video_sampling_fps,
             )
             _n_out = warm_inputs["n_tokens"] // warm_inputs["n_frames"]
             _k_pool = warm_inputs["k_pool"]
@@ -334,6 +341,9 @@ def run_eval(
                     video_path,
                     hf_prompt,
                     num_frames=max_frames,
+                    max_fps=max_fps,
+                    fps=video_fps,
+                    sampling_fps=video_sampling_fps,
                 )
                 extract_ms = (time.perf_counter() - t0) * 1000
                 n_frames = video_inputs["n_frames"]
@@ -509,6 +519,29 @@ def main():
         help="Maximum frames to extract per video",
     )
     parser.add_argument(
+        "--max-video-fps",
+        type=float,
+        default=None,
+        help="HF max_fps cap for sampling (default: omit; HF uses processor default, often 2.0)",
+    )
+    parser.add_argument(
+        "--native-video-fps",
+        action="store_true",
+        help="Do not pass max_fps (same as omitting --max-video-fps when you want HF default).",
+    )
+    parser.add_argument(
+        "--video-fps",
+        type=float,
+        default=None,
+        help="Optional HF fps kwarg.",
+    )
+    parser.add_argument(
+        "--video-sampling-fps",
+        type=float,
+        default=None,
+        help="Optional HF sampling_fps kwarg.",
+    )
+    parser.add_argument(
         "--num-layers",
         type=int,
         default=None,
@@ -570,6 +603,9 @@ def main():
         max_new_tokens=args.max_tokens,
         max_seq_len=args.max_seq_len,
         max_frames=args.max_video_frames,
+        max_fps=None if args.native_video_fps else args.max_video_fps,
+        video_fps=args.video_fps,
+        video_sampling_fps=args.video_sampling_fps,
         num_layers=args.num_layers,
         use_trace=args.use_trace,
         use_decode_trace=args.use_decode_trace,

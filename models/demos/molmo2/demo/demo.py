@@ -2553,6 +2553,7 @@ class Molmo2Generator:
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
                 rot_mats=rot_mats,
                 page_table=effective_page_table,  # Pass page_table for paged attention
+                last_token_idx=hidden_states_ttnn.shape[-2] - 1 if hidden_states_ttnn.shape[-2] > 8192 else None,
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -3775,7 +3776,10 @@ def run_video_demo(
     num_layers: Optional[int] = None,
     max_seq_len: int = 65536,  # 64k for ~320-frame video support
     max_frames: int = VIDEO_MAX_FRAMES,
-    max_fps: float = VIDEO_MAX_FPS,
+    max_fps: Optional[float] = VIDEO_MAX_FPS,
+    native_video_fps: bool = False,
+    video_fps: Optional[float] = None,
+    video_sampling_fps: Optional[float] = None,
     use_trace: bool = False,
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
@@ -3800,7 +3804,10 @@ def run_video_demo(
         num_layers: Number of text layers (default: 36)
         max_seq_len: Maximum sequence length for KV cache (default: 16384 for video)
         max_frames: Maximum frames to sample from video (default: 8)
-        max_fps: Maximum frames per second to sample (default: 2.0)
+        max_fps: Passed to HF as ``max_fps`` (cap on sampling rate). Ignored if ``native_video_fps``.
+        native_video_fps: If True, do not pass ``max_fps`` so HF uses its processor default.
+        video_fps: Optional ``fps`` kwarg for HF video processor (container / rate hint).
+        video_sampling_fps: Optional ``sampling_fps`` for HF video processor.
         use_trace: Whether to use tracing for prefill
         use_decode_trace: Whether to use tracing for decode
         use_vision_trace: Whether to use tracing for vision backbone
@@ -3814,13 +3821,20 @@ def run_video_demo(
     # Load tokenizer
     tokenizer = load_processor()
 
-    # Preprocess video using HF processor (correct pooling_size [3,3], max_fps=2.0)
-    logger.info(f"Preprocessing video: {video_path}")
+    # Preprocess video using HF processor (pooling_size [3,3]; fps kwargs optional)
+    eff_max_fps = None if native_video_fps else max_fps
+    logger.info(
+        f"Preprocessing video: {video_path} (num_frames={max_frames}, max_fps={eff_max_fps}, "
+        f"fps={video_fps}, sampling_fps={video_sampling_fps}, native_fps={native_video_fps})"
+    )
     video_extraction_start = time.perf_counter()
     video_inputs = preprocess_video(
         video_path,
         prompt,
-        num_frames=max_frames,  # HF processor uses num_frames param
+        num_frames=max_frames,
+        max_fps=eff_max_fps,
+        fps=video_fps,
+        sampling_fps=video_sampling_fps,
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
     n_frames = video_inputs["n_frames"]
@@ -4322,7 +4336,27 @@ def main():
         "--max-video-fps",
         type=float,
         default=VIDEO_MAX_FPS,
-        help=f"Maximum frames per second for video sampling (default: {VIDEO_MAX_FPS})",
+        help=(
+            f"Cap on frames/sec for HF video sampling (``max_fps``; default: {VIDEO_MAX_FPS}). "
+            "Use --native-video-fps to omit and use the HF processor default instead."
+        ),
+    )
+    parser.add_argument(
+        "--native-video-fps",
+        action="store_true",
+        help="Do not pass max_fps to the HF video processor (use its configured default).",
+    )
+    parser.add_argument(
+        "--video-fps",
+        type=float,
+        default=None,
+        help="Optional HF ``fps`` argument (container / rate hint; see Molmo2VideoProcessor).",
+    )
+    parser.add_argument(
+        "--video-sampling-fps",
+        type=float,
+        default=None,
+        help="Optional HF ``sampling_fps`` for frame sampling.",
     )
     parser.add_argument(
         "--use-trace",
@@ -4474,7 +4508,10 @@ def main():
             max_seq_len=max_seq_len,
             use_async_ccl=args.use_async_ccl,
             max_frames=args.max_video_frames,
-            max_fps=args.max_video_fps,
+            max_fps=None if args.native_video_fps else args.max_video_fps,
+            native_video_fps=args.native_video_fps,
+            video_fps=args.video_fps,
+            video_sampling_fps=args.video_sampling_fps,
             use_trace=trace_prefill_video,
             use_decode_trace=use_decode_trace_video,
             use_vision_trace=trace_vision_video,

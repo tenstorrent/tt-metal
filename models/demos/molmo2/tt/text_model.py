@@ -282,6 +282,10 @@ class TextModel(LightweightModule):
 
         # For long sequences, slice to last real token before LM head to avoid
         # materializing [seq_len, vocab_size] logits (9.5GB at 32K).
+        print("=" * 100)
+        print(last_token_idx)
+        print(x.shape)
+        print("=" * 100)
         if last_token_idx is not None:
             x = ttnn.slice(x, (0, 0, last_token_idx, 0), (1, 1, last_token_idx + 1, self.hidden_dim))
 
