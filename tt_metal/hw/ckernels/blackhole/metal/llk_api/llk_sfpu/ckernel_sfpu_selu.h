@@ -11,29 +11,37 @@
 
 namespace ckernel::sfpu {
 
+// ======================================================================
+// SELU via Cody-Waite range reduction + factored expm1 polynomial
+//
+// selu(x) = scale * x for x>=0, scale * alpha * (exp(x)-1) for x<0
+// scale ≈ 1.0507, alpha ≈ 1.6733, scale*alpha ≈ 1.7581
+// ======================================================================
+
+// Cody-Waite constants
+constexpr float SELU_CW_INV_LN2 = 1.4426950408889634f;
+constexpr float SELU_CW_NEG_LN2_HI = -0.6931152343750000f;
+constexpr float SELU_CW_NEG_LN2_LO = -3.19461832987e-05f;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_selu(uint scale, uint alpha) {
-    constexpr float CW_INV_LN2 = 1.4426950408889634f;
-    constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
-    constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
-
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
-    const sfpi::vFloat neg_scale_alpha = sfpi::setsgn(scale_alpha, 1);
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to prevent exponent underflow
+        // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
         sfpi::vFloat lo = -87.0f;
         sfpi::vec_min_max(lo, x);
 
         // Cody-Waite range reduction
-        sfpi::vFloat tmp = x * CW_INV_LN2 + c231;
+        sfpi::vFloat tmp = x * SELU_CW_INV_LN2 + c231;
         sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
         sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * CW_NEG_LN2_HI + x;
-        r = r + k_f * CW_NEG_LN2_LO;
+        sfpi::vFloat r = k_f * SELU_CW_NEG_LN2_HI + x;
+        r = r + k_f * SELU_CW_NEG_LN2_LO;
 
         // expm1(r) = r * h(r)
 #ifdef INP_FLOAT32
@@ -49,11 +57,13 @@ inline void calculate_selu(uint scale, uint alpha) {
         sfpi::vFloat h = PolynomialEvaluator::eval(
             r, 1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
 #endif
+        h = r * h;
 
-        // Reconstruct: exp(x) = 2^k * exp(r), result = scale_alpha*exp(x) - scale_alpha
-        sfpi::vFloat exp_r = r * h + sfpi::vConst1;
-        sfpi::vFloat exp_x = sfpi::setexp(exp_r, sfpi::exexp_nodebias(exp_r) + k_int);
-        sfpi::vFloat result = scale_alpha * exp_x + neg_scale_alpha;
+        // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
+        // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
+        result = scale_alpha * result;
 
         v_if(x >= 0.0f) { result = scale_val * x; }
         v_endif;
