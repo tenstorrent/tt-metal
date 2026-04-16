@@ -21,8 +21,7 @@ void kernel_main() {
 
     // in_no_mul, in_mul are from same tensor, so same sizes
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in_no_mul);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in_scalar, onetile);

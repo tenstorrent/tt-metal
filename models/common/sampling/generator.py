@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -558,10 +559,18 @@ class SeedManager:
         self.tt_sampling = tt_sampling
         # True when at least one user slot has a non-None seed.
         self._seed_active = False
-        # Set to True by reset_seed() so the next get_new_values() knows it
-        # must push seeds (or SKIP values) to the device at least once after a
-        # prefill. Cleared after the first push.
+        # Set to True by reset_seed() so the next get_new_values() pushes
+        # fresh values to the device.  When _seed_active is True this pushes
+        # RNG-derived seeds; when False it pushes random per-user values to
+        # diversify the device RNG state (state 1 in the three-state machine
+        # described in get_new_values).  Cleared after the push.
         self._reseted = False
+        # When True, the next get_new_values() must push MAX_UINT32 (SKIP) so
+        # the device transitions from rand_tile_init to rand_tile (advance).
+        # This is needed after pushing random seeds for unseeded slots during
+        # prefill — without it the device would re-init from the same values
+        # every decode step instead of advancing.
+        self._needs_skip = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -569,6 +578,32 @@ class SeedManager:
             )
         else:
             self._seed_mapper = None
+
+    def apply_slot_remap(self, remap):
+        """Reindex RNG state after batch condense.
+
+        ``remap`` is a 1-D int tensor of length ``max_batch_size`` where
+        ``remap[i] = j`` means slot *i* now holds the request that was
+        previously at slot *j*.  Identity entries (``remap[i] == i``) are
+        no-ops.  Only non-identity entries trigger a move.
+        """
+        if not self._seed_active:
+            return
+        moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
+        if not moves:
+            return
+        # Snapshot the state we're about to overwrite.
+        old_seeds = list(self.seeds)
+        old_rngs = list(self.rngs)
+        for old_slot, new_slot in moves:
+            self.seeds[new_slot] = old_seeds[old_slot]
+            # copy.copy preserves internal RNG state but creates an
+            # independent object so the old slot's reference (still in
+            # self.rngs[old_slot]) does not alias the new one. Without
+            # this, get_new_values() would advance the shared object
+            # twice per decode step (once for each slot).
+            self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
+        self._seed_active = any(s is not None for s in self.seeds)
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
@@ -588,26 +623,55 @@ class SeedManager:
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
 
-        When no seeds are active (``_seed_active=False``):
-          - On the first call after reset (``_reseted=True``), pushes SKIP
-            values (MAX_UINT32) so the device's ``rand_tile_init`` is skipped.
-          - On subsequent decode calls (``_reseted=False``), returns early
-            without any device copy — this is the main optimisation.
+        **Seeded path** (``_seed_active=True``):
+        Advances each slot's host-side RNG and copies the new values to the
+        device every step.  The device calls ``rand_tile_init`` with each
+        user's value, then ``rand_tile`` to produce the sampling tile.
 
-        When seeds are active, advances each user's RNG and copies the new
-        seed tensor to the device as before.
+        **Unseeded path** (``_seed_active=False``):
+        Uses a three-state machine to ensure each user gets a unique device
+        RNG state without redundant host-to-device copies during decode:
+
+          State 1 — **init** (``_reseted=True``):
+            Push random per-user values.  The device calls ``rand_tile_init``
+            for every user, giving each one a unique RNG seed.  This prevents
+            stale identical tiles left over from a previous batch (e.g. a
+            replicated seed during an earlier prefill).
+
+          State 2 — **transition** (``_needs_skip=True``):
+            Push MAX_UINT32 (SKIP).  The device skips ``rand_tile_init`` and
+            calls only ``rand_tile``, advancing each user's RNG from the
+            varied state established in state 1.  Without this step the
+            device would re-run ``rand_tile_init`` with the same values
+            every decode step, producing identical tiles.
+
+          State 3 — **steady** (both flags clear):
+            Early-return with no device copy.  The device continues to call
+            ``rand_tile`` each step, advancing the per-user RNG
+            independently.  No host interaction needed.
+
+        ``reset_seed`` always sets ``_reseted=True``, so any new prefill
+        re-enters state 1 to refresh the device RNG.
         """
         if empty_slots is None:
             empty_slots = range(self.max_batch_size)
 
         if not self._seed_active:
-            if not self._reseted:
-                # No active seeds and already pushed SKIP values — nothing to do.
+            if self._reseted:
+                # State 1 (init): must take precedence over a pending
+                # transition so a new prefill always refreshes the device
+                # RNG with varied per-user values.
+                new_seeds = [random.randint(0, 1000000) for _ in range(self.max_batch_size)]
+                self._needs_skip = True
+            elif self._needs_skip:
+                # State 2 (transition): push SKIP so the device stops calling
+                # rand_tile_init and starts advancing via rand_tile().
+                new_seeds = [MAX_UINT32] * self.max_batch_size
+                self._needs_skip = False
+            else:
+                # State 3 (steady): device already has SKIP, rand_tile
+                # advances on its own — no host-to-device copy needed.
                 return
-            # First call after reset with no active seeds: push SKIP (MAX_UINT32)
-            # so the device skips rand_tile_init. All following decode steps will
-            # early-return above until the next reset_seed().
-            new_seeds = [MAX_UINT32] * self.max_batch_size
         else:
             # Advance RNG for each user in empty_slots; non-active slots get MAX_UINT32.
             new_seeds = [rng.randint(0, 1000000) if i in empty_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)]
