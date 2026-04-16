@@ -291,7 +291,7 @@
 - name: GPT-OSS 120B unit tests (Galaxy, high batch)
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
     pytest models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput" --timeout 600
   model: gpt-oss-120b-high-batch-galaxy
   skus:
