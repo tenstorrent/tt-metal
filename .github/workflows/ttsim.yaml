@@ -181,7 +181,8 @@ jobs:
               if not t.get("ttsim") or not t.get("cmd"):
                   continue
               cmd = re.sub(r'\s+--timeout\s+\d+', '', t['cmd'])
-              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": cmd, "timeout": TTSIM_TIMEOUT_MINUTES})
+              serial_cmd = re.sub(r'\s+--splits\s+\d+', '', re.sub(r'\s+--group\s+\d+', '', cmd))
+              entries.append({"name": t.get("name", "Unnamed Test"), "cmd": cmd, "serial_cmd": serial_cmd, "timeout": TTSIM_TIMEOUT_MINUTES})
           if not entries:
               raise SystemExit("No TTSim-compatible TTNN tests found (ttsim: true)")
           with open(out_path, "a") as f:
@@ -246,6 +247,18 @@ jobs:
           path: .
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
+      - name: Apply ttsim WH workaround patches
+        run: |
+          # WORKAROUND: The TEN-3868 LLK hardware bug workaround in unpack_to_dest_tile_done() issues
+          # TT_UNPACR(SrcA, INT32) which is UndefinedBehavior per tt-isa-documentation. ttsim faithfully
+          # implements the spec and correctly rejects it. The simulator does not have the hardware bug, so
+          # the workaround is not needed in simulation. This line can be removed when the LLK team ships
+          # a proper fix. Tracking: https://github.com/tenstorrent/tt-metal/issues/38246
+          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
+          echo "Patching: $HEADER"
+          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
+            "$HEADER"
+
       - name: Compute ttsim asset name
         id: ttsim-asset
         run: |
@@ -289,7 +302,7 @@ jobs:
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          ${{ matrix.test-group.cmd }} -p no:timeout --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          ${{ matrix.test-group.serial_cmd }} -p no:timeout --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
           exit 1
 
   ttsim-cpp-unit-tests:
