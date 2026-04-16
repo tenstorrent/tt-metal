@@ -124,7 +124,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     auto origin_defines = defines;
     origin_defines["IS_ORIGIN"] = "1";
 
-    // Reader compile-time args: scalar args first, then TensorAccessorArgs
     auto origin_phys = get_phys(0, 0);
     std::vector<uint32_t> reader_ct_args{
         static_cast<uint32_t>(origin_phys.x),
@@ -140,7 +139,6 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     auto reader_origin = create_reader_kernel(program, origin_set, reader_ct_args, origin_defines, kReaderKernelPath);
     auto reader_kernel = create_reader_kernel(program, non_origin_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    // Writer kernel: same for all cores
     std::vector<uint32_t> writer_ct_args;
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
 
@@ -192,7 +190,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
 
         uint32_t tiles_this_core = core_group_1.contains(logical_core) ? tiles_per_core_g1 : tiles_per_core_g2;
 
-        // Reader runtime args (is_origin is a compile-time define, not runtime arg)
+        // Reader runtime args
         auto reader_handle = (i == 0) ? reader_origin : reader_kernel;
         SetRuntimeArgs(
             program,
