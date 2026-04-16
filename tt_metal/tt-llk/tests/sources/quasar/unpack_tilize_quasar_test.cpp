@@ -29,8 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_producer, dest_dvalid_client::PACK});
 
-    const DataFormat unpack_dst_format = static_cast<DataFormat>(formats.unpack_A_dst);
-    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(unpack_dst_format);
+    if constexpr (unpack_to_dest)
+    {
+        const DataFormat unpack_dst_format = static_cast<DataFormat>(formats.unpack_A_dst);
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(unpack_dst_format);
+    }
 
     buffer_descriptor_u bd_val = {0};
 
