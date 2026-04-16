@@ -96,6 +96,7 @@ IDevice* GetActiveDevice(ChipId device_id);
  * buffer               | Yes      |
  */
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer);
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter);
 /**
  * Copies data from a host buffer into the specified buffer
  *

@@ -68,6 +68,12 @@ MeshTensor enqueue_write_tensor(
 
 void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
 
+void enqueue_write_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    MeshTensor& device_tensor,
+    const CoreRangeSet& logical_core_filter);
+
 // ======================================================================================
 //                    Unit Tensor enqueue_read/write_tensor
 // ======================================================================================
@@ -115,6 +121,12 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
 
 std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor);
+
+std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    MeshTensor& device_tensor,
+    const CoreRangeSet& logical_core_filter);
 
 }  // namespace non_uniform_data_movement
 
