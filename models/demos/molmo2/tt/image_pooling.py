@@ -345,34 +345,20 @@ class ImagePooling(LightweightModule):
             logger.info(_get_stats(k, "ImagePooling k after wk+bk"))
             logger.info(_get_stats(v, "ImagePooling v after wv+bv"))
 
-        # Reshape Q, K, V for multi-head attention using LOCAL heads
-        # Note: Using ttnn ops for head splitting
-
-        # For cross-attention, we need special handling
-        # Get batch dimensions from input tensors
         batch_seq = query.shape[1]  # B*N_out from vision_backbone
-        padded_local_hidden = self.n_local_heads * self.padded_head_dim  # Local heads only
-
-        # Q: [1, batch_seq, num_queries, padded_local_hidden] -> [batch_seq, n_local_heads, num_queries, head_dim]
-        # K: [1, batch_seq, pool_size, padded_local_hidden] -> [batch_seq, n_local_heads, pool_size, head_dim]
-        # V: [1, batch_seq, pool_size, padded_local_hidden] -> [batch_seq, n_local_heads, pool_size, head_dim]
 
         q = ttnn.reshape(q, [batch_seq, num_queries, self.n_local_heads, self.padded_head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
-        q = ttnn.typecast(q, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
+        q = ttnn.typecast(q, dtype=ttnn.bfloat16)
 
         k = ttnn.reshape(k, [batch_seq, pool_size, self.n_local_heads, self.padded_head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
-        k = ttnn.typecast(k, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
+        k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
         v = ttnn.reshape(v, [batch_seq, pool_size, self.n_local_heads, self.padded_head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
-        v = ttnn.typecast(v, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
+        v = ttnn.typecast(v, dtype=ttnn.bfloat16)
 
-        # Use manual attention computation to handle mask correctly
-        # (TTNN SDPA has issues with additive masks in cross-attention)
-
-        # Q @ K^T -> [batch_seq, n_local_heads, num_queries, pool_size]
         k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, n_local_heads, head_dim, pool_size]
         attn_weights = ttnn.matmul(
             q,
@@ -388,10 +374,9 @@ class ImagePooling(LightweightModule):
         if debug_stats:
             logger.info(_get_stats(attn_weights, "ImagePooling attn_weights (after scale)"))
 
-        # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
+        # Apply attention mask (additive mask: 0 for valid, -inf for invalid).
+        # attn_weights last dim is pool_size (logical); attn_mask last dim is also pool_size.
         if attn_mask is not None:
-            # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, n_local_heads, num_queries, pool_size]
-            # Broadcasting should handle this automatically
             attn_weights = ttnn.add(attn_weights, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Softmax
