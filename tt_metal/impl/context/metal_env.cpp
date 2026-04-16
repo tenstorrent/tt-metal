@@ -280,33 +280,46 @@ void MetalEnvImpl::teardown_fabric_config() {
         constexpr uint32_t timeout_ms = 5000;
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
 
+        auto& control_plane = this->get_control_plane();
         for (const ChipId chip_id : cluster.all_chip_ids()) {
             if (builder_context.get_num_fabric_initialized_routers(chip_id) == 0) {
                 continue;
             }
-            const auto master_chan = builder_context.get_fabric_master_router_chan(chip_id);
-            const auto eth_logical_core =
-                cluster.get_soc_desc(chip_id).get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+            // Wait for ALL active ETH router channels (not just the master) to write TERMINATED.
+            // The master ETH router propagates the termination signal to subordinate channels via
+            // asynchronous NOC writes (notify_subordinate_routers()), so subordinate channels may
+            // still be running their teardown when the master writes TERMINATED. If we only poll
+            // the master, the next binary's tensix mux kernel may poll a still-tearing-down
+            // subordinate channel and trigger ARC "unsafe NOC access" errors.
+            // See: https://github.com/tenstorrent/tt-metal/issues/42429
+            const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+            const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
-            auto start = std::chrono::steady_clock::now();
-            while (true) {
-                auto status =
-                    cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
-                if (!status.empty() && status[0] == terminated_val) {
-                    break;
-                }
-                auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-                        .count();
-                if (elapsed > timeout_ms) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
-                        "(status=0x{:08x}), continuing teardown",
-                        chip_id,
-                        master_chan,
-                        status.empty() ? 0u : status[0]);
-                    break;
+            for (const auto& [chan_id, _direction] : active_eth_channels) {
+                const auto eth_logical_core =
+                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+
+                auto start = std::chrono::steady_clock::now();
+                while (true) {
+                    auto status =
+                        cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
+                    if (!status.empty() && status[0] == terminated_val) {
+                        break;
+                    }
+                    auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+                    if (elapsed > timeout_ms) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
+                            "(status=0x{:08x}), continuing teardown",
+                            chip_id,
+                            chan_id,
+                            status.empty() ? 0u : status[0]);
+                        break;
+                    }
                 }
             }
         }
