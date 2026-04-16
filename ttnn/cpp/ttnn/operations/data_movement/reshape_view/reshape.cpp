@@ -335,6 +335,23 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
+
+    // ND sharded tensors: convert to interleaved, reshape, then convert back.
+    // The reshape op assumes legacy 2D shard specs throughout its internal paths.
+    if (is_device_tensor(tensor) && tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
+        auto interleaved_tensor = ttnn::to_memory_config(tensor, interleaved_config);
+        auto result = ttnn::reshape(
+            interleaved_tensor,
+            logical_input_shape,
+            padded_input_shape,
+            interleaved_config,
+            pad_value,
+            reshape_map_mode,
+            sub_core_grid);
+        return ttnn::to_memory_config(result, mem_config);
+    }
+
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
 
