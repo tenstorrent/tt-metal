@@ -85,9 +85,10 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
-                print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
-                )
+                if NormalRun.verbose:
+                    print(
+                        f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                    )
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     mesh_composer=ttnn.create_mesh_composer(
@@ -589,7 +590,8 @@ class NormalRun:
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
@@ -654,7 +656,8 @@ class NormalRunWithFallback(NormalRun):
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         result = None
         if self.device is not None:
             bypass = getattr(self, "_bypass_tensor_wrapping", False)
@@ -707,7 +710,8 @@ class SELRun(NormalRun):
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
         func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
@@ -753,7 +757,8 @@ class DPLRun(NormalRun):
             self.torch_layer is not None
         ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
 
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
         copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
         func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
@@ -843,13 +848,15 @@ class CPU(NormalRun):
     @staticmethod
     def torch_dispatch(cls, func, types, args=(), kwargs=None):
         """Dispatch torch operations to CPU."""
-        print(f"Executing {func.name()} on CPU")
+        if NormalRun.verbose:
+            print(f"Executing {func.name()} on CPU")
         rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
         return rs
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on CPU")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on CPU")
         func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
         func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
         result = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
@@ -1208,14 +1215,15 @@ class TracedRun(LightweightRun):
         # Check if this module is trace-enabled
         global _TRACE_RUNNING
         if not is_trace_enabled(self) or _TRACE_RUNNING:
-            if _TRACE_RUNNING:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
-                )
-            else:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
-                )
+            if NormalRun.verbose:
+                if _TRACE_RUNNING:
+                    print(
+                        f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
+                    )
+                else:
+                    print(
+                        f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
+                    )
             # Fall back to normal execution
             result = self.forward(*func_args, **func_kwargs)
             end = time.time()
@@ -1236,7 +1244,8 @@ class TracedRun(LightweightRun):
         if cache_key in TracedRun._trace_cache:
             # === RUN 3+: REPLAY ===
             entry = TracedRun._trace_cache[cache_key]
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            if NormalRun.verbose:
+                print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
             # Update module-owned trace-stable buffers BEFORE executing trace.
@@ -1251,7 +1260,8 @@ class TracedRun(LightweightRun):
         elif cache_key in TracedRun._warmup_keys:
             # === RUN 2: CAPTURE (system already warmed up for this key) ===
             _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
+            if NormalRun.verbose:
+                print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
             end2 = time.time()
@@ -1264,7 +1274,8 @@ class TracedRun(LightweightRun):
             # === RUN 1: WARM-UP (normal forward, no trace) ===
             TracedRun._warmup_keys.add(cache_key)
             _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
+            if NormalRun.verbose:
+                print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
             result = self.forward(*func_args, **func_kwargs)
             _TRACE_RUNNING = False
         end = time.time()

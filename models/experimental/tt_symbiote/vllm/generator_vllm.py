@@ -44,6 +44,36 @@ class SymbioteGemma4ForCausalLM:
         self.hf_config = hf_config
 
     # ------------------------------------------------------------------
+    # Tensor conversion: symbiote-wrapped -> host torch.Tensor
+    # ------------------------------------------------------------------
+
+    def _to_host_tensor(self, tensor):
+        """Convert any tensor variant back to a plain torch.Tensor on host.
+
+        The model forward pass may return:
+        - ttnn.Tensor (native device tensor)
+        - TorchTTNNTensor (symbiote wrapper, a torch.Tensor subclass with a
+          .to_torch *property* that yields the unwrapped torch.Tensor)
+        - torch.Tensor (if the dispatcher already converted)
+        """
+        import ttnn
+
+        if isinstance(tensor, ttnn.Tensor):
+            if self.mesh_device.get_num_devices() > 1:
+                return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]).float()
+            return ttnn.to_torch(tensor).float()
+
+        if isinstance(tensor, torch.Tensor):
+            unwrapped = getattr(tensor, "to_torch", None)
+            if unwrapped is not None and isinstance(unwrapped, torch.Tensor):
+                return unwrapped.float()
+            return tensor.float()
+
+        raise TypeError(
+            f"Unexpected logits type {type(tensor).__name__}; " "expected ttnn.Tensor, TorchTTNNTensor, or torch.Tensor"
+        )
+
+    # ------------------------------------------------------------------
     # Class method: model loading & weight conversion
     # ------------------------------------------------------------------
 
@@ -182,6 +212,9 @@ class SymbioteGemma4ForCausalLM:
             kv_cache: opaque KV cache object (our self.kv_cache, passed back by runner)
             prompt_lens: actual prompt lengths per batch element
             **kwargs: additional TTModelInput fields (absorbed)
+
+        Returns:
+            torch.Tensor of shape [batch, seq_len, vocab_size] (float32).
         """
         batch_size = tokens.shape[0]
         seq_len = tokens.shape[1]
@@ -201,11 +234,10 @@ class SymbioteGemma4ForCausalLM:
                 use_cache=True,
             )
 
-        logits = outputs.logits
-        if hasattr(logits, "to_torch"):
-            import ttnn
+        logits = self._to_host_tensor(outputs.logits)
 
-            logits = ttnn.to_torch(logits)
+        if logits.dim() == 2:
+            logits = logits.unsqueeze(0)
 
         return logits
 
@@ -213,7 +245,16 @@ class SymbioteGemma4ForCausalLM:
     # Decode: single-token autoregressive step
     # ------------------------------------------------------------------
 
-    def decode_forward(self, tokens, start_pos, page_table, kv_cache, **kwargs):
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table,
+        kv_cache,
+        enable_trace=False,
+        read_from_device=True,
+        **kwargs,
+    ):
         """Generate logits for one decode step.
 
         Args:
@@ -221,7 +262,15 @@ class SymbioteGemma4ForCausalLM:
             start_pos: cache position for each sequence in the batch
             page_table: vLLM page table (unused; adapter manages its own KV cache)
             kv_cache: opaque KV cache object
-            **kwargs: additional TTModelInput fields (enable_trace, read_from_device, etc.)
+            enable_trace: whether TTNN trace capture is active (accepted but
+                currently unused -- warmup already traced in initialize_vllm_model)
+            read_from_device: if True, convert output to host torch.Tensor;
+                if False, return the device tensor for async pipelines
+            **kwargs: additional TTModelInput fields
+
+        Returns:
+            torch.Tensor of shape [batch, 1, vocab_size] (float32) when
+            read_from_device is True.
         """
         batch_size = tokens.shape[0]
         input_ids = tokens.view(batch_size, 1)
@@ -239,13 +288,25 @@ class SymbioteGemma4ForCausalLM:
                 cache_position=cache_position,
             )
 
-        logits = outputs.logits
-        if hasattr(logits, "to_torch"):
-            import ttnn
+        if not read_from_device:
+            return outputs.logits
 
-            logits = ttnn.to_torch(logits)
+        logits = self._to_host_tensor(outputs.logits)
+
+        if logits.dim() == 2:
+            logits = logits.unsqueeze(0)
 
         return logits
+
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        """Post-process decode output on the host side.
+
+        Called by TTAsyncDecodeController.finalize_decode when
+        read_from_device was False during decode_forward.
+        """
+        if isinstance(tt_out, torch.Tensor):
+            return tt_out.float()
+        return self._to_host_tensor(tt_out)
 
     # ------------------------------------------------------------------
     # Warmup stubs: TTNN kernels are warmed in initialize_vllm_model

@@ -645,7 +645,8 @@ class DPLRunExtended(NormalRun):
         if self.torch_layer is None:
             return NormalRun.module_run(self, *args, **kwds)
 
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        if NormalRun.verbose:
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         args = tree_map(_ensure_elem_for_dpl, args)
         kwds = dict(tree_map(_ensure_elem_for_dpl, kwds))
         copied_torch_tensors_args = tree_map(run_config.copy_to_torch(self.__class__.__name__), args)
