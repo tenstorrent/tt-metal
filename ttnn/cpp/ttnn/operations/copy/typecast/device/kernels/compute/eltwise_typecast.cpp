@@ -58,10 +58,8 @@ void kernel_main() {
 #if FP32_DEST_ACC_EN && !defined(TYPECAST_OUTPUT_32BIT)
     disable_fp32_dest_acc();
 #endif
-    // Sync: init_sfpu has MATH and PACK both writing to ALU_FORMAT_SPEC cfg register
-    // (MATH sets SrcA/SrcB, PACK sets Dstacc) via RMWCIB on the same 32-bit word.
-    // Stall CFG until both MATH and PACK config writes are committed, so pack_tile
-    // reads the correct Dstacc value.
+    // Ensure all config writes (init_sfpu + optional disable_fp32_dest_acc) are
+    // committed before the pack loop starts.
     constexpr auto stall_until_config_done = []() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); };
     PACK((stall_until_config_done()));
 

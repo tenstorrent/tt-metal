@@ -327,9 +327,11 @@ static ProgramDescriptor create_rm_to_tile_descriptor(
         unpack_to_dest_mode[intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
+    const bool output_32bit = is_32bit_type(output_dtype);
+
     auto compute_defines = make_typecast_compute_defines_desc(input_dtype, output_dtype);
     compute_defines.emplace_back("TILIZE_INPUT", "1");
-    if (is_32bit_type(output_dtype)) {
+    if (output_32bit) {
         compute_defines.emplace_back("TYPECAST_OUTPUT_32BIT", "1");
     }
 
