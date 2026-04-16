@@ -1315,6 +1315,8 @@ def main():
                 print(
                     f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
                 )
+                total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+                print(f"   - Total parameters: {total_params:,}")
             except Exception as e:
                 print(f"Error loading checkpoint: {e}")
                 print("Starting fresh training instead...")
@@ -1347,15 +1349,26 @@ def main():
             )
             print(f"   - Total parameters: {total_params:,}")
 
-        # Compute FLOPs per token for throughput reporting
+        # Compute FLOPs per token for throughput reporting (all model types)
         flops_per_token = 0
         if model_config.model_type == "deepseek":
-            from ttml.models.deepseek import DeepSeekConfig, calculate_flops_per_token
+            from ttml.models.deepseek import DeepSeekConfig
+            from ttml.models.deepseek.flops import calculate_flops_per_token as deepseek_flops
 
             ds_cfg = model.config if hasattr(model, "config") and isinstance(model.config, DeepSeekConfig) else None
             if ds_cfg is not None:
-                flops_per_token = calculate_flops_per_token(ds_cfg, model_config.max_sequence_length)
-                print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
+                flops_per_token = deepseek_flops(ds_cfg, model_config.max_sequence_length)
+        elif model_config.model_type == "gpt2":
+            from ttml.models.nanogpt.flops import calculate_flops_per_token as gpt2_flops
+
+            flops_per_token = gpt2_flops(model.config, model_config.max_sequence_length)
+        elif model_config.model_type == "llama":
+            from ttml.models.llama.flops import calculate_flops_per_token as llama_flops
+
+            flops_per_token = llama_flops(model.config, model_config.max_sequence_length)
+
+        if flops_per_token > 0:
+            print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
         # Memory snapshot after model creation
         if args.track_memory:
