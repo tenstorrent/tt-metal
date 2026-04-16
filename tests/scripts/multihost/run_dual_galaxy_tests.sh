@@ -39,6 +39,9 @@ run_dual_galaxy_unit_tests() {
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh" ; fail+=$?
+
+  sleep 60
+
   tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace" ; fail+=$?
 
 
