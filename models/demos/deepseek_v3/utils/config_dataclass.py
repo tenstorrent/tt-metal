@@ -56,7 +56,7 @@ class DeepseekSamplingArgs:
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
-ConfigWeight = ttnn.Tensor | FromWeightConfig
+ConfigWeight = ttnn.Tensor | SavedWeight | FromWeightConfig
 
 
 @dataclass

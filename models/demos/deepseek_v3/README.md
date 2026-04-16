@@ -22,7 +22,8 @@ The recommended DeepSeek-V3 runtime path is:
 
 `--cache-dir` and `DEEPSEEK_V3_CACHE` remain available for reference/test caches, but DeepSeek weights are converted
 directly in memory on this path. If you explicitly want to consume a prebuilt legacy TT weight cache
-(for example BSPM output), pass `--use-weight-cache --cache-dir <cache-root>`.
+(for example BSPM output), pass `--use-weight-cache --cache-dir <cache-root>`. Legacy caches generated before the
+current DeepSeek SavedWeight metadata/versioning must be regenerated first; older-format and unversioned caches are rejected.
 
 ## Running on Multi-Host Galaxy (2x or 4x)
 
@@ -129,7 +130,7 @@ The `launch_multihost_galaxy` script automatically sets `DEEPSEEK_V3_HF_MODEL` a
 - `--output-path FILE`: Save generations/statistics to JSON when using `--prompts-file`. Defaults to `<prompts-file-stem>_output.json`.
 - `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
 - `--cache-dir PATH`: Optional directory for reference/test caches. Defaults to `$DEEPSEEK_V3_CACHE` when set. Also used as the legacy TT weight-cache root when `--use-weight-cache` is enabled.
-- `--use-weight-cache`: Load a prebuilt legacy TT weight cache from `--cache-dir` instead of converting weights in memory. Use this for workflows such as BSPM-generated caches.
+- `--use-weight-cache`: Load a prebuilt current-format legacy TT weight cache from `--cache-dir` instead of converting weights in memory. Use this for workflows such as BSPM-generated caches. Caches generated before the current DeepSeek SavedWeight metadata/versioning must be regenerated first.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
 - `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
 - `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS. Use this for fixed-length stress or perf runs.
@@ -189,6 +190,7 @@ run_demo(None, random_weights=True)
 run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3", stop_at_eos=False)
 
 # Consume a prebuilt BSPM / legacy TT weight cache
+# Regenerate the cache first if it predates the current DeepSeek SavedWeight metadata/versioning.
 run_demo(
     ["Write a haiku about hardware"],
     model_path="/abs/path/to/deepseek-v3-dequantized-stacked",

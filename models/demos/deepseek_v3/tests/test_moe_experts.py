@@ -104,16 +104,17 @@ def test_forward_pass(
     torch_input = torch.randn(1, 1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     if weight_type == "random":
-        state_dict = reference_model.state_dict()
+        tt_state_dict = reference_model.state_dict()
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(state_dict)
+        reference_state_dict = create_combined_state_dict(module_path, model_path, state_dict)
+        tt_state_dict = sub_state_dict(state_dict, ".".join(module_path.split(".")[:-2]) + ".")
+        reference_model.load_state_dict(reference_state_dict)
 
     weight_config = get_test_weight_config(
         TTExperts,
         hf_config,
-        (state_dict,),
+        (tt_state_dict,),
         cache_path,
         mesh_device,
         force_recalculate_weight_config,

@@ -189,8 +189,10 @@ def test_save_dequantized_hf_checkpoint_can_stack_experts(tmp_path: Path):
 
     state_dict = load_state_dict(output_dir, "")
     try:
-        assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" in state_dict
-        stacked_gate = state_dict["model.layers.0.mlp.experts_stacked.gate_proj.weight"]
+        stacked_view = state_dict.view_with_prefix("model.layers.0.mlp.experts_stacked.")
+        assert "model.layers.0.mlp.experts_stacked.gate_proj.weight" not in state_dict
+        assert "gate_proj.weight" in stacked_view
+        stacked_gate = stacked_view["gate_proj.weight"]
         expected_gate = torch.stack(
             [
                 expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"].to(torch.bfloat16),
@@ -240,6 +242,58 @@ def test_save_dequantized_hf_checkpoint_rewrites_dequantized_shards_when_stackin
             ]
         ),
     )
+
+
+def test_save_dequantized_hf_checkpoint_rejects_incomplete_stacked_expert_groups(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps({"quantization_config": {"weight_block_size": [2, 2]}, "n_routed_experts": 2})
+    )
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    with pytest.raises(ValueError, match="do not match n_routed_experts=2"):
+        save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+
+def test_save_dequantized_hf_checkpoint_rejects_missing_required_moe_projection_groups(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "quantization_config": {"weight_block_size": [2, 2]},
+                "n_routed_experts": 2,
+                "first_k_dense_replace": 0,
+                "num_hidden_layers": 2,
+            }
+        )
+    )
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.0.down_proj.weight": torch.tensor([[9.0, 10.0], [11.0, 12.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.down_proj.weight": torch.tensor(
+            [[13.0, 14.0], [15.0, 16.0]], dtype=torch.float32
+        ),
+        "model.layers.0.mlp.experts.0.up_proj.weight": torch.tensor([[17.0, 18.0], [19.0, 20.0]], dtype=torch.float32),
+        "model.layers.0.mlp.experts.1.up_proj.weight": torch.tensor([[21.0, 22.0], [23.0, 24.0]], dtype=torch.float32),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    with pytest.raises(ValueError, match="missing required expert projections"):
+        save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
 
 
 def test_materialize_model_weights_respects_index_for_stacked_exports(tmp_path: Path):
@@ -391,3 +445,54 @@ def test_unload_weight_from_lazy_state_dict_evicts_cache(tmp_path: Path):
     unload_weight("lm_head.weight", target_tensor)
     assert target_tensor.numel() == 0
     assert "lm_head.weight" not in state_dict._cache
+
+
+def test_unload_weight_from_lazy_state_dict_evicts_stacked_alias_cache(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-lazy-stacked-unload"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_weight}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state_dict = index_model_weights(model_dir)
+    assert isinstance(state_dict, LazyStateDict)
+
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(stacked_weight[1])
+
+    load_weight(expert_key, target_tensor)
+    assert expert_key in state_dict._cache
+    assert stacked_key in state_dict._cache
+
+    unload_weight(expert_key, target_tensor)
+    assert target_tensor.numel() == 0
+    assert expert_key not in state_dict._cache
+    assert stacked_key not in state_dict._cache
+
+
+def test_materialized_stacked_checkpoint_load_hooks_resolve_expert_aliases(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-eager-stacked-hooks"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_weight}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state_dict = materialize_model_weights(model_dir)
+    expert_key = "model.layers.3.mlp.experts.1.gate_proj.weight"
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(stacked_weight[1])
+
+    load_weight(expert_key, target_tensor)
+    assert torch.equal(target_tensor, stacked_weight[1])
+
+    unload_weight(expert_key, target_tensor)
+    assert target_tensor.numel() == 0

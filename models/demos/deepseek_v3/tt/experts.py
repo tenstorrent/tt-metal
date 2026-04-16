@@ -56,11 +56,22 @@ class Experts(AbstractModule):
 
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
             stacked_weight_name = f"experts_stacked.{hf_name}.weight"
-            if stacked_weight_name in state_dict:
-                stacked_weight = get_dequantized_tensor(state_dict, stacked_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
+            view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+            stacked_state_dict = view_with_prefix("experts_stacked.") if callable(view_with_prefix) else state_dict
+            stacked_lookup_name = f"{hf_name}.weight" if callable(view_with_prefix) else stacked_weight_name
+
+            if stacked_lookup_name in stacked_state_dict:
+                stacked_weight = get_dequantized_tensor(
+                    stacked_state_dict, stacked_lookup_name, dtype=cls.WEIGHT_TORCH_DTYPE
+                )
                 if stacked_weight.ndim != 3:
                     raise ValueError(
                         f"Expected stacked expert weight '{stacked_weight_name}' to have rank 3, got {stacked_weight.ndim}"
+                    )
+                if stacked_weight.shape[0] != hf_config.n_routed_experts:
+                    raise ValueError(
+                        f"Expected stacked expert weight '{stacked_weight_name}' to contain "
+                        f"{hf_config.n_routed_experts} experts, got {stacked_weight.shape[0]}"
                     )
                 return stacked_weight.contiguous()
 

@@ -86,6 +86,20 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
+def _is_primary_artifact_writer() -> bool:
+    # Prefer global launcher ranks when available; TT_MESH_HOST_RANK is mesh-local
+    # and can repeat across submeshes in a multi-mesh launch.
+    for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK", "TT_MESH_HOST_RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -213,7 +227,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--use-weight-cache",
         action="store_true",
         default=False,
-        help="Load a prebuilt legacy TT weight cache from --cache-dir instead of converting DeepSeek weights in memory.",
+        help="Load a prebuilt current-format legacy TT weight cache from --cache-dir instead of converting DeepSeek weights in memory. Older-format and unversioned caches must be regenerated first.",
     )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -872,7 +886,7 @@ def main() -> None:
             ),
             random_weights=bool(args.random_weights),
         )
-        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+        if _is_primary_artifact_writer():
             _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before

@@ -55,6 +55,9 @@ If you explicitly need to consume a prebuilt legacy TT weight cache, such as BSP
   --use-weight-cache
 ```
 
+Caches generated before the current DeepSeek SavedWeight metadata/versioning must be regenerated first; the runtime
+rejects older-format and unversioned caches.
+
 ### 2) Single‑layer with random weights (fast)
 Runs a minimal single‑layer pipeline with randomly initialized weights. This does not require `.safetensors`, and the tokenizer is optional. If no tokenizer is found, the demo synthesizes simple token IDs. The prompt is not used in this mode, so you don’t need to provide one.
 
@@ -91,7 +94,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 - `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
 - `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS.
 - `--cache-dir PATH`: Optional directory for reference/test caches. Also used as the legacy TT weight-cache root when `--use-weight-cache` is set.
-- `--use-weight-cache`: Load a prebuilt legacy TT weight cache from `--cache-dir` instead of converting DeepSeek weights in memory.
+- `--use-weight-cache`: Load a prebuilt current-format legacy TT weight cache from `--cache-dir` instead of converting DeepSeek weights in memory. Older-format and unversioned caches must be regenerated first.
 - `--random-weights`: Use randomly initialized weights derived from the HF config (no safetensors).
 - `--single-layer {mlp,moe}`: With `--random-weights`, request a single‑layer run. `mlp` is supported; `moe` is not.
 
@@ -120,4 +123,5 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 - The recommended reusable artifact is the stacked dequantized checkpoint directory itself, not a generated TT weight cache.
 - `--cache-dir` remains useful for reference outputs and other test/demo artifacts if you want them outside the model directory.
 - If you explicitly need a legacy TT weight cache, pass both `--cache-dir` and `--use-weight-cache`.
+- Caches generated before the current DeepSeek SavedWeight metadata/versioning are no longer accepted; regenerate them before reuse.
 - This script focuses on decode and greedy sampling for simplicity; stopping at EOS is exposed and enabled by default, while temperature/top‑k/p are not.

@@ -34,6 +34,7 @@ DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE = (
 STACKED_EXPERT_WEIGHT_PATTERN = re.compile(
     r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
 )
+STACKED_EXPERT_ALIAS_PATTERN = STACKED_EXPERT_WEIGHT_PATTERN
 
 
 def load_tokenizer(model_path: str):
@@ -152,6 +153,17 @@ def get_weight_block_shape_from_model_path(model_path: str | Path) -> tuple[int,
     with config_path.open("r", encoding="utf-8") as handle:
         config_obj = json.load(handle)
     return _get_weight_block_shape_from_quant_config(config_obj.get("quantization_config"))
+
+
+def _load_model_config_json(model_path: str | Path) -> dict[str, Any]:
+    config_path = Path(model_path) / "config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Could not find DeepSeek config at {config_path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        config_obj = json.load(handle)
+    if not isinstance(config_obj, dict):
+        raise ValueError(f"Expected JSON object in {config_path}, got {type(config_obj)}")
+    return config_obj
 
 
 def dequantize_weight_tensor(
@@ -328,6 +340,47 @@ def _group_stacked_expert_keys(weight_map: Mapping[str, str]) -> dict[int, dict[
     return normalized
 
 
+def _validate_stacked_expert_groups(
+    grouped_expert_keys: Mapping[int, Mapping[str, list[str]]],
+    *,
+    expected_experts: int | None,
+    first_moe_layer: int | None = None,
+    num_hidden_layers: int | None = None,
+) -> None:
+    required_projections = ("gate_proj", "down_proj", "up_proj")
+    missing_groups: list[str] = []
+    if isinstance(first_moe_layer, int) and isinstance(num_hidden_layers, int):
+        for layer_idx in range(first_moe_layer, num_hidden_layers):
+            projections = grouped_expert_keys.get(layer_idx, {})
+            for projection in required_projections:
+                if projection not in projections:
+                    missing_groups.append(f"layer {layer_idx} projection '{projection}' is missing")
+
+    if expected_experts is None and not missing_groups:
+        return
+
+    invalid_groups: list[str] = []
+    if expected_experts is not None:
+        for layer_idx, projections in grouped_expert_keys.items():
+            for projection, source_keys in projections.items():
+                if len(source_keys) != expected_experts:
+                    invalid_groups.append(
+                        f"layer {layer_idx} projection '{projection}' has {len(source_keys)}/{expected_experts} experts"
+                    )
+
+    issues: list[str] = []
+    if missing_groups:
+        sample_missing = ", ".join(missing_groups[:3])
+        extra = "" if len(missing_groups) <= 3 else f" and {len(missing_groups) - 3} more"
+        issues.append(f"missing required expert projections: {sample_missing}{extra}")
+    if invalid_groups:
+        sample_invalid = ", ".join(invalid_groups[:3])
+        extra = "" if len(invalid_groups) <= 3 else f" and {len(invalid_groups) - 3} more"
+        issues.append(f"expert counts do not match n_routed_experts={expected_experts}: {sample_invalid}{extra}")
+    if issues:
+        raise ValueError("Cannot write stacked DeepSeek checkpoint because " + ". ".join(issues) + ".")
+
+
 def save_dequantized_hf_checkpoint(
     source_model_path: str | Path,
     output_model_path: str | Path | None = None,
@@ -364,9 +417,16 @@ def save_dequantized_hf_checkpoint(
     output_model_path.mkdir(parents=True, exist_ok=True)
     _copy_non_weight_artifacts(source_model_path, output_model_path)
 
-    block_shape = get_weight_block_shape_from_model_path(source_model_path)
+    config_obj = _load_model_config_json(source_model_path)
+    block_shape = _get_weight_block_shape_from_quant_config(config_obj.get("quantization_config"))
     weight_map, metadata = _load_model_weight_map(source_model_path)
     stacked_expert_keys = _group_stacked_expert_keys(weight_map) if stack_experts else {}
+    _validate_stacked_expert_groups(
+        stacked_expert_keys,
+        expected_experts=config_obj.get("n_routed_experts"),
+        first_moe_layer=config_obj.get("first_k_dense_replace"),
+        num_hidden_layers=config_obj.get("num_hidden_layers"),
+    )
     skipped_weight_keys = {
         source_key
         for projections in stacked_expert_keys.values()
@@ -461,12 +521,37 @@ def apply_with_names(
 def load_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor]
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
+    def resolve_weight(name: str) -> torch.Tensor | None:
+        if name in weights_dict:
+            return weights_dict[name]
+
+        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
+        if match is None:
+            return None
+
+        stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
+        if stacked_name not in weights_dict:
+            return None
+
+        stacked_weight = weights_dict[stacked_name]
+        if stacked_weight.ndim != 3:
+            raise RuntimeError(
+                f"Expected stacked expert tensor '{stacked_name}' to have rank 3, got {stacked_weight.ndim}"
+            )
+        expert_idx = int(match.group("expert"))
+        if expert_idx >= stacked_weight.shape[0]:
+            raise RuntimeError(
+                f"Expected stacked expert tensor '{stacked_name}' to contain expert {expert_idx}, "
+                f"got {stacked_weight.shape[0]} experts"
+            )
+        return stacked_weight[expert_idx]
+
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         print(f"Loading weight: {name}" + " " * 50, end="\r")
-        if name not in weights_dict:
+        loaded_weight = resolve_weight(name)
+        if loaded_weight is None:
             return tensor
-        loaded_weight = weights_dict[name]
         if loaded_weight.dtype == torch.float8_e4m3fn:
             raise RuntimeError(
                 f"Expected already-dequantized bf16 weights for '{name}', but found float8 tensor. "
@@ -484,9 +569,17 @@ def load_weight_from_weights_dict(
 def unload_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor],
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
+    def has_weight(name: str) -> bool:
+        if name in weights_dict:
+            return True
+        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
+        if match is None:
+            return False
+        return _stacked_expert_weight_name(int(match.group("layer")), match.group("projection")) in weights_dict
+
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
-        if name not in weights_dict:
+        if not has_weight(name):
             return tensor
         tensor.data = torch.empty(0, dtype=tensor.dtype)
         evict_fn = getattr(weights_dict, "evict", None)

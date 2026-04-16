@@ -6,7 +6,7 @@ from __future__ import annotations
 import fcntl
 import json
 import shutil
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +16,18 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
+from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION, emit_legacy_saved_weights
 from models.demos.deepseek_v3.utils.run_config import WeightConfig, deallocate_weight_config_tensors
+
+
+class InvalidWeightCacheError(ValueError):
+    """Raised when a requested legacy DeepSeek weight cache exists but is invalid."""
+
+
+WEIGHT_CACHE_FORMAT_VERSION = 2
+WEIGHT_CACHE_METADATA_KEY = "deepseek_weight_cache_metadata"
+WEIGHT_CACHE_VERSION_KEY = "format_version"
+WEIGHT_CACHE_PAYLOAD_KEY = "weight_config"
 
 
 @contextmanager
@@ -74,6 +84,43 @@ def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
 
 
+def wrap_weight_cache_payload(weight_config: WeightConfig) -> dict[str, Any]:
+    return {
+        WEIGHT_CACHE_METADATA_KEY: {
+            WEIGHT_CACHE_VERSION_KEY: WEIGHT_CACHE_FORMAT_VERSION,
+        },
+        WEIGHT_CACHE_PAYLOAD_KEY: weight_config,
+    }
+
+
+def unwrap_weight_cache_payload(
+    serialized_config: Any,
+    *,
+    require_current_format: bool,
+    config_path: Path,
+) -> WeightConfig:
+    if (
+        isinstance(serialized_config, dict)
+        and WEIGHT_CACHE_METADATA_KEY in serialized_config
+        and WEIGHT_CACHE_PAYLOAD_KEY in serialized_config
+    ):
+        metadata = serialized_config[WEIGHT_CACHE_METADATA_KEY]
+        version = metadata.get(WEIGHT_CACHE_VERSION_KEY) if isinstance(metadata, dict) else None
+        if version != WEIGHT_CACHE_FORMAT_VERSION:
+            raise InvalidWeightCacheError(
+                f"Requested DeepSeek weight cache at {config_path.parent} uses unsupported format version {version!r}. "
+                f"Expected version {WEIGHT_CACHE_FORMAT_VERSION}; regenerate the cache."
+            )
+        return serialized_config[WEIGHT_CACHE_PAYLOAD_KEY]
+
+    if require_current_format:
+        raise InvalidWeightCacheError(
+            f"Requested DeepSeek weight cache at {config_path.parent} is missing {WEIGHT_CACHE_METADATA_KEY}. "
+            "It was likely generated before the current DeepSeek SavedWeight layout; regenerate the cache."
+        )
+    return serialized_config
+
+
 def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
     """
     Attempt to load weight config from cache.
@@ -85,6 +132,9 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
 
     Returns:
         Normalized weight config if cache hit, None if cache miss
+
+    Raises:
+        InvalidWeightCacheError: if a cache exists but its saved-weight paths are invalid.
     """
     if force_recalculate:
         logger.info("Forcing recalculating weights")
@@ -95,13 +145,18 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
         return None
 
     with locked_file(config_path, "r", exclusive=False) as f:
-        weight_config = json.load(f, object_hook=try_decode_saved_weight)
+        serialized_config = json.load(f, object_hook=try_decode_saved_weight)
+
+    weight_config = unwrap_weight_cache_payload(
+        serialized_config,
+        require_current_format=True,
+        config_path=config_path,
+    )
 
     try:
         validate_weight_config_paths(weight_cache_path, weight_config)
     except ValueError as e:
-        logger.warning(f"Cache validation failed, will recalculate weights: {e}")
-        return None
+        raise InvalidWeightCacheError(f"Requested DeepSeek weight cache was invalid at {weight_cache_path}: {e}") from e
 
     logger.info(f"Using weights cached at {weight_cache_path}")
     return normalize_weight_config_paths(weight_cache_path, weight_config)
@@ -187,7 +242,7 @@ def get_weight_config(
         cached_weight_config = _try_load_cached_config(config_path, output_path, force_recalculate=False)
         if cached_weight_config is None:
             raise FileNotFoundError(
-                f"Requested DeepSeek weight cache was not found or was invalid at {output_path}. "
+                f"Requested DeepSeek weight cache was not found at {output_path}. "
                 "Generate the cache first or disable use_weight_cache."
             )
         return cached_weight_config
@@ -210,19 +265,28 @@ def get_weight_config(
         )
         state_dicts = (model_state,)
 
-    logger.info("Converting DeepSeek weights directly to TTNN tensors (no on-disk weight cache)")
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, output_path, mesh_device)
+    if emit_weight_cache:
+        logger.info(f"Converting DeepSeek weights and streaming them to a legacy weight cache at {output_path}")
+    else:
+        logger.info("Converting DeepSeek weights directly to TTNN tensors (no on-disk weight cache)")
+
+    emit_context = emit_legacy_saved_weights() if emit_weight_cache else nullcontext()
+    with emit_context:
+        weight_config = ModuleClass.convert_weights(hf_config, state_dicts, output_path, mesh_device)
     if contains_saved_weights(weight_config):
         if weight_cache_path is None:
             raise ValueError(
                 "weight_cache_path must be provided when convert_weights returns legacy SavedWeight entries"
             )
         validate_weight_config_paths(output_path, weight_config)
+        if emit_weight_cache:
+            saved_weight_config = save_weight_config(output_path, weight_config)
+            deallocate_weight_config_tensors(weight_config)
+            return saved_weight_config
         return normalize_weight_config_paths(output_path, weight_config)
     if emit_weight_cache:
         if weight_cache_path is None:
             raise ValueError("weight_cache_path must be provided when emit_weight_cache=True")
-        logger.info(f"Persisting converted DeepSeek weights to a legacy weight cache at {output_path}")
         saved_weight_config = save_weight_config(output_path, weight_config)
         deallocate_weight_config_tensors(weight_config)
         return saved_weight_config
@@ -319,7 +383,7 @@ def save_weight_config(root_path: Path, weight_config: WeightConfig) -> WeightCo
     )
     config_path = root_path / "config.json"
     with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(serialized_weight_config, f, cls=WeightConfigEncoder)
+        json.dump(wrap_weight_cache_payload(serialized_weight_config), f, cls=WeightConfigEncoder)
     return normalize_weight_config_paths(root_path, serialized_weight_config)
 
 

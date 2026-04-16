@@ -3,6 +3,8 @@
 
 import inspect
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -130,6 +132,67 @@ def test_run_demo_defaults_to_stop_at_eos(monkeypatch, tmp_path):
     )
 
     assert fake_generator.generate_kwargs["stop_at_eos"] is True
+
+
+def test_is_primary_artifact_writer_accepts_common_rank_envs(monkeypatch):
+    monkeypatch.delenv("TT_MESH_HOST_RANK", raising=False)
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
+
+    assert demo_module._is_primary_artifact_writer() is True
+
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+    assert demo_module._is_primary_artifact_writer() is False
+
+
+def test_is_primary_artifact_writer_prefers_global_rank_over_mesh_local_rank(monkeypatch):
+    monkeypatch.setenv("TT_MESH_HOST_RANK", "0")
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+
+    assert demo_module._is_primary_artifact_writer() is False
+
+
+def test_main_uses_primary_artifact_writer_for_json_output(monkeypatch, tmp_path):
+    prompts_file = tmp_path / "prompts.json"
+    prompts_file.write_text(json.dumps([{"prompt": "prompt-0"}]), encoding="utf-8")
+
+    writes: list[tuple[Path, dict, str]] = []
+
+    monkeypatch.setattr(
+        demo_module,
+        "run_demo",
+        lambda *args, **kwargs: {"generations": [{"text": "11 12"}], "statistics": {}, "model_params": {}},
+    )
+    monkeypatch.setattr(
+        demo_module,
+        "_write_json_output",
+        lambda path, payload, label: writes.append((Path(path), payload, label)),
+    )
+    monkeypatch.setattr(demo_module, "_is_primary_artifact_writer", lambda: False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["demo.py", "--prompts-file", str(prompts_file), "--model-path", str(tmp_path / "model")],
+    )
+
+    demo_module.main()
+
+    assert writes == []
+
+    monkeypatch.setattr(demo_module, "_is_primary_artifact_writer", lambda: True)
+    demo_module.main()
+
+    assert writes == [
+        (
+            prompts_file.parent / f"{prompts_file.stem}_output.json",
+            {
+                "prompts": ["prompt-0"],
+                "generations": [{"index": 1, "prompt": "prompt-0", "text": "11 12"}],
+                "statistics": {},
+                "model_params": {},
+            },
+            "Results",
+        )
+    ]
 
 
 def test_run_demo_sizes_sampling_params_from_max_users_per_row(monkeypatch, tmp_path):

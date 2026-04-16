@@ -4,16 +4,16 @@
 import itertools
 import math
 import os
+from contextlib import contextmanager
 from itertools import takewhile
 from pathlib import Path
 from types import NoneType
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs
-from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3.utils.config_dataclass import ConfigWeight, DeepseekSamplingArgs, SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -32,6 +32,20 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 # So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
 # do sampling on host.
 DEFAULT_SAMPLING_TOP_K = 32
+
+_LEGACY_SAVED_WEIGHT_EMISSION_DEPTH = 0
+
+
+@contextmanager
+def emit_legacy_saved_weights():
+    """Temporarily make ``shard_and_save()`` dump tensors to disk and return ``SavedWeight`` records."""
+
+    global _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH
+    _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH += 1
+    try:
+        yield
+    finally:
+        _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH -= 1
 
 
 def get_fabric_config():
@@ -606,11 +620,11 @@ def get_state_dicts(
     return torch.stack(tensors, dim=concat_dim)
 
 
-def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
+def sub_state_dict(state_dict: Mapping[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
-    # Preserve laziness when applicable by returning a LazyStateDict view.
-    if isinstance(state_dict, LazyStateDict):
-        return state_dict.view_with_prefix(prefix, num_layers)
+    view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+    if callable(view_with_prefix):
+        return view_with_prefix(prefix, num_layers)
     if num_layers is None:
         return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     else:
@@ -631,6 +645,19 @@ def sub_state_dicts(
 
 
 TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
+def _get_relative_cache_path(path: Path) -> str | None:
+    """Extract the cache-relative path after the ``mesh_<rows>x<cols>`` directory."""
+
+    path_str = str(path)
+    mesh_idx = path_str.find("mesh_")
+    if mesh_idx == -1:
+        return None if path.is_absolute() else path_str
+    parts = path_str[mesh_idx:].split("/", 1)
+    if len(parts) < 2:
+        return None if path.is_absolute() else path_str
+    return parts[1]
 
 
 def shard_and_save(
@@ -708,6 +735,25 @@ def shard_and_save(
             memory_config=memory_config,
             padding_needed=padding_needed,
         )
+
+    if _LEGACY_SAVED_WEIGHT_EMISSION_DEPTH > 0:
+        cache_path = (
+            path
+            if path.name.endswith(TENSOR_CACHE_EXTENSION)
+            else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        try:
+            ttnn.dump_tensor(cache_path, ttnn_tensor)
+            return SavedWeight(Path(relative_cache_path), ttnn_tensor.memory_config())
+        finally:
+            try:
+                ttnn.deallocate(ttnn_tensor)
+            except Exception:
+                pass
 
     return ttnn_tensor
 
@@ -958,7 +1004,7 @@ def _shard_device_impl(
                 tensor = torch.nn.functional.pad(tensor, (0, pad_last, 0, pad_second_to_last), mode="constant", value=0)
     if shard_dims[0] is None and shard_dims[1] is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+    elif shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dims[0])
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)

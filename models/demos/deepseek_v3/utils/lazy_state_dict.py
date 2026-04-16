@@ -47,6 +47,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         _num_layers: Optional[int] = None,
         _file_handles: Optional[dict[str, object]] = None,
         _stacked_num_experts: Optional[dict[str, int]] = None,
+        _pinned_cache_keys: Optional[set[str]] = None,
     ):
         self._model_path = Path(model_path)
         self._base_prefix = base_prefix
@@ -82,6 +83,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         # Cache of open safetensors handles keyed by filename to avoid repeated mmaps
         self._file_handles: dict[str, object] = {} if _file_handles is None else _file_handles
         self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
+        self._pinned_cache_keys: set[str] = set() if _pinned_cache_keys is None else _pinned_cache_keys
         # Cache stacked expert counts so iteration can expose logical expert aliases
         # without materializing the full stacked tensors.
         self._stacked_num_experts: dict[str, int] = {} if _stacked_num_experts is None else _stacked_num_experts
@@ -106,6 +108,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         if self._cache:
             self._cache.clear()
+        if self._pinned_cache_keys:
+            self._pinned_cache_keys.clear()
 
     def evict(self, key: str) -> None:
         """
@@ -115,17 +119,21 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         self._cache.pop(full_key, None)
+        self._pinned_cache_keys.discard(full_key)
         alias = self._resolve_stacked_expert_alias(full_key)
         if alias is None:
             return
         stacked_full_key, _ = alias
-        if stacked_full_key in self._cache:
+        if stacked_full_key in self._pinned_cache_keys:
             return
         for cached_key in self._cache:
+            if cached_key == stacked_full_key:
+                continue
             cached_alias = self._resolve_stacked_expert_alias(cached_key)
             if cached_alias is not None and cached_alias[0] == stacked_full_key:
                 return
         self._cache.pop(stacked_full_key, None)
+        self._pinned_cache_keys.discard(stacked_full_key)
 
     def close(self) -> None:
         """
@@ -145,6 +153,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         # Clear cached tensors and accounting to avoid stale references to mmaps
         if self._cache:
             self._cache.clear()
+        if self._pinned_cache_keys:
+            self._pinned_cache_keys.clear()
 
     def __del__(self):
         self.close()
@@ -184,6 +194,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             _num_layers=child_num_layers,
             _file_handles=self._file_handles,
             _stacked_num_experts=self._stacked_num_experts,
+            _pinned_cache_keys=self._pinned_cache_keys,
         )
 
     def _full_key(self, key: str) -> str:
@@ -198,8 +209,15 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             return None
         return stacked_full_key, int(match.group("expert"))
 
-    def _load_tensor(self, full_key: str) -> torch.Tensor:
+    def _exposes_physical_key(self, full_key: str) -> bool:
+        if _STACKED_EXPERT_FULL_RE.match(full_key) is None:
+            return True
+        return "experts_stacked." in self._base_prefix
+
+    def _load_tensor(self, full_key: str, *, pin_cache: bool) -> torch.Tensor:
         if full_key in self._cache:
+            if pin_cache:
+                self._pinned_cache_keys.add(full_key)
             return self._cache[full_key]
         if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
             raise KeyError(full_key)
@@ -212,6 +230,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         f = self._get_handle(filename)
         tensor = f.get_tensor(full_key)
         self._cache[full_key] = tensor
+        if pin_cache:
+            self._pinned_cache_keys.add(full_key)
         return tensor
 
     def _passes_layer_filter(self, full_key: str) -> bool:
@@ -255,9 +275,19 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         if full_key in self._cache:
-            return self._cache[full_key]
-        if full_key in self._full_to_file and self._passes_layer_filter(full_key):
-            return self._load_tensor(full_key)
+            if (
+                full_key in self._full_to_file
+                and self._passes_layer_filter(full_key)
+                and self._exposes_physical_key(full_key)
+            ):
+                self._pinned_cache_keys.add(full_key)
+                return self._cache[full_key]
+        if (
+            full_key in self._full_to_file
+            and self._passes_layer_filter(full_key)
+            and self._exposes_physical_key(full_key)
+        ):
+            return self._load_tensor(full_key, pin_cache=True)
 
         alias = self._resolve_stacked_expert_alias(full_key)
         if alias is None:
@@ -266,7 +296,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         stacked_full_key, expert_idx = alias
         if expert_idx >= self._get_stacked_num_experts(stacked_full_key):
             raise KeyError(key)
-        stacked_tensor = self._load_tensor(stacked_full_key)
+        stacked_tensor = self._load_tensor(stacked_full_key, pin_cache=False)
         tensor = stacked_tensor[expert_idx]
         self._cache[full_key] = tensor
         return tensor
@@ -278,7 +308,11 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         if not isinstance(key, str):
             raise TypeError(f"Key must be a string but got {type(key)}")
         full_key = self._full_key(key)
-        if full_key in self._full_to_file and self._passes_layer_filter(full_key):
+        if (
+            full_key in self._full_to_file
+            and self._passes_layer_filter(full_key)
+            and self._exposes_physical_key(full_key)
+        ):
             return True
         alias = self._resolve_stacked_expert_alias(full_key)
         if alias is None:
@@ -295,11 +329,15 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             if not self._passes_layer_filter(full_key):
                 continue
             if _STACKED_EXPERT_FULL_RE.match(full_key):
+                if "experts_stacked." in base:
+                    if full_key.startswith(base):
+                        yield full_key[len(base) :]
+                    continue
                 for alias_full_key in self._iter_stacked_expert_aliases(full_key):
                     # Prefer the logical HF-compatible expert names when iterating.
-                    # This keeps strict reference-model load_state_dict() working
-                    # while direct stacked-key lookups remain available through
-                    # __getitem__ and __contains__.
+                    # This keeps strict reference-model load_state_dict() working.
+                    # Physical stacked tensors remain available through explicit
+                    # `experts_stacked.` subviews.
                     if alias_full_key in self._full_to_file:
                         continue
                     if alias_full_key.startswith(base):
