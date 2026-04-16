@@ -110,9 +110,10 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
 @pytest.mark.parametrize("input_shape", [(2,), (3, 10), (6, 3, 60), (1, 11, 67, 77)])
 @pytest.mark.parametrize("dim", [None, 0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("force_implicit_pad", [False, True])
 # prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_nanobind.hpp
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_prod(device, input_shape, dim, keepdim, dtype):
+def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
     torch.manual_seed(0)
 
     rank = len(input_shape)
@@ -140,8 +141,11 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=dtype,
-        pad_value=1.0,
     )
+
+    # Padding forced to 0 would annihilate a product if used; prod must still match torch after host-side pad reset
+    if force_implicit_pad:
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, 0.0)
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
