@@ -293,13 +293,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // representative of every device in the mesh.
 
 void ValidateNodeBounds(const ProgramSpec& spec) {
-    if (is_gen2_arch()) {
-        // These checks break the Quasar mock device.
-        // Disable for now.
-        // TODO: re-enable with a PR that adds core_descriptor YAMLs
-        //       to the tests build :(
-        return;
-    }
 
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
