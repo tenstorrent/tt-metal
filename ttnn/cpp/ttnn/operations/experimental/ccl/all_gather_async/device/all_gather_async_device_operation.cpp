@@ -24,7 +24,7 @@ namespace ttnn::experimental::prim {
 namespace {
 
 bool via_broadcast_has_contiguous_output_slice(const Tensor& input_tensor, int32_t gather_dim) {
-    const auto padded_shape = input_tensor.padded_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
     std::vector<uint32_t> page_extents(padded_shape.begin(), padded_shape.end());
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         TT_FATAL(page_extents.size() >= 2, "Broadcast all-gather requires rank >= 2 for tile layout");
