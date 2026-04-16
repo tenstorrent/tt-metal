@@ -377,6 +377,9 @@ struct MatmulExpertCompressedDRAM {
                 if constexpr (CTArgs::accum_experts) {
                     // Packer L1 accumulation: each expert packs per_core_n tiles sequentially.
                     // Each expert uses a distinct activation at its index-tensor position.
+                    constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
+                    constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
+
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
                         cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
@@ -392,12 +395,12 @@ struct MatmulExpertCompressedDRAM {
                         bool fmt_waited = false;
                         uint32_t addr_in0_expert = addr_in0 + dram_act_tile_offset[i] * in0_tile_size;
 
-                        for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
+                        for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
                             tile_regs_acquire();
                             uint32_t addr_in0_subblock = addr_in0_expert;
 
                             for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                                cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                                cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
                                 if (!fmt_waited) {
                                     cb_wait_front(CTArgs::cb_fmt, 1);
@@ -428,13 +431,15 @@ struct MatmulExpertCompressedDRAM {
                                 }
 
                                 addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
-                                fmt_tile_offset += CTArgs::subblock_k;
-                                cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
+                                fmt_tile_offset += tiles_per_block;
+                                cb_pop_front(CTArgs::cb_in1, tiles_per_block);
                             }
 
                             tile_regs_commit();
                             tile_regs_wait();
-                            pack_tile(0, CTArgs::cb_out);
+                            for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                pack_tile(sn, CTArgs::cb_out);
+                            }
                             tile_regs_release();
                         }
 
