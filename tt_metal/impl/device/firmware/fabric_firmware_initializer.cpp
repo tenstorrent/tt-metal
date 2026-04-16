@@ -207,6 +207,76 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
 
+    // Fix B: Poll each master ETH router for EDMStatus::TERMINATED before returning.
+    // Without this poll, the next init's configure_fabric_cores() can clear L1 and load new
+    // firmware while old firmware is still running — leaving ERISCs in a zombie state
+    // (edm_status = RUNNING) that confuses the next session's handshake.
+    {
+        const auto router_sync_address = builder_ctx.get_fabric_router_sync_address_and_status().first;
+        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        constexpr uint32_t teardown_timeout_ms = 5000;
+        constexpr uint32_t kSpinsBetweenSleeps = 64;
+
+        for (auto* dev : devices_) {
+            if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                continue;
+            }
+            const auto master_chan = builder_ctx.get_fabric_master_router_chan(dev->id());
+            auto master_logical_core =
+                cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+
+            std::vector<uint32_t> status_buf(1, 0);
+            const auto start = std::chrono::steady_clock::now();
+            uint32_t spin_counter = 0;
+            bool terminated = false;
+            while (true) {
+                detail::ReadFromDeviceL1(dev, master_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+                if (status_buf[0] == terminated_val) {
+                    terminated = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsed > teardown_timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
+            }
+
+            if (!terminated) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: Device {} master ETH router (chan={}) did not "
+                    "terminate within {}ms (status=0x{:08x}) — asserting ERISC reset to prevent "
+                    "stale firmware racing with next init's L1 clear",
+                    dev->id(),
+                    master_chan,
+                    teardown_timeout_ms,
+                    status_buf[0]);
+                try {
+                    const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        dev->id(), master_logical_core, CoreType::ETH);
+                    cluster_.assert_risc_reset_at_core(
+                        tt_cxy_pair(dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
+                        "Device {} master chan={}: {}",
+                        dev->id(),
+                        master_chan,
+                        e.what());
+                }
+            }
+        }
+    }
+
     devices_.clear();
     initialized_.clear();
     init_done.erase(key);
@@ -218,6 +288,108 @@ void FabricFirmwareInitializer::post_teardown() {
 }
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
+
+// Fix A/C/D: Detect stale ERISC router firmware on ALL active channels for a device and
+// terminate/reset them before configure_fabric_cores() clears L1 and loads new firmware.
+//
+// Checks every active fabric ETH channel (not just the master) because all channels run
+// independent router firmware instances.  For each stale channel:
+//   1. Send TERMINATE to termination_signal_address on that ERISC core's L1.
+//   2. Poll edm_status_address for EDMStatus::TERMINATED (up to 2 s).
+//   3. On timeout: assert RISC reset to halt the stale firmware.
+//   4. Deassert RISC reset (Fix D) so the newly-loaded firmware image can boot.
+void FabricFirmwareInitializer::terminate_stale_erisc_routers(
+    Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const {
+    if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+        return;
+    }
+
+    const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
+    const auto [term_addr, term_signal] = builder_context.get_fabric_router_termination_address_and_signal();
+    constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+    constexpr uint32_t stale_timeout_ms = 2000;
+    constexpr uint32_t kSpinsBetweenSleeps = 64;
+
+    const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
+    const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        const auto eth_logical_core =
+            cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+        std::vector<uint32_t> status_buf(1, 0);
+        detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+
+        if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
+            continue;  // clean — nothing to do
+        }
+
+        log_warning(
+            tt::LogMetal,
+            "terminate_stale_erisc_routers: Device {} ETH chan={} edm_status=0x{:08x} "
+            "(expected 0 or TERMINATED=0x{:08x}) — stale firmware running; sending TERMINATE",
+            dev->id(),
+            eth_chan_id,
+            status_buf[0],
+            terminated_val);
+
+        std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
+        detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+
+        // Poll for TERMINATED
+        const auto stale_start = std::chrono::steady_clock::now();
+        uint32_t spin_counter = 0;
+        bool terminated_ok = false;
+        while (true) {
+            detail::ReadFromDeviceL1(dev, eth_logical_core, router_sync_address, 4, status_buf, CoreType::ETH);
+            if (status_buf[0] == terminated_val) {
+                terminated_ok = true;
+                break;
+            }
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stale_start)
+                    .count();
+            if (elapsed > stale_timeout_ms) {
+                break;
+            }
+            if (++spin_counter >= kSpinsBetweenSleeps) {
+                spin_counter = 0;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            } else {
+                ttsl::pause();
+            }
+        }
+
+        if (!terminated_ok) {
+            log_warning(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Stale ETH firmware on Device {} chan={} did not "
+                "terminate within {}ms — asserting then deasserting ERISC reset",
+                dev->id(),
+                eth_chan_id,
+                stale_timeout_ms);
+            try {
+                const auto virtual_eth_coord =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        dev->id(), eth_logical_core, CoreType::ETH);
+                const tt_cxy_pair core_pair(dev->id(), virtual_eth_coord);
+                cluster_.assert_risc_reset_at_core(core_pair, tt::umd::RiscType::ALL);
+                // Fix D: deassert reset so the already-loaded firmware image can actually boot.
+                // configure_fabric_cores() will have written the new firmware to L1 before
+                // wait_for_fabric_router_sync() calls us; without deassert the ERISC stays
+                // halted and the handshake poll deadlocks.
+                cluster_.deassert_risc_reset_at_core(core_pair, tt::umd::RiscType::ALL);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: reset failed on Device {} chan={}: {}",
+                    dev->id(),
+                    eth_chan_id,
+                    e.what());
+            }
+        }
+    }
+}
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
     std::vector<std::shared_future<Device*>> events;
@@ -237,10 +409,18 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         return;
     }
 
+    const auto& builder_context = control_plane_.get_fabric_context().get_builder_context();
+
     size_t configured_count = 0;
     for (const auto& event : events) {
         auto* dev = event.get();
         if (dev) {
+            // Fix A: probe for stale ERISC firmware on all active channels BEFORE
+            // configure_fabric_cores() clears L1 and loads the new firmware image.
+            // This gives old firmware a chance to terminate cleanly rather than being
+            // interrupted mid-execution by an L1 overwrite.
+            terminate_stale_erisc_routers(dev, builder_context);
+
             dev->configure_fabric();
             configured_count++;
         }
@@ -272,60 +452,13 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
 
-        // Q1: Stale-firmware probe.
-        // configure_fabric_cores() clears edm_status_address to 0 before loading the new
-        // firmware image.  If we read a non-zero, non-TERMINATED value here the ETH core
-        // was NOT cleanly reset between sessions (previous firmware is still running).
-        // Send TERMINATE and wait up to 2 s; fall back to ERISC hard-reset if it won't stop.
-        {
-            constexpr uint32_t terminated_val =
-                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-            detail::ReadFromDeviceL1(
-                dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-            if (master_router_status[0] != 0 && master_router_status[0] != terminated_val) {
-                log_warning(
-                    tt::LogMetal,
-                    "wait_for_fabric_router_sync: Device {} ETH master chan={} edm_status=0x{:08x} "
-                    "before new firmware handshake (expected 0 or TERMINATED=0x{:08x}) — "
-                    "stale firmware detected; sending TERMINATE",
-                    dev->id(),
-                    master_router_chan,
-                    master_router_status[0],
-                    terminated_val);
-                auto [term_addr, term_signal] =
-                    builder_context.get_fabric_router_termination_address_and_signal();
-                std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
-                detail::WriteToDeviceL1(
-                    dev, master_router_logical_core, term_addr, term_buf, CoreType::ETH);
-                constexpr uint32_t stale_timeout_ms = 2000;
-                auto stale_start = std::chrono::steady_clock::now();
-                while (true) {
-                    detail::ReadFromDeviceL1(
-                        dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-                    if (master_router_status[0] == terminated_val) {
-                        break;
-                    }
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - stale_start)
-                                       .count();
-                    if (elapsed > stale_timeout_ms) {
-                        log_warning(
-                            tt::LogMetal,
-                            "wait_for_fabric_router_sync: Stale ETH firmware on Device {} did not "
-                            "terminate within {}ms — asserting ERISC reset",
-                            dev->id(),
-                            stale_timeout_ms);
-                        const auto virtual_eth_coord =
-                            cluster_.get_virtual_coordinate_from_logical_coordinates(
-                                dev->id(), master_router_logical_core, CoreType::ETH);
-                        cluster_.assert_risc_reset_at_core(
-                            tt_cxy_pair(dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
-                        break;
-                    }
-                }
-                master_router_status[0] = 0;  // reset for the main handshake poll below
-            }
-        }
+        // Fix C/D (defence-in-depth): after configure_fabric_cores() loaded the new firmware,
+        // check again for any channels that are still running stale firmware and terminate them.
+        // terminate_stale_erisc_routers() already ran before configure (Fix A), but a channel
+        // that was clean then might have raced to a stale state, and this catches any that
+        // configure_fabric_cores() may have missed.  Also handles any channels not covered by
+        // the pre-configure probe (e.g. non-active-in-new-config channels from prior sessions).
+        terminate_stale_erisc_routers(dev, builder_context);
 
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
