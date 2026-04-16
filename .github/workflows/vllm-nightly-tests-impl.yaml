@@ -107,7 +107,6 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
-              "sampling-test-filter": "not test_bad_words",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -168,7 +167,7 @@ jobs:
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "override-tt-config": "{\"trace_region_size\": 67000000}",
+              "override-tt-config": "{\"trace_region_size\": 71000000}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
