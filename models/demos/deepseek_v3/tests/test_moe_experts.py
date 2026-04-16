@@ -4,6 +4,7 @@
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -193,6 +194,48 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < 0.98"
+
+
+def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    class _FakeMeshDevice:
+        shape = (1, 1)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    class _ViewableStateDict(dict):
+        def view_with_prefix(self, prefix: str, num_layers: int | None = None):
+            return {k[len(prefix) :]: v for k, v in self.items() if k.startswith(prefix)}
+
+    state_dict = _ViewableStateDict(
+        {
+            "experts_stacked.gate_proj.weight": torch.arange(12, dtype=torch.bfloat16).reshape(2, 2, 3),
+            "experts.0.gate_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.gate_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+            "experts.0.down_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.down_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+            "experts.0.up_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.up_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+        }
+    )
+
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
+        lambda state_dict, key, dtype=None: state_dict[key],
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.shard_and_save",
+        lambda path, tensor, *args, **kwargs: tensor,
+    )
+    monkeypatch.setattr(TTExperts, "_warned_legacy_expert_checkpoint", False)
+
+    with pytest.raises(ValueError, match="mixes stacked and legacy expert weights"):
+        TTExperts.convert_weights(
+            SimpleNamespace(n_routed_experts=2),
+            (state_dict,),
+            tmp_path,
+            _FakeMeshDevice(),
+        )
 
 
 if __name__ == "__main__":

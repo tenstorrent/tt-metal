@@ -498,6 +498,7 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         dtype: ttnn.DataType,
         memory_config: ttnn.MemoryConfig,
+        transpose_b: bool = False,
         compute_kernel_config=None,
     ) -> ttnn.Tensor:
         """Linear fallback operation using torch.nn.functional.linear"""
@@ -515,7 +516,7 @@ class MoEGate(AbstractModule):
         )[0][0]
 
         torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
+        torch_weight_2d = torch_weight if transpose_b else torch_weight.T
 
         # use torch linear: input @ weight.T
         torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)

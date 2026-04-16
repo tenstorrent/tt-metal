@@ -466,6 +466,22 @@ def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Pa
         _ = state[missing_expert_key]
 
 
+def test_lazy_state_dict_rejects_mixed_expert_checkpoint(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    tensors = {
+        "model.layers.3.mlp.experts_stacked.gate_proj.weight": torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4),
+        "model.layers.3.mlp.experts.0.gate_proj.weight": torch.ones((2, 4), dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(tensors, str(shard))
+    _write_index(model_dir, {key: shard.name for key in tensors})
+
+    with pytest.raises(ValueError, match="mixes legacy per-expert and stacked expert tensors"):
+        load_state_dict(model_dir, "")
+
+
 def test_stacked_expert_iteration_exposes_logical_aliases(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir(parents=True, exist_ok=True)

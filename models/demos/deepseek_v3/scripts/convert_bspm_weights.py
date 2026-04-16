@@ -339,6 +339,15 @@ def _validate_stacked_dequantized_checkpoint(model_path: Path, hf_config, *, num
     with index_path.open("r", encoding="utf-8") as handle:
         weight_map = json.load(handle)["weight_map"]
 
+    from models.demos.deepseek_v3.utils.hf_model_utils import _validate_no_mixed_expert_weight_layouts
+
+    _validate_no_mixed_expert_weight_layouts(weight_map, model_path)
+    if any(key.endswith("_scale_inv") for key in weight_map):
+        raise ValueError(
+            f"Checkpoint at {model_path} still contains quantized '*_scale_inv' tensors. "
+            "Pass a fully dequantized stacked checkpoint."
+        )
+
     first_k_dense = getattr(hf_config, "first_k_dense_replace", 3)
     expected_experts = getattr(hf_config, "n_routed_experts", None)
     num_layers = hf_config.num_hidden_layers if num_layers is None else num_layers

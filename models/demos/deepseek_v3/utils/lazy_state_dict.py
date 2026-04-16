@@ -64,6 +64,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             except Exception as e:
                 raise ValueError(f"Failed to parse index JSON at {index_path}: {e}") from e
             self._full_to_file = dict(index_obj["weight_map"])
+            from models.demos.deepseek_v3.utils.hf_model_utils import _validate_no_mixed_expert_weight_layouts
+
+            _validate_no_mixed_expert_weight_layouts(self._full_to_file, self._model_path)
             elapsed_ms = (perf_counter() - t0) * 1e3
 
             num_keys = len(self._full_to_file)

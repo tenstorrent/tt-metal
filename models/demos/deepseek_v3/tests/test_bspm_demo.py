@@ -544,6 +544,12 @@ def test_resolve_stacked_dequantized_model_path_requires_stacked_checkpoint(tmp_
 
     source_model_path = tmp_path / "DeepSeek-R1-0528"
     source_model_path.mkdir(parents=True, exist_ok=True)
+    shard = source_model_path / "model-00001-of-00001.safetensors"
+    quantized_tensors = {
+        "model.layers.3.mlp.experts.0.gate_proj.weight_scale_inv": torch.ones((1, 1), dtype=torch.float32),
+    }
+    safetensors.torch.save_file(quantized_tensors, str(shard))
+    _write_index(source_model_path, {key: shard.name for key in quantized_tensors})
 
     with pytest.raises(FileNotFoundError, match="Stacked dequantized DeepSeek checkpoint not found"):
         _resolve_stacked_dequantized_model_path(
@@ -596,6 +602,50 @@ def test_resolve_stacked_dequantized_model_path_rejects_truncated_stacked_checkp
     with pytest.raises(ValueError, match="has invalid stacked expert tensors"):
         _resolve_stacked_dequantized_model_path(
             truncated_stacked_path,
+            types.SimpleNamespace(first_k_dense_replace=3, num_hidden_layers=4, n_routed_experts=2),
+        )
+
+
+def test_resolve_stacked_dequantized_model_path_rejects_mixed_expert_checkpoint(tmp_path: Path):
+    from models.demos.deepseek_v3.scripts.convert_bspm_weights import _resolve_stacked_dequantized_model_path
+
+    mixed_path = tmp_path / "custom-stacked-export"
+    mixed_path.mkdir(parents=True, exist_ok=True)
+    shard = mixed_path / "model-00001-of-00001.safetensors"
+    tensors = {
+        "model.layers.3.mlp.experts_stacked.gate_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.3.mlp.experts_stacked.down_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.3.mlp.experts_stacked.up_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.3.mlp.experts.0.gate_proj.weight": torch.ones((32, 32), dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(tensors, str(shard))
+    _write_index(mixed_path, {key: shard.name for key in tensors})
+
+    with pytest.raises(ValueError, match="mixes legacy per-expert and stacked expert tensors"):
+        _resolve_stacked_dequantized_model_path(
+            mixed_path,
+            types.SimpleNamespace(first_k_dense_replace=3, num_hidden_layers=4, n_routed_experts=2),
+        )
+
+
+def test_resolve_stacked_dequantized_model_path_rejects_quantized_stacked_checkpoint(tmp_path: Path):
+    from models.demos.deepseek_v3.scripts.convert_bspm_weights import _resolve_stacked_dequantized_model_path
+
+    stacked_path = tmp_path / "custom-stacked-export"
+    stacked_path.mkdir(parents=True, exist_ok=True)
+    shard = stacked_path / "model-00001-of-00001.safetensors"
+    tensors = {
+        "model.layers.3.mlp.experts_stacked.gate_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.3.mlp.experts_stacked.down_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.3.mlp.experts_stacked.up_proj.weight": torch.ones((2, 32, 32), dtype=torch.bfloat16),
+        "model.layers.0.self_attn.q_proj.weight_scale_inv": torch.ones((1, 1), dtype=torch.float32),
+    }
+    safetensors.torch.save_file(tensors, str(shard))
+    _write_index(stacked_path, {key: shard.name for key in tensors})
+
+    with pytest.raises(ValueError, match="still contains quantized '\\*_scale_inv' tensors"):
+        _resolve_stacked_dequantized_model_path(
+            stacked_path,
             types.SimpleNamespace(first_k_dense_replace=3, num_hidden_layers=4, n_routed_experts=2),
         )
 

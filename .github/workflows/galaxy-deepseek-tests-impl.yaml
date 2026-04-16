@@ -154,6 +154,11 @@ jobs:
           echo "Copying test_io_cache from CI directory..."
           rm -rf "${NEW_DIR}/test_io_cache"
           cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
+          if [[ -d "${CACHE_BASE}/CI/tests_cache" ]]; then
+            echo "Copying tests_cache from CI directory..."
+            rm -rf "${NEW_DIR}/tests_cache"
+            cp -r "${CACHE_BASE}/CI/tests_cache" "${NEW_DIR}/tests_cache"
+          fi
           chmod -R a+rwX "${NEW_DIR}"
           echo "DEEPSEEK_V3_CACHE=${NEW_DIR}" >> $GITHUB_ENV
       - name: Run DeepSeek unit tests
@@ -166,7 +171,11 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: 10
         run: |
-          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
+          if [[ -d "$DEEPSEEK_V3_CACHE/tests_cache" ]]; then
+            python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache"
+          else
+            echo "No DeepSeek tests_cache present under $DEEPSEEK_V3_CACHE; skipping cache validation."
+          fi
       - name: Run DeepSeek module tests
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}

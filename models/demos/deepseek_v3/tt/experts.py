@@ -54,10 +54,15 @@ class Experts(AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
+        view_with_prefix = getattr(state_dict, "view_with_prefix", None)
+        stacked_state_dict = view_with_prefix("experts_stacked.") if callable(view_with_prefix) else state_dict
+        stacked_lookup_names = {f"{hf_name}.weight" for hf_name in ("gate_proj", "down_proj", "up_proj")}
+        if not callable(view_with_prefix):
+            stacked_lookup_names = {f"experts_stacked.{hf_name}" for hf_name in stacked_lookup_names}
+        present_stacked_lookup_names = {name for name in stacked_lookup_names if name in stacked_state_dict}
+
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
             stacked_weight_name = f"experts_stacked.{hf_name}.weight"
-            view_with_prefix = getattr(state_dict, "view_with_prefix", None)
-            stacked_state_dict = view_with_prefix("experts_stacked.") if callable(view_with_prefix) else state_dict
             stacked_lookup_name = f"{hf_name}.weight" if callable(view_with_prefix) else stacked_weight_name
 
             if stacked_lookup_name in stacked_state_dict:
@@ -74,6 +79,13 @@ class Experts(AbstractModule):
                         f"{hf_config.n_routed_experts} experts, got {stacked_weight.shape[0]}"
                     )
                 return stacked_weight.contiguous()
+
+            if present_stacked_lookup_names:
+                raise ValueError(
+                    f"Checkpoint mixes stacked and legacy expert weights: missing '{stacked_weight_name}' while "
+                    "other stacked expert tensors are present. Regenerate the stacked checkpoint so all expert "
+                    "projections are exported together."
+                )
 
             if not cls._warned_legacy_expert_checkpoint:
                 logger.warning(

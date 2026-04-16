@@ -35,6 +35,9 @@ STACKED_EXPERT_WEIGHT_PATTERN = re.compile(
     r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
 )
 STACKED_EXPERT_ALIAS_PATTERN = STACKED_EXPERT_WEIGHT_PATTERN
+STACKED_EXPERT_TENSOR_PATTERN = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts_stacked\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
 
 
 def load_tokenizer(model_path: str):
@@ -61,6 +64,17 @@ def index_model_weights(model_path: str | Path) -> Mapping[str, torch.Tensor]:
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
     return LazyStateDict(Path(model_path))
+
+
+def _validate_no_mixed_expert_weight_layouts(weight_map: Mapping[str, str], model_path: Path) -> None:
+    has_legacy_expert_weights = any(STACKED_EXPERT_WEIGHT_PATTERN.match(key) for key in weight_map)
+    has_stacked_expert_weights = any(STACKED_EXPERT_TENSOR_PATTERN.match(key) for key in weight_map)
+    if has_legacy_expert_weights and has_stacked_expert_weights:
+        raise ValueError(
+            f"Checkpoint at {model_path} mixes legacy per-expert and stacked expert tensors. "
+            "Use either a fully legacy dequantized checkpoint or a fully stacked dequantized checkpoint, "
+            "not both."
+        )
 
 
 def materialize_model_weights(
@@ -241,7 +255,9 @@ def _load_model_weight_map(model_path: Path) -> tuple[dict[str, str], dict[str, 
     if index_path.is_file():
         with index_path.open("r", encoding="utf-8") as handle:
             index_obj = json.load(handle)
-        return dict(index_obj["weight_map"]), dict(index_obj.get("metadata", {}))
+        weight_map = dict(index_obj["weight_map"])
+        _validate_no_mixed_expert_weight_layouts(weight_map, model_path)
+        return weight_map, dict(index_obj.get("metadata", {}))
 
     weight_map: dict[str, str] = {}
     for shard_path in sorted(model_path.glob("*.safetensors")):
@@ -250,6 +266,7 @@ def _load_model_weight_map(model_path: Path) -> tuple[dict[str, str], dict[str, 
                 weight_map[key] = shard_path.name
     if not weight_map:
         raise FileNotFoundError(f"No `.safetensors` shards found in {model_path}")
+    _validate_no_mixed_expert_weight_layouts(weight_map, model_path)
     return weight_map, {}
 
 
@@ -421,12 +438,13 @@ def save_dequantized_hf_checkpoint(
     block_shape = _get_weight_block_shape_from_quant_config(config_obj.get("quantization_config"))
     weight_map, metadata = _load_model_weight_map(source_model_path)
     stacked_expert_keys = _group_stacked_expert_keys(weight_map) if stack_experts else {}
-    _validate_stacked_expert_groups(
-        stacked_expert_keys,
-        expected_experts=config_obj.get("n_routed_experts"),
-        first_moe_layer=config_obj.get("first_k_dense_replace"),
-        num_hidden_layers=config_obj.get("num_hidden_layers"),
-    )
+    if stack_experts:
+        _validate_stacked_expert_groups(
+            stacked_expert_keys,
+            expected_experts=config_obj.get("n_routed_experts"),
+            first_moe_layer=config_obj.get("first_k_dense_replace"),
+            num_hidden_layers=config_obj.get("num_hidden_layers"),
+        )
     skipped_weight_keys = {
         source_key
         for projections in stacked_expert_keys.values()
@@ -522,29 +540,34 @@ def load_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor]
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
     def resolve_weight(name: str) -> torch.Tensor | None:
+        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
+        if match is not None:
+            stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
+            if name in weights_dict and stacked_name in weights_dict:
+                raise RuntimeError(
+                    f"Checkpoint mixes legacy expert tensor '{name}' with stacked tensor '{stacked_name}'."
+                )
+            if name in weights_dict:
+                return weights_dict[name]
+            if stacked_name not in weights_dict:
+                return None
+
+            stacked_weight = weights_dict[stacked_name]
+            if stacked_weight.ndim != 3:
+                raise RuntimeError(
+                    f"Expected stacked expert tensor '{stacked_name}' to have rank 3, got {stacked_weight.ndim}"
+                )
+            expert_idx = int(match.group("expert"))
+            if expert_idx >= stacked_weight.shape[0]:
+                raise RuntimeError(
+                    f"Expected stacked expert tensor '{stacked_name}' to contain expert {expert_idx}, "
+                    f"got {stacked_weight.shape[0]} experts"
+                )
+            return stacked_weight[expert_idx]
+
         if name in weights_dict:
             return weights_dict[name]
-
-        match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
-        if match is None:
-            return None
-
-        stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
-        if stacked_name not in weights_dict:
-            return None
-
-        stacked_weight = weights_dict[stacked_name]
-        if stacked_weight.ndim != 3:
-            raise RuntimeError(
-                f"Expected stacked expert tensor '{stacked_name}' to have rank 3, got {stacked_weight.ndim}"
-            )
-        expert_idx = int(match.group("expert"))
-        if expert_idx >= stacked_weight.shape[0]:
-            raise RuntimeError(
-                f"Expected stacked expert tensor '{stacked_name}' to contain expert {expert_idx}, "
-                f"got {stacked_weight.shape[0]} experts"
-            )
-        return stacked_weight[expert_idx]
+        return None
 
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
@@ -570,12 +593,17 @@ def unload_weight_from_weights_dict(
     weights_dict: Mapping[str, torch.Tensor],
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
     def has_weight(name: str) -> bool:
-        if name in weights_dict:
-            return True
         match = STACKED_EXPERT_ALIAS_PATTERN.match(name)
-        if match is None:
-            return False
-        return _stacked_expert_weight_name(int(match.group("layer")), match.group("projection")) in weights_dict
+        if match is not None:
+            stacked_name = _stacked_expert_weight_name(int(match.group("layer")), match.group("projection"))
+            if name in weights_dict and stacked_name in weights_dict:
+                raise RuntimeError(
+                    f"Checkpoint mixes legacy expert tensor '{name}' with stacked tensor '{stacked_name}'."
+                )
+            if name in weights_dict:
+                return True
+            return stacked_name in weights_dict
+        return name in weights_dict
 
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
