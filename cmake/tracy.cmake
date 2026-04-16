@@ -52,8 +52,21 @@ endif()
 # Once we update, we can change this
 
 # Build Tracy tools (csvexport and capture) using CMake
+# These are CLI tools that don't need a file selector or GUI dependencies.
+set(NO_FILESELECTOR ON)
+
+# Tracy code has warnings that the parent project's -Werror would make fatal.
+get_directory_property(_parent_compile_opts COMPILE_OPTIONS)
+add_compile_options(-Wno-error)
 add_subdirectory(${TRACY_HOME}/csvexport)
 add_subdirectory(${TRACY_HOME}/capture)
+set_property(
+    DIRECTORY
+    PROPERTY
+        COMPILE_OPTIONS
+            "${_parent_compile_opts}"
+)
+unset(NO_FILESELECTOR)
 
 # Build Tracy profiler WASM project using Emscripten
 add_custom_target(
