@@ -10,12 +10,12 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE, PoolType pool_type, DataFormat format>
+template <PoolType pool_type, DataFormat format>
 inline void llk_math_eltwise_unary_sfpu_reduce_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reduce>(sfpu::init_reduce<pool_type, format>);
 }
 
-template <bool APPROXIMATE, PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
+template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
 inline void llk_math_eltwise_unary_sfpu_reduce(
     uint32_t dst_index, uint32_t ct_dim, uint32_t rt_dim, VectorMode vector_mode) {
     _llk_math_eltwise_unary_sfpu_params_(
