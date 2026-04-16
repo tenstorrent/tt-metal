@@ -69,17 +69,23 @@ void kernel_main() {
                 uint32_t transfer_size_bytes = args[args_idx++];
                 uint32_t bank_id = args[args_idx++];
 
-                uint64_t src_addr_base = 0;
-                if constexpr (is_input_in_dram) {
-                    // For DRAM, use bank_id to compute NOC address from bank_id
-                    src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
-                } else {
-                    src_addr_base = get_noc_addr(src_x, src_y, cb_in_obj.get_read_ptr());
-                }
-
                 // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
-                const uint32_t dst_addr = cb_in_batch_obj.get_write_ptr() + dst_offset_bytes;
-                noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
+                if constexpr (is_input_in_dram) {
+                    // DRAM bank-id path stays on legacy noc_async_read: get_noc_addr_from_bank_id returns a packed
+                    // uint64_t NOC address, and experimental::Noc::async_read does not expose a clean way to
+                    // decompose it back into UnicastEndpoint {noc_x, noc_y, addr} fields.
+                    const uint64_t src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
+                    const uint32_t dst_addr = cb_in_batch_obj.get_write_ptr() + dst_offset_bytes;
+                    noc_async_read(src_addr_base + src_offset_bytes, dst_addr, transfer_size_bytes);
+                } else {
+                    experimental::UnicastEndpoint src_ep;
+                    noc.async_read(
+                        src_ep,
+                        cb_in_batch_obj,
+                        transfer_size_bytes,
+                        {.noc_x = src_x, .noc_y = src_y, .addr = cb_in_obj.get_read_ptr() + src_offset_bytes},
+                        {.offset_bytes = dst_offset_bytes});
+                }
             }
 
             noc.async_read_barrier();

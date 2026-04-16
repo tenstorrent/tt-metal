@@ -73,15 +73,13 @@ void kernel_main() {
     DEVICE_PRINT(
         "num_tiles_per_row_this_core: {} extra_tiles_per_row: {}\n", num_tiles_per_row_this_core, extra_tiles_per_row);
 #endif
-    const uint32_t base_src_buffer_l1_addr = cb_in0.get_write_ptr();
     uint32_t num_tiles_pushed = 0;
     while (tiles_read < num_tiles_per_core) {
         cb_in0.reserve_back(num_tiles_per_barrier);
-        uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
         uint32_t l1_offset = 0;
 #ifdef DEBUG
-        DPRINT << "Src Buffer L1 Addr: " << src_buffer_l1_addr << ENDL();
-        DEVICE_PRINT("Src Buffer L1 Addr: {}\n", src_buffer_l1_addr);
+        DPRINT << "Src Buffer L1 Addr: " << cb_in0.get_write_ptr() << ENDL();
+        DEVICE_PRINT("Src Buffer L1 Addr: {}\n", cb_in0.get_write_ptr());
         DPRINT << "Tiles read " << tiles_read << ", Num tiles pushed: " << num_tiles_pushed << ENDL();
         DEVICE_PRINT("Tiles read {} Num tiles pushed: {}\n", tiles_read, num_tiles_pushed);
 #endif
@@ -107,13 +105,14 @@ void kernel_main() {
             } else {
                 noc.async_read(s0, cb_in0, tile_size, {.page_id = src_stick_id}, {.offset_bytes = l1_offset});
 #ifdef DEBUG
-                DPRINT << "src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr + l1_offset
+                DPRINT << "src_stick_id: " << src_stick_id
+                       << ", src_buffer_l1_addr: " << cb_in0.get_write_ptr() + l1_offset
                        << ", tiles_read: " << tiles_read << "id " << id_per_dim[0] << "," << id_per_dim[1] << ","
                        << id_per_dim[2] << "," << id_per_dim[3] << ENDL();
                 DEVICE_PRINT(
                     "src_stick_id: {}, src_buffer_l1_addr: {}, tiles_read: {}, id {} {} {} {}\n",
                     src_stick_id,
-                    src_buffer_l1_addr + l1_offset,
+                    cb_in0.get_write_ptr() + l1_offset,
                     tiles_read,
                     id_per_dim[0],
                     id_per_dim[1],
