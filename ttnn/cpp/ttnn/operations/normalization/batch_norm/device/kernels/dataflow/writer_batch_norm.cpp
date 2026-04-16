@@ -43,23 +43,23 @@ void kernel_main() {
     constexpr bool param_is_fp32 = get_compile_time_arg_val(bias_args.next_compile_time_args_offset() + 1) == 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
     // output
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     // batch_var
     const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
-    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr, batch_var_tile_bytes);
+    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr);
 
     // weight
     const uint32_t weight_tile_bytes = get_tile_size(cb_id_weight);
-    const auto weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto weight = TensorAccessor(weight_args, weight_addr);
 
     // bias
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
-    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
+    const auto bias = TensorAccessor(bias_args, bias_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_id_src_obj(cb_id_src);

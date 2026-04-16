@@ -262,7 +262,7 @@ void JitBuildEnv::init(
 
     if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
-        this->defines_ += "-DENV_LLK_INFRA ";
+        this->defines_ += "-DENABLE_LLK_ASSERT_ONLY ";
     }
 
     if (rtoptions.get_disable_sfploadmacro()) {
