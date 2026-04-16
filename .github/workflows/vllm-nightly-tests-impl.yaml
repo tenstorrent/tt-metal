@@ -168,7 +168,7 @@ jobs:
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "override-tt-config": "{\"trace_region_size\": 67000000}",
+              "override-tt-config": "{\"trace_region_size\": 71000000}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
