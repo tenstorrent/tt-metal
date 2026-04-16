@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
+
 namespace dataflow_kernel_lib {
 
 // Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
@@ -22,6 +26,18 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* addr_to_l1_ptr(uint32_t addr) {
 }
 
 /**
+ * @brief Create NOC source/destination args for a local L1 address on this core
+ *
+ * @param addr L1 memory address
+ * @param noc_id NOC index (defaults to the current core's noc_index)
+ * @return UnicastEndpoint src_args_type with this core's NOC coordinates and the given address
+ */
+FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
+    return ::experimental::noc_traits_t<::experimental::UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = addr};
+}
+
+/**
  * @brief Zero out the exact tile size for a CB using NOC reads from the hardware zeros region
  *
  * @tparam cb_id Circular buffer ID whose tile byte size should be used
@@ -33,14 +49,18 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
     static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    ::experimental::Noc noc;
+    ::experimental::UnicastEndpoint ep;
+    const auto zeros_src = local_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
+
+    noc.set_async_read_state<::experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
 
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(MEM_ZEROS_BASE, write_addr);
+        noc.async_read_with_state<::experimental::Noc::VcSelection::DEFAULT, 1>(
+            ep, ::experimental::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
         write_addr += MEM_ZEROS_SIZE;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 /**
@@ -50,9 +70,10 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
  */
 template <uint32_t cb_id>
 FORCE_INLINE void prepare_zero_tile() {
-    cb_reserve_back(cb_id, 1);
-    zero_tile<cb_id>(get_write_ptr(cb_id));
-    cb_push_back(cb_id, 1);
+    ::experimental::CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    zero_tile<cb_id>(cb.get_write_ptr());
+    cb.push_back(1);
 }
 
 }  // namespace dataflow_kernel_lib
