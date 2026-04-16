@@ -635,7 +635,7 @@ def tokenize_prompt_to_chat_template(
     tokenizer,
     max_isl: int,
     user_prompt: str = "What is the capital of France",
-    system_prompt: str = "You are friendly assistent",
+    system_prompt: str = "You are a friendly assistant",
     debug: bool = False,
 ) -> tuple[torch.Tensor, list[str] | None]:
     """Apply chat template and tokenize, padding/truncating to max_isl tokens.
