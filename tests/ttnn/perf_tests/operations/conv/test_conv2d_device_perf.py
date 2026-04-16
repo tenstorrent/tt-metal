@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pandas as pd
 import pytest
 import re
@@ -144,6 +145,14 @@ def test_run_conv2d_ops(device):
 
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
+
+    if os.environ.get("TT_METAL_LLK_ASSERTS") == "1" and any(
+        cfg["enable_activation_reuse"] for cfg in CONV_PERF_CONFIGS
+    ):
+        pytest.skip(
+            "activation reuse overshoots CB fifo_limit by design; "
+            "incompatible with TT_METAL_LLK_ASSERTS (see GH #42510)"
+        )
 
     warmup_iterations = 2
 

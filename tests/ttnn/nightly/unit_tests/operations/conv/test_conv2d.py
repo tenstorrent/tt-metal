@@ -3,10 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from loguru import logger
 
 import torch
 import pytest
+
+# Activation reuse conv2d kernel deliberately overshoots fifo_limit as part of
+# its split-reader fill pattern. The LLK CB-bounds assert does not tolerate this
+# (see GH #42510), so parametrizations with activation reuse must be skipped
+# when LLK asserts are enabled.
+_LLK_ASSERTS_ACTIVE = os.environ.get("TT_METAL_LLK_ASSERTS") == "1"
+_ACTIVATION_REUSE_SKIP_REASON = (
+    "activation reuse overshoots CB fifo_limit by design; incompatible with " "TT_METAL_LLK_ASSERTS (see GH #42510)"
+)
 from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
@@ -4960,6 +4970,8 @@ def test_conv2d_activation_reuse(
     enable_activation_reuse,
     config_in_dram
 ):
+    if enable_activation_reuse and _LLK_ASSERTS_ACTIVE:
+        pytest.skip(_ACTIVATION_REUSE_SKIP_REASON)
     if batch == 16 and is_wormhole_b0():
         # not enough memory on WH for this case
         act_block_h_override = 32*4
@@ -5051,6 +5063,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
     enable_activation_reuse,
     num_cores,
 ):
+    if enable_activation_reuse and _LLK_ASSERTS_ACTIVE:
+        pytest.skip(_ACTIVATION_REUSE_SKIP_REASON)
     batch_size = 1
     groups = 4
     input_channels = groups * input_channels
@@ -5249,6 +5263,8 @@ def test_resnet50_conv_p150(
     shard_shape,
     enable_weights_double_buffer,
 ):
+    if _LLK_ASSERTS_ACTIVE:
+        pytest.skip(_ACTIVATION_REUSE_SKIP_REASON)
     # Test runs on Blackhole P150
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) != (13, 10):
         pytest.skip("Test is only supported on Blackhole P150")

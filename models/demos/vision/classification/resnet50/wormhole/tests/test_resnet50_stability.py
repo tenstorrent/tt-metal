@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 
 import pytest
@@ -12,6 +13,13 @@ from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vision.classification.resnet50.wormhole.demo.demo import test_demo_trace_with_imagenet
 
 test_demo_trace_with_imagenet.__test__ = False
+
+# ResNet50 enables conv2d activation reuse, which overshoots the CB fifo_limit
+# by design; this trips the LLK CB-bounds assert (see GH #42510).
+pytestmark = pytest.mark.skipif(
+    os.environ.get("TT_METAL_LLK_ASSERTS") == "1",
+    reason="ResNet50 conv2d activation reuse is incompatible with TT_METAL_LLK_ASSERTS (GH #42510)",
+)
 
 
 @run_for_wormhole_b0()
