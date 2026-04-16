@@ -202,8 +202,8 @@ class DroidNet(nn.Module):
 
     def extract_features(self, images):
         images = images[:, :, [2, 1, 0]] / 255.0
-        mean = torch.as_tensor([0.485, 0.456, 0.406], device=images.device)
-        std = torch.as_tensor([0.229, 0.224, 0.225], device=images.device)
+        mean = torch.as_tensor([0.485, 0.456, 0.406], device=images.device, dtype=images.dtype)
+        std = torch.as_tensor([0.229, 0.224, 0.225], device=images.device, dtype=images.dtype)
         images = (images - mean[:, None, None]) / std[:, None, None]
         fmaps = self.fnet(images)
         net_hidden = self.cnet(images)

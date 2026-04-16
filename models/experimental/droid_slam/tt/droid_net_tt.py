@@ -17,17 +17,41 @@ from models.experimental.droid_slam.reference.droid_net_ref import DroidNet as R
 
 
 class TtDroidNet:
-    """tt-nn / torch hybrid DROID-SLAM forward path."""
+    """tt-nn / torch hybrid DROID-SLAM forward path.
+
+    As an initial speedup we run the torch reference in bfloat16. The
+    native fp32 torch path keeps a full-precision copy of the weights
+    for the PCC reference — this wrapper casts inputs and weights to
+    bfloat16 on entry and casts outputs back to fp32 so downstream
+    (classical BA) sees fp32.
+    """
+
+    _COMPUTE_DTYPE = torch.bfloat16
 
     def __init__(self, device, reference: ReferenceDroidNet):
         self.device = device
-        self.reference = reference
-        self.reference.eval()
+        self.reference_fp32 = reference
+        reference.eval()
+        self.reference = self._cast_reference(reference)
+
+    @classmethod
+    def _cast_reference(cls, fp32_model: ReferenceDroidNet) -> ReferenceDroidNet:
+        # Deep-clone the module with bfloat16 weights so the fp32
+        # reference stays pristine for PCC comparisons.
+        import copy
+
+        bf16 = copy.deepcopy(fp32_model).to(cls._COMPUTE_DTYPE)
+        bf16.eval()
+        return bf16
 
     @torch.no_grad()
     def extract_features(self, images: torch.Tensor):
-        return self.reference.extract_features(images)
+        images_bf = images.to(self._COMPUTE_DTYPE)
+        fmaps, net, inp = self.reference.extract_features(images_bf)
+        return fmaps.float(), net.float(), inp.float()
 
     @torch.no_grad()
     def update(self, net, inp, corr, flow, ii):
-        return self.reference.update(net, inp, corr, flow, ii)
+        args = [t.to(self._COMPUTE_DTYPE) for t in (net, inp, corr, flow)]
+        net_o, delta, weight, eta, upmask = self.reference.update(*args, ii)
+        return net_o.float(), delta.float(), weight.float(), eta.float(), upmask.float()
