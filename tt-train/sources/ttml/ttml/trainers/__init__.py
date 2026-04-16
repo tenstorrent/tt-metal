@@ -4,4 +4,14 @@
 
 from .callback import TrainerCallback
 from .sft_trainer import SFTConfig, SFTTrainer
+from .grpo_trainer import (
+    GrpoMeshCtx,
+    GRPOMeshCtx,
+    GRPOCompletion,
+    GrpoConfig,
+    GRPOConfig,
+    GrpoTrainer,
+    GRPOTrainer,
+    deallocate_tensors,
+)
 from ttml.modules.lora import LoraConfig

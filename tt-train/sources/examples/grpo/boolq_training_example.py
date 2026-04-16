@@ -5,11 +5,15 @@
 
 import csv
 import os
+from datetime import datetime, timezone
+
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import TrainerCallback
-from utils.grpo_trainer import GrpoConfig, GrpoTrainer
+from ttml.trainers import GRPOConfig, GRPOTrainer
+from utils.llama_completion import CompletionCtx
+from utils.llama_completion import LlamaCompletion
 
 
 class GRPOMonitor(TrainerCallback):
@@ -97,15 +101,13 @@ if __name__ == "__main__":
         "kahan_summation": False,
     }
 
-    from datetime import datetime, timezone
-
     output_dir = (
         get_tt_metal_runtime_root()
         + "/generated/tt-train/grpo_run/"
         + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     )
 
-    config = GrpoConfig(
+    config = GRPOConfig(
         epsilon=0.2,
         batch_size=2,
         micro_batch_size=16,
@@ -122,14 +124,24 @@ if __name__ == "__main__":
         warmup_steps=0,
     )
 
-    grpo_trainer = GrpoTrainer(
+    completion = LlamaCompletion(
+        ctx=CompletionCtx(
+            max_tokens_to_complete=config.max_completion_length,
+            temperature=config.temperature,
+            completions_per_prompt=config.num_generations,
+        ),
+        transformer_config=transformer_config,
+        device_config=device_config,
         model_source=model_id,
+    )
+
+    grpo_trainer = GRPOTrainer(
+        completion=completion,
         dataset=dataset,
         config=config,
         reward_func=boolq_reward,
-        transformer_config=transformer_config,
         optimizer_config=optimizer_config,
-        device_config=device_config,
         callbacks=[GRPOMonitor(output_dir)],
+        model_source=model_id,
     )
     grpo_trainer.train()

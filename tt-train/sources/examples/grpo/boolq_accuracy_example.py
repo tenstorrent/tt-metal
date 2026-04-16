@@ -11,11 +11,9 @@ from typing import Sequence, Iterator
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
-import ttml
-
-from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.inference import InferenceCtx, setup_inference, generate_answers_multiple_prompts
+from utils.llama_completion import CompletionCtx
+from utils.llama_completion import LlamaCompletion
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."
@@ -53,16 +51,16 @@ DEVICE_CONFIG = {
 
 
 def iter_generated_completions(
-    ctx: InferenceCtx,
+    llama: LlamaCompletion,
     prompts: Sequence[str],
     batch_size: int = 32,
 ) -> Iterator[tuple[int, str, str]]:
     for start in range(0, len(prompts), batch_size):
         end = min(start + batch_size, len(prompts))
         prompt_batch = list(prompts[start:end])
-        batch_completions = generate_answers_multiple_prompts(ctx, prompt_batch)
-        if ctx.group_size != 1:
-            raise ValueError(f"Expected group_size=1, got {ctx.group_size}")
+        batch_completions = llama.generate_str(prompt_batch)
+        if llama.ctx.completions_per_prompt != 1:
+            raise ValueError(f"Expected completions_per_prompt=1, got {llama.ctx.completions_per_prompt}")
         for offset, completion in enumerate(batch_completions):
             i = start + offset
             yield i, prompts[i], completion
@@ -115,6 +113,7 @@ if __name__ == "__main__":
         )
         csv_writer.writeheader()
 
+<<<<<<< HEAD
         transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
         device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
 
@@ -125,12 +124,25 @@ if __name__ == "__main__":
         ctx = setup_inference(
             TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, MODEL_ID
         )
+=======
+    llama = LlamaCompletion(
+        ctx=CompletionCtx(
+            max_tokens_to_complete=MAX_COMPLETION_LENGTH,
+            temperature=TEMPERATURE,
+            completions_per_prompt=NUM_GENERATIONS,
+        ),
+        transformer_config=TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=MODEL_ID,
+    )
+>>>>>>> c24c420bfe4 (move grpotrainer into ttml, decouple it from llama)
 
         correct_answers = 0
         wrong_answers = 0
         total_chars = 0
         start_time = time.perf_counter()
 
+<<<<<<< HEAD
         for i, prompt, completion in iter_generated_completions(
             ctx, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
         ):
@@ -140,6 +152,17 @@ if __name__ == "__main__":
                 correct_answers += 1
             else:
                 wrong_answers += 1
+=======
+    for i, prompt, completion in iter_generated_completions(
+        llama, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
+    ):
+        correct, model_answer = compare_boolq_answers(completion, answers[i])
+        total_chars += len(completion)
+        if correct:
+            correct_answers += 1
+        else:
+            wrong_answers += 1
+>>>>>>> c24c420bfe4 (move grpotrainer into ttml, decouple it from llama)
 
             total = correct_answers + wrong_answers
             accuracy = correct_answers / total

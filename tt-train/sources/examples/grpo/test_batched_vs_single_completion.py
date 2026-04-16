@@ -3,14 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttml
 
-from ttml.common.config import DeviceConfig, TransformerConfig
-from utils.inference import (
-    setup_inference,
-    generate_answers_multiple_prompts,
-    generate_answers_one_prompt,
-)
+from utils.llama_completion import CompletionCtx
+from utils.llama_completion import LlamaCompletion
 
 HF_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TEMPERATURE = 0.0
@@ -63,35 +58,36 @@ def to_chat_prompt(tokenizer, user_text: str) -> str:
 
 @pytest.mark.slow
 def test_capitals_one_by_one_equals_single_batch():
-    transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
-    device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
-
-    if device_config.total_devices() > 1:
-        ttml.core.distributed.enable_fabric(device_config.total_devices())
-    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
-
-    ctx = setup_inference(
-        TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, HF_MODEL_ID
+    llama = LlamaCompletion(
+        ctx=CompletionCtx(
+            max_tokens_to_complete=MAX_COMPLETION_LENGTH,
+            temperature=TEMPERATURE,
+            completions_per_prompt=NUM_GENERATIONS,
+        ),
+        transformer_config=TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
     )
 
-    assert ctx.group_size == 1, "This test expects group_size=1 for 1:1 comparison."
-    assert ctx.temperature == 0.0, "This test expects greedy decoding (temperature=0)."
+    assert llama.ctx.completions_per_prompt == 1, "This test expects completions_per_prompt=1 for 1:1 comparison."
+    assert llama.ctx.temperature == 0.0, "This test expects greedy decoding (temperature=0)."
 
+    tokenizer = llama.ctx.tokenizer
     user_prompts = [
         "The capital of France is",
         "The capital of Portugal is",
         "The capital of United Kingdom is",
         "The capital of Czech Republic is",
     ]
-    prompts = [to_chat_prompt(ctx.tokenizer, p) for p in user_prompts]
+    prompts = [to_chat_prompt(tokenizer, p) for p in user_prompts]
 
     single_outputs = []
     for prompt in prompts:
-        completions = generate_answers_one_prompt(ctx, prompt)
+        completions = llama.generate_str([prompt])
         assert len(completions) == 1
         single_outputs.append(completions[0])
 
-    batched_outputs = generate_answers_multiple_prompts(ctx, prompts)
+    batched_outputs = llama.generate_str(prompts)
     assert len(batched_outputs) == len(prompts)
 
     assert batched_outputs == single_outputs, (

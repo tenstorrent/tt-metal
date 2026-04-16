@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict
 import inspect
 import json
@@ -6,10 +7,7 @@ import random
 from datetime import datetime, timezone
 from typing import List, Callable, Sequence
 
-from ttml.common.config import DeviceConfig, TransformerConfig
-from utils.inference import InferenceCtx, setup_inference
-from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
-from utils.loss import compute_nlog_probs, compute_grpo_loss
+from ttml.trainers.grpo_ops import Exp, Clip, Min
 import os
 import numpy as np
 import torch
@@ -17,7 +15,81 @@ import ttml
 import ttnn
 from safetensors.torch import save_file
 from ttml.common.utils import create_optimizer, no_grad
-from ttml.trainers.callback import TrainerCallback
+from .callback import TrainerCallback
+
+
+@dataclass
+class GrpoMeshCtx:
+    """Distributed-mesh handles for tensor creation and reading."""
+
+    dp_mapper: object = None
+    dp_composer: object = None
+    total_devices: int = 1
+
+
+class GrpoCompletion(ABC):
+    """Abstract base for model-specific completion engines used in GRPO training.
+
+    Subclass this for each model architecture (Llama, Qwen, etc.).
+    """
+
+    @property
+    @abstractmethod
+    def ctx(self) -> "CompletionCtx":
+        """Generation parameters (tokenizer, completions_per_prompt, …)."""
+
+    @property
+    @abstractmethod
+    def mesh(self) -> "GrpoMeshCtx":
+        """Distributed-mesh handles for tensor placement and gradient sync."""
+
+    @property
+    @abstractmethod
+    def model(self):
+        """The underlying tt model used for forward passes and optimization."""
+
+    @abstractmethod
+    def generate(self, prompts: List[List[int]]) -> List[List[int]]:
+        """Generate completions for a batch of tokenised prompts.
+
+        For N prompts returns N * completions_per_prompt completions.
+        """
+
+    @abstractmethod
+    def generate_str(self, prompt_strs: List[str]) -> List[str]:
+        """Generate completions from string prompts, returning decoded strings.
+        For N strs returns N * completions_per_prompt strs.
+        """
+
+    @abstractmethod
+    def compute_nlog_probs(self, prompts: List[List[int]], completions: List[List[int]]) -> tuple:
+        """Compute per-token negative log probabilities for prompt+completion pairs.
+
+        Each prompt[i] and completion[i] are concatenated, and the standard
+        next-token-prediction shift is applied (input = seq[:-1],
+        target = seq[1:]).  The model runs a forward pass and returns
+        cross-entropy at every position.
+
+        Dimension glossary:
+            B: Global batch size (number of prompt+completion pairs).
+            B_local: Per-device batch size (``B // total_devices``).
+                On a single device B_local == B.
+            T: ``max(len(prompt[i]) + len(completion[i])) - 1`` across the
+                batch — the sequence length after the next-token shift.
+            T_padded: ``T`` rounded up to the tile boundary (multiple of 32).
+
+        Args:
+            prompts: B lists of token IDs (the original prompts).
+            completions: B lists of token IDs (the generated completions).
+
+        Returns:
+            nlog_probs: Tensor [B_local, T_padded] — negative log-probability
+                of each target token.  Prompt and padding positions contain
+                meaningless values; use ``mask`` to ignore them.
+            mask: Tensor [B_local, T_padded] — binary mask where 1.0 marks
+                completion-token positions and 0.0 marks prompt tokens,
+                left-padding, and tile-padding.
+        """
 
 
 @dataclass
@@ -36,6 +108,20 @@ class GrpoConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+
+
+def deallocate_tensors(tensors) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
 
 
 def dispatch_reward(reward_func, completions, prompts, batch_columns):
@@ -62,21 +148,22 @@ def compute_advantages(rewards_np, group_size):
 
 
 def iter_batched_completions(
-    ctx: InferenceCtx,
+    completion: GRPOCompletion,
     prompts: Sequence[List[int]],
     batch_columns: dict,
     batch_size: int = 32,
 ):
+    completions_per_prompt = completion.ctx.completions_per_prompt
     n = len(prompts)
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
         prompt_batch = list(prompts[start:end])
 
-        completions_batch = completion_batched_multiple_prompts(ctx, prompt_batch)
+        completions_batch = completion.generate(prompt_batch)
 
-        prompt_batch_expanded = [item for item in prompt_batch for _ in range(ctx.group_size)]
+        prompt_batch_expanded = [item for item in prompt_batch for _ in range(completions_per_prompt)]
         columns_expanded = {
-            k: [v for v in col[start:end] for _ in range(ctx.group_size)] for k, col in batch_columns.items()
+            k: [v for v in col[start:end] for _ in range(completions_per_prompt)] for k, col in batch_columns.items()
         }
 
         assert len(prompt_batch_expanded) == len(completions_batch)
@@ -159,50 +246,69 @@ def save_checkpoint(
 class GrpoTrainer:
     def __init__(
         self,
-        model_source: str,
+        completion: GRPOCompletion,
         dataset,
         config: GrpoConfig,
         reward_func: Callable,
-        transformer_config: dict,
         optimizer_config: dict,
-        device_config: dict,
         callbacks: list = None,
+        model_source: str = None,
     ):
-        self.model_source = model_source
+        self.completion = completion
         self.dataset = dataset
         self.config = config
         self.reward_func = reward_func
-        self.transformer_config = TransformerConfig({"transformer_config": transformer_config})
-        self.device_config = DeviceConfig({"device_config": device_config})
         self.optimizer_config_dict = optimizer_config
         self.callbacks = callbacks or []
+        self.model_source = model_source
         self.model = None
+
+    def _compute_grpo_loss(
+        self,
+        nlog_probs_old: ttml.autograd.Tensor,
+        nlog_probs_new: ttml.autograd.Tensor,
+        mask: ttml.autograd.Tensor,
+        adv_tt: ttml.autograd.Tensor,
+        completions_batch_len: int,
+        eps: float,
+        mesh: GrpoMeshCtx = None,
+    ) -> ttml.autograd.Tensor:
+        """Compute the clipped GRPO surrogate loss."""
+        if mesh is None:
+            mesh = GrpoMeshCtx()
+        B_local, Tp = nlog_probs_old.shape()
+        ratio = Exp.apply(nlog_probs_old - nlog_probs_new)
+        clipped_ratio = Clip.apply(ratio, 1.0 - eps, 1.0 + eps)
+
+        surr1 = ratio * adv_tt
+        surr2 = clipped_ratio * adv_tt
+        surr = Min.apply(surr1, surr2)
+
+        mask_np = mask.to_numpy(composer=mesh.dp_composer)
+        tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
+        weight_np = (mask_np / tokens_per_completion).astype(np.float32)
+        weight_tt = ttml.autograd.Tensor.from_numpy(
+            weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, mesh.dp_mapper
+        )
+
+        weighted_surr = surr * weight_tt
+        weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
+        return ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
 
     def train(self):
         grpo_cfg = self.config
+        completion = self.completion
+        ctx = completion.ctx
+        tt_model = completion.model
+        tokenizer = ctx.tokenizer
+        mesh = completion.mesh
+        self.model = tt_model
 
-        if self.device_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(self.device_config.total_devices())
-
-        ttml.autograd.AutoContext.get_instance().open_device(
-            self.device_config.mesh_shape, self.device_config.device_ids
-        )
-
-        inference_ctx = setup_inference(
-            grpo_cfg.temperature,
-            grpo_cfg.max_completion_length,
-            grpo_cfg.num_generations,
-            self.transformer_config,
-            self.device_config,
-            self.model_source,
-        )
-        self.model = inference_ctx.tt_model
-
-        optimizer = create_optimizer(inference_ctx.tt_model, self.optimizer_config_dict)
+        optimizer = create_optimizer(tt_model, self.optimizer_config_dict)
         base_lr = optimizer.get_lr()
 
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
-        prompts = [inference_ctx.tokenizer.encode(row["prompt"]) for row in dataset]
+        prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
         num_batches = 0
@@ -218,30 +324,30 @@ class GrpoTrainer:
             cb.on_train_begin(self)
 
         for prompts_batch, completions_batch, dataset_columns_dict in iter_batched_completions(
-            inference_ctx, prompts, extra_columns, grpo_cfg.batch_size
+            completion, prompts, extra_columns, grpo_cfg.batch_size
         ):
             num_batches += 1
 
-            completions_strs = [inference_ctx.tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
-            prompts_strs = [inference_ctx.tokenizer.decode(p) for p in prompts_batch]
+            completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
+            prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
             rewards_np = np.array(rewards, dtype=np.float32)
 
-            advantages_np = compute_advantages(rewards_np, inference_ctx.group_size)
+            advantages_np = compute_advantages(rewards_np, ctx.completions_per_prompt)
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
             probs_old_list = []
-            inference_ctx.tt_model.eval()
+            tt_model.eval()
             with no_grad():
                 for p, c in iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size):
-                    nlog_old, mask, Tp = compute_nlog_probs(inference_ctx, p, c)
+                    nlog_old, mask = completion.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
-                    probs_old_list.append((nlog_old, mask, Tp))
+                    probs_old_list.append((nlog_old, mask))
 
             for mini_epoch in range(grpo_cfg.num_iterations):
-                inference_ctx.tt_model.train()
+                tt_model.train()
 
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
@@ -253,23 +359,21 @@ class GrpoTrainer:
                         adv_slice.reshape((B, 1)),
                         ttnn.Layout.ROW_MAJOR,
                         ttnn.DataType.BFLOAT16,
-                        inference_ctx.dp_mapper,
+                        mesh.dp_mapper,
                     )
                     adv_tt.set_requires_grad(False)
 
-                    nlog_old, mask_old, Tp = probs_old_list[i]
-                    nlog_probs_new, mask_new, _ = compute_nlog_probs(inference_ctx, p, c)
+                    nlog_old, mask_old = probs_old_list[i]
+                    nlog_probs_new, mask_new = completion.compute_nlog_probs(p, c)
 
-                    loss = compute_grpo_loss(
+                    loss = self._compute_grpo_loss(
                         nlog_old,
                         nlog_probs_new,
                         mask_old,
                         adv_tt,
-                        B,
-                        Tp,
                         len(prompts_batch) * grad_accum,
                         grpo_cfg.epsilon,
-                        inference_ctx,
+                        mesh=mesh,
                     )
 
                     loss.backward(retain_graph=False)
@@ -285,8 +389,8 @@ class GrpoTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if inference_ctx.dp_mapper is not None:
-                        ttml.core.distributed.synchronize_gradients(inference_ctx.tt_model.parameters())
+                    if mesh.dp_mapper is not None:
+                        ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:
                         cb.on_before_optimizer_step(self)
@@ -315,11 +419,11 @@ class GrpoTrainer:
                     if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                         ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
                         save_checkpoint(
-                            inference_ctx.tt_model,
+                            tt_model,
                             num_steps,
                             grpo_cfg.output_dir,
-                            dp_composer=inference_ctx.dp_composer,
-                            tokenizer=inference_ctx.tokenizer,
+                            dp_composer=mesh.dp_composer,
+                            tokenizer=tokenizer,
                             grpo_config=grpo_cfg,
                             optimizer=optimizer,
                             model_source=self.model_source,
@@ -327,8 +431,15 @@ class GrpoTrainer:
                         for cb in self.callbacks:
                             cb.on_save(self, num_steps, ckpt_dir)
 
-            for nlog_old, mask_old, _ in probs_old_list:
+            for nlog_old, mask_old in probs_old_list:
                 deallocate_tensors([nlog_old, mask_old])
 
         for cb in self.callbacks:
             cb.on_train_end(self)
+
+
+# Aliases for the all-caps naming convention
+GRPOMeshCtx = GrpoMeshCtx
+GRPOConfig = GrpoConfig
+GRPOTrainer = GrpoTrainer
+GRPOCompletion = GrpoCompletion
