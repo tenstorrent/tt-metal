@@ -286,9 +286,7 @@ struct WorkerToFabricEdmSenderBase {
         return static_cast<eth_chan_directions>(this->edm_direction);
     }
 
-    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
-    template <size_t num_slots = 1>
-    FORCE_INLINE bool edm_has_space_for_packet() const {
+    FORCE_INLINE uint32_t get_num_free_write_slots() const {
         /*
         Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric
         test hangs, while sending packets, waiting for space in the EDM buffer. This is despite disabling the use of the
@@ -297,14 +295,16 @@ struct WorkerToFabricEdmSenderBase {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
-            if constexpr (num_slots == 1) {
-                return used_slots < this->num_buffers_per_channel;
-            } else {
-                return used_slots <= this->num_buffers_per_channel - num_slots;
-            }
+            return used_slots >= this->num_buffers_per_channel ? 0 : this->num_buffers_per_channel - used_slots;
         } else {
-            return get_ptr_val(worker_credits_stream_id) >= num_slots;
+            return get_ptr_val(worker_credits_stream_id);
         }
+    }
+
+    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
+    template <size_t num_slots = 1>
+    FORCE_INLINE bool edm_has_space_for_packet() const {
+        return this->get_num_free_write_slots() >= num_slots;
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {

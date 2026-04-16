@@ -217,15 +217,20 @@ private:
         constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
 
         header->to_noc_fused_unicast_write_atomic_inc({dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
+        // Amortize downstream free-slot queries across back-to-back payload sends.
+        uint32_t cached_free_write_slots = 0;
+
+        auto refill_free_write_slots = [&]() __attribute__((always_inline)) {
+            DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_WAIT_SLOT");
+            do {
+                cached_free_write_slots = connection.get_num_free_write_slots();
+            } while (cached_free_write_slots == 0);
+        };
 
         auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SETUP");
                 header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
-            }
-            {
-                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_WAIT_SLOT");
-                connection.wait_for_empty_write_slot();
             }
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_DATA");
@@ -240,16 +245,24 @@ private:
         };
 
         uint32_t chunk_idx = CTArgs::link_index;
-        for (; chunk_idx < CTArgs::num_chunks - 1; chunk_idx += CTArgs::num_links) {
-            send_payload(offset, regular_payload_bytes);
-            {
-                DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
-                offset += stride_bytes;
-                noc_async_writes_flushed();
+        while (chunk_idx < CTArgs::num_chunks - 1) {
+            refill_free_write_slots();
+            while (chunk_idx < CTArgs::num_chunks - 1 && cached_free_write_slots > 0) {
+                send_payload(offset, regular_payload_bytes);
+                cached_free_write_slots--;
+                {
+                    DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
+                    offset += stride_bytes;
+                    noc_async_writes_flushed();
+                }
+                chunk_idx += CTArgs::num_links;
             }
         }
 
         if (chunk_idx < CTArgs::num_chunks) {
+            if (cached_free_write_slots == 0) {
+                refill_free_write_slots();
+            }
             if constexpr (CTArgs::last_chunk_tiles != CTArgs::tiles_per_chunk) {
                 header->set_payload_size_bytes(last_payload_bytes);
             }
