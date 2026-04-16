@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
@@ -22,17 +23,7 @@ constexpr float SELU_CW_INV_LN2 = 1.4426950408889634f;
 constexpr float SELU_CW_NEG_LN2_HI = -0.6931152343750000f;
 constexpr float SELU_CW_NEG_LN2_LO = -3.19461832987e-05f;
 
-#ifdef INP_FLOAT32
-constexpr uint32_t SELU_EXPM1_H_DEGREE = 5;
-constexpr float SELU_EXPM1_H[] = {
-    1.0000000000e+00f, 5.0000000000e-01f, 1.6666504741e-01f, 4.1666239500e-02f, 8.3691505715e-03f, 1.3948583510e-03f};
-#else
-constexpr uint32_t SELU_EXPM1_H_DEGREE = 4;
-constexpr float SELU_EXPM1_H[] = {
-    1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f};
-#endif
-
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_selu(uint scale, uint alpha) {
     const sfpi::vFloat scale_val = Converter::as_float(scale);
     const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
@@ -53,10 +44,19 @@ inline void calculate_selu(uint scale, uint alpha) {
         r = r + k_f * SELU_CW_NEG_LN2_LO;
 
         // expm1(r) = r * h(r)
-        sfpi::vFloat h = SELU_EXPM1_H[SELU_EXPM1_H_DEGREE];
-        for (int i = static_cast<int>(SELU_EXPM1_H_DEGREE) - 1; i >= 0; i--) {
-            h = h * r + SELU_EXPM1_H[i];
-        }
+#ifdef INP_FLOAT32
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r,
+            1.0000000000e+00f,
+            5.0000000000e-01f,
+            1.6666504741e-01f,
+            4.1666239500e-02f,
+            8.3691505715e-03f,
+            1.3948583510e-03f);
+#else
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r, 1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+#endif
         h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)

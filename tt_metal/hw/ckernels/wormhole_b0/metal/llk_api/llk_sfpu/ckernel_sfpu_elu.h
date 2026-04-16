@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
@@ -25,19 +26,6 @@ namespace ckernel::sfpu {
 constexpr float CW_INV_LN2 = 1.4426950408889634f;
 constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
 constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
-
-// expm1(r) = r * h(r) coefficients
-#ifdef INP_FLOAT32
-// FP32: h degree 5 (max abs error = 8.67e-9)
-constexpr uint32_t EXPM1_H_DEGREE = 5;
-constexpr float EXPM1_H[] = {
-    1.0000000000e+00f, 5.0000000000e-01f, 1.6666504741e-01f, 4.1666239500e-02f, 8.3691505715e-03f, 1.3948583510e-03f};
-#else
-// BF16: h degree 4 (max abs error = 1.60e-7)
-constexpr uint32_t EXPM1_H_DEGREE = 4;
-constexpr float EXPM1_H[] = {
-    1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f};
-#endif
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
@@ -61,10 +49,19 @@ inline void calculate_elu(uint slope) {
         r = r + k_f * CW_NEG_LN2_LO;
 
         // expm1(r) = r * h(r), Horner evaluation of h
-        sfpi::vFloat h = EXPM1_H[EXPM1_H_DEGREE];
-        for (int i = static_cast<int>(EXPM1_H_DEGREE) - 1; i >= 0; i--) {
-            h = h * r + EXPM1_H[i];
-        }
+#ifdef INP_FLOAT32
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r,
+            1.0000000000e+00f,
+            5.0000000000e-01f,
+            1.6666504741e-01f,
+            4.1666239500e-02f,
+            8.3691505715e-03f,
+            1.3948583510e-03f);
+#else
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r, 1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+#endif
         h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
