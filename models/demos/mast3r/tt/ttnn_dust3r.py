@@ -56,6 +56,7 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 
 _ROPE_CACHE: dict = {}
 _POS_MAX_CACHE: dict = {}
+_ROPE_LUT_CACHE: dict = {}
 
 
 def _rope_cos_sin(D: int, max_pos: int, base: float, dtype):
@@ -83,26 +84,41 @@ def _pos_max_plus_one(pos: torch.Tensor) -> int:
     return v
 
 
+def _rope_lut_host(pos: torch.Tensor, D: int, base: float, dtype):
+    """Pre-indexed cos/sin LUTs (cy, sy, cx, sx) of shape (B, 1, N, D).
+
+    Indexing cos[pos[..., 0]] etc. happens once per inference instead of every
+    RoPE call (which is ~96× per inference for encoder + decoder).
+    """
+    key = (id(pos), D, base, dtype)
+    lut = _ROPE_LUT_CACHE.get(key)
+    if lut is not None:
+        return lut
+    max_pos = _pos_max_plus_one(pos)
+    cos, sin = _rope_cos_sin(D, max_pos, base, dtype)
+    cy = cos[pos[..., 0]][:, None, :, :].contiguous()
+    sy = sin[pos[..., 0]][:, None, :, :].contiguous()
+    cx = cos[pos[..., 1]][:, None, :, :].contiguous()
+    sx = sin[pos[..., 1]][:, None, :, :].contiguous()
+    lut = (cy, sy, cx, sx)
+    _ROPE_LUT_CACHE[key] = lut
+    return lut
+
+
 def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) -> torch.Tensor:
     """Apply DUSt3R 2D RoPE100 on host. tokens: (B, H, N, Dh), pos: (B, N, 2)."""
     B, H, N, Dh = tokens.shape
     assert Dh % 2 == 0
     D = Dh // 2
-    max_pos = _pos_max_plus_one(pos)
-    cos, sin = _rope_cos_sin(D, max_pos, base, tokens.dtype)
+    cy, sy, cx, sx = _rope_lut_host(pos, D, base, tokens.dtype)
 
-    y = tokens[..., :D]
-    x = tokens[..., D:]
-
-    def apply_1d(t, p1d, cos_t, sin_t):
-        c = cos_t[p1d][:, None, :, :]
-        s = sin_t[p1d][:, None, :, :]
+    def apply_1d(t, c, s):
         t1, t2 = t.chunk(2, dim=-1)
         rotated = torch.cat((-t2, t1), dim=-1)
         return t * c + rotated * s
 
-    y = apply_1d(y, pos[..., 0], cos, sin)
-    x = apply_1d(x, pos[..., 1], cos, sin)
+    y = apply_1d(tokens[..., :D], cy, sy)
+    x = apply_1d(tokens[..., D:], cx, sx)
     return torch.cat((y, x), dim=-1)
 
 
