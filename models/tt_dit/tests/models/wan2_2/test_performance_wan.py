@@ -50,9 +50,9 @@ def t2v_metrics(mesh_device, height):
         if is_blackhole():
             expected_metrics = {
                 "encoder": 0.1,
-                "denoising": 162.0,
-                "vae": 7.0,
-                "total": 168.0,
+                "denoising": 140.0,
+                "vae": 2.0,
+                "total": 142.1,
             }
         else:
             expected_metrics = {
@@ -212,6 +212,9 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     # Warmup run (not timed)

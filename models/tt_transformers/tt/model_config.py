@@ -2718,7 +2718,8 @@ class ModelArgs:
         self.is_multimodal = "vision_config" in config or self.is_vision()
         self.vision_chunk_size = config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        if "vision_num_cross_attention_layers" in config:
+            self.vision_num_cross_attention_layers = config["vision_num_cross_attention_layers"]
 
         self.vision_dim = 1280
         self.vision_mlp_ratio = 4

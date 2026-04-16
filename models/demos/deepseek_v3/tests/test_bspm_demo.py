@@ -279,7 +279,7 @@ def _run_one_decode_step(
         for _ in range(hf_config.num_hidden_layers)
     )
 
-    model_config = get_model_config(RowBatchedModel, "decode", hf_config, mesh_device)
+    model_config = get_model_config(RowBatchedModel, "decode", hf_config, mesh_device, batch_size_per_row=USERS_PER_ROW)
     model_state = RowBatchedModel.create_state(hf_config, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
