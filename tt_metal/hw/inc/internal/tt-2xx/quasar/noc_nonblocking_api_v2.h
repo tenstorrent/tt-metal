@@ -45,12 +45,15 @@ constexpr uint32_t WRITE_RESPONSE_STATIC_VC = 14;
 constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 
 // Overlay command buffer VC assignments (matching cmdbuff_api.hpp)
+#ifndef CMDBUF_VC_CONSTANTS_DEFINED
+#define CMDBUF_VC_CONSTANTS_DEFINED
 constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
 constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
 constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
 constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
 constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
 constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+#endif
 
 // Static transaction ID used for all command buffers
 constexpr uint32_t CMDBUF_TRID_STATIC = 0;

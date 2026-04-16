@@ -48,18 +48,17 @@ constexpr uint32_t CMDBUF_1_TRID_START = 8;
 /* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_END = 12;
 
-/* Read request virtual channel - used by both command buffers */
+/* Read/Write/Multicast virtual channel assignments.
+ * Guarded to avoid redefinition when noc_nonblocking_api_v2.h is included first. */
+#ifndef CMDBUF_VC_CONSTANTS_DEFINED
+#define CMDBUF_VC_CONSTANTS_DEFINED
 constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
-/* Read response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
-/* Write request virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
-/* Write response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
-/* Multicast request virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
-/* Multicast response virtual channel - used by both command buffers */
 constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+#endif
 
 #define DEFINE_CMD_BUFS(buf_name, cmdbuf)                                                                              \
                                                                                                                        \
