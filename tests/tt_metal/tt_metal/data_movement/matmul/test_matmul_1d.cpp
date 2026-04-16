@@ -285,7 +285,7 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
     // Verify in1 read output in L1 for each core
     vector<uint32_t> golden_in1_read_output;
     uint32_t total_in1_read_elements = in1_per_core_read_size_bytes / sizeof(uint32_t);
-    for (int i = 0; i < matmul_cores_list.size(); i++) {
+    for (auto & i : matmul_cores_list) {
         vector<uint32_t> in1_read_output;
         detail::ReadFromDeviceL1(
             device, matmul_cores_list[i], in1_output_addr, in1_per_core_read_size_bytes, in1_read_output);
