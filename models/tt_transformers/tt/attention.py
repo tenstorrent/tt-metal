@@ -1171,9 +1171,18 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device
+        # reshaping long sequence to matmul fit on device (chunks of 1024 along seq)
+        # Total seq must be divisible by 1024 (e.g. batched prefill: batch*seq_per_user can be 12800)
+        pad_to_1024 = seq_len
         if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+            pad_to_1024 = ((seq_len + 1023) // 1024) * 1024
+            if pad_to_1024 != seq_len:
+                attn_output_11SH = ttnn.pad(
+                    attn_output_11SH,
+                    padding=((0, 0), (0, 0), (0, pad_to_1024 - seq_len), (0, 0)),
+                    value=0.0,
+                )
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, pad_to_1024 // 1024, 1024, -1])
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
@@ -1199,11 +1208,13 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=wo_memcfg,
-            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
+            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, pad_to_1024, None),
         )
 
         if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, pad_to_1024, -1])
+            if pad_to_1024 != seq_len:
+                output_11SH = output_11SH[:, :, :seq_len, :]
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
