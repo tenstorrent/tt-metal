@@ -66,11 +66,24 @@ CHIP_ARCH=quasar python scripts/compiler.py ../tests/sources/quasar/sfpu_{op}_qu
 Template (`-t`) and runtime (`-r`) params use classes from `tests/python_tests/helpers/test_variant_parameters.py`.
 
 ### Run Tests
+
+Tests run as a **two-step compile-then-run flow**:
+
+1. **Compile step** — `--compile-producer -n 15` (no `--run-simulator`). Builds ELFs for all selected variants in parallel via pytest-xdist; never touches the simulator.
+2. **Simulator step** — `--run-simulator --compile-consumer` (no `-n 15`; xdist is not supported under the simulator). Consumes the pre-built ELFs and executes them.
+
 ```bash
 source tests/.venv/bin/activate
 cd tests/python_tests/quasar
-TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_quasar.py
+
+# Step A: parallel compile
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
+
+# Step B: run on simulator
+TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
 ```
+
+When running inside codegen agents, wrap the simulator step with the `flock /tmp/tt-llk-test-simulator.lock` pattern to serialize simulator access — see any `codegen/agents/quasar/llk-*.md` for the full wrapper.
 
 ## Key Files
 

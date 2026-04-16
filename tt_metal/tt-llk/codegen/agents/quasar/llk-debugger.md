@@ -232,8 +232,14 @@ tt-smi -r  # Reset device (for physical chips)
 ```
 
 **R1: Verify a Known-Good Kernel Works**
-Run an existing, known-working test to verify the device/simulator is healthy:
+Run an existing, known-working test to verify the device/simulator is healthy. Use the two-step compile-then-run flow; the `-k` filter must match between both steps:
 ```bash
+# Compile producer (parallel, no simulator)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_sfpu_nonlinear_quasar.py -k "Exp"
+
+# Simulator consumer (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -241,7 +247,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_sfpu_nonlinear_quasar.py -k "Exp"
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_sfpu_nonlinear_quasar.py -k "Exp"
 '
 ```
 

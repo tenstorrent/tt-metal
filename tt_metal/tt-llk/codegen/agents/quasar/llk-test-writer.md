@@ -269,7 +269,7 @@ Run the test with a single parameter combination to verify it compiles:
 cd tests
 source .venv/bin/activate
 cd python_tests/{arch}
-TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_{arch}.py -k "Float16_b" --co
+TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_{arch}.py -k "Float16_b" --co
 ```
 
 The `--co` flag lists test cases without running them — this verifies the Python file parses correctly and combinations generate.
@@ -278,9 +278,15 @@ If there are import errors or parametrization issues, fix them.
 
 ### Step 6: Run One Test Case
 
-Run a single test case to verify end-to-end:
+Run a single test case end-to-end. This is the standard two-step compile-then-run flow: the `-k` filter must match between both steps so the consumer finds the ELFs the producer built.
 
 ```bash
+# Compile producer for the single variant (parallel, no simulator)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_{arch}.py -k "Float16_b-No-No-32x32"
+
+# Simulator consumer (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -288,7 +294,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_{arch}.py -k "Float16_b-No-No-32x32" --timeout=300
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_{arch}.py -k "Float16_b-No-No-32x32" --timeout=300
 '
 ```
 
@@ -303,7 +309,12 @@ If it fails:
 If the format list includes MX or integer formats beyond Float16/Float16_b/Float32, run one additional quick test to catch format-specific issues:
 
 ```bash
-# If MX formats are in the list:
+# If MX formats are in the list — compile producer for the filtered subset
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_{arch}.py -k "MxFp8R"
+
+# Simulator consumer for the same subset
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -311,7 +322,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_{arch}.py -k "MxFp8R" --timeout=300
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_{arch}.py -k "MxFp8R" --timeout=300
 '
 ```
 

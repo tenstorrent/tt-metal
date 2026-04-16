@@ -454,6 +454,12 @@ rm -f tests/python_tests/test_{op}_phase*.py
 After all phases complete and phase tests are cleaned up, run the existing repo tests that exercise this kernel to confirm the complete kernel works end-to-end:
 
 ```bash
+# Step A: Compile producer (parallel, no simulator, no flock)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
+
+# Step B: Simulator consumer (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -461,7 +467,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_quasar.py
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
 '
 ```
 
@@ -776,7 +782,13 @@ source ../tests/.venv/bin/activate
 CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
     -t "PARAM(...)" -r "PARAM(...)" -v
 
-# Functional tests (correctness validation) — ALWAYS use flock wrapper for simulator exclusivity
+# Functional tests (correctness validation) — two-step compile-then-run flow.
+# Step A: parallel compile (no simulator, no flock).
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{kernel_name}_quasar.py
+
+# Step B: simulator consumer — ALWAYS use flock wrapper for simulator exclusivity, no -n.
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -784,7 +796,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{kernel_name}_quasar.py
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{kernel_name}_quasar.py
 '
 
 # List available tests

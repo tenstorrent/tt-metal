@@ -189,8 +189,14 @@ table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mappin
 fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
 it **must** be `-t`.
 
-2. **Run functional tests**:
+2. **Run functional tests** — two-step compile-then-run flow:
 ```bash
+# Compile producer (parallel, no simulator, no flock)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
+
+# Simulator consumer (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -198,7 +204,7 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{op}_quasar.py
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
 '
 ```
 

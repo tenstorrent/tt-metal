@@ -9,11 +9,21 @@ tools: Bash, Read, Write, Glob
 
 You run existing repository tests to validate a complete kernel implementation. Your mission is to execute tests and report results clearly.
 
-## Pre-Test Protocol (MANDATORY — before EVERY pytest --run-simulator invocation)
+## Pre-Test Protocol (MANDATORY — two-step compile-then-run flow)
 
-Multiple codegen instances may run in parallel, all sharing simulator port 5556. To prevent conflicts and clean up stale processes, you MUST wrap **every** `pytest --run-simulator` command using the pattern below. **NEVER run `pytest --run-simulator` without the flock wrapper.**
+Every test invocation runs as **two separate pytest commands**:
+
+1. **Compile step** — `--compile-producer -n 15` (no `--run-simulator`). Builds the ELFs for all selected variants in parallel via pytest-xdist. Never touches the simulator, so **no flock wrapper is needed**.
+2. **Simulator step** — `--run-simulator --compile-consumer` (no `-n 15`; xdist is not supported under the simulator). Consumes the pre-built ELFs and executes them on the simulator. Multiple codegen instances share simulator port 5556, so this step **MUST** be wrapped in the flock pattern below. **NEVER run `pytest --run-simulator` without the flock wrapper.**
 
 ```bash
+# Step A: Compile all variants in parallel (no simulator, no flock)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{kernel}_quasar.py
+COMPILE_EXIT=$?
+
+# Step B: Run the pre-compiled variants on the simulator (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   # Clean stale simulator processes (safe — we hold the exclusive lock)
   STALE=$(lsof -ti :5556 2>/dev/null || true)
@@ -21,18 +31,18 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
   sleep 1
 
-  # Run the test
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 \
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 \
     CHIP_ARCH=quasar \
-    pytest -x --run-simulator --port=5556 test_{kernel}_quasar.py
+    pytest -x --run-simulator --compile-consumer --port=5556 test_{kernel}_quasar.py
 '
 TEST_EXIT=$?
 ```
 
+- If the **compile step** fails, skip the simulator step and report the compile error directly — no point running ELFs that were never built.
 - The `flock --timeout 900` waits up to 15 minutes for another test to finish. If it times out, report as **ENV_ERROR**: "Could not acquire simulator lock within 15 minutes — another test may be stuck."
-- Adapt the pytest command inside the `bash -c '...'` as needed (different test file, `-k` filter, etc.), but always keep the flock+cleanup wrapper.
+- Adapt the pytest commands as needed (different test file, `-k` filter, etc.). The `-k` filter must match between the compile and simulator steps so the consumer finds the ELFs the producer built. Always keep `-n 15` on the producer and **never** on the consumer.
 
 ---
 
@@ -61,18 +71,15 @@ source ../tests/.venv/bin/activate
 
 ### Step 2: Run Functional Tests
 
-```bash
-flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5556 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
-  sleep 1
-  source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{kernel}_quasar.py
-'
+Full-matrix run (every variant in the file):
 
-# Test specific format with -k filter
+```bash
+# Compile producer (parallel, no simulator)
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{kernel}_quasar.py
+
+# Simulator consumer (flock-wrapped, no -n)
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   STALE=$(lsof -ti :5556 2>/dev/null || true)
   [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
@@ -80,7 +87,27 @@ flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
   sleep 1
   source ../tests/.venv/bin/activate
   cd ../tests/python_tests/quasar
-  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/vvukomanovic/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --port=5556 test_{kernel}_quasar.py -k "Float16_b"
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{kernel}_quasar.py
+'
+```
+
+Filtered run (specific format). The same `-k` filter must appear on **both** steps so the consumer finds the ELFs the producer built:
+
+```bash
+# Compile producer for the filtered subset
+source ../tests/.venv/bin/activate
+cd ../tests/python_tests/quasar
+CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{kernel}_quasar.py -k "Float16_b"
+
+# Simulator consumer for the same subset
+flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
+  STALE=$(lsof -ti :5556 2>/dev/null || true)
+  [ -n "$STALE" ] && echo "Killing stale port 5556 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "tt-exalens.*--port=5556" 2>/dev/null || true
+  sleep 1
+  source ../tests/.venv/bin/activate
+  cd ../tests/python_tests/quasar
+  TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{kernel}_quasar.py -k "Float16_b"
 '
 ```
 
