@@ -37,11 +37,16 @@ class TtDroidNet:
     @classmethod
     def _cast_reference(cls, fp32_model: ReferenceDroidNet) -> ReferenceDroidNet:
         # Deep-clone the module with bfloat16 weights so the fp32
-        # reference stays pristine for PCC comparisons.
+        # reference stays pristine for PCC comparisons. Wrap the two
+        # hot sub-modules in torch.compile so inductor can fuse the
+        # conv/norm/relu chains.
         import copy
 
         bf16 = copy.deepcopy(fp32_model).to(cls._COMPUTE_DTYPE)
         bf16.eval()
+        bf16.fnet = torch.compile(bf16.fnet, mode="reduce-overhead", dynamic=False)
+        bf16.cnet = torch.compile(bf16.cnet, mode="reduce-overhead", dynamic=False)
+        bf16.update = torch.compile(bf16.update, mode="reduce-overhead", dynamic=False)
         return bf16
 
     @torch.no_grad()
