@@ -209,20 +209,26 @@ def tt_vit_attention(
 
     scale = head_dim ** -0.5
 
-    # Use ttnn FlashAttention for global attention (large L, tile-aligned).
-    # Windowed attention (L=196) is not tile-aligned; keep CPU SDPA.
     if L >= 1024 and (L % 32) == 0:
+        # FlashAttention-2 for global blocks (L=5184, tile-aligned).
         tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         tt_k = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         tt_v = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
             tt_q, tt_k, tt_v, is_causal=False, scale=scale,
         )
-        attn_out = ttnn.to_torch(tt_sdpa_out).float()  # (B, nH, L, head_dim)
+        attn_out = ttnn.to_torch(tt_sdpa_out).float()
     else:
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, nH, L, L)
-        attn_weights = torch.softmax(attn_weights, dim=-1)
-        attn_out = torch.matmul(attn_weights, v)  # (B, nH, L, head_dim)
+        # Manual matmul+softmax for windowed blocks (L=196, non-tile-aligned).
+        tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_k = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_v = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_kt = ttnn.transpose(tt_k, -2, -1)
+        tt_attn = ttnn.matmul(tt_q, tt_kt)
+        tt_attn = ttnn.multiply(tt_attn, scale)
+        tt_attn = ttnn.softmax(tt_attn, dim=-1)
+        tt_out = ttnn.matmul(tt_attn, tt_v)
+        attn_out = ttnn.to_torch(tt_out).float()
 
     # Concatenate heads: (B, L, dim)
     attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, L, -1)
