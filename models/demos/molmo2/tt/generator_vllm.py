@@ -1223,7 +1223,9 @@ class TT_MolmoProcessingInfo(MolmoProcessingInfo):
         return wrapped
 
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        return {"image": 1, "video": 1}
+        # 196 images supports up to 196-frame video (at 2fps this covers ~98s videos).
+        # Single image/video requests still work within this limit.
+        return {"image": 196, "video": 1}
 
 
 @MULTIMODAL_REGISTRY.register_processor(
