@@ -14,86 +14,91 @@ from pysptk import sptk
 from safetensors.torch import load_file
 from scipy import signal
 
-from models.demos.rvc.torch_impl.audio import load_audio
-from models.demos.rvc.torch_impl.configs.config import Config
+from models.demos.rvc.torch_impl.vc.hubert import HubertModel
 from models.demos.rvc.torch_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
-from models.demos.rvc.torch_impl.vc.utils import load_hubert
-from models.demos.rvc.tt_impl.vc.pipeline import _change_rms
+from models.demos.rvc.utils.audio import load_audio
+from models.demos.rvc.utils.config import (
+    Config,
+    HubertPretrainingConfig,
+    HubertPretrainingTask,
+    get_hubert_paths,
+    get_model_and_config_paths,
+)
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
 
-def _get_configs_dir() -> str:
-    configs_dir = os.getenv("RVC_CONFIGS_DIR")
-    if not configs_dir:
-        raise OSError("RVC_CONFIGS_DIR is not set. Set it to the directory containing v1/ and v2/ config folders.")
-    if not os.path.isdir(configs_dir):
-        raise FileNotFoundError(f"RVC_CONFIGS_DIR does not exist: {configs_dir}")
-    return configs_dir
+def _frame_signal(
+    y: np.ndarray,
+    *,
+    frame_length: int,
+    hop_length: int,
+    center: bool,
+    pad_mode: str,
+) -> np.ndarray:
+    if y.ndim != 1:
+        raise ValueError(f"Expected a 1D audio signal, got shape {y.shape}")
+    if frame_length <= 0:
+        raise ValueError("frame_length must be positive")
+    if hop_length <= 0:
+        raise ValueError("hop_length must be positive")
+
+    if center:
+        pad = frame_length // 2
+        y = np.pad(y, (pad, pad), mode=pad_mode)
+    elif y.shape[0] < frame_length:
+        raise ValueError("len(y) must be at least frame_length when center=False")
+
+    if y.shape[0] < frame_length:
+        raise ValueError("Padded signal is shorter than frame_length")
+
+    n_frames = 1 + (y.shape[0] - frame_length) // hop_length
+    frame_starts = hop_length * np.arange(n_frames)
+    frames = np.lib.stride_tricks.sliding_window_view(y, frame_length)[frame_starts]
+    return frames
 
 
-def _get_assets_dir() -> str:
-    assets_dir = os.getenv("RVC_ASSETS_DIR")
-    if not assets_dir:
-        raise OSError("RVC_ASSETS_DIR is not set. Set it to the directory containing pretrained model weights.")
-    if not os.path.isdir(assets_dir):
-        raise FileNotFoundError(f"RVC_ASSETS_DIR does not exist: {assets_dir}")
-    return assets_dir
+def _rms_numpy(
+    y,
+    *,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    center: bool = True,
+    pad_mode: str = "constant",
+    dtype=np.float32,
+) -> np.ndarray:
+    """NumPy reimplementation of ``librosa.feature.rms(y=...)`` for batched audio (2D).
+
+    Returns an array of shape ``(batch_size, num_frames)`` to match librosa.
+    """
+    y = np.asarray(y, dtype=dtype)
+    frames_list = []
+    for i in range(y.shape[0]):
+        frames = _frame_signal(
+            y[i],
+            frame_length=frame_length,
+            hop_length=hop_length,
+            center=center,
+            pad_mode=pad_mode,
+        )
+        frames_list.append(frames)
+    frames = np.stack(frames_list, axis=0)
+
+    power = np.mean(np.square(frames), axis=1, dtype=np.float64)
+    rms = np.sqrt(power, dtype=np.float64).astype(dtype, copy=False)
+    return rms
 
 
-def _build_path_mapping() -> dict[tuple[str, str, bool], tuple[str, str]]:
-    configs_dir = _get_configs_dir()
-    assets_dir = _get_assets_dir()
-    pretrained_dir = os.path.join(assets_dir, "pretrained")
-    return {
-        ("v1", "32k", True): (
-            os.path.join(pretrained_dir, "f0G32k.safetensors"),
-            os.path.join(configs_dir, "v1/32k.json"),
-        ),
-        ("v1", "40k", True): (
-            os.path.join(pretrained_dir, "f0G40k.safetensors"),
-            os.path.join(configs_dir, "v1/40k.json"),
-        ),
-        ("v1", "48k", True): (
-            os.path.join(pretrained_dir, "f0G48k.safetensors"),
-            os.path.join(configs_dir, "v1/48k.json"),
-        ),
-        ("v1", "48k", False): (
-            os.path.join(pretrained_dir, "G48k.safetensors"),
-            os.path.join(configs_dir, "v1/48k.json"),
-        ),
-    }
-
-
-def _get_hubert_paths():
-    configs_dir = _get_configs_dir()
-    assets_dir = _get_assets_dir()
-    return (
-        os.path.join(configs_dir, "hubert_cfg.json"),
-        os.path.join(assets_dir, "hubert.safetensors"),
-    )
-
-
-path_mapping = _build_path_mapping()
-
-
-def _get_model_and_config_paths(version: str, num: str, if_f0: bool) -> tuple[str, str]:
-    key = (version, num, if_f0)
-    if key not in path_mapping:
-        raise KeyError(f"Unsupported path mapping key: {key}")
-    return path_mapping[key]
-
-
-# def _change_rms(source_audio, source_sr, target_audio, target_sr, rate):
-#     source_rms = librosa.feature.rms(y=source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
-#     target_rms = librosa.feature.rms(y=target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
-#     source_rms = torch.from_numpy(source_rms)
-#     source_rms = F.interpolate(source_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
-#     target_rms = torch.from_numpy(target_rms)
-#     target_rms = F.interpolate(target_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
-#     target_rms = torch.max(target_rms, torch.zeros_like(target_rms) + 1e-6)
-#     target_audio *= torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
-#     return target_audio
+def change_rms(source_audio, source_sr, target_audio, target_sr, rate):
+    source_rms = _rms_numpy(source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
+    target_rms = _rms_numpy(target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
+    source_rms = torch.from_numpy(source_rms)
+    source_rms = F.interpolate(source_rms.unsqueeze(1), size=target_audio.shape[1], mode="linear").squeeze(1)
+    target_rms = torch.from_numpy(target_rms)
+    target_rms = F.interpolate(target_rms.unsqueeze(1), size=target_audio.shape[1], mode="linear").squeeze(1)
+    target_rms = torch.max(target_rms, torch.zeros_like(target_rms) + 1e-6)
+    target_audio *= torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
+    return target_audio
 
 
 def _load_synthesizer(
@@ -102,7 +107,7 @@ def _load_synthesizer(
     version: str,
     num: str = "48k",
 ):
-    synthesizer_path, synthesizer_cfg_path = _get_model_and_config_paths(version, num, if_f0)
+    synthesizer_path, synthesizer_cfg_path = get_model_and_config_paths(version, num, if_f0)
     synthesizer_state = load_file(synthesizer_path)
 
     with open(synthesizer_cfg_path) as f:
@@ -120,6 +125,18 @@ def _load_synthesizer(
     return synthesizer, synthesizer_config["data"]
 
 
+def _load_hubert(config, hubert_path: str, hubert_cfg_path: str):
+    task = HubertPretrainingTask(HubertPretrainingConfig())
+    with open(hubert_cfg_path) as f:
+        cfg = json.load(f)
+    hubert_model = HubertModel(cfg=cfg["model"], task_cfg=task.cfg)
+    hubert_state_safetensors = load_file(hubert_path)
+    hubert_model.load_state_dict(hubert_state_safetensors, strict=True)
+    hubert_model = hubert_model.to(config.device)
+    hubert_model = hubert_model.float()
+    return hubert_model.eval()
+
+
 class Pipeline:
     def __init__(
         self,
@@ -134,7 +151,7 @@ class Pipeline:
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
     ):
-        hubert_cfg_path, hubert_path = _get_hubert_paths()
+        hubert_cfg_path, hubert_path = get_hubert_paths()
         if not os.path.exists(hubert_path):
             raise FileNotFoundError("hubert_path not found.")
         self.config = config or Config()
@@ -150,7 +167,7 @@ class Pipeline:
 
         self.synthesizer, data_cfg = _load_synthesizer(self.config, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
-        self.hubert_model = load_hubert(self.config, hubert_path, hubert_cfg_path)
+        self.hubert_model = _load_hubert(self.config, hubert_path, hubert_cfg_path)
         self._init_timing(self.tgt_sr, self.config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
@@ -354,7 +371,7 @@ class Pipeline:
 
         # post-process
         if self.rms_mix_rate != 1:
-            audio_output = _change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
+            audio_output = change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
         if audio_max > 1:

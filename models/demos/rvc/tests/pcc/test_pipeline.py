@@ -2,28 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-
-def _require_real_file_env() -> Path:
-    input_path = os.getenv("RVC_TEST_INPUT")
-    if not input_path:
-        pytest.skip("RVC_TEST_INPUT is not set; real-file pipeline test requires an existing audio file.")
-    path = Path(input_path)
-    if not path.exists():
-        pytest.skip(f"RVC_TEST_INPUT does not exist: {path}")
-
-    for env_key in ("RVC_CONFIGS_DIR", "RVC_ASSETS_DIR"):
-        env_val = os.getenv(env_key)
-        if not env_val:
-            pytest.skip(f"{env_key} is not set; real-file pipeline test requires model/config assets.")
-        if not Path(env_val).exists():
-            pytest.skip(f"{env_key} path does not exist: {env_val}")
-    return path
 
 
 def _to_mono_1d(x: np.ndarray) -> np.ndarray:
@@ -36,7 +17,6 @@ def _to_mono_1d(x: np.ndarray) -> np.ndarray:
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65384}], indirect=True)
 def test_pipeline_real_file_usage(device) -> None:
-    input_path = _require_real_file_env()
     from models.demos.rvc.torch_impl.vc.pipeline import Pipeline as TorchPipeline
     from models.demos.rvc.tt_impl.vc.pipeline import Pipeline as TTPipeline
 

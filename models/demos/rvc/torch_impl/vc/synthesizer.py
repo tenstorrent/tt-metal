@@ -8,7 +8,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from models.demos.rvc.torch_impl.utils import linear_channel_first
+
+def linear_channel_first(x: torch.Tensor, linear: nn.Linear) -> torch.Tensor:
+    """Apply nn.Linear over channels of a [B, C, T] tensor without transpose."""
+    y = torch.matmul(linear.weight, x)
+    if linear.bias is not None:
+        y = y + linear.bias.view(1, -1, 1)
+    return y
 
 
 def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
