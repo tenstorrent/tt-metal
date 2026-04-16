@@ -245,8 +245,8 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
             risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
             risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
         };
-        tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, matmul_cores_list[i], risc0_core_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, matmul_cores_list[i], risc1_core_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, i, risc0_core_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, i, risc1_core_runtime_args);
     }
 
     // Assign unique id
