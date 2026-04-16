@@ -34,20 +34,29 @@ HEAD_FEATURES = 256
 HEAD_OUT_CHANNELS = (256, 512, 1024, 1024)
 
 
+class _LayerScale(nn.Module):
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.gamma
+
+
 class _Attention(nn.Module):
     def __init__(self, dim: int, num_heads: int) -> None:
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
+        self.scale = self.head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.proj = nn.Linear(dim, dim, bias=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Q-rows of qkv weight are pre-scaled by 1/sqrt(head_dim) at load time.
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-        attn = q @ k.transpose(-2, -1)
+        attn = (q * self.scale) @ k.transpose(-2, -1)
         attn = attn.softmax(dim=-1)
         out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
@@ -68,13 +77,14 @@ class _Block(nn.Module):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = _Attention(dim, num_heads)
+        self.ls1 = _LayerScale(dim)
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = _Mlp(dim, dim * mlp_ratio)
+        self.ls2 = _LayerScale(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # ls1/ls2 gammas are pre-folded into attn.proj and mlp.fc2 at load time.
-        x = x + self.attn(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
+        x = x + self.ls1(self.attn(self.norm1(x)))
+        x = x + self.ls2(self.mlp(self.norm2(x)))
         return x
 
 
@@ -255,51 +265,9 @@ class DA3Metric(nn.Module):
         return depth
 
 
-def _absorb_scalars_into_linears(remapped: dict) -> dict:
-    """Pre-multiply two scalar multiplicands into their preceding linear weights:
-
-    - layerscale gammas (ls1.gamma, ls2.gamma) are absorbed into attn.proj
-      and mlp.fc2 respectively, so the runtime forward drops the elementwise
-      gamma multiplies.
-    - the attention scale 1/sqrt(head_dim) is absorbed into the q-rows of
-      qkv.weight and qkv.bias, so the runtime drops `q * scale`.
-
-    All transformations are mathematically equivalent in fp32; bf16 may show
-    a tiny per-element rounding difference well within the noise floor."""
-    out = dict(remapped)
-    head_dim = EMBED_DIM // NUM_HEADS
-    scale = head_dim**-0.5
-    block_indices = sorted(
-        {int(k.split(".")[2]) for k in remapped if k.startswith("backbone.blocks.")}
-    )
-    for i in block_indices:
-        # 1) layerscale folds
-        for ls_key, lin_w_key, lin_b_key in [
-            (f"backbone.blocks.{i}.ls1.gamma",
-             f"backbone.blocks.{i}.attn.proj.weight",
-             f"backbone.blocks.{i}.attn.proj.bias"),
-            (f"backbone.blocks.{i}.ls2.gamma",
-             f"backbone.blocks.{i}.mlp.fc2.weight",
-             f"backbone.blocks.{i}.mlp.fc2.bias"),
-        ]:
-            gamma = out.pop(ls_key)
-            out[lin_w_key] = out[lin_w_key] * gamma.unsqueeze(1)
-            out[lin_b_key] = out[lin_b_key] * gamma
-        # 2) attention scale fold
-        wkey = f"backbone.blocks.{i}.attn.qkv.weight"
-        bkey = f"backbone.blocks.{i}.attn.qkv.bias"
-        w = out[wkey].clone()
-        b = out[bkey].clone()
-        w[:EMBED_DIM] = w[:EMBED_DIM] * scale
-        b[:EMBED_DIM] = b[:EMBED_DIM] * scale
-        out[wkey] = w
-        out[bkey] = b
-    return out
-
-
 def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> dict:
-    """Read only the `model.da3_metric.*` slice of the checkpoint, remap keys
-    onto the DA3Metric module above, and pre-fold scalar multiplicands."""
+    """Read only the `model.da3_metric.*` slice of the checkpoint and remap keys
+    onto the DA3Metric module above."""
     from safetensors import safe_open
 
     state = {}
@@ -310,13 +278,20 @@ def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> di
                 continue
             state[k[len(prefix):]] = f.get_tensor(k)
 
+    # Remap backbone keys: pretrained.* -> backbone.*
     remapped = {}
     for k, v in state.items():
         if k.startswith("backbone.pretrained."):
-            remapped["backbone." + k[len("backbone.pretrained."):]] = v
+            new_k = "backbone." + k[len("backbone.pretrained."):]
+            # patch_embed.proj.{weight,bias}  -> backbone.patch_embed.proj.{...}
+            # blocks.{i}.* unchanged
+            # ls1.gamma / ls2.gamma unchanged (we already named them gamma)
+            remapped[new_k] = v
+        elif k.startswith("head."):
+            remapped[k] = v
         else:
             remapped[k] = v
-    return _absorb_scalars_into_linears(remapped)
+    return remapped
 
 
 def build_da3_metric(load_weights: bool = True, img_size: int = DEFAULT_INPUT_SIZE) -> DA3Metric:
