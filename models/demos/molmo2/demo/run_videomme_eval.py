@@ -93,7 +93,7 @@ def run_eval(
     num_devices: int = 8,
     frames_per_device: int = 8,
     use_decode_trace: bool = True,
-    use_vision_trace: bool = True,
+    use_vision_trace: bool = False,
     use_trace: bool = False,
     use_dp_vision_trace: bool = False,
     num_layers: Optional[int] = None,
@@ -170,11 +170,16 @@ def run_eval(
             apply_template=False,
         )
 
-        if use_dp_vision_trace or use_decode_trace or use_trace or use_vision_trace:
-            from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
+        from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
 
-            _n_out = warmup_inputs["n_tokens"] // warmup_inputs["n_frames"]
-            _k_pool = warmup_inputs["k_pool"]
+        _n_out = warmup_inputs["n_tokens"] // warmup_inputs["n_frames"]
+        _k_pool = warmup_inputs["k_pool"]
+
+        # Always initialize KV cache (allocates rot_mat_idxs, current_pos, page tables).
+        generator.init_kv_cache()
+
+        # Capture decode trace (and optionally prefill traces).
+        if use_decode_trace or use_trace:
             generator.warmup_video_traces(
                 frames_per_device=frames_per_device,
                 num_devices=num_devices,
@@ -403,8 +408,8 @@ def main():
     parser.add_argument(
         "--use-vision-trace",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use vision trace (default: ON)",
+        default=False,
+        help="Use non-DP vision trace (default: OFF — hangs on large frame counts; use --use-dp-vision-trace for video)",
     )
     parser.add_argument(
         "--use-trace",
@@ -414,9 +419,9 @@ def main():
     )
     parser.add_argument(
         "--use-dp-vision-trace",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=False,
-        help="Use DP=8 vision trace",
+        help="Use DP=8 vision trace (default: OFF)",
     )
     args = parser.parse_args()
 

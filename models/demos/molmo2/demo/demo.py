@@ -325,9 +325,11 @@ class Molmo2Generator:
         # Reset KV cache position
         self.reset_kv_cache(0)
 
-        # Clear KV cache content to prevent stale data leakage between requests
-        # This is critical for correct behavior when reusing traces across multiple inferences
-        if self.kv_caches is not None:
+        # Clear KV cache content to prevent stale data leakage between requests.
+        # Skip when using paged attention: each request gets fresh pages so stale
+        # data in old blocks is never read. Zeroing with an active trace on-device
+        # triggers unsafe buffer allocation warnings and can hang.
+        if self.kv_caches is not None and not self.use_paged_attention:
             for layer_idx, (k_cache, v_cache) in enumerate(self.kv_caches):
                 # Get cache shape and dtype for creating zeros
                 k_shape = list(k_cache.shape)
