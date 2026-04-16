@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_hf_sharded_program_factory.hpp"
+#include <bit>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -151,6 +153,22 @@ RotaryEmbeddingHfMultiCoreSharded::cached_program_t RotaryEmbeddingHfMultiCoreSh
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+
+    // Reader kernel: writes -1.0 (bfloat16) into the scalar CB so the compute
+    // kernel can use it for the rotate-half negation.  No NOC transfers needed —
+    // all tensor data is in globally-allocated L1 CBs — so this is the only job
+    // of the reader on the sharded decode path.
+    const uint16_t bfloat16_neg_one = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src_scalar_cb_index,
+        (std::uint32_t)bfloat16_neg_one,
+    };
+    tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+        "reader_rotary_embedding_hf_sharded.cpp",
+        all_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     RotaryEmbeddingHfMultiCoreSharded::shared_variables_t shared_variables;
     shared_variables.cb_input = cb_input;
