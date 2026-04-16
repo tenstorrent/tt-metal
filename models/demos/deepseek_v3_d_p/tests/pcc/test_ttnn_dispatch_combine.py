@@ -226,7 +226,7 @@ def test_ttnn_dispatch_combine(
     num_links,
     topology,
     use_predictable_data,
-    dispatched_buffer_layout=ttnn.TILE_LAYOUT,
+    dispatched_buffer_layout,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
     torch.manual_seed(42)

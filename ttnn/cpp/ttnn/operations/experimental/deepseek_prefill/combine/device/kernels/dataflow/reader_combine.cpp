@@ -90,14 +90,14 @@ void kernel_main() {
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_total_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
 #if IS_TILE_LAYOUT
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
-    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
-    constexpr uint32_t num_total_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
 #endif
 #else
 #if IS_TILE_LAYOUT
-    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores_group = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
 #endif
 #endif
@@ -160,8 +160,8 @@ void kernel_main() {
 
     uint32_t start_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t start_sem_l1_offset = get_semaphore(start_semaphore_id);
-    uint64_t idle_start_noc_addrs[num_idle_cores];
-    for (uint32_t c = 0; c < num_idle_cores; c++) {
+    uint64_t idle_start_noc_addrs[num_idle_cores_group];
+    for (uint32_t c = 0; c < num_idle_cores_group; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args++);
         idle_start_noc_addrs[c] = get_noc_addr(noc_x, noc_y, start_sem_l1_offset);
@@ -218,11 +218,12 @@ void kernel_main() {
         while (off < mcast_total_size) {
             uint32_t chunk = ((mcast_total_size - off) > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE
                                                                                        : (mcast_total_size - off);
-            noc_async_write_multicast(counter_base_addr + off, mcast_counter_noc_addr + off, chunk, num_idle_cores);
+            noc_async_write_multicast(
+                counter_base_addr + off, mcast_counter_noc_addr + off, chunk, num_idle_cores_group);
             off += chunk;
         }
         noc_async_write_barrier();
-        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores);
+        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores_group);
         noc_async_atomic_barrier();
     }
 <<<<<<< HEAD
@@ -280,10 +281,10 @@ void kernel_main() {
             bool batch_did_local_write = false;
 
 #if IS_TILE_LAYOUT
-            uint32_t C = B % num_idle_cores;
+            uint32_t current_idle_core = B % num_idle_cores_group;
 
-            // Signal idle core C to send its untilized batch
-            noc_semaphore_inc(idle_start_noc_addrs[C], 1);
+            // Signal idle core to send its untilized batch
+            noc_semaphore_inc(idle_start_noc_addrs[current_idle_core], 1);
             noc_async_atomic_barrier();
 
             // Speculatively read metadata for this batch
