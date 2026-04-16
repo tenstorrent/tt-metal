@@ -206,7 +206,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::convert_layout_tile_to_row_major(
+                auto row_major_data = tensor_impl::to_row_major_layout(
                     tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
@@ -1495,6 +1495,17 @@ void pytensor_module(nb::module_& mod) {
                 .. code-block:: python
 
                     topology = tt_tensor.tensor_topology()
+            )doc")
+        .def(
+            "update_tensor_topology",
+            [](Tensor& self, const tt::tt_metal::TensorTopology& topology) { self.update_tensor_topology(topology); },
+            nb::arg("topology"),
+            R"doc(
+                Update the topology of the tensor.
+
+                .. code-block:: python
+
+                    tt_tensor.update_tensor_topology(new_topology)
             )doc")
         .def_prop_rw(
             "tensor_id",

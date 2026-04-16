@@ -264,3 +264,11 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
 }
+
+TEST_F(DevicePrintOutputFixture, PrintReorder) {
+    std::vector<std::string> messages = {
+        "u16_1: 16 u16_2: 32 u32_1: 1 u32_2: 2 u32_3: 4 u32_4: 8",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_reorder.cpp", messages);
+}

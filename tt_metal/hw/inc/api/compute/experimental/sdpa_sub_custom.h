@@ -6,17 +6,17 @@
 
 #include "api/compute/common.h"
 
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+#if defined(TRISC_MATH) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
 #include "experimental/llk_math_eltwise_binary_custom_api.h"
 #endif
 
-#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
+#if defined(TRISC_UNPACK) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom_api.h"
 #endif
 
 namespace ckernel {
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 
 ALWI void sub_bcast_cols_init_short_custom(uint32_t icb0, uint32_t icb1, uint32_t ct_dim, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
