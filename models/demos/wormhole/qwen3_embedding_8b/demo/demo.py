@@ -27,7 +27,9 @@ import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 import torch
 from loguru import logger
@@ -62,6 +64,24 @@ MESH_SHAPES = {
     8: (1, 8),
     32: (8, 4),
 }
+
+_DEFAULT_EMBEDDING_PERF_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embedding_perf_results.csv")
+
+
+def append_embedding_perf_csv_row(row: dict, csv_path: str | None = None) -> str:
+    """Write one run as a single-row DataFrame, appending to CSV (header only if file is new or empty).
+
+    Override path with ``csv_path`` or env ``TT_EMBEDDING_PERF_CSV``.
+    Returns the path written.
+    """
+    path = csv_path or os.environ.get("TT_EMBEDDING_PERF_CSV", _DEFAULT_EMBEDDING_PERF_CSV)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    df = pd.DataFrame([row])
+    write_header = not os.path.isfile(path) or os.path.getsize(path) == 0
+    df.to_csv(path, mode="a", header=write_header, index=False)
+    return path
 
 
 def load_input_texts(input_file, batch_size):
@@ -280,6 +300,24 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
+        (  # dp1-batch1-seqlt32: ISL 32; max_seq_len 128 (get_padded_prefill_len pads <=128 to 128)
+            1,
+            128,
+            32,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-seqlt64: ISL 64; max_seq_len 128 (prefill padded to 128)
+            1,
+            128,
+            64,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
         (  # dp1-batch1-seq512: ISL 512 at max_seq_len 512 (upper end of short-seq L1 path)
             1,
             512,
@@ -302,6 +340,24 @@ def clear_all_kv_caches(generator):
             25,
             128,
             128,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch25-seqlt32: ISL 32; max_seq_len 128 (prefill padded to 128)
+            25,
+            128,
+            32,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch25-seqlt64: ISL 64; max_seq_len 128 (prefill padded to 128)
+            25,
+            128,
+            64,
             {"page_block_size": 32, "page_max_num_blocks": 256},
             3,
             True,
@@ -375,9 +431,13 @@ def clear_all_kv_caches(generator):
         "dp1-batch1-short",
         "dp1-batch1-seqlt512",
         "dp1-batch1-seqlt128",
+        "dp1-batch1-seqlt32",
+        "dp1-batch1-seqlt64",
         "dp1-batch1-seq512",
         "dp1-batch25-seqlt512",
         "dp1-batch25-seqlt128",
+        "dp1-batch25-seqlt32",
+        "dp1-batch25-seqlt64",
         "dp1-batch25-seq512",
         "dp1-batch8-short",
         "dp32-isl512",
@@ -567,6 +627,35 @@ def test_embedding_perf(
     logger.info(f"  Avg tokens/s:         {tokens_per_sec_avg:.0f}")
     logger.info(f"  Best tokens/s:        {tokens_per_sec_best:.0f}")
     logger.info("=" * 60)
+
+    perf_csv_row = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "test_id": test_id,
+        "device": tt_device_name,
+        "num_devices": num_devices,
+        "model_name": getattr(model_args, "base_model_name", None) or getattr(model_args, "model_name", MODEL_NAME),
+        "batch_size": batch_size,
+        "batch_per_dp": batch_per_dp,
+        "data_parallel": data_parallel,
+        "input_seq_len": isl,
+        "max_seq_len": max_seq_len,
+        "total_input_tokens": total_input_tokens,
+        "num_iterations": num_iterations,
+        # Same units as logger: compile/build in s; prefill avg/best in ms (lines above use * 1000 for ms)
+        "compile_prefill_s": measurements["compile_prefill"],
+        "build_model_s": measurements["build_model_time"],
+        "avg_prefill_ms": avg_prefill_time * 1000.0,
+        "best_prefill_ms": best_prefill_time * 1000.0,
+        "embeddings_per_sec_avg": measurements["embeddings/s_avg"],
+        "embeddings_per_sec_best": measurements["embeddings/s_best"],
+        "tokens_per_sec_avg": measurements["prefill_t/s_avg"],
+        "tokens_per_sec_best": measurements["prefill_t/s_best"],
+    }
+    try:
+        csv_path = append_embedding_perf_csv_row(perf_csv_row)
+        logger.info(f"Appended perf row to {csv_path}")
+    except OSError as e:
+        logger.warning(f"Could not append embedding perf CSV: {e}")
 
     # ---- Cosine similarity sanity check (only for real text inputs) ----
     if data_parallel <= 1 and embeddings is not None and batch_size >= 2:
