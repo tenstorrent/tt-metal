@@ -11,17 +11,14 @@
 #include "ttnn/operations/math.hpp"
 
 namespace ttnn::operations::data_movement::clone {
-CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory::create(
+
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
+ProgramDescriptor CloneOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    using namespace tt::constants;
-    using namespace tt::tt_metal::detail;
-    using namespace tt::tt_metal;
-    using namespace tt;
-
-    Program program;
-
     const auto& input = tensor_args.input;
     auto input_data_format = datatype_to_dataformat_converter(input.dtype());
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -97,39 +94,58 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     auto alignment = input.buffer()->alignment();
 
-    uint32_t src_cb_id = CBIndex::c_4;
+    uint32_t src_cb_id = tt::CBIndex::c_4;
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
-    auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
-                             .set_page_size(src_cb_id, aligned_input_unit_size);
-    CreateCircularBuffer(program, all_cores, src_cb_config);
+
+    ProgramDescriptor desc;
+
+    // Source CB
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * aligned_input_unit_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src_cb_id,
+            .data_format = input_data_format,
+            .page_size = aligned_input_unit_size,
+        }}},
+    });
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
-        dst_cb_id = CBIndex::c_20;
+        dst_cb_id = tt::CBIndex::c_20;
         uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
-        auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
-                                 .set_page_size(dst_cb_id, aligned_output_unit_size);
-        CreateCircularBuffer(program, all_cores, dst_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * aligned_output_unit_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = dst_cb_id,
+                .data_format = output_data_format,
+                .page_size = aligned_output_unit_size,
+            }}},
+        });
     }
 
     auto* input_buffer = input.buffer();
     auto* output_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
+    // Compile-time args differ for tilized vs row-major
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
     if (tilized) {
-        reader_compile_time_args = {(uint32_t)src_cb_id};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        writer_compile_time_args = {(uint32_t)dst_cb_id};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        reader_ct_args = {src_cb_id};
+        TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+        writer_ct_args = {dst_cb_id};
+        TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
     } else {
-        reader_compile_time_args = {(uint32_t)src_cb_id, (uint32_t)input_unit_size};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        writer_compile_time_args = {(uint32_t)dst_cb_id, (uint32_t)output_unit_size};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        reader_ct_args = {src_cb_id, input_unit_size};
+        TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+        writer_ct_args = {dst_cb_id, output_unit_size};
+        TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
     }
 
-    std::string read_kernel_path;
-    std::string write_kernel_path;
+    // Kernel paths depend on sharded vs interleaved and tilized vs RM
+    const char* read_kernel_path;
+    const char* write_kernel_path;
 
     if (is_sharded) {
         read_kernel_path =
@@ -145,42 +161,62 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                                     : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp";
     }
 
-    auto read_kernel_id =
-        CreateKernel(program, read_kernel_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args, {}));
+    // Reader kernel
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = read_kernel_path;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    auto write_kernel_id =
-        CreateKernel(program, write_kernel_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, {}));
+    // Writer kernel
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = write_kernel_path;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
+    // Compute kernel for dtype conversion (dual core groups)
     if (convert_dtype) {
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
-        auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
-            if (!core_group.ranges().empty()) {
-                std::vector<uint32_t> compute_kernel_args = {
-                    (uint32_t)src_cb_id,
-                    (uint32_t)dst_cb_id,
-                    (uint32_t)num_units_per_core,
-                };
-                CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
-                    core_group,
-                    ComputeConfig{
-                        .math_fidelity = math_fidelity,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .math_approx_mode = math_approx_mode,
-                        .compile_args = compute_kernel_args,
-                    });
-            }
+
+        ComputeConfigDescriptor compute_config{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
         };
-        create_compute_kernel(core_group_1, num_units_per_core_group_1);
-        create_compute_kernel(core_group_2, num_units_per_core_group_2);
+
+        if (!core_group_1.ranges().empty()) {
+            KernelDescriptor compute_desc_1;
+            compute_desc_1.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp";
+            compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            compute_desc_1.core_ranges = core_group_1;
+            compute_desc_1.compile_time_args = {src_cb_id, dst_cb_id, num_units_per_core_group_1};
+            compute_desc_1.config = compute_config;
+            desc.kernels.push_back(std::move(compute_desc_1));
+        }
+        if (!core_group_2.ranges().empty()) {
+            KernelDescriptor compute_desc_2;
+            compute_desc_2.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp";
+            compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            compute_desc_2.core_ranges = core_group_2;
+            compute_desc_2.compile_time_args = {src_cb_id, dst_cb_id, num_units_per_core_group_2};
+            compute_desc_2.config = compute_config;
+            desc.kernels.push_back(std::move(compute_desc_2));
+        }
     }
 
+    // Runtime args per core
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
+    reader_desc.runtime_args.reserve(cores.size());
+    writer_desc.runtime_args.reserve(cores.size());
 
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -188,105 +224,55 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
         if (is_sharded) {
             if (tilized) {
-                SetRuntimeArgs(
-                    program,
-                    read_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)input_buffer->address(),
-                        (uint32_t)num_units_per_core,
-                    });
-                SetRuntimeArgs(
-                    program,
-                    write_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(input_buffer->address()), num_units_per_core});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)output_buffer->address(),
-                        (uint32_t)num_units_per_core,
-                    });
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(output_buffer->address()), num_units_per_core});
             } else {
-                SetRuntimeArgs(
-                    program,
-                    read_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)input_buffer->address(),
-                        (uint32_t)input_unit_size,
-                        (uint32_t)num_units_per_core,
-                    });
-                SetRuntimeArgs(
-                    program,
-                    write_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(input_buffer->address()), input_unit_size, num_units_per_core});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)output_buffer->address(),
-                        (uint32_t)output_unit_size,
-                        (uint32_t)num_units_per_core,
-                    });
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(output_buffer->address()), output_unit_size, num_units_per_core});
             }
         } else {
             if (tilized) {
-                SetRuntimeArgs(
-                    program,
-                    read_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)input_buffer->address(),
-                        (uint32_t)num_units_per_core,
-                        (uint32_t)start_id,
-                    });
-                SetRuntimeArgs(
-                    program,
-                    write_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(input_buffer->address()), num_units_per_core, start_id});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)output_buffer->address(),
-                        (uint32_t)num_units_per_core,
-                        (uint32_t)start_id,
-                    });
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(output_buffer->address()), num_units_per_core, start_id});
             } else {
-                SetRuntimeArgs(
-                    program,
-                    read_kernel_id,
+                reader_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)input_buffer->address(),
-                        (uint32_t)input_unit_size,
-                        (uint32_t)num_units_per_core,
-                        (uint32_t)start_id,
-                    });
-                SetRuntimeArgs(
-                    program,
-                    write_kernel_id,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(input_buffer->address()), input_unit_size, num_units_per_core, start_id});
+                writer_desc.runtime_args.emplace_back(
                     core,
-                    {
-                        (uint32_t)output_buffer->address(),
-                        (uint32_t)output_unit_size,
-                        (uint32_t)num_units_per_core,
-                        (uint32_t)start_id,
-                    });
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(output_buffer->address()),
+                        output_unit_size,
+                        num_units_per_core,
+                        start_id});
             }
             start_id += num_units_per_core;
         }
     }
-    return {std::move(program), {read_kernel_id, write_kernel_id, cores}};
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+
+    return desc;
 }
 
-void CloneOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    const auto& program = cached_program.program;
-    const auto& read_kernel_id = cached_program.shared_variables.read_kernel_id;
-    const auto& write_kernel_id = cached_program.shared_variables.write_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    auto input_buffer_address = tensor_args.input.buffer()->address();
-    auto output_buffer_address = output.buffer()->address();
-    for (const auto& core : cores) {
-        GetRuntimeArgs(program, read_kernel_id, core)[0] = input_buffer_address;
-        GetRuntimeArgs(program, write_kernel_id, core)[0] = output_buffer_address;
-    }
-}
 }  // namespace ttnn::operations::data_movement::clone
