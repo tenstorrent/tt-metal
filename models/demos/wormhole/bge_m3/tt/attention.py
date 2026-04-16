@@ -224,7 +224,7 @@ class BgeM3Attention(LightweightModule):
             assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
 
         cfg = self.config
-        core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len)
+        core_grid = bge_m3_matmul_core_grid(cfg.mesh_device, seq_len, batch_size)
 
         max_qkv = max_qkv_mm_chunk_seq_len(cfg.mesh_device)
         if seq_len > max_qkv:
@@ -412,11 +412,17 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
         )
 
     if config.qkv_compute_kernel_cfg is None:
-        to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
+        to_set["qkv_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
+        )
     if config.output_compute_kernel_cfg is None:
-        to_set["output_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
+        to_set["output_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
+        )
     if config.score_compute_kernel_cfg is None:
-        to_set["score_compute_kernel_cfg"] = bge_m3_sdpa_compute_kernel_config(mesh_device, max_seq_len=max_seq)
+        to_set["score_compute_kernel_cfg"] = bge_m3_sdpa_compute_kernel_config(
+            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
+        )
 
     # Phase E: resolve LazyWeights with resolved dtype + memory config.
     qkv_dtype = to_set.get("qkv_dtype", config.qkv_dtype)
