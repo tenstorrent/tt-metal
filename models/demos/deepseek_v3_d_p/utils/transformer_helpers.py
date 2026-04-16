@@ -605,7 +605,13 @@ def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch
 # --- Tokenization helpers ---
 def tokenize_prompt_to_isl(
     tokenizer, max_isl: int, prompt_text: str = "Capital of France is", debug: bool = False
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, list[str] | None]:
+    """Tokenize a prompt, padding/truncating to exactly max_isl tokens.
+
+    Returns:
+        (input_ids, attention_mask, tokens): input_ids and attention_mask are [1, max_isl] tensors;
+        tokens is a list of token strings (only when debug=True, else None).
+    """
     inputs = tokenizer(
         prompt_text,
         return_tensors="pt",  # return PyTorch tensors
@@ -631,7 +637,13 @@ def tokenize_prompt_to_chat_template(
     user_prompt: str = "What is the capital of France",
     system_prompt: str = "You are friendly assistent",
     debug: bool = False,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, list[str] | None]:
+    """Apply chat template and tokenize, padding/truncating to max_isl tokens.
+
+    Returns:
+        (input_ids, tokens): input_ids is a [1, max_isl] tensor;
+        tokens is a list of token strings (only when debug=True, else None).
+    """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
