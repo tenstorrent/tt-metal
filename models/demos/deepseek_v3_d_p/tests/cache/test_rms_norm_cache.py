@@ -41,7 +41,6 @@ def test_rms_norm_weights_cold_warm_cache(mesh_device, device_params):
     # Use realistic parameters (from PCC test)
     emb_dim = 7168
     isl_per_chip = 320  # Sequence length per chip
-    epsilon = 1e-6
 
     # Create random weight
     torch_weight = torch.randn(emb_dim, dtype=torch.float32)
