@@ -20,6 +20,7 @@ Usage (standalone, single device):
 
 Usage (pytest, picks device from MESH_DEVICE env):
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -sv -k "dp32"
+    pytest .../demo.py -sv -k "dp1-batch1-seqlt512"   # batch=1, seq length < 512
 """
 
 import json
@@ -39,7 +40,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_mod
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name
 
-MODEL_NAME = "Qwen/Qwen3-Embedding-8B"
+MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 BLOCK_SIZE = 32
 
 INSTRUCTION = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
@@ -97,6 +98,22 @@ def _submesh_has_local_devices(submesh):
     )
 
 
+def _align_max_num_blocks_for_batch(max_num_blocks: int, batch_per_dp: int) -> int:
+    """Ensure max_num_blocks is a multiple of batch_per_dp so the page table can reshape.
+
+    prepare_embedding_model builds
+    ``page_table`` as ``[local_batch, max_num_blocks // batch_per_dp]`` with
+    ``local_batch * (max_num_blocks // batch_per_dp) == max_num_blocks * local_dp``,
+    which requires ``max_num_blocks % batch_per_dp == 0`` when ``local_dp == 1``.
+    """
+    if batch_per_dp <= 1:
+        return max_num_blocks
+    rem = max_num_blocks % batch_per_dp
+    if rem == 0:
+        return max_num_blocks
+    return max_num_blocks + (batch_per_dp - rem)
+
+
 def prepare_embedding_model(
     mesh_device,
     global_batch_size,
@@ -111,9 +128,17 @@ def prepare_embedding_model(
     """
     batch_per_dp = global_batch_size // data_parallel
 
+    raw_max_blocks = page_params["page_max_num_blocks"]
+    aligned_max_blocks = _align_max_num_blocks_for_batch(raw_max_blocks, batch_per_dp)
+    if aligned_max_blocks != raw_max_blocks:
+        logger.info(
+            f"Aligned page_max_num_blocks {raw_max_blocks} -> {aligned_max_blocks} "
+            f"for batch_per_dp={batch_per_dp} (paged page_table layout)"
+        )
+
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
-        max_num_blocks=page_params["page_max_num_blocks"],
+        max_num_blocks=aligned_max_blocks,
     )
 
     all_submeshes = create_submeshes(mesh_device, data_parallel)
@@ -129,6 +154,14 @@ def prepare_embedding_model(
 
     if len(submeshes) != len(all_submeshes):
         logger.info(f"Distributed mode: using {len(submeshes)}/{len(all_submeshes)} local submeshes")
+
+    # Overlap host dispatch with device (large op-to-op gaps in Tracy for embedding prefill on N150)
+    if os.getenv("TT_EMBEDDING_ASYNC_DISPATCH", "0") == "1":
+        try:
+            ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+            logger.info("Asynchronous slow dispatch enabled (TT_EMBEDDING_ASYNC_DISPATCH=1; requires slow dispatch)")
+        except Exception as e:
+            logger.warning(f"enable_asynchronous_slow_dispatch skipped: {e}")
 
     models = []
     model_args_list = []
@@ -229,6 +262,60 @@ def clear_all_kv_caches(generator):
             True,
             1,
         ),
+        (  # dp1-batch1-seqlt512: batch=1, max_seq_len and ISL both < 512 (synthetic tokens)
+            1,
+            256,
+            256,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-seqlt128: short ISL (trace bucket 128), batch 1
+            1,
+            128,
+            128,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch1-seq512: ISL 512 at max_seq_len 512 (upper end of short-seq L1 path)
+            1,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch25-seqlt512: batch=25, max_seq_len and ISL both < 512 (synthetic tokens)
+            25,
+            256,
+            256,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch25-seqlt128: short ISL (trace bucket 128), batch 25
+            25,
+            128,
+            128,
+            {"page_block_size": 32, "page_max_num_blocks": 256},
+            3,
+            True,
+            1,
+        ),
+        (  # dp1-batch25-seq512: ISL 512 at max_seq_len 512, batch 25
+            25,
+            512,
+            512,
+            {"page_block_size": 32, "page_max_num_blocks": 512},
+            3,
+            True,
+            1,
+        ),
         (  # dp1-batch8-short: 8 texts, 1024 tokens, single device
             8,
             1024,
@@ -286,6 +373,12 @@ def clear_all_kv_caches(generator):
     ],
     ids=[
         "dp1-batch1-short",
+        "dp1-batch1-seqlt512",
+        "dp1-batch1-seqlt128",
+        "dp1-batch1-seq512",
+        "dp1-batch25-seqlt512",
+        "dp1-batch25-seqlt128",
+        "dp1-batch25-seq512",
         "dp1-batch8-short",
         "dp32-isl512",
         "dp32-isl1024",
