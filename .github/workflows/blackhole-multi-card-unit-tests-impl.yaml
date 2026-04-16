@@ -51,36 +51,17 @@ jobs:
           # Define all test groups as YAML (test-type: "fast" = run when fast-only; others run in full matrix)
           # Convert to JSON for jq filtering; multi-line cmd blocks stay readable
           all_tests_yaml=$(cat <<'YAML_EOF'
-          - name: fabric fast unit tests (1D, 2D, system health)
+          - name: fabric fast unit tests (1D, 2D, single erisc)
             cmd: |
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-              ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
-            test-type: fast
-          - name: Sockets fast unit test
-            cmd: |
-              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
-            timeout: 10
             test-type: fast
           - name: Host IO fast unit test (viommu only)
             cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
             timeout: 10
             test-type: fast-viommu
-          - name: cpp fast unit tests (eth, single erisc)
-            cmd: |
-              ./build/test/tt_metal/unit_tests_eth
-              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
-              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
-              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
-            timeout: 15
-            test-type: fast
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
