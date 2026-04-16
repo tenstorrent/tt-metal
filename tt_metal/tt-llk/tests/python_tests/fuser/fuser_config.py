@@ -4,6 +4,7 @@
 
 from dataclasses import dataclass
 from functools import reduce
+from hashlib import sha256
 from typing import List
 
 import pandas as pd
@@ -99,6 +100,29 @@ class FuserConfig(TestConfig):
                     f"Block size ({operation.block_size}) is bigger than dest capacity ({dest_capacity})"
                 )
 
+    def generate_variant_hash(self):
+        NON_COMPILATION_ARGUMENTS = [
+            "run_configs",
+            "variant_id",
+            "runtime_arguments_struct",
+            "runtime_format",
+            "passed_templates",
+            "passed_runtimes",
+            "current_run_type",
+            "temp_elfs",
+            "pipeline",
+            "global_config",
+            "operand_registry",
+        ]
+
+        temp_str = [
+            str(value)
+            for field_name, value in self.__dict__.items()
+            if field_name not in NON_COMPILATION_ARGUMENTS
+        ]
+
+        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+
     def generate_and_build_test(self):
         from .fused_generator import FusedKernelGenerator
 
@@ -137,10 +161,10 @@ class FuserConfig(TestConfig):
 
             self.operand_registry.allocate_l1_addresses()
 
-            if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+            if self.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
                 self.generate_and_build_test()
 
-            if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+            if self.BUILD_MODE == BuildMode.PRODUCE:
                 continue
 
             logger.info("Running perf test for run type: {}", run_type.name)
@@ -151,11 +175,11 @@ class FuserConfig(TestConfig):
                 meta = Profiler._get_meta(self.test_name, self.variant_id)
                 buffer_data = [
                     read_words_from_device(
-                        TestConfig.TENSIX_LOCATION,
+                        self.TENSIX_LOCATION,
                         addr,
-                        word_count=TestConfig.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
+                        word_count=self.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
                     )
-                    for addr in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
+                    for addr in self.THREAD_PERFORMANCE_DATA_BUFFER
                 ]
                 profiler_data = Profiler._parse_buffers(buffer_data, meta)
                 profiler_data.df["run_index"] = run_index
@@ -164,7 +188,7 @@ class FuserConfig(TestConfig):
             get_stats = Profiler.STATS_FUNCTION[run_type]
             all_results.append(get_stats(ProfilerData.concat(runs)))
 
-        if TestConfig.BUILD_MODE != BuildMode.PRODUCE and all_results:
+        if self.BUILD_MODE != BuildMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
                     left, right, on="marker", how="outer", validate="1:1"
@@ -187,8 +211,8 @@ class FuserConfig(TestConfig):
         from .fused_generator import FUSED_TESTS_DIR
         from .fused_golden import FusedGolden
 
-        if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
+        if self.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
+            pytest.skip(self.SKIP_JUST_FOR_STIMULI_MARKER)
 
         self.test_name = FUSED_TESTS_DIR / f"{self.global_config.test_name}.cpp"
 
@@ -196,16 +220,16 @@ class FuserConfig(TestConfig):
 
         self.operand_registry.allocate_l1_addresses()
 
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        if self.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             self.generate_and_build_test()
 
-        if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+        if self.BUILD_MODE == BuildMode.PRODUCE:
+            pytest.skip(self.SKIP_JUST_FOR_COMPILE_MARKER)
 
-        self.operand_registry.write_inputs_to_l1(TestConfig.TENSIX_LOCATION)
+        self.operand_registry.write_inputs_to_l1(self.TENSIX_LOCATION)
 
         self.run_elf_files()
         self.wait_for_tensix_operations_finished()
-        self.operand_registry.read_outputs_from_l1(TestConfig.TENSIX_LOCATION)
+        self.operand_registry.read_outputs_from_l1(self.TENSIX_LOCATION)
         golden = FusedGolden()
         assert golden.check_pipeline(self)

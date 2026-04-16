@@ -342,6 +342,15 @@ class OperandRegistry:
         2. All output operands
         """
 
+        if (
+            start_address < self.DEFAULT_L1_START_ADDRESS
+            or start_address > self.DEFAULT_L1_END_ADDRESS
+        ):
+            raise ValueError(
+                f"Start L1 address for operands must be between "
+                f"{self.DEFAULT_L1_START_ADDRESS} and {self.DEFAULT_L1_END_ADDRESS}"
+            )
+
         current_address = start_address
 
         for operand in self.get_all_inputs():
