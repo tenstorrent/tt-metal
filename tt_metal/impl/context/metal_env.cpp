@@ -31,6 +31,9 @@
 #include <system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_metal {
 
@@ -263,6 +266,52 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // Before releasing the ETH cores, wait for the fabric router firmware on each chip to
+    // finish its teardown.  The ETH router writes EDMStatus::TERMINATED to edm_status_address
+    // when it exits.  If we skip this wait, the next process that opens the same devices may
+    // find the ETH cores mid-teardown, causing wait_for_fabric_endpoint_ready() in the new
+    // mux kernel to spin forever and triggering ARC "unsafe NOC access" errors on all chips.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    if (control_plane_ != nullptr) {
+        auto& cluster = this->get_cluster();
+        const auto& fabric_context = this->get_control_plane().get_fabric_context();
+        const auto& builder_context = fabric_context.get_builder_context();
+        const auto [edm_status_address, _unused] = builder_context.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t timeout_ms = 5000;
+        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+
+        for (const ChipId chip_id : cluster.all_chip_ids()) {
+            if (builder_context.get_num_fabric_initialized_routers(chip_id) == 0) {
+                continue;
+            }
+            const auto master_chan = builder_context.get_fabric_master_router_chan(chip_id);
+            const auto eth_logical_core =
+                cluster.get_soc_desc(chip_id).get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+
+            auto start = std::chrono::steady_clock::now();
+            while (true) {
+                auto status =
+                    cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
+                if (!status.empty() && status[0] == terminated_val) {
+                    break;
+                }
+                auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
+                if (elapsed > timeout_ms) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
+                        "(status=0x{:08x}), continuing teardown",
+                        chip_id,
+                        master_chan,
+                        status.empty() ? 0u : status[0]);
+                    break;
+                }
+            }
+        }
+    }
+
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
