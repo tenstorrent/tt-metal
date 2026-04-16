@@ -84,6 +84,12 @@ Tensor to_layout_impl(
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.padded_shape().size() < 2) {
+            TT_FATAL(
+                !tensor.is_sharded(),
+                "ttnn::to_layout: Cannot convert a sharded device tensor with rank {} to TILE_LAYOUT. "
+                "Tilize requires shard dimensions divisible by tile size, but rank promotion to 2D "
+                "produces a shard height of 1. Move to interleaved first, then tilize.",
+                tensor.padded_shape().size());
             const bool is_scalar = tensor.padded_shape().size() == 0;
             SmallVector<uint32_t> new_padded_shape =
                 is_scalar ? SmallVector<uint32_t>{1, 1} : SmallVector<uint32_t>{1, tensor.padded_shape()[-1]};
@@ -195,7 +201,7 @@ Tensor to_layout_impl(
                     use_multicore_tilize,
                     sub_core_grids);
             }
-            if (original_rank == 1) {
+            if (original_rank < 2) {
                 return ttnn::reshape(
                     tensor,
                     original_shape,

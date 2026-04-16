@@ -345,6 +345,14 @@ ttnn::Tensor ttnn::reshape(
     // ND sharded tensors: convert to interleaved, reshape, then convert back.
     // The reshape op assumes legacy 2D shard specs throughout its internal paths.
     if (is_device_tensor(tensor) && tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        if (mem_config.is_sharded()) {
+            tt::tt_metal::TensorSpec
+                output_spec(  // check if the output sharded memory config is even compatible with the reshaped tensor
+                              // so that we can TT_FATAL out before launching device operations.
+                    logical_shape,
+                    tt::tt_metal::TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), mem_config));
+            (void)output_spec;
+        }
         MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         auto interleaved_tensor = ttnn::to_memory_config(tensor, interleaved_config);
         auto result = ttnn::reshape(
