@@ -423,14 +423,6 @@ class CCLManager:
             tensor.shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
         )
 
-        # When progress semaphore is active, force num_links=1 so a SINGLE direction-0
-        # fabric core handles all T outer_dims. This ensures local outer_dim == global
-        # T-slice: the signal condition (outer_dim+1)%T_batch==0 fires at correct boundaries.
-        # With num_links=2, two direction-0 cores split outer_dims; core 1's
-        # outer_dim_offset_start_id is in sticks (not T-slices) making global T-batch
-        # computation wrong — core 1 never fires signals, causing reader deadlock.
-        effective_num_links = [1] * len(num_links) if progress_t_batch_size > 0 else num_links
-
         # Dispatch NeighborPad on CQ0 (same CQ as conv3d) targeting SD0 (fabric cores).
         # Single-CQ dispatch: NP (SD0) and conv3d (SD1) run concurrently on device.
         # deactivate_halo_sub_devices() naturally waits for both NP+conv3d before reset.
@@ -445,7 +437,7 @@ class CCLManager:
             axes,
             neighbor_sems,
             [barrier_sem],
-            num_links=effective_num_links,
+            num_links=num_links,
             topology=self.topology,
             persistent_output_buffer=halo_buf,
             progress_semaphore=progress_semaphore,

@@ -307,13 +307,11 @@ class WanCausalConv3d(Module):
             H=conv_dims.H,
             W=conv_dims.W,
         )
-        # Enable halo buffer path when T_out_block > 1 AND halo exchange is needed.
-        # T_out_block > 1 means the blocking table selected a multi-T-batch plan, which requires
-        # NP to signal conv3d readers per T-batch via the progress semaphore.
+        # Enable fused NP+Conv3d when spatial halo exchange is needed.
         # use_h_halo_buffer is a compile-time flag (part of program hash); set it once here.
         h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-        if self.conv_config.T_out_block > 1 and (h_pad_enabled or w_pad_enabled):
+        if h_pad_enabled or w_pad_enabled:
             self.conv_config.use_h_halo_buffer = True
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -785,7 +783,7 @@ class WanConv2d(Module):
         )
         h_pad_enabled = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_enabled = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
-        if self.conv_config.T_out_block > 1 and (h_pad_enabled or w_pad_enabled):
+        if h_pad_enabled or w_pad_enabled:
             self.conv_config.use_h_halo_buffer = True
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
