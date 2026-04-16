@@ -25,8 +25,12 @@ You will receive:
 - **ISSUE_BODY** — the full issue description (verbatim — error messages, reproduction steps, code snippets, etc.)
 - **ISSUE_LABELS** — labels (e.g., blackhole, P2, LLK)
 - **ISSUE_COMMENTS** — all comments in full (verbatim — follow-up context, clarifications, stack traces, etc.)
+- **WORKTREE_DIR** — absolute path to the git worktree where all code changes must be made (e.g., `/tmp/codegen_worktree_123`)
+- **WORKTREE_BRANCH** — the branch name for this issue (e.g., `ai-code-gen/issue-123-codegen-v1`)
 
 **CRITICAL: Never alter, summarize, paraphrase, or truncate any issue content.** Pass the raw title, body, and comments as-is to every subagent you spawn.
+
+**CRITICAL: All subagents that read or modify code must operate inside `WORKTREE_DIR`.** The worktree contains the codebase from `origin/main` plus symlinked codegen infrastructure. Pass `WORKTREE_DIR` to every subagent prompt.
 
 ---
 
@@ -39,7 +43,7 @@ LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
 START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
 LOG_DIR=${LOGS_BASE}/${RUN_ID}
-GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 mkdir -p $LOG_DIR/instructions
 ```
 
@@ -54,7 +58,7 @@ Snapshot agent playbooks for reproducibility:
 cp codegen/agents/blackhole/bh-*.md $LOG_DIR/instructions/
 ```
 
-Pass `LOG_DIR` to every agent prompt so they can self-log their reasoning.
+Pass `LOG_DIR` and `WORKTREE_DIR` to every agent prompt so they can self-log their reasoning and operate in the correct working directory.
 
 ---
 
@@ -79,6 +83,7 @@ Agent tool:
 
     Output your analysis to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -120,6 +125,7 @@ Agent tool:
 
     Write your findings to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_arch_research.md
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -145,6 +151,7 @@ Agent tool:
 
     Output your fix plan to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -170,6 +177,7 @@ Agent tool:
 
     Apply all changes described in the fix plan and run compilation checks.
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -203,6 +211,7 @@ Agent tool:
 
     Max 5 fix attempts.
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -235,6 +244,7 @@ Agent tool:
     Run compilation checks and functional tests as described in the fix plan's
     test strategy section.
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -270,6 +280,7 @@ Agent tool:
 
     Max 5 fix attempts. After fixing, ensure compilation still passes.
 
+    WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -285,7 +296,7 @@ After debug → re-run Step 5 (test). Max 2 debug→test cycles before proceedin
 
 ```bash
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-CHANGED_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null || echo "")
 ```
 
 ### 6b: Append to runs.jsonl
