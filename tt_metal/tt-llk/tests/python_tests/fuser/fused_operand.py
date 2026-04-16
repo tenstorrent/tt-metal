@@ -26,10 +26,9 @@ class Operand:
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
-    _data: Optional[torch.Tensor] = None
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
-    _const_value: Optional[float] = None
+    const_value: Optional[float] = None
     l1_golden: Optional[torch.Tensor] = None
     tile_count: Optional[int] = None
     tile_count_x: Optional[int] = None
@@ -43,25 +42,17 @@ class Operand:
     def is_input(self) -> bool:
         return not self.is_output
 
-    def generate_data(self, const_value=None):
-        if self._data is not None:
-            return
-
-        const_value = const_value if const_value is not None else self._const_value
-
+    def generate_data(self):
         height, width = self.dimensions[0], self.dimensions[1]
-        tile_rows = self.tile_shape.total_row_dim()
-        tile_cols = self.tile_shape.total_col_dim()
-        tile_count = (height // tile_rows) * (width // tile_cols)
 
-        faces_needed = tile_count * self.tile_shape.total_num_faces()
+        faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
         for _ in range(faces_needed):
             face = generate_random_face(
                 stimuli_format=self.data_format,
-                const_value=const_value,
-                const_face=const_value is not None,
+                const_value=self.const_value,
+                const_face=self.const_value is not None,
                 sfpu=self.sfpu,
                 face_r_dim=self.tile_shape.face_r_dim,
                 negative_values=False,
@@ -77,39 +68,10 @@ class Operand:
             height, width
         )
 
-        if self.data_format != DataFormat.Bfp8_b:
-            tilized_data = tilize_block(
-                raw_data, dimensions=self.dimensions, stimuli_format=self.data_format
-            )
-        else:
-            tilized_data = raw_data
-
         self._raw_data = raw_data
-        self._data = tilized_data
-        self._tile_count = tile_count
 
     def set_data(self, raw_data: torch.Tensor):
-        self._const_value = None
         self._raw_data = raw_data
-
-        if self.data_format != DataFormat.Bfp8_b:
-            tilized_data = tilize_block(
-                raw_data, dimensions=self.dimensions, stimuli_format=self.data_format
-            )
-        else:
-            tilized_data = raw_data
-
-        self._data = tilized_data
-
-    @property
-    def data(self) -> Optional[torch.Tensor]:
-        if self._data is None and self.is_input():
-            self.generate_data()
-        return self._data
-
-    @data.setter
-    def data(self, value: torch.Tensor):
-        self._data = value
 
     @property
     def raw_data(self) -> Optional[torch.Tensor]:
@@ -171,7 +133,16 @@ class Operand:
 
         tile_elements = self.tile_shape.total_tile_size()
         tile_size = self.data_format.num_bytes_per_tile(tile_elements)
-        buffer = self.data.flatten()
+
+        if self.data_format != DataFormat.Bfp8_b:
+            buffer = tilize_block(
+                self.raw_data,
+                dimensions=self.dimensions,
+                stimuli_format=self.data_format,
+            ).flatten()
+        else:
+            buffer = self.raw_data.flatten()
+
         packed_tiles = []
 
         for i in range(self.tile_count):
@@ -235,13 +206,6 @@ class OperandMapping:
 
         return (M, N)
 
-    def get_output_tile_count(self, operand_registry: "OperandRegistry") -> int:
-        dims = self.resolve_output_dimensions(operand_registry)
-        output_op = operand_registry.get(self.output)
-        tile_rows = output_op.tile_shape.total_row_dim()
-        tile_cols = output_op.tile_shape.total_col_dim()
-        return (dims[0] // tile_rows) * (dims[1] // tile_cols)
-
 
 class OperandRegistry:
     def __init__(self):
@@ -267,7 +231,7 @@ class OperandRegistry:
             is_output=False,
             sfpu=sfpu,
         )
-        operand._const_value = const_value
+        operand.const_value = const_value
         self.operands[name] = operand
         return operand
 
@@ -302,11 +266,6 @@ class OperandRegistry:
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]
 
-    def update_data(self, name: str, data: torch.Tensor):
-        if name not in self.operands:
-            raise KeyError(f"Operand '{name}' not found")
-        self.operands[name].data = data
-
     def create_mapping(
         self,
         src_a: str,
@@ -335,8 +294,6 @@ class OperandRegistry:
                 raise ValueError(
                     f"Operand '{src_a}' already exists with dimensions {existing.dimensions}, got {src_a_dims}"
                 )
-            if src_a_tensor is None:
-                self.operands[src_a]._const_value = src_a_const_value
 
         if src_b not in self.operands:
             self.add_input(
@@ -351,8 +308,6 @@ class OperandRegistry:
                 raise ValueError(
                     f"Operand '{src_b}' already exists with dimensions {existing.dimensions}, got {src_b_dims}"
                 )
-            if src_b_tensor is None:
-                self.operands[src_b]._const_value = src_b_const_value
 
         if src_a_tensor is not None:
             self.operands[src_a].set_data(src_a_tensor)
@@ -450,5 +405,4 @@ class OperandRegistry:
             else:
                 raw_tensor = tilized_tensor
 
-            output._data = tilized_tensor
             output._raw_data = raw_tensor
