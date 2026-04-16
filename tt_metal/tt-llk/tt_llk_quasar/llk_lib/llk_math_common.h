@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -20,7 +21,8 @@ using namespace ckernel::math;
 inline bool _is_src_fmt_fp32_dest_compatible_(const DataFormat src_reg_fmt)
 {
     return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 || src_reg_fmt == DataFormat::Tf32 ||
-           src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B || src_reg_fmt == DataFormat::Int32;
+           src_reg_fmt == DataFormat::Float32 || src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B ||
+           src_reg_fmt == DataFormat::Int32;
 }
 
 /**
@@ -54,6 +56,7 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 
     const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(srcA_format) && _is_src_fmt_fp32_dest_compatible_(srcB_format);
     const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format);
+    LLK_ASSERT(!(EN_FP32_DEST_FORMAT && EN_INT32_DEST_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
     // Set implied math format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
@@ -101,13 +104,14 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * @tparam EN_32BIT_DEST: Set to true to use 32-bit math dest in Float32 or Int32 format
  * otherwise default behaviour is Float16/Float16_b depending on input
  * format exponent width
- * @param unpack_dst_format: The unpacker output format, used to determine whether destination register format is Float32 or Int32
+ * @param unpack_dst_format: The unpacker0 output format, used to determine whether destination register format is Float32 or Int32
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _llk_math_upk_to_dest_hw_configure_(DataFormat unpack_dst_format)
 {
     const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(unpack_dst_format);
     const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(unpack_dst_format);
+    LLK_ASSERT(!(EN_FP32_DEST_FORMAT && EN_INT32_DEST_FORMAT), "Cannot have Int32 dest & Float32 dest at the same time");
 
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
