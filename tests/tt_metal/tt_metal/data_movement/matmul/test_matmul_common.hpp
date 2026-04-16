@@ -142,4 +142,7 @@ class Matmul1DParamFixture : public GenericMeshDeviceFixture,
 class Matmul1DV2ParamFixture : public GenericMeshDeviceFixture,
                                public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
 
+class Matmul2DParamFixture : public GenericMeshDeviceFixture,
+                             public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
+
 }  // namespace tt::tt_metal
