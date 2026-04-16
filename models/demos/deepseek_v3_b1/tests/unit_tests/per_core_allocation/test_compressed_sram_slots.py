@@ -11,16 +11,20 @@ Validates:
   - Expert index encoding and selection meta for SRAM/DRAM routing
 """
 
+import numpy as np
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
 from models.demos.deepseek_v3_b1.weights.prepare import (
     SramCompressedExpertSlots,
     SramHotExpertConfig,
     _build_l1_compressed_tensor,
+    build_sram_hot_expert_config,
+    compute_expert_l1_bytes,
     prepare_compressed_sram_slots,
 )
 
@@ -269,3 +273,161 @@ def test_sram_hot_expert_config_per_layer(device):
     assert flags3[0] == 0 and flags3[5] == 0 and flags3[10] == 1
     assert flags7[10] == 0 and flags7[20] == 0 and flags7[30] == 0 and flags7[0] == 1
     logger.info("Per-layer config: layer 3 has 2 slots, layer 7 has 3 slots, layer 5 has none")
+
+
+# ---------------------------------------------------------------------------
+# compute_expert_l1_bytes tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_expert_l1_bytes():
+    """compute_expert_l1_bytes returns the max per-core sum across projections.
+
+    Uses a mixed-precision assignment from CompressedTensorAssigner to verify
+    the tighter computation (sum-per-core, then max) is <= the conservative
+    estimate (sum of independent per-projection maxes).
+    """
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    num_cores = 8
+    assigner = _make_assigner(formats=["bfp8", "bfp4", "bfp2"])
+
+    def _quantize_fn(x, fmt_str):
+        mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
+        return quantize_dequantize_bfp(x, mant_map[fmt_str])
+
+    torch.manual_seed(123)
+    weights = [torch.randn(K, N), torch.randn(K, N), torch.randn(K, N)]
+    assignments = []
+    shapes = []
+    for w in weights:
+        result = assigner.assign(w, _quantize_fn)
+        assignments.append(result.assignment)
+        shapes.append(tuple(w.shape))
+
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grid)
+    assert computed > 0, "L1 bytes must be positive"
+
+    # Conservative estimate: sum of independent per-projection maxes
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import compute_shard_page_mapping
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    _MANT_BITS = {0: 7, 1: 3, 2: 1, 3: 0}
+    tile_byte_lut = np.array(
+        [bfp_tile_packed_size(_MANT_BITS[c], TILE_W) for c in range(4)],
+        dtype=np.int64,
+    )
+
+    conservative = 0
+    for assignment, (Kd, Nd) in zip(assignments, shapes):
+        per_core_Nd = Nd // num_cores
+        shard_spec = ttnn.ShardSpec(core_grid, [Kd, per_core_Nd], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        shard_mapping = compute_shard_page_mapping([Kd, Nd], mem_config, TILE_W)
+        flat = assignment.ravel()
+        proj_max = 0
+        for _core, page_indices in shard_mapping:
+            shard_bytes = int(tile_byte_lut[flat[list(page_indices)]].sum())
+            proj_max = max(proj_max, shard_bytes)
+        conservative += proj_max
+
+    assert computed <= conservative, f"Tightened {computed} must be <= conservative {conservative}"
+
+    # Determinism
+    computed2 = compute_expert_l1_bytes(assignments, shapes, core_grid)
+    assert computed == computed2, "compute_expert_l1_bytes must be deterministic"
+
+    logger.info(f"compute_expert_l1_bytes: {computed} bytes (conservative: {conservative})")
+
+
+def test_compute_expert_l1_bytes_uniform_assignment():
+    """All-bfp8 assignment yields uniform shard sizes across cores."""
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    tiles_h = K // TILE_W
+    tiles_w = N // TILE_W
+    uniform_bfp8 = np.zeros((tiles_h, tiles_w), dtype=np.int32)
+
+    assignments = [uniform_bfp8, uniform_bfp8, uniform_bfp8]
+    shapes = [(K, N), (K, N), (K, N)]
+
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grid)
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    expected_per_tile = bfp_tile_packed_size(7, TILE_W)
+    tiles_per_shard = tiles_h * (tiles_w // 8)
+    expected = 3 * tiles_per_shard * expected_per_tile
+
+    assert computed == expected, f"Uniform bfp8: expected {expected}, got {computed}"
+    logger.info(f"Uniform bfp8: {computed} bytes")
+
+
+# ---------------------------------------------------------------------------
+# build_sram_hot_expert_config tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_sram_hot_expert_config_budget():
+    """build_sram_hot_expert_config respects L1 budget and prioritizes by frequency."""
+    layer_idx = 3
+    num_experts = 8
+    expert_indices = list(range(num_experts))
+    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
+    assigner = _make_assigner()
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+
+    freqs = [0] * 256
+    for i, e in enumerate(expert_indices):
+        freqs[e] = 100 - i * 10
+
+    routing_frequencies = {layer_idx: freqs}
+
+    large_budget = 10 * 1024 * 1024
+    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, large_budget, routing_frequencies)
+    assert layer_idx in config
+    assert len(config[layer_idx]) == num_experts
+
+    tiny_budget = 1
+    config_tiny = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, tiny_budget, routing_frequencies)
+    assert config_tiny.get(layer_idx) is None or len(config_tiny.get(layer_idx, [])) == 0
+
+
+def test_build_sram_hot_expert_config_zero_budget():
+    """Zero budget yields no selected experts."""
+    layer_idx = 5
+    sd = _make_state_dict(layer_idx, [0, 1], K=K, N=N)
+    assigner = _make_assigner()
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    freqs = [0] * 256
+    freqs[0] = 50
+    freqs[1] = 30
+    routing_frequencies = {layer_idx: freqs}
+
+    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, 0, routing_frequencies)
+    assert config.get(layer_idx) is None
+
+
+def test_build_sram_hot_expert_config_multi_layer():
+    """Multi-layer config produces independent allocations per layer."""
+    layers = [3, 5]
+    experts_per_layer = {3: [0, 1, 2], 5: [4, 5]}
+    sd = {}
+    for li in layers:
+        sd.update(_make_state_dict(li, experts_per_layer[li], K=K, N=N))
+
+    assigner = _make_assigner()
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+
+    routing_frequencies = {}
+    for li in layers:
+        freqs = [0] * 256
+        for i, e in enumerate(experts_per_layer[li]):
+            freqs[e] = 100 - i * 10
+        routing_frequencies[li] = freqs
+
+    large_budget = 10 * 1024 * 1024
+    config = build_sram_hot_expert_config(sd, layers, assigner, core_grid, large_budget, routing_frequencies)
+
+    assert 3 in config and 5 in config
+    assert len(config[3]) == 3
+    assert len(config[5]) == 2
+    logger.info(f"Multi-layer config: {config}")
