@@ -20,6 +20,28 @@ from _ttml.modules import RunMode
 
 @dataclass
 class LoraConfig:
+    """Configuration for LoRA (Low-Rank Adaptation) injection.
+
+    Attributes:
+        rank: Rank of the low-rank decomposition (A and B matrices).
+        alpha: Scaling numerator.  The effective scaling factor is
+            ``alpha / sqrt(rank)`` when *use_rslora* is ``True``, else
+            ``alpha / rank``.
+        target_modules: List of regex patterns matched against fully-qualified
+            module names.  Matching linear layers are replaced with their LoRA
+            counterparts.
+        use_rslora: Use rank-stabilized LoRA scaling (``alpha / sqrt(rank)``)
+            instead of the original ``alpha / rank``.
+        is_bias_trainable: If ``True``, bias parameters in matched layers remain
+            trainable after injection.
+        trainable_modules: List of name substrings; any parameter whose path
+            contains one of these substrings is unfrozen after injection.  This
+            is useful for keeping specific non-LoRA parameters trainable
+            (e.g. layer norms).
+        lora_dropout: Dropout probability applied to the LoRA input during
+            training.
+    """
+
     rank: int = 8
     alpha: float = 16.0
     target_modules: list[str] = field(default_factory=list)
@@ -122,6 +144,9 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             base = ttml.ops.distributed.all_gather(
                 base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
             )
+        # lora_A is replicated so it operates on the full input; lora_B is
+        # column-sharded, producing a sharded update that must be gathered
+        # whenever the base path is gathered.
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
@@ -172,6 +197,9 @@ class LoraRowParallelLinear(AbstractModuleBase):
         base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
+        # lora_A is row-sharded (each device sees a slice of in_features), so
+        # an all_reduce is needed after lora_A to sum partial projections before
+        # the replicated lora_B can be applied.
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
@@ -189,7 +217,13 @@ _LORA_MODULE_MAP: dict[type, type] = {
 
 
 class LoraModel(AbstractModuleBase):
-    """Wraps a model, freezes its parameters, and injects LoraLinear modules."""
+    """Wraps a model, freezes its parameters, and injects LoRA adapters.
+
+    Linear layers whose fully-qualified name matches any pattern in
+    ``config.target_modules`` are replaced with their LoRA counterpart via
+    ``_LORA_MODULE_MAP`` (``LinearLayer`` -> ``LoraLinear``,
+    ``ColumnParallelLinear`` -> ``LoraColumnParallelLinear``, etc.).
+    """
 
     def __init__(self, model: AbstractModuleBase, config: LoraConfig) -> None:
         super().__init__()
@@ -211,6 +245,11 @@ class LoraModel(AbstractModuleBase):
         patterns: list[re.Pattern],
         config: LoraConfig,
     ) -> None:
+        """Recursively replace matching linear layers with their LoRA wrappers.
+
+        ModuleList and ModuleDict require index/key-based assignment instead of
+        ``setattr`` because their ``__setitem__`` maintains internal bookkeeping.
+        """
         for name, child in list(module.named_children()):
             full_name = f"{prefix}.{name}" if prefix else name
 

@@ -78,6 +78,9 @@ class LlamaMLP(AbstractModuleBase):
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
 
         if use_tp:
+            # Gate (w1) and up (w3) projections are column-parallel (output sharded);
+            # down projection (w2) is row-parallel (input sharded).  The pair
+            # eliminates a gather/scatter round-trip between w1/w3 and w2.
             self.w1 = ColumnParallelLinear(
                 embedding_size,
                 intermediate_size,
@@ -143,6 +146,8 @@ class LlamaMLP(AbstractModuleBase):
 
 
 class LlamaBlock(AbstractModuleBase):
+    """Pre-norm residual transformer block (attention + MLP)."""
+
     def __init__(
         self,
         hidden_size: int,

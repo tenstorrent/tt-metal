@@ -14,6 +14,14 @@ from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, 
 
 
 class GroupedQueryAttention(AbstractModuleBase):
+    """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
+
+    When ``use_tp=True`` the Q and KV projections use ``ColumnParallelLinear``
+    (output features sharded) with ``gather_output=False``, and the output
+    projection uses ``RowParallelLinear`` with ``input_is_parallel=True``.
+    This avoids redundant communication between the two matmuls.
+    """
+
     def __init__(
         self,
         embedding_size: int,
@@ -36,10 +44,12 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
 
-        # Compute concat_kv_dim using GLOBAL head counts (before TP division)
+        # concat_kv_dim uses GLOBAL head counts because the weight matrices are
+        # created at full size and then sharded by ColumnParallelLinear.
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
-        # Store LOCAL head/group counts (divided by tp_size when TP is active)
+        # Head/group counts stored here are LOCAL (per-device) so that reshaping
+        # in grouped_heads_creation matches the sharded activation width.
         if use_tp:
             tp_size = ttml.current_mesh().axis_size("tp")
             self.num_heads = num_heads // tp_size

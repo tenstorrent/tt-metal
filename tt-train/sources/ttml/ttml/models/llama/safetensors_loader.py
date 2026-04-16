@@ -78,12 +78,18 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
 
 
 def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
+    """Overwrite *param* with a TTML tensor built from *arr_4d*, optionally sharded via *mapper*."""
     restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
     param.assign(restored)
 
 
 def _make_tp_mapper(shard_type):
-    """Create a shard-to-mesh mapper for the given shard type, or None if replicated."""
+    """Create a shard-to-mesh mapper for the given shard type, or ``None`` if replicated.
+
+    In TTML's 4-D weight layout ``(1, 1, out_features, in_features)``:
+      - ``"col_w"`` shards dim 2 (rows = output features) for ColumnParallelLinear.
+      - ``"row_w"`` shards dim 3 (cols = input features) for RowParallelLinear.
+    """
     if shard_type is None:
         return None
     dim = 2 if shard_type == "col_w" else 3
@@ -130,6 +136,9 @@ def load_from_safetensors(
     num_heads = config.num_attention_heads
     num_kv_heads = config.num_key_value_heads
 
+    # HF stores k_proj and v_proj as separate tensors; TTML combines them into
+    # a single kv_linear weight.  We stage K and V as they arrive and combine
+    # once both are available for a given layer.
     k_staged: Dict[int, np.ndarray] = {}
     v_staged: Dict[int, np.ndarray] = {}
 
@@ -238,7 +247,7 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # q_proj
+            # q_proj — column-parallel (output features sharded)
             if hf_name in (
                 f"{pfx}.self_attn.q_proj.weight",
                 f"{pfx2}.self_attn.q_proj.weight",
@@ -281,7 +290,7 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # o_proj
+            # o_proj — row-parallel (input features sharded)
             if hf_name in (
                 f"{pfx}.self_attn.o_proj.weight",
                 f"{pfx2}.self_attn.o_proj.weight",
@@ -304,7 +313,7 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # gate_proj -> w1
+            # gate_proj -> w1 — column-parallel
             if hf_name in (
                 f"{pfx}.mlp.gate_proj.weight",
                 f"{pfx2}.mlp.gate_proj.weight",
@@ -327,7 +336,7 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # up_proj -> w3
+            # up_proj -> w3 — column-parallel
             if hf_name in (
                 f"{pfx}.mlp.up_proj.weight",
                 f"{pfx2}.mlp.up_proj.weight",
@@ -350,7 +359,7 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # down_proj -> w2
+            # down_proj -> w2 — row-parallel
             if hf_name in (
                 f"{pfx}.mlp.down_proj.weight",
                 f"{pfx2}.mlp.down_proj.weight",

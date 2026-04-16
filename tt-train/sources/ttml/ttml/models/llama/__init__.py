@@ -17,6 +17,8 @@ from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_s
 
 @dataclass(frozen=True)
 class LlamaRopeScalingConfig:
+    """Llama 3.x RoPE frequency scaling configuration."""
+
     scaling_factor: float = 0.0  # 0.0 means no scaling
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
@@ -25,6 +27,13 @@ class LlamaRopeScalingConfig:
 
 @dataclass(frozen=True)
 class LlamaConfig:
+    """Llama model hyper-parameters.
+
+    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
+    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.
+    """
+
     hidden_size: int = 384
     intermediate_size: Optional[int] = None
     num_hidden_layers: int = 6
@@ -95,6 +104,8 @@ class LlamaConfig:
 
 
 class Llama(AbstractModuleBase):
+    """Llama decoder-only transformer (Python implementation)."""
+
     def __init__(self, config: LlamaConfig) -> None:
         super().__init__()
 
@@ -107,6 +118,8 @@ class Llama(AbstractModuleBase):
             )
 
         if config.use_tp:
+            # gather_output=True: the LM head must produce full-vocab logits on
+            # every device so that the loss can be computed without further CCL.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 config.vocab_size,
@@ -176,6 +189,8 @@ class Llama(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
+        # Token IDs must be padded to the tile boundary so the embedding lookup
+        # produces a tile-aligned tensor.  The padding is stripped after lookup.
         TILE_SIZE = 32
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]

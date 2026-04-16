@@ -151,6 +151,8 @@ def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
     def uniform_init(shape, mapper=None):
+        # When a mapper is provided (TP sharding) the tensor is built from a
+        # CPU-side NumPy array because device ops don't accept mesh mappers.
         if mapper is not None:
             data = np.random.uniform(a, b, size=shape).astype(np.float32)
             return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)

@@ -15,6 +15,13 @@ def prod(x: Iterable[int]) -> int:
 
 
 class Mesh:
+    """Named multi-dimensional device mesh.
+
+    Maps a flat set of devices onto a logical grid where each axis has a name
+    (e.g. ``("dp", "tp")``).  Axis names are used throughout the TP/DP stack to
+    look up shard dimensions, communicate across the correct device subset, etc.
+    """
+
     shape: tuple[int, ...]
     axis_names: tuple[str, ...]
     _axis_map: dict[str, int]
@@ -47,6 +54,12 @@ class Mesh:
         return self._axis_map[name]
 
     def axis_mapper(self, name: str, tdim: int):
+        """Return a mapper that shards a tensor along ``tdim`` across the named mesh axis.
+
+        The mapper is passed to ``Tensor.from_numpy`` (or an initializer's ``mapper``
+        kwarg) so that each device in the mesh receives the appropriate slice of the
+        full tensor.
+        """
         dev = ttml.autograd.AutoContext.get_instance().get_device()
         cluster_axis = self.axis_pos(name)
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
@@ -57,6 +70,13 @@ _ARCH_MAX_DIMS = {"WORMHOLE_B0": 2, "BLACKHOLE": 3}
 
 
 def _validate_mgd(mesh: Mesh) -> None:
+    """Validate that the requested Mesh is consistent with the Mesh Graph Descriptor (MGD) file.
+
+    Three checks are performed:
+      1. dims — the MGD device_topology dims must match ``mesh.shape`` exactly.
+      2. arch — the mesh dimensionality must not exceed the architecture's maximum.
+      3. topology — any axis named ``"dp"`` must use RING topology in the MGD.
+    """
     mgd_path = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     if not mgd_path:
         print("WARNING: TT_MESH_GRAPH_DESC_PATH not set, skipping MGD validation")
@@ -127,6 +147,12 @@ def _validate_mgd(mesh: Mesh) -> None:
 
 
 def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
+    """Initialize the global device mesh and open the underlying TT devices.
+
+    When more than one device is requested the MGD file is validated and the
+    TT-Fabric interconnect is enabled.  A plain tuple is accepted for backward
+    compatibility and converted into a ``Mesh`` with anonymous axis names.
+    """
     if not isinstance(mesh, Mesh):
         mesh = Mesh(mesh, tuple(f"_{i}" for i in range(len(mesh))))
     if device_ids is None:
@@ -143,11 +169,13 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
 
 
 def maybe_current_mesh() -> Mesh | None:
+    """Return the active device mesh, or ``None`` if no mesh has been opened."""
     global _current_mesh
     return _current_mesh
 
 
 def current_mesh() -> Mesh:
+    """Return the active device mesh, raising ``RuntimeError`` if none is open."""
     global _current_mesh
     if _current_mesh is None:
         msg = (
