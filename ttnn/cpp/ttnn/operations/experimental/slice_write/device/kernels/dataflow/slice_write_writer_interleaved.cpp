@@ -64,39 +64,27 @@ void kernel_main() {
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
-#ifdef DEBUG
-    uint32_t base_src_l1_addr = cb_out0.get_read_ptr();
-#endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_out0.wait_front(num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = cb_out0.get_read_ptr();
+        uint32_t src_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
 #ifdef UNPAD_INPUT_WIDTH
             if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                noc.async_write(
-                    experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr),
-                    s0,
-                    noc_write_size,
-                    {},
-                    {.page_id = dst_stick_id});
+                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
             }
 #else
             noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr),
-                s0,
-                noc_write_size,
-                {.offset_bytes = page_offset},
-                {.page_id = dst_stick_id});
+                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
 #endif
 #ifdef DEBUG
-            DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
-                   << " sticks_read: " << sticks_read << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", "
-                   << id_per_dim[2] << ", " << id_per_dim[3] << ENDL();
+            DPRINT << "SRC L1 : " << src_offset << " Dst Stick ID " << dst_stick_id << " sticks_read: " << sticks_read
+                   << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", " << id_per_dim[2] << ", "
+                   << id_per_dim[3] << ENDL();
             DEVICE_PRINT(
                 "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
-                src_buffer_l1_addr - base_src_l1_addr,
+                src_offset,
                 dst_stick_id,
                 sticks_read,
                 id_per_dim[0],
@@ -104,7 +92,7 @@ void kernel_main() {
                 id_per_dim[2],
                 id_per_dim[3]);
 #endif
-            src_buffer_l1_addr += stick_size_offset;
+            src_offset += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;

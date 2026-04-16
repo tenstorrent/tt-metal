@@ -51,21 +51,17 @@ void kernel_main() {
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             input_cb.wait_front(tiles_per_channel_dim);
-            uint32_t l1_read_addr = input_cb.get_read_ptr();
+            auto src = experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
+            uint32_t src_offset = 0;
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
             for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                noc.async_write(
-                    experimental::CoreLocalMem<uint32_t>(l1_read_addr),
-                    dst,
-                    stick_nbytes,
-                    {},
-                    {.page_id = output_stick_idx});
+                noc.async_write(src, dst, stick_nbytes, {.offset_bytes = src_offset}, {.page_id = output_stick_idx});
 
                 // Update pointers and indices
-                l1_read_addr += aligned_stick_nbytes;
+                src_offset += aligned_stick_nbytes;
                 output_stick_idx++;
                 stride_width_idx++;
 

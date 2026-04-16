@@ -49,11 +49,9 @@ void kernel_main() {
     experimental::CB cb_out(cb_out_id);
     experimental::CB cb_padding(cb_padding_id);
 
-    const uint32_t base_write_addr = cb_out.get_write_ptr();
-    uint32_t write_addr = base_write_addr;
+    uint32_t write_offset = 0;
     uint32_t rows_remaining = num_sticks_this_core;
     uint32_t tiles_read = 0;
-    uint32_t read_addr = cb_untilized.get_read_ptr();
     uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
     const uint32_t pad_addr = cb_padding.get_read_ptr();
     const uint32_t output_row_size_elems = output_row_size_bytes / output_elem_size;
@@ -146,8 +144,8 @@ void kernel_main() {
             output_coord[1],
             output_coord[2],
             output_coord[3]);
-        DPRINT << "Write Addr " << write_addr << ", Offset " << write_addr - base_write_addr << ENDL();
-        DEVICE_PRINT("Write Addr {} Offset {}\n", write_addr, write_addr - base_write_addr);
+        DPRINT << "Write Offset " << write_offset << ENDL();
+        DEVICE_PRINT("Write Offset {}\n", write_offset);
 
 #endif
 
@@ -156,26 +154,26 @@ void kernel_main() {
 
         if constexpr (is_non_aligned) {
             uint32_t current_src_l1 = noc_read_src_base;
-            uint32_t current_write_addr = write_addr;
+            uint32_t current_write_offset = write_offset;
             for (uint32_t row = 0; row < read_rows_size; row++) {
                 noc.async_read(
                     self_ep,
-                    experimental::CoreLocalMem<uint32_t>(current_write_addr),
+                    cb_out,
                     output_row_size_bytes,
                     experimental::local_addr(current_src_l1 + misalignment, noc.get_noc_id()),
-                    {});
+                    {.offset_bytes = current_write_offset});
                 current_src_l1 += block_row_size;
-                current_write_addr += output_row_size_bytes;
+                current_write_offset += output_row_size_bytes;
             }
         } else {
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(write_addr),
+                cb_out,
                 read_rows_size * block_row_size,
                 experimental::local_addr(noc_read_src_base, noc.get_noc_id()),
-                {});
+                {.offset_bytes = write_offset});
         }
-        uint32_t pad_write_addr = write_addr + output_row_size_bytes - padded_channels_bytes;
+        uint32_t pad_write_offset = write_offset + output_row_size_bytes - padded_channels_bytes;
         if (padded_channels_elems > 0) {
 #ifdef DEBUG
             volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
@@ -188,23 +186,23 @@ void kernel_main() {
             }
             DPRINT << ENDL();
             DEVICE_PRINT("\n");
-            DPRINT << "Pad Write Addr : " << pad_write_addr << ENDL();
-            DEVICE_PRINT("Pad Write Addr : {}\n", pad_write_addr);
+            DPRINT << "Pad Write Offset : " << pad_write_offset << ENDL();
+            DEVICE_PRINT("Pad Write Offset : {}\n", pad_write_offset);
 #endif
             const auto pad_src = experimental::local_addr(pad_src_l1_addr, noc.get_noc_id());
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
                 noc.async_read(
                     self_ep,
-                    experimental::CoreLocalMem<uint32_t>(pad_write_addr),
+                    cb_out,
                     padded_channels_elems * output_elem_size,
                     pad_src,
-                    {});
-                pad_write_addr += output_row_size_bytes;
+                    {.offset_bytes = pad_write_offset});
+                pad_write_offset += output_row_size_bytes;
             }
         }
         noc.async_read_barrier();
 
-        write_addr += read_rows_size * output_row_size_bytes;
+        write_offset += read_rows_size * output_row_size_bytes;
         cb_untilized.pop_front(num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 

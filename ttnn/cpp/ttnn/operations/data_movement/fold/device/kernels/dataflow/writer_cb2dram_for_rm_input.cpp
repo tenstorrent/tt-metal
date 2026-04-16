@@ -46,20 +46,16 @@ void kernel_main() {
             }
         }
         if constexpr (!is_l1_aligned) {
+            // Scratch buffer (cb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
             noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(intermed_l1_scratch),
+                experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
                 s_out,
                 stick_nbytes * patch_size,
                 {},
                 {.page_id = dst_index});
         } else {
             // If L1 aligned, write directly from the circular buffer
-            noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(l1_addr),
-                s_out,
-                stick_nbytes * patch_size,
-                {},
-                {.page_id = dst_index});
+            noc.async_write(cb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
         }
         noc.async_write_barrier();
         cb_in0.pop_front(1);

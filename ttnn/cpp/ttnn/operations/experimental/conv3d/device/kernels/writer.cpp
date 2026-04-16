@@ -93,22 +93,22 @@ void kernel_main() {
         experimental::CB cb_zero(cb_zero_tiled);
         cb_zero.reserve_back(1);
         constexpr uint32_t zero_tile_bytes = get_tile_size(cb_zero_safe);
-        uint32_t zero_addr = cb_zero.get_write_ptr();
+        uint32_t zero_offset = 0;
         uint32_t remaining = zero_tile_bytes;
         experimental::set_read_state<MEM_ZEROS_SIZE>(noc, MEM_ZEROS_BASE);
         while (remaining >= MEM_ZEROS_SIZE) {
-            experimental::read_with_state(noc, zero_addr, MEM_ZEROS_BASE);
-            zero_addr += MEM_ZEROS_SIZE;
+            experimental::read_with_state(noc, cb_zero, MEM_ZEROS_BASE, {.offset_bytes = zero_offset});
+            zero_offset += MEM_ZEROS_SIZE;
             remaining -= MEM_ZEROS_SIZE;
         }
         if (remaining > 0) {
             experimental::UnicastEndpoint self_ep;
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(zero_addr),
+                cb_zero,
                 remaining,
                 experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()),
-                {});
+                {.offset_bytes = zero_offset});
         }
         noc.async_read_barrier();
         cb_zero.push_back(1);
@@ -218,7 +218,7 @@ void kernel_main() {
                                 }
 
                                 cb_out.wait_front(output_tiles);
-                                uint32_t cb_read_ptr = cb_out.get_read_ptr();
+                                uint32_t cb_read_offset = 0;
 
                                 for (uint32_t t = t_block; t < t_block_end; ++t) {
                                     for (uint32_t h = h_block; h < h_block_end; ++h) {
@@ -226,13 +226,13 @@ void kernel_main() {
                                             uint32_t out_page_idx =
                                                 batch_idx * T_out_H_out_W_out + t * H_out * W_out + h * W_out + w;
                                             noc.async_write(
-                                                experimental::CoreLocalMem<uint32_t>(cb_read_ptr),
+                                                cb_out,
                                                 out_writer,
                                                 C_out_block_bytes,
-                                                {},
+                                                {.offset_bytes = cb_read_offset},
                                                 {.page_id = out_page_idx,
                                                  .offset_bytes = c_out_block * C_out_block_bytes});
-                                            cb_read_ptr += C_out_block_bytes;
+                                            cb_read_offset += C_out_block_bytes;
                                         }
                                     }
                                 }

@@ -53,14 +53,14 @@ void kernel_main() {
         }
     }
 
-    uint32_t write_addr = out_addr + unpadded_row_size_bytes;
     // pad_size_bytes is runtime; issue each read as a single-packet UnicastEndpoint NOC transfer
     experimental::UnicastEndpoint self_ep;
     const auto pad_src = experimental::local_addr(pad_addr + unpadded_row_size_bytes, noc.get_noc_id());
 
+    uint32_t write_offset = unpadded_row_size_bytes;
     for (uint32_t i = 0; i < num_units; ++i) {
-        noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(write_addr), pad_size_bytes, pad_src, {});
-        write_addr += padded_row_size_bytes;
+        noc.async_read(self_ep, cb_out_obj, pad_size_bytes, pad_src, {.offset_bytes = write_offset});
+        write_offset += padded_row_size_bytes;
     }
     noc.async_read_barrier();
 }

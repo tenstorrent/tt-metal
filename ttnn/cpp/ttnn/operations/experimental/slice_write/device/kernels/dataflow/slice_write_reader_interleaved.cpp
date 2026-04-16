@@ -31,22 +31,22 @@ void kernel_main() {
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_in0.reserve_back(num_read_per_barrier);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        uint32_t l1_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            noc.async_read(
-                s0, experimental::CoreLocalMem<uint32_t>(l1_write_addr), stick_size, {.page_id = i_stick}, {});
+            noc.async_read(s0, cb_in0, stick_size, {.page_id = i_stick}, {.offset_bytes = l1_offset});
 #ifdef LAST_DIM
             // align data if slicing on last dim
             noc.async_read_barrier();
+            const uint32_t l1_write_addr = cb_in0.get_write_ptr() + l1_offset;
             tt::data_movement::common::tt_memmove<false, false, false, 0>(
                 l1_write_addr + page_offset,  // destination (shifted right)
                 l1_write_addr,                // source (original location)
                 stick_size                    // total bytes to move
             );
 #endif
-            l1_write_addr += stick_size_offset;
+            l1_offset += stick_size_offset;
             i_stick += 1;
         }
         noc.async_read_barrier();

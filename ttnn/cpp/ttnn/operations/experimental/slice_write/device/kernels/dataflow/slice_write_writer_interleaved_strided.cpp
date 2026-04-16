@@ -95,23 +95,13 @@ void kernel_main() {
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
     uint32_t sticks_written = 0;
-#ifdef DEBUG
-    uint32_t base_src_l1_addr = cb_in.get_read_ptr();
-#endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_written < num_sticks_per_core; ++iter) {
 #ifdef LAST_DIM_STRIDED
         // read output rows in batches if striding on last dim
         cb_out.reserve_back(num_read_per_barrier);
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint32_t l1_write_addr = cb_out.get_write_ptr();
-            noc.async_read(
-                s0,
-                experimental::CoreLocalMem<uint32_t>(l1_write_addr),
-                output_stick_size,
-                {.page_id = src_stick_id},
-                {});
-            l1_write_addr += output_stick_size;
+            noc.async_read(s0, cb_out, output_stick_size, {.page_id = src_stick_id}, {});
             src_stick_id += rev_stride[1];
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
@@ -131,17 +121,17 @@ void kernel_main() {
         cb_in.wait_front(num_read_per_barrier);
 #ifdef LAST_DIM_STRIDED
         cb_out.wait_front(num_read_per_barrier);
-        uint32_t output_l1_addr = cb_out.get_read_ptr();
+        uint32_t output_offset = 0;
 #endif
-        uint32_t src_buffer_l1_addr = cb_in.get_read_ptr();
+        uint32_t src_offset = 0;
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_written < num_sticks_per_core; ++i) {
             sticks_written++;
 #ifdef LAST_DIM_STRIDED
             // fill the read output row with the input with stride
-            volatile tt_l1_ptr uint8_t* out_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(output_l1_addr + page_begins_offset);
+            volatile tt_l1_ptr uint8_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(
+                cb_out.get_read_ptr() + output_offset + page_begins_offset);
             volatile tt_l1_ptr uint8_t* in_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr + alignment_offset);
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_in.get_read_ptr() + src_offset + alignment_offset);
             uint32_t out_index = 0;
             for (uint32_t j = 0; j < input_stick_size / element_size; j++) {
                 // general writing for all data types byte by byte
@@ -150,29 +140,21 @@ void kernel_main() {
                 }
                 out_index += rev_stride[0];
             }
-            noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(output_l1_addr),
-                s0,
-                output_stick_size,
-                {},
-                {.page_id = dst_stick_id});
-            output_l1_addr += output_stick_size;
+            noc.async_write(cb_out, s0, output_stick_size, {.offset_bytes = output_offset}, {.page_id = dst_stick_id});
+            output_offset += output_stick_size;
 #else
             noc.async_write(
-                experimental::CoreLocalMem<uint32_t>(src_buffer_l1_addr + alignment_offset),
+                cb_in,
                 s0,
                 noc_write_size,
-                {},
+                {.offset_bytes = src_offset + alignment_offset},
                 {.page_id = dst_stick_id, .offset_bytes = page_begins_offset});
 #endif
 #ifdef DEBUG
-            DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
+            DPRINT << "SRC L1 : " << src_offset << " Dst Stick ID " << dst_stick_id
                    << " sticks_written: " << sticks_written << " Coord ";
             DEVICE_PRINT(
-                "SRC L1 : {} Dst Stick ID {} sticks_written: {} Coord ",
-                src_buffer_l1_addr - base_src_l1_addr,
-                dst_stick_id,
-                sticks_written);
+                "SRC L1 : {} Dst Stick ID {} sticks_written: {} Coord ", src_offset, dst_stick_id, sticks_written);
             for (uint32_t j = 0; j < num_dims; j++) {
                 DPRINT << ", " << id_per_dim[j];
                 DEVICE_PRINT(", {} ", id_per_dim[j]);
@@ -180,7 +162,7 @@ void kernel_main() {
             DPRINT << ENDL();
             DEVICE_PRINT("\n");
 #endif
-            src_buffer_l1_addr += stick_size_offset;
+            src_offset += stick_size_offset;
             dst_stick_id += rev_stride[1];
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;

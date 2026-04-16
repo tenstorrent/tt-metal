@@ -8,24 +8,20 @@
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
-template <uint32_t padded_page_bytes>
-FORCE_INLINE void pre_zero_pages(experimental::Noc noc, uint32_t write_addr, uint32_t num_pages) {
+template <uint32_t padded_page_bytes, typename Dst>
+FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
     static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
     uint32_t total = num_pages * padded_page_bytes;
     experimental::set_read_state<MEM_ZEROS_SIZE>(noc, MEM_ZEROS_BASE);
     while (total >= MEM_ZEROS_SIZE) {
-        experimental::read_with_state(noc, write_addr, MEM_ZEROS_BASE);
-        write_addr += MEM_ZEROS_SIZE;
+        experimental::read_with_state(noc, dst, MEM_ZEROS_BASE, {.offset_bytes = offset});
+        offset += MEM_ZEROS_SIZE;
         total -= MEM_ZEROS_SIZE;
     }
     if (total > 0) {
         experimental::UnicastEndpoint self_ep;
         noc.async_read(
-            self_ep,
-            experimental::CoreLocalMem<uint32_t>(write_addr),
-            total,
-            experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()),
-            {});
+            self_ep, dst, total, experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()), {.offset_bytes = offset});
     }
     noc.async_read_barrier();
 }
@@ -40,8 +36,8 @@ inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound)
     return idx;
 }
 
-template <uint32_t in_row_size_bytes>
-inline void zeroPad(experimental::Noc noc, uint32_t cb_write_addr) {
+template <uint32_t in_row_size_bytes, typename Dst>
+inline void zeroPad(experimental::Noc noc, const Dst& dst, uint32_t offset) {
     constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
 
@@ -49,22 +45,23 @@ inline void zeroPad(experimental::Noc noc, uint32_t cb_write_addr) {
     const auto zeros_src = experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(cb_write_addr), MEM_ZEROS_SIZE, zeros_src, {});
-        cb_write_addr += MEM_ZEROS_SIZE;
+        noc.async_read(self_ep, dst, MEM_ZEROS_SIZE, zeros_src, {.offset_bytes = offset});
+        offset += MEM_ZEROS_SIZE;
     }
     if (partial_read_size > 0) {
-        noc.async_read(self_ep, experimental::CoreLocalMem<uint32_t>(cb_write_addr), partial_read_size, zeros_src, {});
+        noc.async_read(self_ep, dst, partial_read_size, zeros_src, {.offset_bytes = offset});
     }
 }
 
-template <typename Reader>
+template <typename Reader, typename Dst>
 FORCE_INLINE void read_input_row(
     experimental::Noc noc,
     const Reader& reader,
     uint32_t page_idx,
     uint32_t c_in_offset_bytes,
     uint32_t in_row_size_bytes,
-    uint32_t dst_addr,
+    const Dst& dst,
+    uint32_t dst_offset,
     uint32_t size_bytes) {
     if constexpr (Reader::DSpec::tensor_shape_static) {
         if constexpr ((reader.dspec().rank() > 1) && (reader.dspec().tensor_shape()[1] > 1)) {
@@ -76,29 +73,29 @@ FORCE_INLINE void read_input_row(
             const uint32_t in_page_id = page_idx * width_in_pages + col_page_idx;
             noc.async_read(
                 reader,
-                experimental::CoreLocalMem<uint32_t>(dst_addr),
+                dst,
                 size_bytes,
                 {.page_id = in_page_id, .offset_bytes = in_offset_bytes},
-                {});
+                {.offset_bytes = dst_offset});
             return;
         }
     }
 
     noc.async_read(
         reader,
-        experimental::CoreLocalMem<uint32_t>(dst_addr),
+        dst,
         size_bytes,
         {.page_id = page_idx, .offset_bytes = c_in_offset_bytes},
-        {});
+        {.offset_bytes = dst_offset});
 }
 
 template <uint32_t cb_id, uint32_t padded_page_bytes, uint32_t patch_pad_bytes>
 struct ChunkWriter {
-    static constexpr uint32_t chunk_max = 32;
+    static constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
     uint32_t remaining;
     uint32_t chunk_size;
     uint32_t in_chunk;
-    uint32_t write_addr;
+    uint32_t write_offset;
     experimental::Noc noc;
     experimental::CB cb;
 
@@ -109,15 +106,17 @@ struct ChunkWriter {
         in_chunk = 0;
         chunk_size = remaining < chunk_max ? remaining : chunk_max;
         cb.reserve_back(chunk_size);
-        write_addr = cb.get_write_ptr();
+        write_offset = 0;
         if constexpr (patch_pad_bytes > 0) {
-            pre_zero_pages<padded_page_bytes>(noc, write_addr, chunk_size);
+            pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
         }
     }
 
+    // Call after writing one patch to write_offset.
+    // Returns true when a chunk was pushed and a new one reserved — caller must restore NOC packet state.
     bool advance() {
         if constexpr (patch_pad_bytes > 0) {
-            write_addr += patch_pad_bytes;
+            write_offset += patch_pad_bytes;
         }
         in_chunk++;
         if (in_chunk == chunk_size) {
@@ -128,11 +127,11 @@ struct ChunkWriter {
             if (remaining > 0) {
                 chunk_size = remaining < chunk_max ? remaining : chunk_max;
                 cb.reserve_back(chunk_size);
-                write_addr = cb.get_write_ptr();
+                write_offset = 0;
                 if constexpr (patch_pad_bytes > 0) {
-                    pre_zero_pages<padded_page_bytes>(noc, write_addr, chunk_size);
+                    pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
                 }
-                return true;
+                return true;  // pushed and re-reserved — caller may need to restore NOC state
             }
         }
         return false;
@@ -155,6 +154,9 @@ struct ChunkWriter {
     }
 };
 
+// Copy one (t, h) row of patches from the L1 shard into the vol2col CB.
+// Iterates over w positions in [w_block, w_block_end), extracting kT×kH×kW patches
+// via one_packet NOC reads.  Calls chunk.advance() after each patch.
 template <
     uint32_t kT,
     uint32_t kH,
@@ -184,8 +186,9 @@ void vol2col_shard_to_cb(
                 const uint32_t h_local = h_base + kh;
                 const uint32_t shard_offset =
                     (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_base) * C_in_block_bytes;
-                experimental::read_with_state(noc, chunk.write_addr, shard_l1_base + shard_offset);
-                chunk.write_addr += kW_bytes;
+                experimental::read_with_state(
+                    noc, chunk.cb, shard_l1_base + shard_offset, {.offset_bytes = chunk.write_offset});
+                chunk.write_offset += kW_bytes;
             }
         }
         if (chunk.advance()) {
@@ -194,32 +197,40 @@ void vol2col_shard_to_cb(
     }
 }
 
+// Shift retained columns to the start of each shard row for sliding-window W reuse.
+// With stride_w, adjacent w_blocks overlap by max(0, kW - stride_w) columns, not kW-1.
+// After the shift, only (W_shard_cur - overlap) new columns need to be gathered from DRAM.
 template <
     uint32_t C_in_block_bytes,
     uint32_t H_shard_max_W_shard_max,
     uint32_t W_shard_max,
     uint32_t kW,
-    uint32_t stride_w>
+    uint32_t stride_w,
+    typename ShardCB>
 void shift_retained_w_columns(
-    experimental::Noc noc, uint32_t shard_l1_base, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
+    experimental::Noc noc, const ShardCB& shard_cb, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
     constexpr uint32_t overlap_w = kW > stride_w ? kW - stride_w : 0;
     constexpr uint32_t shift_bytes = overlap_w * C_in_block_bytes;
     constexpr uint32_t src_off = (W_shard_max - overlap_w) * C_in_block_bytes;
     experimental::UnicastEndpoint self_ep;
+    const uint32_t shard_l1_base = shard_cb.get_write_ptr();
     for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
         for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
             const uint32_t row_base = (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) * C_in_block_bytes;
             noc.async_read(
                 self_ep,
-                experimental::CoreLocalMem<uint32_t>(shard_l1_base + row_base),
+                shard_cb,
                 shift_bytes,
                 experimental::local_addr(shard_l1_base + row_base + src_off, noc.get_noc_id()),
-                {});
+                {.offset_bytes = row_base});
         }
     }
     noc.async_read_barrier();
 }
 
+// Gather rows from DRAM into the L1 shard buffer.
+// When check_padding=false, all positions are known to be in-bounds — skip per-position
+// boundary checks and clamp/zeroPad logic (~3-6 RISC-V cycles saved per position).
 template <
     uint32_t C_in_block_bytes,
     bool is_padding_zeros,
@@ -231,11 +242,12 @@ template <
     uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     bool check_padding,
-    typename Reader>
+    typename Reader,
+    typename ShardCB>
 void gather_rows_to_shard(
     experimental::Noc noc,
     const Reader& in_reader,
-    uint32_t shard_l1_base,
+    const ShardCB& shard_cb,
     uint32_t batch_page_base,
     uint32_t c_in_offset_bytes,
     int32_t t_shard_start,
@@ -260,13 +272,12 @@ void gather_rows_to_shard(
                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
             for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
                 const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
-                const uint32_t shard_addr = shard_l1_base + shard_offset;
                 if constexpr (check_padding) {
                     const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
                     const bool in_padding = t_outside || h_outside || w_outside;
                     if (in_padding) {
                         if constexpr (is_padding_zeros) {
-                            zeroPad<C_in_block_bytes>(noc, shard_addr);
+                            zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                         } else {
                             const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
                             const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
@@ -278,7 +289,8 @@ void gather_rows_to_shard(
                                 page_idx,
                                 c_in_offset_bytes,
                                 in_row_size_bytes,
-                                shard_addr,
+                                shard_cb,
+                                shard_offset,
                                 C_in_block_bytes);
                         }
                     } else {
@@ -290,14 +302,23 @@ void gather_rows_to_shard(
                             page_idx,
                             c_in_offset_bytes,
                             in_row_size_bytes,
-                            shard_addr,
+                            shard_cb,
+                            shard_offset,
                             C_in_block_bytes);
                     }
                 } else {
+                    // Fast path: no padding checks
                     const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
                                               static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
                     read_input_row(
-                        noc, in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes, shard_addr, C_in_block_bytes);
+                        noc,
+                        in_reader,
+                        page_idx,
+                        c_in_offset_bytes,
+                        in_row_size_bytes,
+                        shard_cb,
+                        shard_offset,
+                        C_in_block_bytes);
                 }
                 shard_offset += C_in_block_bytes;
             }
@@ -306,6 +327,7 @@ void gather_rows_to_shard(
     noc.async_read_barrier();
 }
 
+// Dispatch to fast or slow gather based on runtime bounds check.
 #define GATHER_ROWS(all_in_bounds, ...)  \
     do {                                 \
         if (all_in_bounds)               \
@@ -366,14 +388,17 @@ void kernel_main() {
     constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
+    // L1 prefetch buffer parameters
     constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
     constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
     constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
     constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
 
+    // Padding bytes to append after each patch row to reach tile-aligned CB page width
     constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
 
+    // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
@@ -387,6 +412,7 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
+    // Tensor accessor for input tensor
     constexpr auto in_args = TensorAccessorArgs<36>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
@@ -396,28 +422,35 @@ void kernel_main() {
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
+    // L1 prefetch: enabled when the host allocated a shard buffer (T_shard_max > 0).
+    // The host decides based on kernel size, dilation, and L1 budget.
     constexpr bool use_l1_prefetch = (T_shard_max > 0);
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
+    // Reserve shard buffer once (used as scratch space, not streaming CB)
+    experimental::CB shard_cb(cb_input_shard);
     uint32_t shard_l1_base = 0;
     if constexpr (use_l1_prefetch) {
         constexpr uint32_t shard_total = T_shard_max * H_shard_max_W_shard_max;
-        experimental::CB cb_shard(cb_input_shard);
-        cb_shard.reserve_back(shard_total);
-        shard_l1_base = cb_shard.get_write_ptr();
+        shard_cb.reserve_back(shard_total);
+        shard_l1_base = shard_cb.get_write_ptr();
     }
 
+    // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
         const uint32_t batch_page_base = batch_idx * T_in_H_in_W_in;
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
             const uint32_t c_in_offset_bytes = c_in_block * C_in_block_bytes;
+            // Iterate only over assigned C_out blocks
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
+                // 3D blocking loops over assigned ranges:
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
 
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
 
+                        // H rows persist across w_blocks for sliding window W reuse.
                         uint32_t h_rows_gathered = 0;
                         const int32_t t_shard_start =
                             static_cast<int32_t>(t_block * stride_t) - static_cast<int32_t>(padding_t);
@@ -428,6 +461,7 @@ void kernel_main() {
                         constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
                         static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
 
+                        // Precompute T/H bounds for shard_all_in_bounds (W is per-w_block).
                         const bool th_in_bounds =
                             t_shard_start >= 0 &&
                             (t_shard_start + static_cast<int32_t>(T_shard_cur) - 1) < static_cast<int32_t>(T_in) &&
@@ -444,10 +478,17 @@ void kernel_main() {
                                                                  (w_shard_start + static_cast<int32_t>(W_shard_cur) -
                                                                   1) < static_cast<int32_t>(W_in);
 
+                                // --- SLIDING WINDOW W + H-ROW INTERLEAVED GATHER ---
+                                // For w_block > first: shift retained kW-1 columns to shard start,
+                                // then gather only W_block new columns for existing h-rows.
+                                // H rows persist across w_blocks — no re-gather for retained rows.
                                 const bool is_first_w = (w_block == w_out_start);
 
+                                // W overlap between adjacent w_blocks: kW - stride_w columns.
+                                // No overlap when stride_w >= kW (each block reads entirely new data).
                                 constexpr uint32_t overlap_w = kW > stride_w ? kW - stride_w : 0;
 
+                                // Reset h_rows when no W overlap to retain or on first w_block
                                 if (is_first_w || overlap_w == 0) {
                                     h_rows_gathered = 0;
                                 }
@@ -458,14 +499,15 @@ void kernel_main() {
                                         H_shard_max_W_shard_max,
                                         W_shard_max,
                                         kW,
-                                        stride_w>(noc, shard_l1_base, T_shard_cur, h_rows_gathered);
+                                        stride_w>(noc, shard_cb, T_shard_cur, h_rows_gathered);
 
+                                    // Gather new W columns for existing h-rows
                                     const uint32_t new_w_cols = W_shard_cur - overlap_w;
                                     GATHER_ROWS(
                                         shard_all_in_bounds,
                                         noc,
                                         in_reader,
-                                        shard_l1_base,
+                                        shard_cb,
                                         batch_page_base,
                                         c_in_offset_bytes,
                                         t_shard_start,
@@ -486,13 +528,14 @@ void kernel_main() {
                                     for (uint32_t h = h_block; h < h_block_end; h++) {
                                         const uint32_t h_base = (h - h_block) * stride_h;
 
+                                        // Gather shard rows needed for this output h (incremental)
                                         const uint32_t h_needed = h_base + kH;
                                         if (h_needed > h_rows_gathered) {
                                             GATHER_ROWS(
                                                 shard_all_in_bounds,
                                                 noc,
                                                 in_reader,
-                                                shard_l1_base,
+                                                shard_cb,
                                                 batch_page_base,
                                                 c_in_offset_bytes,
                                                 t_shard_start,
@@ -506,6 +549,7 @@ void kernel_main() {
                                             h_rows_gathered = h_needed;
                                         }
 
+                                        // Vol2col for this (t, h) across all w
                                         vol2col_shard_to_cb<
                                             kT,
                                             kH,
@@ -523,6 +567,10 @@ void kernel_main() {
                                 chunk.flush();
 
                             } else {
+                                // ============================================================
+                                // DIRECT READER (for 1x1x1 or dilated kernels, no spatial reuse)
+                                // Push patches in TILE_HEIGHT-sized chunks to keep cb_vol2col small.
+                                // ============================================================
                                 const uint32_t t_block_s_start = t_block * stride_t;
                                 const uint32_t t_block_s_end = t_block_end * stride_t;
                                 const uint32_t h_block_s_start = h_block * stride_h;
@@ -560,8 +608,9 @@ void kernel_main() {
 
                                                         if constexpr (is_padding_zeros) {
                                                             if (in_padding) {
-                                                                zeroPad<C_in_block_bytes>(noc, chunk.write_addr);
-                                                                chunk.write_addr += C_in_block_bytes;
+                                                                zeroPad<C_in_block_bytes>(
+                                                                    noc, chunk.cb, chunk.write_offset);
+                                                                chunk.write_offset += C_in_block_bytes;
                                                                 continue;
                                                             }
                                                         }
@@ -576,9 +625,10 @@ void kernel_main() {
                                                             page_idx,
                                                             c_in_offset_bytes,
                                                             in_row_size_bytes,
-                                                            chunk.write_addr,
+                                                            chunk.cb,
+                                                            chunk.write_offset,
                                                             C_in_block_bytes);
-                                                        chunk.write_addr += C_in_block_bytes;
+                                                        chunk.write_offset += C_in_block_bytes;
                                                     }
                                                 }
                                             }
@@ -589,8 +639,11 @@ void kernel_main() {
                                 }
                                 chunk.flush();
                             }
+                            // End of w_block
                         }
+                        // End of h_block
                     }
+                    // End of t_block
                 }
             }
         }

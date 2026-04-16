@@ -143,10 +143,10 @@ static inline void resolve_destination_coords(
     }
 }
 
-template <uint32_t StickSizeBytes, bool EnableBlocking, uint32_t BlockHeightSticks>
+template <uint32_t StickSizeBytes, bool EnableBlocking, uint32_t BlockHeightSticks, typename Src>
 static inline void write_stick_async(
     experimental::Noc noc,
-    uint32_t in_base_l1_addr,
+    const Src& in_src,
     uint32_t out_base_l1_addr,
     uint16_t dst_noc_x,
     uint16_t dst_noc_y,
@@ -161,14 +161,13 @@ static inline void write_stick_async(
     }
     const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
     const uint32_t size = transfer_size * StickSizeBytes;
-    const uint32_t src_addr = in_base_l1_addr + src_offset;
     const uint32_t dst_addr = out_base_l1_addr + dst_offset;
 
     noc.async_write(
-        experimental::CoreLocalMem<uint32_t>(src_addr),
+        in_src,
         experimental::UnicastEndpoint{},
         size,
-        {},
+        {.offset_bytes = src_offset},
         {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = dst_addr});
 }
 
@@ -203,8 +202,8 @@ static inline void run_halo_gather(
         return;
     }
 
-    uint32_t in_base_l1_addr = in_cb.get_read_ptr();
     const uint32_t out_base_l1_addr = out_cb.get_write_ptr();
+    auto in_src = experimental::use<experimental::CB::AddrSelector::READ_PTR>(in_cb);
 
     // Assume input is already ready when !EnableBlocking (like when using RM)
     if constexpr (EnableBlocking) {
@@ -240,11 +239,11 @@ static inline void run_halo_gather(
                         BlockStride;  // When block stride > 1 we are expecting the input CB to skip
                                       // BlockStride number of blocks (like when splitting work across cores)
                     block_id += BlockStride;
-                    in_base_l1_addr = in_cb.get_read_ptr();  // Ensure base address is at front of input CB
+                    // in_src tracks the CB's read_ptr dynamically via AddrSelector::READ_PTR
                 }
             }
             write_stick_async<StickSizeBytes, EnableBlocking, BlockSizeHeight>(
-                noc, in_base_l1_addr, out_base_l1_addr, dst_noc_x, dst_noc_y, src_offset, dst_offset, transfer_size);
+                noc, in_src, out_base_l1_addr, dst_noc_x, dst_noc_y, src_offset, dst_offset, transfer_size);
             transfers_remaining--;
         }
         number_of_segments_remaining--;
