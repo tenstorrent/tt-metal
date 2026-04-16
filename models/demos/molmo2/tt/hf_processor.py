@@ -9,10 +9,9 @@ Image and video preprocessing use the HF remote implementations and **their defa
 - Image: `image_processing_molmo2.Molmo2ImageProcessor`
   (see https://huggingface.co/allenai/Molmo2-8B/blob/main/image_processing_molmo2.py )
 
-Calls use only ``return_tensors`` plus ``text`` and ``images`` or ``videos``. No extra
-flags (e.g. ``return_metadata``, ``return_mm_token_type_ids``): HF defaults apply.
-The only video override from this module is optional ``num_frames`` (caps sampled frames
-for tests / memory); all other video/image kwargs stay at HF defaults.
+Calls use ``return_tensors`` plus ``text`` and ``images`` or ``videos``. Optional
+video overrides: ``num_frames``, ``max_fps``, ``fps``, ``sampling_fps`` (see
+``Molmo2VideoProcessor`` / HF config). Other kwargs use HF defaults unless set.
 
 Converts HF outputs to tensors expected by our TTNN model.
 """
@@ -203,6 +202,9 @@ def preprocess_video(
     prompt: str,
     num_frames: Optional[int] = None,
     apply_template: bool = True,
+    max_fps: Optional[float] = None,
+    fps: Optional[float] = None,
+    sampling_fps: Optional[float] = None,
 ) -> dict:
     """
     Preprocess video + text using HF processor.
@@ -212,6 +214,10 @@ def preprocess_video(
         prompt: Text prompt (should contain <|video|>)
         num_frames: Passed to HF as ``num_frames`` when set; otherwise HF default.
         apply_template: Whether to apply chat template (default True)
+        max_fps: Cap on frames per second during sampling (HF ``max_fps``). ``None`` = omit
+            (HF processor default from config, typically 2.0).
+        fps: Optional container / target frame rate hint (HF ``fps``; semantics match HF video processor).
+        sampling_fps: Optional sampling rate override (HF ``sampling_fps``).
 
     Returns:
         Dict with:
@@ -237,6 +243,12 @@ def preprocess_video(
     call_kwargs = dict(text=text, videos=video_path, return_tensors="np")
     if num_frames is not None:
         call_kwargs["num_frames"] = num_frames
+    if max_fps is not None:
+        call_kwargs["max_fps"] = max_fps
+    if fps is not None:
+        call_kwargs["fps"] = fps
+    if sampling_fps is not None:
+        call_kwargs["sampling_fps"] = sampling_fps
 
     result = processor(**call_kwargs)
 
@@ -259,14 +271,23 @@ def preprocess_video(
     valid_mask = (pooling_idx >= 0).astype(np.float32)
     valid_mask_flat = valid_mask.flatten()
 
-    # Get timestamps from metadata
+    # Get timestamps from metadata (prefer decoded fps; else kwargs / defaults)
     metadata = result.get("video_metadata", [None])[0]
+    fallback_fps = 2.0
+    if max_fps is not None:
+        fallback_fps = float(max_fps)
+    elif fps is not None:
+        fallback_fps = float(fps)
+    elif sampling_fps is not None:
+        fallback_fps = float(sampling_fps)
+
     if metadata is not None:
-        fps = getattr(metadata, "fps", 2.0)
+        meta_fps = getattr(metadata, "fps", None)
+        fps_for_ts = float(meta_fps) if meta_fps is not None else fallback_fps
         frames_indices = getattr(metadata, "frames_indices", np.arange(n_frames))
-        timestamps = np.array(frames_indices) / fps
+        timestamps = np.array(frames_indices, dtype=float) / fps_for_ts
     else:
-        timestamps = np.arange(n_frames) / 2.0  # Default 2 fps
+        timestamps = np.arange(n_frames, dtype=float) / fallback_fps
 
     out = {
         "input_ids": torch.from_numpy(result["input_ids"]),
