@@ -10,7 +10,9 @@
 // DRAM writes are handled by the paired writer (minimal_default_writer).
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/device_print.h"
+// #include "api/debug/device_print.h"
+#undef DEVICE_PRINT
+#define DEVICE_PRINT(...) ((void)0)
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 

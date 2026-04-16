@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/device_print.h"
+// #include "api/debug/device_print.h"
+#undef DEVICE_PRINT
+#define DEVICE_PRINT(...) ((void)0)
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
@@ -395,55 +397,79 @@ void gather_rows_halo(
 }
 
 // Halo-aware GATHER_ROWS macro: same signature as the non-halo version.
-// Args: all_in_bounds, in_reader, shard_l1_base, batch_page_base, c_in_offset_bytes,
-//       t_shard_start, T_shard_cur, h_shard_start, h_start, h_end,
-//       w_shard_start, w_col_start, w_count
-#define GATHER_ROWS(                 \
-    all_in_bounds,                   \
-    in_rdr,                          \
-    shard_l1,                        \
-    batch_pg,                        \
-    c_in_off,                        \
-    t_sh_st,                         \
-    T_sh_cur,                        \
-    h_sh_st,                         \
-    h_st,                            \
-    h_en,                            \
-    w_sh_st,                         \
-    w_col_st,                        \
-    w_cnt)                           \
-    do {                             \
-        gather_rows_halo<            \
-            C_in_block_bytes,        \
-            H_shard_max_W_shard_max, \
-            W_shard_max,             \
-            T_in,                    \
-            H_in,                    \
-            W_in,                    \
-            H_in_W_in,               \
-            in_row_size_bytes>(      \
-            in_rdr,                  \
-            halo_reader,             \
-            shard_l1,                \
-            batch_pg,                \
-            batch_idx,               \
-            c_in_off,                \
-            t_sh_st,                 \
-            T_sh_cur,                \
-            h_sh_st,                 \
-            h_st,                    \
-            h_en,                    \
-            w_sh_st,                 \
-            w_col_st,                \
-            w_cnt,                   \
-            h_halo_outer_dim_size,   \
-            h_halo_H,                \
-            h_halo_W,                \
-            h_halo_padding_h,        \
-            h_halo_padding_w,        \
-            h_halo_hbot_base,        \
-            h_halo_wleft_base,       \
-            h_halo_wright_base);     \
+// When all_in_bounds, use the fast path (no per-element branching).
+// Otherwise fall back to gather_rows_halo for boundary blocks.
+#define GATHER_ROWS(                     \
+    all_in_bounds,                       \
+    in_rdr,                              \
+    shard_l1,                            \
+    batch_pg,                            \
+    c_in_off,                            \
+    t_sh_st,                             \
+    T_sh_cur,                            \
+    h_sh_st,                             \
+    h_st,                                \
+    h_en,                                \
+    w_sh_st,                             \
+    w_col_st,                            \
+    w_cnt)                               \
+    do {                                 \
+        if (all_in_bounds)               \
+            gather_rows_to_shard<        \
+                C_in_block_bytes,        \
+                is_padding_zeros,        \
+                H_shard_max_W_shard_max, \
+                W_shard_max,             \
+                T_in,                    \
+                H_in,                    \
+                W_in,                    \
+                H_in_W_in,               \
+                in_row_size_bytes,       \
+                false>(                  \
+                in_rdr,                  \
+                shard_l1,                \
+                batch_pg,                \
+                c_in_off,                \
+                t_sh_st,                 \
+                T_sh_cur,                \
+                h_sh_st,                 \
+                h_st,                    \
+                h_en,                    \
+                w_sh_st,                 \
+                w_col_st,                \
+                w_cnt);                  \
+        else                             \
+            gather_rows_halo<            \
+                C_in_block_bytes,        \
+                H_shard_max_W_shard_max, \
+                W_shard_max,             \
+                T_in,                    \
+                H_in,                    \
+                W_in,                    \
+                H_in_W_in,               \
+                in_row_size_bytes>(      \
+                in_rdr,                  \
+                halo_reader,             \
+                shard_l1,                \
+                batch_pg,                \
+                batch_idx,               \
+                c_in_off,                \
+                t_sh_st,                 \
+                T_sh_cur,                \
+                h_sh_st,                 \
+                h_st,                    \
+                h_en,                    \
+                w_sh_st,                 \
+                w_col_st,                \
+                w_cnt,                   \
+                h_halo_outer_dim_size,   \
+                h_halo_H,                \
+                h_halo_W,                \
+                h_halo_padding_h,        \
+                h_halo_padding_w,        \
+                h_halo_hbot_base,        \
+                h_halo_wleft_base,       \
+                h_halo_wright_base);     \
     } while (0)
 #else
 // Dispatch to fast or slow gather based on runtime bounds check.

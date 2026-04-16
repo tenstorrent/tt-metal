@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/device_print.h"
+// #include "api/debug/device_print.h"
+#undef DEVICE_PRINT
+#define DEVICE_PRINT(...) ((void)0)
 #include "hostdevcommon/common_values.hpp"
 #if defined(PROFILE_ZONES)
 #include "tools/profiler/kernel_profiler.hpp"

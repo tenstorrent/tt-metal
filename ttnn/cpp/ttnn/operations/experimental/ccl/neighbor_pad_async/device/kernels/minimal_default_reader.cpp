@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/device_print.h"
+// #include "api/debug/device_print.h"
+#undef DEVICE_PRINT
+#define DEVICE_PRINT(...) ((void)0)
 #include <cstdint>
 
 using address_t = uint32_t;
