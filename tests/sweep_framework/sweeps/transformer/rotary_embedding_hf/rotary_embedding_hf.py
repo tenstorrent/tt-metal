@@ -8,11 +8,11 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, nearest_32, torch_random
+from ttnn.types import BlackholeComputeKernelConfig
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -20,26 +20,78 @@ TIMEOUT = 30
 random.seed(0)
 
 
+def _attention_rotary_embedding_hf_compute_kernel_config():
+    """Match ``ModelArgs.compute_kernel_config_hifi4`` / ``Attention._hf_rope_new_{decode,prefill}``."""
+    cls = BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
+    return cls(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+# Shared dtype/layout/mem columns (decode path ignores sweep ``input_memory_config`` for Q/K — uses
+# explicit height-sharded L1 like ``test_hf_rope_decode_reassembly_parity._height_sharded_decode_heads_mem_cfg``;
+# ``ModelArgs`` WH uses layout-only ``L1_HEIGHT_SHARDED_MEMORY_CONFIG``, which is invalid for ``from_torch``.)
+_COMMON = {
+    "input_dtype": [ttnn.bfloat16],
+    "input_layout": [ttnn.TILE_LAYOUT],
+    "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+    # Retained for vector serialization; ``Attention`` does not pass ``memory_config`` to ``rotary_embedding_hf``.
+    "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+}
+
 # Parameters provided to the test vector generator are defined here.
+#
+# Prefill and decode must live in **separate** suites: a Cartesian product of two non-None dict lists
+# would always take the prefill branch (``if prefill_spec:``), so decode shapes would never run.
+#
+# **Llama-3.1-8B-Instruct decode capture** (e.g. ``TT_HF_ROPE_DECODE_CAPTURE_REPLAY_DIR=tmp/hf_rope_cap/run3``):
+# log parity via ``TT_HF_ROPE_SWEEP_PARITY_LOG=1 pytest … test_hf_rope_attention_capture_replay_vs_captured_cos_sin_golden``:
+#   Q ``[1,1,32,128]``, K ``[1,1,8,128]`` (logical heads; device padded head tile matches NLP layout),
+#   cos/sin logical ``[1,1,1,128]``, prefill hint ``[1,32,256,128]`` / ``cache_size=256`` from manifest ``max_seq_len``.
 parameters = {
-    "nightly": {
+    # Minimal vectors that match a typical ``run3``-style HF decode capture (see module docstring above).
+    "hf_rope_capture_run3_prefill": {
         "prefill_spec": [
-            # Various prefill configurations: [1, num_heads, seq_len, head_dim]
+            {"input_shape": [1, 32, 256, 128], "cache_size": 256, "is_decode": False},
+        ],
+        "decode_spec": [None],
+        **_COMMON,
+    },
+    "hf_rope_capture_run3_decode": {
+        "prefill_spec": [None],
+        "decode_spec": [
+            {"input_shape": [1, 1, 32, 128], "is_decode": True},
+            {"input_shape": [1, 1, 8, 128], "is_decode": True},
+        ],
+        **_COMMON,
+    },
+    "nightly_prefill": {
+        "prefill_spec": [
+            # [1, num_heads, seq_len, head_dim]
             {"input_shape": [1, 8, 32, 64], "cache_size": 128, "is_decode": False},
             {"input_shape": [1, 16, 64, 64], "cache_size": 256, "is_decode": False},
             {"input_shape": [1, 32, 128, 128], "cache_size": 512, "is_decode": False},
             {"input_shape": [1, 12, 256, 64], "cache_size": 512, "is_decode": False},
+            {"input_shape": [1, 32, 256, 128], "cache_size": 256, "is_decode": False},
         ],
+        "decode_spec": [None],
+        **_COMMON,
+    },
+    "nightly_decode": {
+        "prefill_spec": [None],
         "decode_spec": [
-            # Various decode configurations: [1, batch, num_heads, head_dim]
+            # [1, batch, num_heads, head_dim] — first two match run3 capture log (Q then GQA K).
+            {"input_shape": [1, 1, 32, 128], "is_decode": True},
+            {"input_shape": [1, 1, 8, 128], "is_decode": True},
             {"input_shape": [1, 8, 8, 64], "is_decode": True},
             {"input_shape": [1, 16, 16, 64], "is_decode": True},
             {"input_shape": [1, 32, 32, 128], "is_decode": True},
+            {"input_shape": [1, 32, 8, 128], "is_decode": True},
         ],
-        "input_dtype": [ttnn.bfloat16],
-        "input_layout": [ttnn.TILE_LAYOUT],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        **_COMMON,
     },
 }
 
@@ -48,15 +100,24 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b requires TILE_LAYOUT!"
 
-    # Check which spec we're using
-    if "prefill_spec" in test_vector and test_vector["prefill_spec"]:
-        spec = test_vector["prefill_spec"]
+    ps = test_vector.get("prefill_spec")
+    ds = test_vector.get("decode_spec")
+    if ps and ds:
+        return (
+            True,
+            "invalid vector: set only one of prefill_spec or decode_spec (use nightly_prefill / nightly_decode)",
+        )
+
+    if ps:
+        spec = ps
         if spec["input_shape"][-1] % 64 != 0:
             return True, f"Input head_dim ({spec['input_shape'][-1]}) must be divisible by 64 for tiling"
-    elif "decode_spec" in test_vector and test_vector["decode_spec"]:
-        spec = test_vector["decode_spec"]
+    elif ds:
+        spec = ds
         if spec["input_shape"][-1] % 64 != 0:
             return True, f"Input head_dim ({spec['input_shape'][-1]}) must be divisible by 64 for tiling"
+    else:
+        return True, "vector must set exactly one of prefill_spec or decode_spec"
 
     return False, None
 
@@ -73,17 +134,30 @@ def apply_rotary_pos_emb_hf(x, cos, sin):
     return (x * cos) + (rotate_half(x) * sin)
 
 
-def _decode_qk_heads_mem_config(head_dim: int) -> ttnn.MemoryConfig:
-    """Match ``ModelArgs.get_attn_create_head_output_mem_config(Mode.DECODE, None)`` (``test_attention`` decode path)."""
+def _decode_qk_heads_mem_config(device, batch: int, num_heads: int, head_dim: int) -> ttnn.MemoryConfig:
+    """Height-sharded L1 mem for decode Q/K.
+
+    ``ModelArgs`` uses ``L1_HEIGHT_SHARDED_MEMORY_CONFIG`` on Wormhole for op-allocated tensors; host
+    ``ttnn.from_torch`` requires a non-None ``shard_spec`` (see ``test_hf_rope_decode_reassembly_parity``).
+    """
+    padded_heads = nearest_32(num_heads)
     if is_blackhole():
         return ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
+            shape=(padded_heads, head_dim),
             core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-    return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    grid_size = device.compute_with_storage_grid_size()
+    batch_grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
+    return ttnn.create_sharded_memory_config(
+        shape=(padded_heads, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
 
 def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin_torch, *, dtype):
@@ -132,14 +206,14 @@ def run(
     input_dtype,
     input_layout,
     input_memory_config,
-    output_memory_config,
+    output_memory_config,  # noqa: ARG001 — kept for sweep vector schema; Attention omits output mem on the op.
     *,
     device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    # Determine which mode we're testing
+    # Determine which mode we're testing (suites pass None for the unused spec — see ``parameters``).
     if prefill_spec:
         spec = prefill_spec
         input_shape = spec["input_shape"]
@@ -148,7 +222,7 @@ def run(
 
         # Prefill: cos/sin shape is [1, 1, cache_size, head_dim]
         cos_sin_shape = [1, 1, cache_size, input_shape[-1]]
-    else:
+    elif decode_spec:
         spec = decode_spec
         input_shape = spec["input_shape"]
         is_decode = True
@@ -156,6 +230,8 @@ def run(
         # Decode: cos/sin shape is [1, batch, 1, head_dim]
         batch_size = input_shape[1]
         cos_sin_shape = [1, batch_size, 1, input_shape[-1]]
+    else:
+        raise RuntimeError("rotary_embedding_hf sweep vector needs prefill_spec or decode_spec")
 
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
@@ -188,11 +264,26 @@ def run(
     # ``HfRotarySetupNew.get_rot_mats`` (DRAM interleaved → HEIGHT shard on batch grid).
     if is_decode:
         batch = input_shape[1]
+        num_heads = input_shape[2]
         head_dim = input_shape[3]
-        qk_mem_config = _decode_qk_heads_mem_config(head_dim)
+        padded_heads = nearest_32(num_heads)
+        qk_mem_config = _decode_qk_heads_mem_config(device, batch, num_heads, head_dim)
+
+        torch_input_for_device = torch_input_tensor
+        if padded_heads != num_heads:
+            pad_h = padded_heads - num_heads
+            z = torch.zeros(
+                1,
+                batch,
+                pad_h,
+                head_dim,
+                dtype=torch_input_tensor.dtype,
+                device=torch_input_tensor.device,
+            )
+            torch_input_for_device = torch.cat([torch_input_tensor, z], dim=2)
 
         input_tensor = ttnn.from_torch(
-            torch_input_tensor,
+            torch_input_for_device,
             dtype=input_dtype,
             layout=input_layout,
             device=device,
@@ -229,16 +320,20 @@ def run(
             memory_config=input_memory_config,
         )
 
+    rope_cfg = _attention_rotary_embedding_hf_compute_kernel_config()
     start_time = start_measuring_time()
+    # Match ``Attention._hf_rope_new_decode`` / ``_hf_rope_new_prefill``: HiFi4 compute config, no ``memory_config``.
     output_tensor = ttnn.experimental.rotary_embedding_hf(
         input_tensor,
         cos_cache_tensor,
         sin_cache_tensor,
         is_decode=is_decode,
-        memory_config=output_memory_config,
+        compute_kernel_config=rope_cfg,
     )
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    if is_decode and nearest_32(input_shape[2]) != input_shape[2]:
+        output_tensor = output_tensor[:, :, : input_shape[2], :]
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
