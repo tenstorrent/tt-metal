@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <cmath>
 
 #include <tt-metalium/host_api.hpp>
@@ -216,20 +217,20 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt_metal::CreateCircularBuffer(program, all_cores, combined_cb_config);
     }
 
-    bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
-    uint32_t packed_scalar_value = pack_two_bfloat16_into_uint32({bfloat_scalar_value, bfloat_scalar_value});
-
     tt_metal::Buffer* input_buffer = tensor_arg.buffer();
     tt_metal::Buffer* output_buffer = tensor_return_value.buffer();
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
+    reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
 
     // --- Reader kernel ---
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     tt_metal::KernelHandle reader_kernel_id;
     if (reduce_w) {
         // W-reduce: sequential reader reads tiles row by row
-        std::vector<uint32_t> reader_compile_time_args = {packed_scalar_value};
+        std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -240,14 +241,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     } else {
         // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
         // For HW-reduce, num_cols = Wt * NC_per_core to read all columns for all assigned NC slices.
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, /*row_chunk=*/1, packed_scalar_value};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
     }
 
     // --- Compute + Writer kernels ---
