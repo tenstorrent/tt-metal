@@ -6,7 +6,6 @@
 
 #include "ttnn/operations/experimental/add/device/add_device_operation_types.hpp"
 #include "ttnn/operations/experimental/add/device/dram_optimized/dram_optimized_program.hpp"
-#include "ttnn/operations/experimental/add/device/ndsharded/elt_nd_sharded_add_program.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
@@ -26,7 +25,7 @@ struct AddDeviceOperation {
     using tensor_args_t = AddInputs;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<ElementWiseMultiCoreAddProgram, EltNDShardedAddProgram>;
+    using program_factory_t = std::variant<ElementWiseMultiCoreAddProgram>;
 
     // DeviceOperationConcept methods
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
