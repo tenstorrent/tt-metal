@@ -278,8 +278,8 @@ class Pipeline:
         index,
         big_npy,
     ):
-        speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
         assert audio.dim() == 2, audio.dim()
+        speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
         with torch.no_grad():
             logits = self.hubert_model(
                 source=audio,
@@ -323,6 +323,7 @@ class Pipeline:
         return output
 
     def _run_pipeline(self, audio):
+        assert audio.dim() == 2, audio.dim()
         # if (
         #     file_index
         #     and file_index != ""
@@ -339,7 +340,6 @@ class Pipeline:
         #         traceback.print_exc()
         #         index = big_npy = None
         # else:
-        assert audio.dim() == 2, audio.dim()
         index = big_npy = None
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
         num_frames = audio_padded.shape[1] // self.window
@@ -374,10 +374,8 @@ class Pipeline:
             audio_output = change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
-        if audio_max > 1:
-            max_int16 /= audio_max
-        # use torch
-        audio_output = (audio_output * max_int16).to(torch.int16)
+        scale = max_int16 / audio_max if audio_max > 1 else 1
+        audio_output = audio_output * scale
         return audio_output
 
     def infer(self):

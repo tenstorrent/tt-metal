@@ -102,8 +102,8 @@ class MultiHeadAttention(nn.Module):
         num_heads,
         window_size=None,
     ):
-        super().__init__()
         assert in_features % num_heads == 0
+        super().__init__()
 
         self.num_heads = num_heads
         self.window_size = window_size
@@ -303,9 +303,9 @@ class WN(nn.Module):
         num_layers,
         gin_channels=0,
     ):
+        assert kernel_size % 2 == 1
         super().__init__()
 
-        assert kernel_size % 2 == 1
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
 

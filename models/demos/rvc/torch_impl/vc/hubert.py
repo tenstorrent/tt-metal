@@ -179,9 +179,8 @@ class ConvFeatureExtractionModel(nn.Module):
         mode: str = "default",
         conv_bias: bool = False,
     ):
-        super().__init__()
-
         assert mode in {"default", "layer_norm"}
+        super().__init__()
 
         def block(
             n_in,

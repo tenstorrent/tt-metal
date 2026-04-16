@@ -244,6 +244,7 @@ class Pipeline:
         index,
         big_npy,
     ):
+        assert audio.dim() == 2, audio.dim()
         batch_size = audio.shape[0]
         speaker_id = torch.full((batch_size,), self.speaker_id, device=self.device, dtype=torch.long)
         speaker_id = ttnn.from_torch(
@@ -254,7 +255,6 @@ class Pipeline:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=self.input_mesh_mapper,
         )
-        assert audio.dim() == 2, audio.dim()
         hubert_input = ttnn.from_torch(
             audio.view(batch_size, -1, 1),
             dtype=ttnn.bfloat16,
