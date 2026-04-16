@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
@@ -40,7 +42,10 @@ void kernel_main() {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    // HW init once at kernel start. Matmul maps in0->srcB, in1->srcA,
+    // so pass (in1, in0) to match compute_kernel_hw_startup's (srcA, srcB) convention.
+    compute_kernel_hw_startup(cb_in1, cb_in0, cb_intermed0);
+    mm_init_short(cb_in0, cb_in1, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -75,7 +80,9 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                    // Reconfigure srcA data format back to matmul mode after untilize changed it
+                    reconfig_data_format_srca(cb_intermed0, cb_in1);
+                    mm_init_short(cb_in0, cb_in1, transpose_hw);
                 }
                 cb_in0_obj.pop_front(Kt);
 
@@ -83,8 +90,10 @@ void kernel_main() {
                 // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
                 compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
 
+                // Reconfigure pack format and both src data formats back to matmul mode after tilize
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);
+                reconfig_data_format(cb_intermed2, cb_in1, cb_intermed2, cb_in0);
+                mm_init_short(cb_in0, cb_in1, transpose_hw);
             }
         }
     }
