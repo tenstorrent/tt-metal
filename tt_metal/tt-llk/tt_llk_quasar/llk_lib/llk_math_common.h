@@ -104,7 +104,7 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
  * @tparam EN_32BIT_DEST: Set to true to use 32-bit math dest in Float32 or Int32 format
  * otherwise default behaviour is Float16/Float16_b depending on input
  * format exponent width
- * @param unpack_dst_format: The unpacker0 output format, used to determine whether destination register format is Float32 or Int32
+ * @param unpack_dst_format: The unpacker0 output format, used to determine whether the 32-bit destination register is Float32 or Int32
  */
 template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
 inline void _llk_math_upk_to_dest_hw_configure_(DataFormat unpack_dst_format)
@@ -115,7 +115,6 @@ inline void _llk_math_upk_to_dest_hw_configure_(DataFormat unpack_dst_format)
 
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
-    cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
     alu_config_u alu_config;
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
