@@ -2529,6 +2529,22 @@ void update_traced_program_dispatch_commands(
             trace_node.cb_configs_payloads[i].size() * sizeof(uint32_t));
         i++;
     }
+    // Update DFB Configs
+    TT_ASSERT(
+        trace_node.dfb_configs_payloads.size() ==
+        cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
+    {
+        uint32_t dfb_i = 0;
+        for ([[maybe_unused]] const auto& dfbs_on_core_range :
+             cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
+            std::memcpy(
+                dfb_config_payload,
+                trace_node.dfb_configs_payloads[dfb_i].data(),
+                trace_node.dfb_configs_payloads[dfb_i].size());
+            dfb_i++;
+        }
+    }
     // Update RTAs.
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
     for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
@@ -2794,13 +2810,36 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
         cb_config_payload.resize(first_unused_index);
     }
 
+    std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
+    if (!hal.has_tile_counter_registers()) {
+        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
+            std::vector<uint8_t> dfb_config_payload(
+                max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
+            size_t first_unused_byte = 0;
+            for (const auto& dfb : dfbs_on_core_range) {
+                size_t base_index = static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                size_t byte_offset = base_index * sizeof(uint32_t);
+                uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
+                words[0] = dfb->uniform_alloc_addr();
+                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[2] = dfb->config.num_entries;
+                words[3] = dfb->config.entry_size;
+                first_unused_byte = std::max(
+                    first_unused_byte, byte_offset + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t));
+            }
+            dfb_config_payload.resize(first_unused_byte);
+            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
+        }
+    }
+
     return TraceNode{
         program.shared_from_this(),
         static_cast<uint32_t>(program.get_runtime_id()),
         sub_device_ids[0],
         num_workers,
         std::move(rta_data),
-        std::move(all_cb_configs_payloads)};
+        std::move(all_cb_configs_payloads),
+        std::move(all_dfb_configs_payloads)};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {

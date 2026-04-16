@@ -40,6 +40,8 @@ struct TraceNode {
     std::vector<std::vector<uint8_t>> rta_data;
     // Matches cb_configs_payloads in the ProgramCommandSequence
     std::vector<std::vector<uint32_t>> cb_configs_payloads;
+    // Matches dfb_configs_payloads in the ProgramCommandSequence
+    std::vector<std::vector<uint8_t>> dfb_configs_payloads;
 
     TraceDispatchMetadata dispatch_metadata;
 };
