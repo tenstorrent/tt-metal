@@ -266,6 +266,7 @@ class WanTransformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        output_dtype: ttnn.DataType = ttnn.float32,
     ) -> None:
         super().__init__()
 
@@ -276,6 +277,7 @@ class WanTransformer3DModel(Module):
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
+        self.output_dtype = output_dtype
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -584,7 +586,7 @@ class WanTransformer3DModel(Module):
             )
 
         proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
         )
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
@@ -640,7 +642,7 @@ class WanTransformer3DModel(Module):
             )
 
         proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
         )
 
         # Gather fp32 spatial output across sequence parallel devices (remains on device)
