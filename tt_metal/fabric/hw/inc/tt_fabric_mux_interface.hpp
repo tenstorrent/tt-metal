@@ -106,6 +106,28 @@ FORCE_INLINE void fabric_endpoint_terminate(
     noc_async_write_barrier();
 }
 
+// Poll the mux core's status address until it reports TERMINATED.
+// Must be called after fabric_endpoint_terminate() by the termination master to ensure
+// the mux Tensix core has fully exited before this kernel returns. Without this wait,
+// quiesce_devices() / wait_for_completion() can return while the mux core is still
+// executing, causing binary integrity failures when the next AllGather reprograms the
+// same cores.
+FORCE_INLINE void wait_for_fabric_endpoint_terminated(
+    uint8_t fabric_ep_x,
+    uint8_t fabric_ep_y,
+    size_t fabric_ep_status_address,
+    uint32_t local_fabric_ep_status_address) {
+    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
+    auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
+
+    local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC;
+    do {
+        noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::TERMINATED);
+}
+
 // assumes packet header is correctly populated
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_async_write(
