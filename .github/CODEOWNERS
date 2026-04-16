@@ -98,6 +98,7 @@ tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT @
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/codeowner-bypass
 tt_metal/impl/memory_tracking/ @aperezvicente-TT @tenstorrent/codeowner-bypass
 tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
+tt_metal/impl/memory_tracking/ @aperezvicente-TT @tenstorrent/codeowner-bypass
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/profiler/ @mo-tenstorrent @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/codeowner-bypass
