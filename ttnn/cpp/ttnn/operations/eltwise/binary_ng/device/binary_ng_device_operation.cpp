@@ -250,8 +250,10 @@ BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_progr
     (void)args;
     (void)tensor_args;
     if (!program::BinaryNgDramOptimizedProgram::validate_program(args, tensor_args).has_value()) {
+        log_info(tt::LogOp, "Using BinaryNgDramOptimizedProgram");
         return program::BinaryNgDramOptimizedProgram{};
     }
+    log_info(tt::LogOp, "Using BinaryNgProgramFactory");
     return program::BinaryNgProgramFactory{};
 }
 
@@ -544,9 +546,6 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     bool is_where_op =
         (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TTS ||
          binary_op_type == ttnn::operations::binary_ng::BinaryOpType::WHERE_TST);
-
-    log_info(tt::LogOp, "fast_and_approximate_mode: {}", fast_and_approximate_mode);
-    log_info(tt::LogOp, "\n[binary_ng] is_sfpu_op: {}", is_sfpu_op);
 
     MemoryConfig mem_config_actual = input_tensor_a.memory_config();
     if (input_tensor_a.is_sharded()) {
