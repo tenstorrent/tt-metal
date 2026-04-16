@@ -6,6 +6,8 @@
 #include "ttnn_test_fixtures.hpp"
 
 #include <cmath>
+#include <cstdlib>
+#include <string_view>
 #include <thread>
 #include <queue>
 #include <mutex>
@@ -52,6 +54,18 @@ class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+    void SetUp() override {
+        // Escape hatch for CI while the chip-3 CQ0 AllGather hang is under investigation.
+        // Setting TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 skips the body of these tests but
+        // leaves them present so local reproducers and bisects continue to work. Remove
+        // once the underlying hang is fixed.
+        if (const char* disable = std::getenv("TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP");
+            disable != nullptr && std::string_view(disable) == "1") {
+            GTEST_SKIP() << "Temporarily disabled via TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 "
+                            "while chip-3 AllGather hang is being root-caused.";
+        }
+        MeshDeviceFixtureBase::SetUp();
     }
     void TearDown() override {
         MeshDeviceFixtureBase::TearDown();
@@ -147,8 +161,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
-        // Quiesce parent mesh before all gather
+        log_info(LogTest, "[AsyncExecutionWorksCQ0] pre-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(LogTest, "[AsyncExecutionWorksCQ0] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
 
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
@@ -158,8 +173,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
             std::nullopt,
             aggregated_output_tensor);
 
-        // Quiesce parent mesh after all gather
+        log_info(LogTest, "[AsyncExecutionWorksCQ0] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(LogTest, "[AsyncExecutionWorksCQ0] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
 
@@ -316,8 +332,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
-        // Quiesce parent mesh before all gather
+        log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] pre-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
 
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
@@ -327,8 +344,10 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             std::nullopt,
             aggregated_output_tensor);
 
-        // Quiesce parent mesh after all gather
+        log_info(
+            LogTest, "[AsyncExecutionWorksCQ0CQ1] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
 
@@ -510,8 +529,11 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
-        // Quiesce parent mesh before all gather
+        log_info(LogTest, "[AsyncExecutionWorksMultithreadCQ0] pre-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(
+            LogTest,
+            "[AsyncExecutionWorksMultithreadCQ0] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
 
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
@@ -521,8 +543,11 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
             std::nullopt,
             aggregated_output_tensor);
 
-        // Quiesce parent mesh after all gather
+        log_info(
+            LogTest,
+            "[AsyncExecutionWorksMultithreadCQ0] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
         mesh_device_->quiesce_devices();
+        log_info(LogTest, "[AsyncExecutionWorksMultithreadCQ0] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
 

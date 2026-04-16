@@ -1492,11 +1492,25 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             log_info(
                 LogMetal,
-                "[wait_for_completion] cq={} sub_device[{}] expected_workers={} reset_launch_msg_state={}",
+                "[wait_for_completion] cq={} sub_device[{}] expected_workers={} reset_launch_msg_state={} in_use={}",
                 id_,
                 i,
                 expected_num_workers_completed_[i],
-                reset_launch_msg_state);
+                reset_launch_msg_state,
+                in_use_);
+        }
+        // Per-device event-counter snapshot so a hang here can be correlated with
+        // the quiesce-invariant asserts in MeshDeviceImpl::quiesce_devices. If
+        // current_event != last_completed_event on any device at this point, H-C
+        // from the chip3_t3k_ccl_hang plan is in play.
+        for (auto* device : mesh_device_->get_devices()) {
+            log_info(
+                LogMetal,
+                "[wait_for_completion] cq={} device={} current_event={} last_completed_event={}",
+                id_,
+                device->id(),
+                device->sysmem_manager().get_current_event(id_),
+                device->sysmem_manager().get_last_completed_event(id_));
         }
         for (auto* device : mesh_device_->get_devices()) {
             log_info(

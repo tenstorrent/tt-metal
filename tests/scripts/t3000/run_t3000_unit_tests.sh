@@ -96,6 +96,14 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
+  # Run the chip-3 CQ0 AllGather hang reproducer FIRST. It runs
+  # unit_tests_ttnn_ccl_ops + test_ccl_multi_cq_multi_device back-to-back with
+  # the in-process TT_METAL_OPERATION_TIMEOUT_SECONDS + hang_report triage hook
+  # wired up, so if the hang fires on CI we capture dispatcher/worker state
+  # instead of just getting a SIGKILL'd log tail. Keep this at the top of the
+  # list so the triage artifact is produced before any later step perturbs
+  # device state. See tests/scripts/t3000/repro_ccl_cq0_hang.sh.
+  ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
@@ -103,7 +111,28 @@ run_t3000_ttnn_tests() {
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; fail+=$?
   # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
   # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; fail+=$?
-  timeout 300 ./build/test/ttnn/test_ccl_multi_cq_multi_device ; fail+=$?
+  #
+  # test_ccl_multi_cq_multi_device: chip-3 CQ0 AllGather hang investigation.
+  # - Split each TEST_F into its own subprocess so predecessor state cannot bleed
+  #   across and so a hang pinpoints exactly one test.
+  # - Brief sleep between the preceding FABRIC_2D binary and this FABRIC_1D binary
+  #   gives chips that were slow to drain TERMINATED a chance to settle before the
+  #   next fabric bring-up. If removing this sleep makes the hang reappear, that
+  #   points at residual device state (H-A in the investigation plan).
+  # - Outer `timeout` intentionally omitted here so the in-process
+  #   TT_METAL_OPERATION_TIMEOUT_SECONDS + hang_report.py triage hook can fire and
+  #   capture dispatcher/worker state before the process is killed. A much looser
+  #   ceiling is provided via `timeout 600` as a last-resort backstop.
+  sleep 2
+  for ccl_mcq_test in \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0" \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0CQ1" \
+      "MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksMultithreadCQ0"; do
+      echo "LOG_METAL: running test_ccl_multi_cq_multi_device --gtest_filter=${ccl_mcq_test}"
+      timeout 600 ./build/test/ttnn/test_ccl_multi_cq_multi_device --gtest_filter="${ccl_mcq_test}"
+      fail+=$?
+      sleep 1
+  done
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?

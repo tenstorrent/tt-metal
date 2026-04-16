@@ -112,7 +112,21 @@ void issue_record_event_commands(
             expected_num_workers_completed[offset_index]);
     }
 
+    // Paired before/after logs around issue_queue_reserve so a hang on chip N at
+    // this callsite can be attributed to either (a) the host-side issue-queue-full
+    // path (blocking in issue_queue_reserve because the device dispatcher has not
+    // drained prior commands) or (b) the subsequent on-device wait. A hang between
+    // "[issue_record_event] reserve begin" and "reserve ok" fingerprints (a);
+    // anything later fingerprints (b). See chip3_t3k_ccl_hang plan item 2a.
+    log_warning(
+        tt::LogMetal,
+        "[issue_record_event] reserve begin device={} event={} cq={} sizeB={}",
+        device_id,
+        event_id,
+        cq_id,
+        cmd_sequence_sizeB);
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    log_warning(tt::LogMetal, "[issue_record_event] reserve ok device={} event={} cq={}", device_id, event_id, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
