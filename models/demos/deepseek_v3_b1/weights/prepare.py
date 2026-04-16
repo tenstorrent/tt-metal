@@ -16,6 +16,7 @@ with :class:`~weights.cache.CacheConfig` and the ``prepare_*`` functions
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1389,6 +1390,162 @@ def prepare_compressed_sram_slots(
         up_proj=up_cts,
         down_proj=down_cts,
     )
+
+
+def compute_expert_l1_bytes(
+    assignments: list[np.ndarray],
+    tensor_shapes: list[tuple[int, int]],
+    core_grid: ttnn.CoreRangeSet,
+    tile_hw: int = 32,
+) -> int:
+    """Compute the exact L1 byte cost for one expert across all projections.
+
+    Each projection's shard-to-core tile mapping is computed via
+    ``compute_shard_page_mapping``, then per-tile byte sizes (determined by
+    the assignment codes) are summed per core.  The per-core totals are
+    accumulated across all projections, and the maximum across cores is
+    returned — this is the true worst-case L1 footprint for a single core
+    under per-core allocation.
+
+    Args:
+        assignments: Per-projection assignment arrays, each ``(tiles_h, tiles_w)``
+            with tt-metal format codes (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
+        tensor_shapes: Per-projection ``(K, N)`` logical shapes (must match
+            assignment tile counts).
+        core_grid: The L1 ``CoreRangeSet`` for WIDTH_SHARDED layout.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        L1 bytes needed on the most loaded core (max across cores of the
+        sum across projections).
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import compute_shard_page_mapping
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    _MANT_BITS = {0: 7, 1: 3, 2: 1, 3: 0}
+    tile_byte_lut = np.array(
+        [bfp_tile_packed_size(_MANT_BITS[c], tile_hw) for c in range(4)],
+        dtype=np.int64,
+    )
+
+    num_cores = core_grid.num_cores()
+    per_core_totals = [0] * num_cores
+
+    for assignment, (K, N) in zip(assignments, tensor_shapes):
+        per_core_N = N // num_cores
+        shard_spec = ttnn.ShardSpec(core_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+        shard_mapping = compute_shard_page_mapping([K, N], mem_config, tile_hw)
+        assignment_flat = assignment.ravel()
+
+        for core_idx, (_core, page_indices) in enumerate(shard_mapping):
+            shard_bytes = int(tile_byte_lut[assignment_flat[list(page_indices)]].sum())
+            per_core_totals[core_idx] += shard_bytes
+
+    return max(per_core_totals)
+
+
+def _load_routing_frequencies(path: Path | None = None) -> dict[int, list[int]]:
+    """Load per-layer routing frequencies from a JSON file.
+
+    The file maps ``"layer_idx" → list[int]`` where each list has 256 entries
+    (one per routed expert) representing activation counts from calibration.
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "data" / "routing_frequencies.json"
+    with open(path) as f:
+        raw = json.load(f)
+    return {int(k): v for k, v in raw.items()}
+
+
+def build_sram_hot_expert_config(
+    state_dict: dict[str, torch.Tensor],
+    layer_indices: list[int],
+    assigner: CompressedTensorAssigner,
+    core_grid: ttnn.CoreRangeSet,
+    l1_budget_bytes: int,
+    routing_frequencies: dict[int, list[int]],
+    *,
+    tile_hw: int = 32,
+) -> SramHotExpertConfig:
+    """Build per-layer SRAM hot expert config using two-pass greedy allocation.
+
+    For each layer, experts are sorted by routing frequency (descending).
+    Each candidate's exact L1 byte size is computed via
+    :func:`compute_expert_l1_bytes` using the ``CompressedTensorAssigner``
+    on CPU.  Experts are accumulated until ``l1_budget_bytes`` is exhausted.
+
+    Args:
+        state_dict: HuggingFace state dict with expert weight tensors.
+        layer_indices: MoE layer indices to consider.
+        assigner: ``CompressedTensorAssigner`` for on-CPU format selection.
+        core_grid: L1 ``CoreRangeSet`` for WIDTH_SHARDED layout.
+        l1_budget_bytes: Maximum L1 bytes available per core for hot experts.
+        routing_frequencies: ``layer_idx → list[int]`` activation counts.
+        tile_hw: Tile dimension (default 32).
+
+    Returns:
+        ``SramHotExpertConfig`` mapping ``layer_idx → list[expert_idx]``.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+
+    def _quantize_fn(x, fmt_str):
+        mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
+        return quantize_dequantize_bfp(x, mant_map[fmt_str])
+
+    config: SramHotExpertConfig = {}
+
+    for layer_idx in layer_indices:
+        freqs = routing_frequencies.get(layer_idx)
+        if freqs is None:
+            logger.warning("No routing frequencies for layer {}, skipping", layer_idx)
+            continue
+
+        ranked_experts = sorted(range(len(freqs)), key=lambda e: freqs[e], reverse=True)
+
+        selected: list[int] = []
+        budget_used = 0
+
+        for expert_idx in ranked_experts:
+            if freqs[expert_idx] == 0:
+                break
+
+            gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
+            up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
+            down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
+
+            gate_w = state_dict[gate_key].T.contiguous()
+            up_w = state_dict[up_key].T.contiguous()
+            down_w = state_dict[down_key].T.contiguous()
+
+            weights = [gate_w, up_w, down_w]
+            assignments = []
+            shapes = []
+            for w in weights:
+                result = assigner.assign(w, _quantize_fn)
+                assignments.append(result.assignment)
+                shapes.append(tuple(w.shape))
+
+            expert_bytes = compute_expert_l1_bytes(assignments, shapes, core_grid, tile_hw)
+
+            if budget_used + expert_bytes > l1_budget_bytes:
+                break
+
+            selected.append(expert_idx)
+            budget_used += expert_bytes
+
+        if selected:
+            config[layer_idx] = selected
+            logger.info(
+                "Layer {}: {} SRAM experts selected ({} / {} bytes used)",
+                layer_idx,
+                len(selected),
+                budget_used,
+                l1_budget_bytes,
+            )
+
+    return config
 
 
 def prepare_routed_expert_weights(
