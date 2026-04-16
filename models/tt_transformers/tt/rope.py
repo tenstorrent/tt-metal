@@ -387,7 +387,6 @@ def get_rot_mats_hf(
     theta: float,
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
-    width_pad_to_tile: Optional[int] = None,
 ) -> List[ttnn.Tensor]:
     """Generate HF-format cos/sin matrices (no Meta permutation).
 
@@ -416,24 +415,6 @@ def get_rot_mats_hf(
     # Add batch dimensions: [1, 1, seq_len, head_dim]
     cos_hf = cos_hf.unsqueeze(0).unsqueeze(0)
     sin_hf = sin_hf.unsqueeze(0).unsqueeze(0)
-
-    # Block-interleave width padding for Phi-style partial rotary (rotary_ndims=32 -> 64).
-    # Shapes before padding: cos_hf/sin_hf = [1, 1, seq_len, rotary_ndims].
-    # After padding: [1, 1, seq_len, 2*rotary_ndims] with identity lanes inserted:
-    #   cos: [c0..c_{n/2-1}, 1..1, c_{n/2}..c_{n-1}, 1..1]
-    #   sin: [s0..s_{n/2-1}, 0..0, s_{n/2}..s_{n-1}, 0..0]
-    # This matches the layout that ttnn.experimental.rotary_embedding expects (pairs (i, i+16)),
-    # so downstream rope can call the op directly without runtime pad work on cos/sin.
-    if width_pad_to_tile is not None and cos_hf.shape[-1] < width_pad_to_tile:
-        assert width_pad_to_tile % 2 == 0 and cos_hf.shape[-1] % 2 == 0
-        half = cos_hf.shape[-1] // 2
-        pad_lanes = width_pad_to_tile // 2 - half
-        cos_first, cos_second = cos_hf[..., :half], cos_hf[..., half:]
-        sin_first, sin_second = sin_hf[..., :half], sin_hf[..., half:]
-        cos_identity = torch.ones(cos_first.shape[:-1] + (pad_lanes,), dtype=cos_hf.dtype)
-        sin_zero = torch.zeros(sin_first.shape[:-1] + (pad_lanes,), dtype=sin_hf.dtype)
-        cos_hf = torch.cat([cos_first, cos_identity, cos_second, cos_identity], dim=-1)
-        sin_hf = torch.cat([sin_first, sin_zero, sin_second, sin_zero], dim=-1)
 
     cos_matrix = ttnn.from_torch(
         cos_hf,
@@ -763,10 +744,6 @@ class HfRotarySetup(LightweightModule):
         # Generate the cos/sin matrices in HF format (no Meta permutation)
         # Generate for max_seq_len to allow slicing in prepare_inputs_prefill
         rotary_ndims = int(head_dim * partial_rotary_factor)
-        # Pre-pad cos/sin at init (torch-level, block-interleaved) when partial rotary would leave
-        # width < 64. The ttnn rotary_embedding op requires width == 64, so pre-padding removes
-        # the per-step runtime pad work on cos/sin in _hf_rope_decode.
-        self.hf_rotary_pre_padded_width = 64 if rotary_ndims == 32 else None
 
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
             head_dim=rotary_ndims,
@@ -775,7 +752,6 @@ class HfRotarySetup(LightweightModule):
             theta=rope_theta,
             rope_scaling=rope_scaling,
             datatype=datatype,
-            width_pad_to_tile=self.hf_rotary_pre_padded_width,
         )
 
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats_hf(
@@ -785,14 +761,11 @@ class HfRotarySetup(LightweightModule):
             theta=rope_theta,
             rope_scaling=rope_scaling,
             datatype=datatype,
-            width_pad_to_tile=self.hf_rotary_pre_padded_width,
         )
 
         # Store 2D versions for embedding lookup (trace-compatible slicing).
-        # If pre-padded, matrices are 2*rotary_ndims wide; otherwise rotary_ndims.
-        cached_width = self.hf_rotary_pre_padded_width or rotary_ndims
-        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, cached_width))
-        self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, cached_width))
+        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, rotary_ndims))
+        self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, rotary_ndims))
 
         self.transformation_mat = None
         self.transformation_mat_prefill = None
