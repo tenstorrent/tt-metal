@@ -419,6 +419,8 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+    bool is_tile_layout = dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
+    reader_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
 
     const bool init_zeros = operation_attributes.init_zeros;
     tt::tt_metal::KernelHandle zero_init_kernel_id = 0;

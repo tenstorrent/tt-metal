@@ -90,12 +90,16 @@ void kernel_main() {
 #if INIT_ZEROS
     // Zero-init args follow immediately after the TensorAccessorArgs block
     constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+#if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 2);
     constexpr uint32_t num_total_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
+#endif
 #else
+#if IS_TILE_LAYOUT
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+#endif
 #endif
 
     // ===== Runtime Args =====
@@ -137,6 +141,7 @@ void kernel_main() {
     }
 #endif
 
+#if IS_TILE_LAYOUT
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_start_x = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_start_y = get_arg_val<uint32_t>(rt_args++);
@@ -161,6 +166,7 @@ void kernel_main() {
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args++);
         idle_start_noc_addrs[c] = get_noc_addr(noc_x, noc_y, start_sem_l1_offset);
     }
+#endif
 
     // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
@@ -195,6 +201,10 @@ void kernel_main() {
     constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
     constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
     // Multicast expert token counts + receive_buf_addr to all idle cores
+#if IS_TILE_LAYOUT
+    // Each sender multicasts token counts + its own receive_buf_addr to its dedicated idle group.
+    // The mcast destination covers only this sender's k_s idle cores (per-sender bounding box),
+    // so all senders can multicast in parallel without interfering with each other.
     {
         constexpr uint32_t counter_total_size = experts_tok_counter_pages * aligned_experts_tok_counter_page_size;
 
@@ -215,16 +225,39 @@ void kernel_main() {
         noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_idle_cores);
         noc_async_atomic_barrier();
     }
+<<<<<<< HEAD
+=======
+#endif
+
+    // Expert token counts are laid out as [n_dispatch_groups, experts_per_dispatch_group]
+    // where each dispatch group is a mesh column (all rows in that column).
+    // Row-major linearization: linearized_mesh_coord = mesh_row * mesh_cols + mesh_col
+    constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;  // position within dispatch group
+    constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;  // which dispatch group
+    constexpr uint32_t experts_per_dispatch_group = experts_per_chip * mesh_rows;
+    constexpr uint32_t offset = mesh_col * experts_per_dispatch_group + mesh_row * experts_per_chip;
+>>>>>>> 8ea4f244e1 (Adding TILE_LAYOUT defines into reader_combine kernel)
     volatile tt_l1_ptr uint32_t* experts_tok_counter_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_base_addr) + offset;
 
     // Set up scratch buffers for batched reads
     cb_reserve_back(cb_dispatched_metadata_id, read_batch_size);
     uint32_t metadata_base = get_write_ptr(cb_dispatched_metadata_id);
+
+#if IS_TILE_LAYOUT
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);
+#else
+    cb_reserve_back(cb_dispatched_buffer_id, read_batch_size);
+    uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
+#endif
 
     const auto dispatched_metadata_addr_gen =
         TensorAccessor(dispatched_metadata_args, dispatched_metadata_addr, aligned_dispatched_metadata_page_size);
+
+#if !IS_TILE_LAYOUT
+    const auto dispatched_buffer_addr_gen =
+        TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
+#endif
 
     constexpr auto expert_stride = max_dispatched_tokens_per_expert;
 
@@ -244,14 +277,16 @@ void kernel_main() {
             uint32_t batch_start = start_page + B * read_batch_size;
             uint32_t batch_end = (batch_start + read_batch_size < end_page) ? batch_start + read_batch_size : end_page;
             uint32_t batch_count = batch_end - batch_start;
-            uint32_t C = B % num_idle_cores;
             bool batch_did_local_write = false;
+
+#if IS_TILE_LAYOUT
+            uint32_t C = B % num_idle_cores;
 
             // Signal idle core C to send its untilized batch
             noc_semaphore_inc(idle_start_noc_addrs[C], 1);
             noc_async_atomic_barrier();
 
-            // Speculatively read metadata for this batch (overlaps with idle core's NOC write)
+            // Speculatively read metadata for this batch
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(
                     batch_start + t,
@@ -259,16 +294,32 @@ void kernel_main() {
                     metadata_base + t * aligned_dispatched_metadata_page_size);
             }
 
-            // Wait for idle core to write untilized data to sender's cb_untilize_id
+            // Wait for idle core to write untilized data
             noc_semaphore_wait(data_ready_sem_ptr, 1);
             noc_semaphore_set(data_ready_sem_ptr, 0);
 
             // Ensure metadata is ready
             noc_async_read_barrier();
+#else
+            // ROW_MAJOR: DMA read dispatched_buffer rows + metadata
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(
+                    batch_start + t, dispatched_buffer_addr_gen, buffer_base + t * aligned_dispatched_buffer_page_size);
+                noc_async_read_page(
+                    batch_start + t,
+                    dispatched_metadata_addr_gen,
+                    metadata_base + t * aligned_dispatched_metadata_page_size);
+            }
+            noc_async_read_barrier();
+#endif
 
             // Route tokens
             for (uint32_t t = 0; t < batch_count; t++) {
+#if IS_TILE_LAYOUT
                 uint32_t buffer_scratch_addr = untilize_base + t * aligned_output_page_size;
+#else
+                uint32_t buffer_scratch_addr = buffer_base + t * aligned_dispatched_buffer_page_size;
+#endif
                 uint32_t metadata_scratch_addr = metadata_base + t * aligned_dispatched_metadata_page_size;
                 volatile tt_l1_ptr uint32_t* metadata =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_scratch_addr);
@@ -301,7 +352,12 @@ void kernel_main() {
                         // Push output payload to writer
                         cb_reserve_back(cb_output_for_writer_id, 1);
                         uint32_t output_dst = get_write_ptr(cb_output_for_writer_id);
+#if IS_TILE_LAYOUT
                         noc_async_read(get_noc_addr(buffer_scratch_addr), output_dst, aligned_output_page_size);
+#else
+                        noc_async_read(
+                            get_noc_addr(buffer_scratch_addr), output_dst, aligned_dispatched_buffer_page_size);
+#endif
                         noc_async_read_barrier();
                         cb_push_back(cb_output_for_writer_id, 1);
                     }
