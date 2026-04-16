@@ -508,7 +508,7 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    _init_exponential_<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B>();
 }
 
 template <bool APPROXIMATION_MODE>

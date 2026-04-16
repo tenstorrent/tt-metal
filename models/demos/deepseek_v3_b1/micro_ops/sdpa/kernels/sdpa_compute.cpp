@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr bool exp_approx_mode = false;
 
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
     sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
 
     // TODO: Init ahead of time
