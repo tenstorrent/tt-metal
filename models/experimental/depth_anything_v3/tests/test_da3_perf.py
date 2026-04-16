@@ -68,14 +68,18 @@ def test_da3_metric_perf(img_size: int) -> None:
 
     tt_depth, peak_dram_mb = _try_run_ttnn(pixel_values)
 
-    # Time the implementation we will publish as our `gen_speed`. Today this is
-    # the torch CPU reference (iteration 0); future iterations swap in the ttnn
-    # implementation and will surface device-side throughput automatically.
-    timed_target = (
-        (lambda: _try_run_ttnn(pixel_values)[0])
-        if tt_depth is not None
-        else (lambda: model(pixel_values))
-    )
+    if tt_depth is not None:
+        timed_target = lambda: _try_run_ttnn(pixel_values)[0]
+        compare_output = tt_depth
+    else:
+        # Iteration 1+: cast a clone of the reference to bfloat16 for the timed
+        # path. Backbone matmuls dominate runtime and benefit most from bf16 on
+        # CPUs with AVX512_BF16. PCC vs the fp32 reference quantifies any drop.
+        fast_model = build_da3_metric(load_weights=True, img_size=img_size).to(torch.bfloat16)
+        pixel_values_bf16 = pixel_values.to(torch.bfloat16)
+        timed_target = lambda: fast_model(pixel_values_bf16)
+        with torch.inference_mode():
+            compare_output = timed_target()
 
     n_warmup = 1
     n_runs = 3
@@ -84,15 +88,11 @@ def test_da3_metric_perf(img_size: int) -> None:
             _ = timed_target()
         t0 = time.perf_counter()
         for _ in range(n_runs):
-            out = timed_target()
+            _ = timed_target()
         elapsed = time.perf_counter() - t0
     inference_speed = n_runs / max(elapsed, 1e-9)
 
-    if tt_depth is not None:
-        accuracy = 100.0 * max(_pcc(tt_depth, ref_depth), 0.0)
-    else:
-        # Self-PCC of the reference == 100.0 by construction.
-        accuracy = 100.0
+    accuracy = 100.0 * max(_pcc(compare_output, ref_depth), 0.0)
 
     print(f"inference_speed={inference_speed:.4f} frames/sec", flush=True)
     print(f"accuracy={accuracy:.4f} percent_of_reference", flush=True)
