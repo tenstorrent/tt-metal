@@ -247,10 +247,16 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
+
+        // arch detection happens in SetUp()
+        if (arch_ == tt::ARCH::BLACKHOLE || arch_ == tt::ARCH::QUASAR) {
+            // Wormhole does not implement the fence instruction which this feature would produce.
+            tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
+        }
+
         MetalContext::instance().watcher_server()->clear_log();
     }
 
