@@ -532,6 +532,7 @@ create_program_batch_sharded(
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
+                {"bias_ntiles", per_core_N},
             }});
 
     // Set runtime args - each core only gets SetRuntimeArgs called ONCE per kernel
