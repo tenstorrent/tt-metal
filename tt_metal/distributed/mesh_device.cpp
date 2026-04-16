@@ -27,6 +27,7 @@
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
+#include "pinned_memory_cache.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -1488,6 +1489,7 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
+    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 

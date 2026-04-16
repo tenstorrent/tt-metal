@@ -12,6 +12,8 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -90,9 +92,46 @@ void enqueue_read_tensor(
         "Host tensor has different page config");
 
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    auto* device = mesh_buffer->device();
 
-    cq.enqueue_read(mesh_buffer, host_tensor.buffer(), /*shards=*/std::nullopt, blocking);
-    host_tensor.update_tensor_topology(device_tensor.tensor_topology());
+    // Move the buffer out so the old HostTensor's destructor does not evict
+    // PinnedMemoryCache entries for these addresses.
+    DistributedHostBuffer old_host_buffer = host_tensor.take_host_buffer();
+
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+    const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+
+    distributed::MeshCoordinateRange all_coords(device->shape());
+    std::vector<distributed::MeshCoordinate> coords(all_coords.begin(), all_coords.end());
+    for (const auto& coord : coords) {
+        dst_distributed_host_buffer.emplace_shard(coord, [&]() {
+            auto host_buffer = old_host_buffer.get_shard(coord);
+            TT_FATAL(host_buffer.has_value(), "Host shard for device shard {} is not populated.", coord);
+            TT_FATAL(
+                host_buffer->view_bytes().size() == expected_size_bytes,
+                "Host shard for device shard {} has invalid size: {} != {}",
+                coord,
+                host_buffer->view_bytes().size(),
+                expected_size_bytes);
+
+            auto coord_range =
+                distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+            if (auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
+                    *device, coord_range, *host_buffer, /*map_to_noc=*/true)) {
+                experimental::HostBufferSetPinnedMemory(*host_buffer, std::move(pinned));
+            }
+            return *host_buffer;
+        });
+    }
+
+    cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+
+    // Clear transient PinnedMemory references; the cache holds them long-term.
+    dst_distributed_host_buffer.apply(
+        [](HostBuffer& shard) { experimental::HostBufferSetPinnedMemory(shard, nullptr); });
+
+    host_tensor = HostTensor(
+        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology());
 }
 
 void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
@@ -234,6 +273,17 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
 }
 
 namespace {
+
+constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;
+
+bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
+    if (size_bytes <= k_pin_write_threshold_bytes) {
+        return false;
+    }
+    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
+    return params.max_pins > 0 && params.can_map_to_noc;
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 void h2d_as_replicate_tensor_on_1x1_mesh(
@@ -249,7 +299,33 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         expected_packed_buffer_size_bytes);
 
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
-    command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+    auto* mesh_device = mesh_buffer->device();
+
+    const bool use_pinned = should_use_pinned_write_path(*mesh_device, data_to_write.size());
+
+    if (use_pinned) {
+        auto full_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(mesh_device->shape()));
+        HostBuffer pinned_buffer(*host_buffer);
+        auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
+            *mesh_device, full_range, pinned_buffer, /*map_to_noc=*/true);
+
+        if (pinned_memory) {
+            std::vector<distributed::ShardDataTransfer> transfers;
+            transfers.reserve(mesh_device->shape().mesh_size());
+            for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+                auto xfer = distributed::ShardDataTransfer{coord}
+                                .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
+                                .region(BufferRegion(0, data_to_write.size()));
+                experimental::ShardDataTransferSetPinnedMemory(xfer, pinned_memory);
+                transfers.push_back(std::move(xfer));
+            }
+            command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+        } else {
+            command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+        }
+    } else {
+        command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+    }
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
@@ -282,13 +358,56 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     }
 
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
-    cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false);
+    const auto& distributed_host_buffer = host_tensor.buffer();
+
+    size_t total_size = 0;
+    for (const auto& coord : distributed_host_buffer.shard_coords()) {
+        auto buf = distributed_host_buffer.get_shard(coord);
+        if (buf) {
+            total_size += buf->view_bytes().size();
+        }
+    }
+
+    const bool use_pinned = should_use_pinned_write_path(*cq.device(), total_size);
+
+    if (use_pinned) {
+        auto* mesh_device = mesh_buffer->device();
+        std::vector<distributed::ShardDataTransfer> transfers;
+        transfers.reserve(distributed_host_buffer.shard_coords().size());
+        bool any_pinned = false;
+
+        for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            auto buf = distributed_host_buffer.get_shard(coord);
+            if (buf) {
+                auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+                HostBuffer pinned_buf(*buf);
+                auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
+                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+
+                auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
+                                .host_data(buf->view_bytes().data())
+                                .region(BufferRegion(0, buf->view_bytes().size()));
+                if (pinned_memory) {
+                    experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
+                    any_pinned = true;
+                }
+                transfers.push_back(std::move(xfer));
+            }
+        }
+        if (any_pinned) {
+            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+        } else {
+            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        }
+    } else {
+        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    }
 
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
     // Coordinates here represents the shards that are local to this instance, there maybe other shards that are on
     // another host.
     std::vector<distributed::MeshCoordinate> coords;
-    const auto& shard_coords = host_tensor.buffer().shard_coords();
+    const auto& shard_coords = distributed_host_buffer.shard_coords();
     coords.reserve(shard_coords.size());
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
