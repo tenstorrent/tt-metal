@@ -320,8 +320,8 @@ for (uint32_t i = 0; i < C; i++) {
     for (auto & i : matmul_cores_list) {
         vector<uint32_t> in1_read_output;
         detail::ReadFromDeviceL1(
-            device, matmul_cores_list[i], in1_output_addr, in1_per_core_read_size_bytes, in1_read_output);
-        uint32_t cur_c_dim = matmul_cores_list[i].x - test_config.start_logical_core.x;
+            device, i, in1_output_addr, in1_per_core_read_size_bytes, in1_read_output);
+        uint32_t cur_c_dim = i.x - test_config.start_logical_core.x;
         for (uint32_t j = 0; j < total_in1_read_elements; j++) {
             golden_in1_read_output.push_back(in1_input[cur_c_dim * total_in1_read_elements + j]);
         }
