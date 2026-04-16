@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr int vector_mode = VectorMode::RC_custom;
 
     binary_op_init_common(cb_l1, cb_l1, cb_l_out);
-    exp_tile_init<EXP_APPROX_MODE, false>();
+    exp_tile_init<EXP_APPROX_MODE>();
 
     sdpa_tail<EXP_APPROX_MODE, final_reduction, block_size, num_blocks, scale_fp32, vector_mode, dense, untilize>(
         cb_ms1,     // worker max (ms1)

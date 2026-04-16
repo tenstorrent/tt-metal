@@ -39,9 +39,9 @@ void kernel_main() {
             negative_tile_init();
             negative_tile(1);
 
-            // Apply exp with fast+approx mode to DST[1]: exp(-x)
-            exp_tile_init<true, true>();  // Fast+approx exp
-            exp_tile<true, true>(1);
+            // Apply exp to DST[1]: exp(-x)
+            exp_tile_init<true>();
+            exp_tile<true>(1);
 
             // Apply logsigmoid SFPU: logsigmoid(x) = -softplus(-x)
             logsigmoid_tile_init();
