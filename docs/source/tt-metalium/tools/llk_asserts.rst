@@ -57,13 +57,16 @@ There is a single macro used throughout the tt-llk library:
 
    LLK_ASSERT(condition, message)
 
-Its runtime behavior depends on the compile context:
+Its runtime behavior depends on the compile context, which is determined by flags injected during JIT build (``tt_metal/jit_build/build.cpp``):
 
 - **Disabled** (``ENABLE_LLK_ASSERT`` not defined): the condition is evaluated only as an unevaluated ``sizeof`` expression — fully type-checked and name-resolved at compile time, but with zero runtime overhead.
 
-- **LLK infra / assert-only context** (``ENV_LLK_INFRA`` or ``ENABLE_LLK_ASSERT_ONLY`` defined): if the condition is false, an ``ebreak`` instruction is executed and the TRISC hangs. This path is taken when ``TT_METAL_LLK_ASSERTS=1`` is set without Watcher.
+- **Assert-only context** (``ENV_LLK_INFRA`` or ``ENABLE_LLK_ASSERT_ONLY`` defined): if the condition is false, an ``ebreak`` instruction is executed directly and the TRISC hangs. In JIT builds, ``ENABLE_LLK_ASSERT_ONLY`` is set when ``TT_METAL_LLK_ASSERTS=1`` and **neither** ``TT_METAL_WATCHER`` **nor** ``TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS`` is enabled.
 
-- **tt-metal context with Watcher** (neither of the above, but ``ENABLE_LLK_ASSERT`` is defined): delegates to the standard ``ASSERT(condition)`` macro from ``api/debug/assert.h``, which reports the failure through the Watcher mechanism.
+- **tt-metal context** (``ENABLE_LLK_ASSERT`` defined but neither of the above): delegates to the standard ``ASSERT(condition)`` macro from ``api/debug/assert.h``. This covers two sub-cases:
+
+  - *Lightweight Kernel Asserts enabled* (``TT_METAL_LLK_ASSERTS=1`` + ``TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1``, no Watcher): ``ASSERT`` triggers ``ebreak`` via the lightweight-assert path, allowing ``dump_lightweight_asserts.py`` to retrieve the call stack and local variables.
+  - *Watcher enabled* (``TT_METAL_LLK_ASSERTS=1`` + ``TT_METAL_WATCHER=1``): ``ASSERT`` reports the failure through the Watcher mechanism, printing a message to stderr and the watcher log file.
 
 The macro is defined in ``tt_metal/tt-llk/common/llk_assert.h``.
 
