@@ -272,7 +272,7 @@ void MetalEnvImpl::teardown_fabric_config() {
     // find the ETH cores mid-teardown, causing wait_for_fabric_endpoint_ready() in the new
     // mux kernel to spin forever and triggering ARC "unsafe NOC access" errors on all chips.
     // See: https://github.com/tenstorrent/tt-metal/issues/42429
-    if (control_plane_ != nullptr) {
+    if (control_plane_ != nullptr && fabric_config_ != tt_fabric::FabricConfig::DISABLED) {
         auto& cluster = this->get_cluster();
         const auto& fabric_context = this->get_control_plane().get_fabric_context();
         const auto& builder_context = fabric_context.get_builder_context();
