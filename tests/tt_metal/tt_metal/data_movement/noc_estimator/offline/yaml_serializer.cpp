@@ -7,12 +7,9 @@
 #include <fstream>
 #include <iostream>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
-using namespace common;
-
-bool save_latency_data_to_yaml(
-    const std::map<common::GroupKey, common::LatencyData>& data, const std::string& yaml_path) {
+bool save_latency_data_to_yaml(const std::map<GroupKey, LatencyData>& data, const std::string& yaml_path) {
     YAML::Emitter out;
     out.SetDoublePrecision(6);
 
@@ -88,4 +85,4 @@ bool save_latency_data_to_yaml(
     return true;
 }
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline
