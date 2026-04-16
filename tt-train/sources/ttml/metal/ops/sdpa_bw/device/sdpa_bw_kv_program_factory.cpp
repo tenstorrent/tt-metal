@@ -492,9 +492,9 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
-        std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
+        std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        mode[tt::CBIndex::c_8] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
+        mode[tt::CBIndex::c_9] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
         return mode;
     };
 
@@ -517,7 +517,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             kComputeKernelPath,
             all_cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -541,7 +541,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             kComputeKernelPath,
             core_group_1,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -566,7 +566,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                 kComputeKernelPath,
                 core_group_2,
                 tt::tt_metal::ComputeConfig{
-                    .math_fidelity = MathFidelity::HiFi4,
+                    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                     .fp32_dest_acc_en = true,
                     .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                     .math_approx_mode = false,
