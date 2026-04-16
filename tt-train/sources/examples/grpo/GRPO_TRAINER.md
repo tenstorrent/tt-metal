@@ -12,7 +12,7 @@ conventions where possible so that users familiar with TRL face minimal friction
 ```python
 from datasets import load_dataset
 from transformers import AutoTokenizer
-from utils.grpo_trainer import GrpoConfig, GrpoTrainer, TrainerCallback
+from utils.grpo_trainer import GRPOConfig, GRPOTrainer, TrainerCallback
 
 model_id = "meta-llama/Llama-3.2-1B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -41,10 +41,10 @@ class LogCallback(TrainerCallback):
         print(f"Step {step} | Reward: {metrics['reward_mean']:.4f} | Len: {metrics['mean_completion_len']:.2f}")
 
 # 4. Train
-trainer = GrpoTrainer(
+trainer = GRPOTrainer(
     model_source=model_id,
     dataset=dataset,
-    config=GrpoConfig(
+    config=GRPOConfig(
         batch_size=4,
         num_generations=8,
         max_completion_length=256,
@@ -63,12 +63,12 @@ trainer.train()
 
 ---
 
-## GrpoConfig
+## GRPOConfig
 
-`GrpoConfig` is a dataclass that controls the GRPO training loop.
+`GRPOConfig` is a dataclass that controls the GRPO training loop.
 
 ```python
-from utils.grpo_trainer import GrpoConfig
+from utils.grpo_trainer import GRPOConfig
 ```
 
 | Parameter | Type | Default | TRL equivalent | Description |
@@ -90,16 +90,16 @@ from utils.grpo_trainer import GrpoConfig
 
 ---
 
-## GrpoTrainer
+## GRPOTrainer
 
 ```python
-from utils.grpo_trainer import GrpoTrainer
+from utils.grpo_trainer import GRPOTrainer
 ```
 
 ### Constructor
 
 ```python
-GrpoTrainer(
+GRPOTrainer(
     model_source,
     dataset,
     config,
@@ -115,7 +115,7 @@ GrpoTrainer(
 |-----------|------|-------------|
 | `model_source` | `str` | HuggingFace model ID (e.g. `"meta-llama/Llama-3.2-1B-Instruct"`) or path to a local directory containing `model.safetensors`. |
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
-| `config` | `GrpoConfig` | Training configuration (see above). |
+| `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
 | `transformer_config` | `dict` | Model architecture config (see [Transformer Config](#transformer-config)). |
 | `optimizer_config` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](../../docs/TTML_ONBOARDING.md). Must include a `"type"` key. |
@@ -161,7 +161,7 @@ If the function declares `**kwargs`, all available data is passed. If it does no
 only explicitly named parameters are passed.
 
 > **Note:** Unlike TRL, which accepts a list of reward functions (`reward_funcs=[f1, f2]`)
-> and sums their outputs, `GrpoTrainer` takes a single `reward_func`. To combine
+> and sums their outputs, `GRPOTrainer` takes a single `reward_func`. To combine
 > multiple reward signals, sum them in your function:
 >
 > ```python
@@ -197,7 +197,7 @@ class GRPOMonitor(TrainerCallback):
         with open(self.file_path, mode="a", newline="") as f:
             csv.writer(f).writerow([step, reward, length])
 
-trainer = GrpoTrainer(..., callbacks=[GRPOMonitor(output_dir)])
+trainer = GRPOTrainer(..., callbacks=[GRPOMonitor(output_dir)])
 ```
 
 | Hook | Signature | When |
@@ -279,7 +279,7 @@ device_config = {
 | `mesh_shape` | `list[int]` | `[1, 1]` | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`. |
 | `device_ids` | `list[int] \| None` | `None` | Specific device IDs to use (default: auto-select). |
 
-`GrpoTrainer.train()` handles device setup automatically — calling `enable_fabric`,
+`GRPOTrainer.train()` handles device setup automatically — calling `enable_fabric`,
 `open_device`, and `initialize_parallelism_context` based on this config.
 
 ---
@@ -311,11 +311,11 @@ Each checkpoint directory contains:
 | `config.json` | HuggingFace model configuration | `AutoConfig.from_pretrained(model_source)` |
 | `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
 | `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |
-| `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GrpoConfig` and tokenizer |
+| `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GRPOConfig` and tokenizer |
 | `trainer_state.json` | Training progress (global step, learning rate) | Current optimizer step and LR |
 | `scheduler.pt` | Learning rate scheduler state (base LR, warmup config, step) | `torch.save()` |
 | `rng_state.pth` | Python, NumPy, and PyTorch RNG states for reproducibility | `torch.save()` |
-| `training_args.bin` | Full `GrpoConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
+| `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
 
 To resume from a checkpoint, point `model_source` at the checkpoint directory
@@ -341,7 +341,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ## Key Differences from TRL
 
-| Aspect | TRL `GRPOTrainer` | ttml `GrpoTrainer` |
+| Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
 | **Model** | Passed as a `transformers` model object | Specified via `model_source` (HF ID or local path); built internally |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
@@ -359,7 +359,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 ### Training
 
 [`boolq_training_example.py`](boolq_training_example.py) — trains
-Llama-3.2-1B-Instruct on BoolQ using `GrpoTrainer` with a custom reward
+Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
 function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
 
 ```bash
