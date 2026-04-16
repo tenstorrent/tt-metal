@@ -3,9 +3,10 @@
 # Source this file: source models/experimental/groot_n16/run_env.sh
 # Then run Python scripts from the pi0 tt-metal directory
 
-export TT_METAL_HOME=/home/ttuser/experiments/pi0/tt-metal
+export TT_METAL_HOME=/home/ttuser/experiments/gr00t_n16/tt-metal
 export ARCH_NAME=blackhole
 export PYTHONPATH=/home/ttuser/experiments/gr00t_n16/tt-metal:$PYTHONPATH
+export GR00T_DEVICE_ID=${GR00T_DEVICE_ID:-2}
 
 echo "GR00T N1.6 environment set up"
 echo "  TT_METAL_HOME=$TT_METAL_HOME"

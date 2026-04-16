@@ -15,6 +15,7 @@ Run:
     pytest models/experimental/gr00t_n1_6/tests/perf/test_perf_e2e.py -svv
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -29,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 def tt_device():
     import ttnn
 
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=int(os.environ.get("GR00T_DEVICE_ID", "0")))
     yield device
     ttnn.close_device(device)
 

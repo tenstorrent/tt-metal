@@ -14,6 +14,7 @@ Run:
 """
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -45,7 +46,7 @@ def compute_pcc(ref: torch.Tensor, test: torch.Tensor) -> float:
 def tt_device():
     import ttnn
 
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=int(os.environ.get("GR00T_DEVICE_ID", "0")))
     yield device
     ttnn.close_device(device)
 

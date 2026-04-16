@@ -13,6 +13,7 @@ Run:
     pytest models/experimental/gr00t_n1_6/tests/pcc/test_pcc_siglip2.py -svv
 """
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -130,7 +131,7 @@ def _build_siglip2_ref_model(vision_weights):
 def tt_device():
     import ttnn
 
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=int(os.environ.get("GR00T_DEVICE_ID", "0")))
     yield device
     ttnn.close_device(device)
 
