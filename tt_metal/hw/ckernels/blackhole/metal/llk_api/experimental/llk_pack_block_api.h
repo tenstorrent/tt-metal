@@ -41,7 +41,7 @@ inline void llk_pack_block_contiguous(std::uint32_t tile_index, std::uint32_t ou
     LLK_ASSERT(
         ((num_tiles > 0) &&
          ((tile_index + num_tiles - 1) < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>())),
-        "");
+        "Dst tile exceeds packer destination capacity");
 
     std::uint8_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =

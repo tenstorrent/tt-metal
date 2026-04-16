@@ -274,6 +274,7 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l_out,
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
+    // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
     PACK((llk_pack_mop_config<false, false>(cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
