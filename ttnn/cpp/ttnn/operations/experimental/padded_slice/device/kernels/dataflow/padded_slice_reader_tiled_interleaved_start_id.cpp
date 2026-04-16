@@ -29,7 +29,7 @@ void kernel_main() {
     uint32_t tiles_read = 0;
     const uint32_t tile_size = get_tile_size(cb_id_in0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
 
 #ifdef DEBUG

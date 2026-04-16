@@ -182,8 +182,7 @@ ttnn.erf_bw,200,0.168,0.174,0.582,0.088
 ttnn.erf_fast_and_approx_False,200,0.039,0.029,0.258,0.01
 ttnn.erf_fast_and_approx_True,200,0.027,0.024,0.259,0.009
 ttnn.erfc_bw,200,0.16,0.243,0.576,0.095
-ttnn.erfc_fast_and_approx_False,200,0.032,0.031,0.263,0.01
-ttnn.erfc_fast_and_approx_True,200,0.032,0.031,0.266,0.01
+ttnn.erfc,200,0.032,0.031,0.266,0.01
 ttnn.erfinv,200,0.028,0.025,0.692,0.009
 ttnn.erfinv_bw,200,3.914,3.92,5.93,0.454
 ttnn.exp,200,0.026,0.023,0.13,0.009

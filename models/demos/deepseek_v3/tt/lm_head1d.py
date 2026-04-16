@@ -169,7 +169,7 @@ class LMHead1D(AbstractModule):
         }
 
     @classmethod
-    def prefill_model_config(cls, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
         """Generate model configuration for this module."""
         # Construct the config
         return {

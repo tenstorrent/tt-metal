@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t single_tile_size_bytes = cb_out0.get_tile_size();
 
     constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, out_tensor_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     bool one_time_profile = true;
     uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;

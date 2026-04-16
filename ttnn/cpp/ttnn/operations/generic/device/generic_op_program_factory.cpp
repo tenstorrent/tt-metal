@@ -102,7 +102,7 @@ void override_program_runtime_arguments(
             }
         }
         if (cb_desc.buffer != nullptr) {
-            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer, cb_desc.address_offset);
         }
         if (cb_desc.global_circular_buffer != nullptr) {
             experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.global_circular_buffer);
