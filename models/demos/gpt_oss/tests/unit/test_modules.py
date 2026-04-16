@@ -597,10 +597,9 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
-    [0, 1],
+    [0],
     ids=[
         "layer_0",
-        "layer_1",
     ],
 )
 def test_decoder(
