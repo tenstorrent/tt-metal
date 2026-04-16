@@ -119,8 +119,9 @@ struct KVCacheUpdate {
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t WRITE_NOC = 0;
+                static_assert(
+                    noc_mode == DM_DYNAMIC_NOC || WRITE_NOC == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
                 uint32_t target_core_idx = (args.local_cur_pos / args.k_chunk_size) % args.num_cores_per_head;
                 uint64_t sem_noc_addr = get_noc_addr(
                     args.mla_sender_noc_x[target_core_idx],

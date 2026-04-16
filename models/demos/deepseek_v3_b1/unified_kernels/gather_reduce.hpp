@@ -73,6 +73,7 @@ struct GatherReduce {
         uint32_t gather_reduce_half_num_cores;
         uint32_t dst_cb_id;
         uint32_t half_size_bytes;
+        uint32_t noc;
     };
 
     struct ComputeArgs {
@@ -128,6 +129,7 @@ struct GatherReduce {
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
+                ASSERT(noc_mode == DM_DYNAMIC_NOC || args.noc == noc_index);
                 const auto half_info = unified_kernels::get_split_half_core_info<true>(
                     args.gather_reduce_grid_start_x,
                     args.gather_reduce_grid_start_y,
@@ -138,7 +140,7 @@ struct GatherReduce {
                 uint32_t dst_offset =
                     (half_info.is_half0 ? 0 : args.half_size_bytes) + half_info.half_local_idx * args.data_size_bytes;
 
-                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
+                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0, args.noc);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);
                 uint64_t dst_sem_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
@@ -148,16 +150,16 @@ struct GatherReduce {
                 // Get source address from CB
                 uint32_t src_addr = get_read_ptr(args.src_cb);
 
-                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes);
+                noc_async_write_one_packet<true, true>(src_addr, dst_data_noc_addr, args.data_size_bytes, args.noc);
                 // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_sem_noc_addr, 1);
-                noc_async_posted_writes_flushed();
+                noc_semaphore_inc(dst_sem_noc_addr, 1, args.noc);
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
+                    noc_async_posted_writes_flushed(args.noc);
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                noc_async_atomic_barrier();
+                noc_async_atomic_barrier(args.noc);
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
