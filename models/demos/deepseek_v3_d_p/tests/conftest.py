@@ -196,8 +196,6 @@ def download_model_weights(cache_dir: Path, layer_idx: int = 0, num_layers: int 
         logger.info(f"✓ Configuration downloaded to: {index_dir}")
 
         # Systematically determine which shards are needed based on the index
-        import json
-
         index_path = Path(index_dir) / "model.safetensors.index.json"
         with open(index_path, "r") as f:
             index_data = json.load(f)
