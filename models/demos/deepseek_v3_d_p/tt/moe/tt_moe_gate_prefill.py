@@ -231,17 +231,6 @@ class TtMoEGatePrefill(LightweightModule):
 
         self.weight = weights["weight"]
 
-        # ============================================================================
-        # BIAS BROADCASTING - PRESERVED EXACTLY AS BEFORE
-        # ============================================================================
-        # This is the EXACT same logic as the original code.
-        # The bias is broadcasted here using config.sp_dim, which is set by
-        # TtMoe.__init__ (line 194: gate_config.sp_dim = seq_len_per_chip)
-        #
-        # Flow: TtMoe.__init__ → gate_config.sp_dim = seq_len_per_chip
-        #                      → TtMoEGatePrefill.__init__
-        #                      → bias.repeat(config.sp_dim)
-        # ============================================================================
         bias_tt = weights["bias_unbroadcasted"]
         bias_torch = ttnn.to_torch(bias_tt)
         del bias_tt
@@ -253,7 +242,6 @@ class TtMoEGatePrefill(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
-        # ============================================================================
 
         self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
 

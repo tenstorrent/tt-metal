@@ -438,9 +438,6 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
-        if expert_outputs.dtype != ttnn.bfloat16:
-            logger.warning(f"Typecasting expert_outputs from {expert_outputs.dtype} to bfloat16 for combine module")
-            expert_outputs = ttnn.typecast(expert_outputs, ttnn.bfloat16)
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 

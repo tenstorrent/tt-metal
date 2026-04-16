@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_mla")
@@ -24,14 +25,16 @@ def cleanup_cache():
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(8, 4)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
+            id="linear-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     """Test: weights → cold cache → warm cache produce identical outputs."""
@@ -43,6 +46,8 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
 
     # Set max_seq_len on config (required by MLA)
     config.max_seq_len = seq_len
+
+    mesh_shape = list(mesh_device.shape)
 
     # Create random weights matching MLA architecture
     torch.manual_seed(42)
@@ -101,6 +106,17 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
+    # Initialize KVPE cache (required by MLA forward)
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+
     # Helper to convert TP-sharded output to torch
     def to_torch_concat(tt_tensor):
         """Convert TP-sharded 4D tensor to torch."""
@@ -122,7 +138,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
         tp_axis=tp_axis,
         weight_cache_path=None,
     )
-    output1_tt = mla_from_weights.forward(x_tt, rope_tensors)
+    output1_tt = mla_from_weights.forward(x_tt, rope_tensors, tt_kvpe_cache)
     output1 = to_torch_concat(output1_tt)
 
     # === Path 2: Cold Cache ===
@@ -147,7 +163,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
         tp_axis=tp_axis,
         weight_cache_path=CACHE_DIR,
     )
-    output2_tt = mla_cold.forward(x_tt, rope_tensors)
+    output2_tt = mla_cold.forward(x_tt, rope_tensors, tt_kvpe_cache)
     output2 = to_torch_concat(output2_tt)
 
     # === Path 3: Warm Cache ===
@@ -161,7 +177,7 @@ def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only):
         tp_axis=tp_axis,
         weight_cache_path=CACHE_DIR,
     )
-    output3_tt = mla_warm.forward(x_tt, rope_tensors)
+    output3_tt = mla_warm.forward(x_tt, rope_tensors, tt_kvpe_cache)
     output3 = to_torch_concat(output3_tt)
 
     # === Validation ===

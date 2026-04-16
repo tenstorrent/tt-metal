@@ -29,13 +29,9 @@ class ttMLA:
     ):
         """Build TTNN cache for MLA weights using device=None (no device copy)."""
 
-        # Extract dimensions from config
-        hidden_size = config.hidden_size
         num_heads = config.num_attention_heads
         kv_lora_rank = config.kv_lora_rank
-        q_lora_rank = config.q_lora_rank
         qk_nope_head_dim = config.qk_nope_head_dim
-        qk_rope_head_dim = config.qk_rope_head_dim
         v_head_dim = config.v_head_dim
 
         def _cache_name(name):
@@ -323,17 +319,16 @@ class ttMLA:
             )
             o_proj_weight = state_dict["o_proj.weight"].transpose(-2, -1)
         else:
-            # Cache-only mode - create dummy tensors (ignored when cache exists)
-            # TODO: Validate if smoke test works or some of these need to be tranposed
+            # Cache-only mode - create dummy tensors with transposed dimensions (ignored when cache exists)
             q_a_ln_weight = torch.empty(1, 1, self.qk_rope_head_dim, ttnn.TILE_SIZE)
             kv_a_ln_weight = torch.empty(1, 1, self.kv_lora_rank, ttnn.TILE_SIZE)
-            q_a_proj = torch.empty(self.q_lora_rank, self.hidden_size)
-            q_b_proj_weight = torch.empty(self.qk_rope_head_dim * self.num_heads, self.q_lora_rank)
-            kv_a_proj_weight = torch.empty(self.kv_lora_rank + self.qk_rope_head_dim, self.hidden_size)
+            q_a_proj = torch.empty(self.hidden_size, self.q_lora_rank)
+            q_b_proj_weight = torch.empty(self.q_lora_rank, self.qk_rope_head_dim * self.num_heads)
+            kv_a_proj_weight = torch.empty(self.hidden_size, self.kv_lora_rank + self.qk_rope_head_dim)
             kv_b_proj_weights = torch.empty(
                 1, self.num_heads, self.qk_nope_head_dim + self.v_head_dim, self.kv_lora_rank
             )
-            o_proj_weight = torch.empty(self.hidden_size, self.qk_rope_head_dim * self.num_heads)
+            o_proj_weight = torch.empty(self.num_heads * self.qk_rope_head_dim, self.hidden_size)
 
         # Mesh Device = (sp x tp)
         # Convert q_a_layernorm
