@@ -305,19 +305,34 @@ jobs:
       - name: 🔍 CCache Debug Logs
         if: ${{ !cancelled() }}
         run: |
+          echo "::group::CCache Configuration"
+          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
+          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
+          ccache --show-config | grep -E '(debug|log)' || true
+          echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug logs found:"
-            ls -lah /tmp/ccache-debug/ || true
-            for log in /tmp/ccache-debug/*.txt; do
+            echo "Debug directory structure:"
+            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            echo ""
+            echo "All files in debug dir:"
+            find /tmp/ccache-debug -type f || true
+            echo ""
+            # Search recursively for all .txt files
+            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
               if [ -f "$log" ]; then
-                echo "::group::$(basename $log)"
+                echo "::group::$log"
                 cat "$log" || true
                 echo "::endgroup::"
               fi
             done
+            # If no txt/log files, show what's there
+            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
+              echo "No .txt or .log files found. Directory contents:"
+              ls -lahR /tmp/ccache-debug/ || true
+            fi
           else
-            echo "No debug logs directory found"
+            echo "No debug logs directory found at /tmp/ccache-debug"
           fi
           echo "::endgroup::"
 
@@ -420,19 +435,34 @@ jobs:
       - name: 🔍 CCache Debug Logs
         if: ${{ !cancelled() }}
         run: |
+          echo "::group::CCache Configuration"
+          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
+          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
+          ccache --show-config | grep -E '(debug|log)' || true
+          echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug logs found:"
-            ls -lah /tmp/ccache-debug/ || true
-            for log in /tmp/ccache-debug/*.txt; do
+            echo "Debug directory structure:"
+            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            echo ""
+            echo "All files in debug dir:"
+            find /tmp/ccache-debug -type f || true
+            echo ""
+            # Search recursively for all .txt files
+            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
               if [ -f "$log" ]; then
-                echo "::group::$(basename $log)"
+                echo "::group::$log"
                 cat "$log" || true
                 echo "::endgroup::"
               fi
             done
+            # If no txt/log files, show what's there
+            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
+              echo "No .txt or .log files found. Directory contents:"
+              ls -lahR /tmp/ccache-debug/ || true
+            fi
           else
-            echo "No debug logs directory found"
+            echo "No debug logs directory found at /tmp/ccache-debug"
           fi
           echo "::endgroup::"
 
@@ -519,18 +549,33 @@ jobs:
       - name: 🔍 CCache Debug Logs
         if: ${{ !cancelled() }}
         run: |
+          echo "::group::CCache Configuration"
+          echo "CCACHE_DEBUG=${CCACHE_DEBUG:-not set}"
+          echo "CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-not set}"
+          ccache --show-config | grep -E '(debug|log)' || true
+          echo "::endgroup::"
           echo "::group::CCache Debug Logs"
           if [ -d "/tmp/ccache-debug" ]; then
-            echo "Debug logs found:"
-            ls -lah /tmp/ccache-debug/ || true
-            for log in /tmp/ccache-debug/*.txt; do
+            echo "Debug directory structure:"
+            find /tmp/ccache-debug -type f -name "*.txt" -o -type f -name "*.log" || true
+            echo ""
+            echo "All files in debug dir:"
+            find /tmp/ccache-debug -type f || true
+            echo ""
+            # Search recursively for all .txt files
+            find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) | while read log; do
               if [ -f "$log" ]; then
-                echo "::group::$(basename $log)"
+                echo "::group::$log"
                 cat "$log" || true
                 echo "::endgroup::"
               fi
             done
+            # If no txt/log files, show what's there
+            if [ -z "$(find /tmp/ccache-debug -type f \( -name "*.txt" -o -name "*.log" \) 2>/dev/null)" ]; then
+              echo "No .txt or .log files found. Directory contents:"
+              ls -lahR /tmp/ccache-debug/ || true
+            fi
           else
-            echo "No debug logs directory found"
+            echo "No debug logs directory found at /tmp/ccache-debug"
           fi
           echo "::endgroup::"
