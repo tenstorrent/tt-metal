@@ -165,27 +165,26 @@ def get_kv_range_for_q(
     q_chunk: int,
     cfg: SDPAConfig,
     ring_iter: int = 0,
-) -> Tuple[int, int, bool]:
+) -> Tuple[int, int, bool, bool]:
     """
-    Returns (k_start, k_end, is_light) for a Q chunk during ring_iter 0.
+    Returns (k_start, k_end, is_light, is_reverse) for a Q chunk during ring_iter 0.
 
-    For ring_iter 0 (causal, balanced):
-    - Light Q: only need first half of KV (k_chunk 0 to half-1)
-    - Heavy Q: need up to causal boundary
+    New algorithm (no discards):
+    - Light Q: process K in forward order (K0, K1, ..., K_causal)
+    - Heavy Q: process K in reverse order (K_causal, K_causal-1, ..., K0)
+
+    This eliminates discards by interleaving light/heavy Q with opposite K directions.
     """
     half = cfg.half_sequence
     q_is_light = is_light_q(q_chunk, half)
 
-    if q_is_light and ring_iter == 0:
-        # Phase 3 optimization: light Q only needs first half of KV
-        # Causal boundary within light region: q_chunk + 1
-        k_end = min(q_chunk + 1, half)
-    else:
-        # Heavy Q: process up to causal boundary (q_chunk + 1 in local indexing)
-        # For heavy Q, q_chunk >= half, so causal boundary = q_chunk + 1
-        k_end = q_chunk + 1
+    # Causal boundary: can only attend to K[0:q_chunk+1]
+    k_end = q_chunk + 1
 
-    return 0, k_end, q_is_light
+    # Light Q: forward K order, Heavy Q: reverse K order
+    is_reverse = not q_is_light
+
+    return 0, k_end, q_is_light, is_reverse
 
 
 def format_id(head: int, chunk: int) -> str:
@@ -211,19 +210,19 @@ def write_work_distribution_csv(cfg: SDPAConfig, filename: str = "ring_iter0_wor
                 "head",
                 "q_chunk",
                 "light_heavy",
+                "direction",
                 "k_start",
                 "k_end",
                 "compute_ops",
-                "discard_ops",
             ]
         )
 
         for core_idx, core in enumerate(cores):
             for q_iter, w in enumerate(core.work_items):
-                k_start, k_end, is_light = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
+                k_start, k_end, is_light, is_reverse = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
                 tag = "L" if is_light else "H"
+                direction = "reverse" if is_reverse else "forward"
                 compute_ops = k_end - k_start
-                discard_ops = cfg.num_k_chunks - compute_ops
 
                 writer.writerow(
                     [
@@ -234,10 +233,10 @@ def write_work_distribution_csv(cfg: SDPAConfig, filename: str = "ring_iter0_wor
                         w.head,
                         w.q_chunk,
                         tag,
+                        direction,
                         k_start,
                         k_end,
                         compute_ops,
-                        discard_ops,
                     ]
                 )
 
@@ -246,53 +245,102 @@ def write_work_distribution_csv(cfg: SDPAConfig, filename: str = "ring_iter0_wor
 
 def write_flattened_timestamp_csv(cfg: SDPAConfig, filename: str = "ring_iter0_timestamps.csv") -> None:
     """
-    Write CSV with columns as flattened timestamps (q_iter, k_chunk).
+    Write CSV with columns as flattened timestamps (t0, t1, t2, ...).
     Rows = cores with (x,y) coords.
     Each cell shows q_id, k_id, v_id being processed.
+
+    No padding - each column is a real operation in time order.
+    All cells contain actual compute operations (no '-' or 'D').
+
+    Bottom row shows distinct K_V pairs per column (should be at most 2).
     """
     cores = compute_work_distribution(cfg)
-    max_q_iters = max(len(c.work_items) for c in cores) if cores else 0
+
+    # First pass: compute total operations per core and build ops matrix
+    max_ops = 0
+    all_ops = []  # List of lists: all_ops[core_idx] = [op0, op1, ...]
+
+    for core in cores:
+        ops = []
+        for w in core.work_items:
+            k_start, k_end, is_light, is_reverse = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
+
+            # Generate K indices in the correct order
+            if is_reverse:
+                k_indices = list(range(k_end - 1, k_start - 1, -1))
+            else:
+                k_indices = list(range(k_start, k_end))
+
+            for k_i in k_indices:
+                ops.append((w.q_chunk, k_i))  # Store as tuple for analysis
+
+        all_ops.append(ops)
+        max_ops = max(max_ops, len(ops))
+
+    # Compute distinct K_V per column
+    distinct_kv_per_col = []
+    for t in range(max_ops):
+        kv_set = set()
+        for core_ops in all_ops:
+            if t < len(core_ops):
+                q_chunk, k_i = core_ops[t]
+                kv_set.add(f"K{k_i}_V{k_i}")
+        distinct_kv_per_col.append(sorted(kv_set))
 
     with open(filename, "w", newline="") as f:
         writer = csv.writer(f)
 
-        # Header row
+        # Header row - flat timeline
         header = ["core_idx", "x", "y"]
-        for q_i in range(max_q_iters):
-            for k_i in range(cfg.num_k_chunks):
-                header.append(f"q{q_i}_k{k_i:02d}")
+        for t in range(max_ops):
+            header.append(f"t{t:03d}")
         writer.writerow(header)
 
         # Data rows
         for core_idx, core in enumerate(cores):
             row = [core_idx, core.core_x, core.core_y]
 
-            for q_i in range(max_q_iters):
-                if q_i >= len(core.work_items):
-                    for k_i in range(cfg.num_k_chunks):
-                        row.append("-")
-                    continue
+            for t in range(max_ops):
+                if t < len(all_ops[core_idx]):
+                    q_chunk, k_i = all_ops[core_idx][t]
+                    row.append(f"Q{q_chunk}_K{k_i}_V{k_i}")
+                else:
+                    row.append("")  # Core finished early
 
-                w = core.work_items[q_i]
-                k_start, k_end, is_light = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
-
-                for k_i in range(cfg.num_k_chunks):
-                    if k_i < k_end:
-                        # Format: Q<q_chunk>_K<k_chunk>_V<k_chunk>
-                        # In MLA: K and V share the same indexing (both from compressed latent)
-                        row.append(f"Q{w.q_chunk}_K{k_i}_V{k_i}")
-                    else:
-                        row.append("D")
             writer.writerow(row)
 
+        # Bottom row: distinct K_V per column
+        summary_row = ["DISTINCT_KV", "", ""]
+        for t in range(max_ops):
+            kv_list = distinct_kv_per_col[t]
+            summary_row.append(" | ".join(kv_list))
+        writer.writerow(summary_row)
+
+        # Ideal K_V row: shows the expected pattern with fake index 20
+        # Pattern repeats every 21 timestamps:
+        # t=0: K0_V0 | K20_V20, t=1: K1_V1 | K19_V19, ..., t=20: K20_V20 | K0_V0, t=21: repeats
+        ideal_row = ["IDEAL_KV", "", ""]
+        cycle_len = 21  # 0 to 20 inclusive
+        for t in range(max_ops):
+            t_in_cycle = t % cycle_len
+            k_fwd = t_in_cycle
+            k_bwd = 20 - t_in_cycle
+            ideal_row.append(f"K{k_fwd}_V{k_fwd} | K{k_bwd}_V{k_bwd}")
+        writer.writerow(ideal_row)
+
+    # Print stats about distinct K_V counts
+    kv_counts = [len(kv) for kv in distinct_kv_per_col]
+    max_distinct = max(kv_counts) if kv_counts else 0
     print(f"Written: {filename}")
+    print(f"  Max distinct K_V per column: {max_distinct}")
 
 
 def write_compact_grid_csv(cfg: SDPAConfig, selected_q_iter: int = 0, filename: str = None) -> None:
     """
-    Write CSV grid for a single q_iter showing compute vs discard across all cores.
+    Write CSV grid for a single q_iter showing K processing order across all cores.
     Columns = k_chunk, Rows = cores.
-    'C' = compute, 'D' = discard, '-' = no work.
+    Cell value = sequence number (1, 2, 3, ...) showing processing order.
+    '-' = not processed (outside causal boundary).
     """
     if filename is None:
         filename = f"ring_iter0_q{selected_q_iter}_grid.csv"
@@ -303,7 +351,7 @@ def write_compact_grid_csv(cfg: SDPAConfig, selected_q_iter: int = 0, filename: 
         writer = csv.writer(f)
 
         # Header row
-        header = ["core_idx", "x", "y", "q_chunk", "light_heavy"]
+        header = ["core_idx", "x", "y", "q_chunk", "light_heavy", "direction"]
         for k in range(cfg.num_k_chunks):
             header.append(f"K{k:02d}")
         writer.writerow(header)
@@ -311,21 +359,33 @@ def write_compact_grid_csv(cfg: SDPAConfig, selected_q_iter: int = 0, filename: 
         # Data rows
         for core_idx, core in enumerate(cores):
             if selected_q_iter >= len(core.work_items):
-                row = [core_idx, core.core_x, core.core_y, "-", "-"]
+                row = [core_idx, core.core_x, core.core_y, "-", "-", "-"]
                 row.extend(["-"] * cfg.num_k_chunks)
                 writer.writerow(row)
                 continue
 
             w = core.work_items[selected_q_iter]
-            k_start, k_end, is_light = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
+            k_start, k_end, is_light, is_reverse = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
             tag = "L" if is_light else "H"
+            direction = "<-" if is_reverse else "->"
 
-            row = [core_idx, core.core_x, core.core_y, w.q_chunk, tag]
+            # Build sequence numbers for each K position
+            if is_reverse:
+                # Heavy Q: reverse order (k_end-1 down to k_start)
+                k_indices = list(range(k_end - 1, k_start - 1, -1))
+            else:
+                # Light Q: forward order (k_start to k_end-1)
+                k_indices = list(range(k_start, k_end))
+
+            # Map K position to sequence number
+            k_to_seq = {k_idx: seq + 1 for seq, k_idx in enumerate(k_indices)}
+
+            row = [core_idx, core.core_x, core.core_y, w.q_chunk, tag, direction]
             for k in range(cfg.num_k_chunks):
-                if k < k_end:
-                    row.append("C")
+                if k in k_to_seq:
+                    row.append(k_to_seq[k])
                 else:
-                    row.append("D")
+                    row.append("-")
             writer.writerow(row)
 
     print(f"Written: {filename}")
@@ -335,17 +395,12 @@ def write_summary_csv(cfg: SDPAConfig, filename: str = "ring_iter0_summary.csv")
     """Write summary statistics to CSV."""
     cores = compute_work_distribution(cfg)
     total_computes = 0
-    total_discards = 0
 
     for core in cores:
         for w in core.work_items:
-            k_start, k_end, is_light = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
+            k_start, k_end, is_light, is_reverse = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
             computes = k_end - k_start
-            discards = cfg.num_k_chunks - computes
             total_computes += computes
-            total_discards += discards
-
-    total_ops = total_computes + total_discards
 
     with open(filename, "w", newline="") as f:
         writer = csv.writer(f)
@@ -363,9 +418,8 @@ def write_summary_csv(cfg: SDPAConfig, filename: str = "ring_iter0_summary.csv")
         writer.writerow(["grid_rows", cfg.grid_rows])
         writer.writerow(["num_cores", cfg.num_cores])
         writer.writerow(["total_compute_ops", total_computes])
-        writer.writerow(["total_discard_ops", total_discards])
-        writer.writerow(["compute_fraction", f"{total_computes / total_ops * 100:.1f}%"])
-        writer.writerow(["discard_fraction", f"{total_discards / total_ops * 100:.1f}%"])
+        writer.writerow(["algorithm", "reverse_k_for_heavy_q"])
+        writer.writerow(["discard_ops", 0])
 
     print(f"Written: {filename}")
 
@@ -387,7 +441,8 @@ def main():
         enable_zigzag=True,
     )
 
-    print("Ring Iteration 0 Execution Trace")
+    print("Ring Iteration 0 Execution Trace (Reverse-K Algorithm)")
+    print("Algorithm: Light Q -> forward K, Heavy Q -> reverse K")
     print(f"Config: mla_100k (non-Galaxy Blackhole)")
     print(f"  seq_len={cfg.seq_len}, q_chunk_size={cfg.q_chunk_size}")
     print(f"  num_q_chunks={cfg.num_q_chunks}, half_sequence={cfg.half_sequence}")
@@ -404,18 +459,15 @@ def main():
     # Print summary
     cores = compute_work_distribution(cfg)
     total_computes = 0
-    total_discards = 0
 
     for core in cores:
         for w in core.work_items:
-            k_start, k_end, is_light = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
+            k_start, k_end, is_light, is_reverse = get_kv_range_for_q(w.q_chunk, cfg, ring_iter=0)
             total_computes += k_end - k_start
-            total_discards += cfg.num_k_chunks - (k_end - k_start)
 
-    total_ops = total_computes + total_discards
     print(f"\nSummary:")
-    print(f"  Compute: {total_computes} ops ({total_computes / total_ops * 100:.1f}%)")
-    print(f"  Discard: {total_discards} ops ({total_discards / total_ops * 100:.1f}%)")
+    print(f"  Total compute ops: {total_computes}")
+    print(f"  Discards: 0 (all K/V reads are used)")
 
 
 if __name__ == "__main__":
