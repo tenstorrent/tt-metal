@@ -41,17 +41,13 @@ def assert_equal(expected, actual):
         raise AssertionError(f"Tensors not equal. Max abs diff: {max_atol}, " f"shape: {expected.shape}")
 
 
-def make_block_sharded_config(shard_shape, grid):
-    return ttnn.create_sharded_memory_config(
-        shard_shape,
-        core_grid=grid,
-        strategy=ttnn.ShardStrategy.BLOCK,
-        use_height_and_width_as_shard_shape=True,
-    )
+def make_block_sharded_config(shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, orientation)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def to_block_sharded(torch_tensor, device, layout, shard_shape, grid):
-    mem = make_block_sharded_config(shard_shape, grid)
+def to_block_sharded(torch_tensor, device, layout, shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    mem = make_block_sharded_config(shard_shape, grid, orientation)
     tt = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
     return ttnn.to_memory_config(tt, mem)
 
@@ -694,4 +690,118 @@ def test_manual_block_tiled(device):
     out_mem = make_block_sharded_config(out_shard, grid)
 
     result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+
+
+# ---------------------------------------------------------------------------
+# COL_MAJOR orientation tests
+# ---------------------------------------------------------------------------
+
+
+def test_col_major_height_concat_rm(device):
+    """Height concat (dim=2) with COL_MAJOR block sharding on a 2x2 grid, RM layout.
+
+    COL_MAJOR: height distributed across grid cols (x), width across grid rows (y).
+    Shape (1,1,4,64) with 2x2 grid -> shard (2, 32).
+    After concat of 3 tensors: output (1,1,12,64) -> shard (6, 32).
+    """
+    orient = ttnn.ShardOrientation.COL_MAJOR
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shape = [1, 1, 4, 64]
+    shard_shape = (2, 32)
+    dim = 2
+
+    a = random_tensor(shape)
+    b = random_tensor(shape)
+    c = random_tensor(shape)
+    expected = torch.cat([a, b, c], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid, orient)
+    tt_b = to_block_sharded(b, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid, orient)
+    tt_c = to_block_sharded(c, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid, orient)
+
+    out_shard = (6, 32)
+    out_mem = make_block_sharded_config(out_shard, grid, orient)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+
+
+def test_col_major_width_concat_rm(device):
+    """Width concat (dim=3) with COL_MAJOR block sharding on a 2x2 grid, RM layout.
+
+    Shape (1,1,4,64) with 2x2 grid -> shard (2, 32).
+    After width concat of 2 tensors: output (1,1,4,128) -> shard (2, 64).
+    """
+    orient = ttnn.ShardOrientation.COL_MAJOR
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shape = [1, 1, 4, 64]
+    shard_shape = (2, 32)
+    dim = 3
+
+    a = random_tensor(shape)
+    b = random_tensor(shape)
+    expected = torch.cat([a, b], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid, orient)
+    tt_b = to_block_sharded(b, device, ttnn.ROW_MAJOR_LAYOUT, shard_shape, grid, orient)
+
+    out_shard = (2, 64)
+    out_mem = make_block_sharded_config(out_shard, grid, orient)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+
+
+def test_col_major_height_concat_tiled(device):
+    """Height concat (dim=2) with COL_MAJOR block sharding on a 2x2 grid, TILE layout.
+
+    Shape (1,1,64,64) with 2x2 grid -> shard (32, 32).
+    After height concat of 3 tensors: output (1,1,192,64) -> shard (96, 32).
+    """
+    orient = ttnn.ShardOrientation.COL_MAJOR
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shape = [1, 1, 64, 64]
+    shard_shape = (32, 32)
+    dim = 2
+
+    a = random_tensor(shape)
+    b = random_tensor(shape)
+    c = random_tensor(shape)
+    expected = torch.cat([a, b, c], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.TILE_LAYOUT, shard_shape, grid, orient)
+    tt_b = to_block_sharded(b, device, ttnn.TILE_LAYOUT, shard_shape, grid, orient)
+    tt_c = to_block_sharded(c, device, ttnn.TILE_LAYOUT, shard_shape, grid, orient)
+
+    out_shard = (96, 32)
+    out_mem = make_block_sharded_config(out_shard, grid, orient)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
+    assert_equal(expected, result)
+
+
+def test_col_major_width_concat_tiled(device):
+    """Width concat (dim=3) with COL_MAJOR block sharding on a 2x2 grid, TILE layout.
+
+    Shape (1,1,64,64) with 2x2 grid -> shard (32, 32).
+    After width concat of 2 tensors: output (1,1,64,128) -> shard (32, 64).
+    """
+    orient = ttnn.ShardOrientation.COL_MAJOR
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shape = [1, 1, 64, 64]
+    shard_shape = (32, 32)
+    dim = 3
+
+    a = random_tensor(shape)
+    b = random_tensor(shape)
+    expected = torch.cat([a, b], dim=dim)
+
+    tt_a = to_block_sharded(a, device, ttnn.TILE_LAYOUT, shard_shape, grid, orient)
+    tt_b = to_block_sharded(b, device, ttnn.TILE_LAYOUT, shard_shape, grid, orient)
+
+    out_shard = (32, 64)
+    out_mem = make_block_sharded_config(out_shard, grid, orient)
+
+    result = ttnn.to_torch(ttnn.concat([tt_a, tt_b], dim=dim, memory_config=out_mem))
     assert_equal(expected, result)

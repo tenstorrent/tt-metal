@@ -42,10 +42,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
         const bool is_height_sharded = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
 
-        // Only use optimized 2-tensor kernels for height-sharded; width-sharded
-        // is routed to ConcatS2SMultiProgramFactory.
-        // Original code:
-        //   if (input_tensors.size() == 2) {
+        // optimized 2-tensor kernels only support height-sharded.
         if (input_tensors.size() == 2 && is_height_sharded) {
             TT_FATAL(
                 input_tensors[0].layout() == input_tensors[1].layout(),
@@ -76,8 +73,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
 
-    for (int i = 0; i < input_tensors.size(); i++) {
-        const Tensor& in_ref = input_tensors[i];
+    for (const auto& in_ref : input_tensors) {
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
@@ -136,17 +132,11 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             args.output_mem_config.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
             "Sharded output and inputs must have the same shard orientation.");
         if (args.dim == shape_first.rank() - 1) {
-            // Original: only height-sharded allowed for width concat
-            // TT_FATAL(memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-            //     "Only support width concat on height-sharded tensors.");
             TT_FATAL(
                 memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                     memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
                 "Only support width concat on height-sharded or block-sharded tensors.");
         } else if (args.dim == shape_first.rank() - 2) {
-            // Original: only width-sharded allowed for height concat
-            // TT_FATAL(memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-            //     "Only support height concat on width-sharded tensors.");
             TT_FATAL(
                 memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                     memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
@@ -159,6 +149,16 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",
             args.groups,
             memory_layout);
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_FATAL(
+                tensor_args.input_tensors.size() <= 16,
+                "Block-sharded concat supports at most 16 input tensors (got {}). "
+                "Batching is not supported for block-sharded concat.",
+                tensor_args.input_tensors.size());
+            TT_FATAL(
+                first_input.shard_spec().value().grid.ranges().size() == 1,
+                "Block-sharded concat requires a single contiguous rectangular CoreRange.");
+        }
     }
 }
 
@@ -312,6 +312,12 @@ Tensor concat_impl(
     // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
     const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
+        TT_FATAL(
+            !(input_tensors[0].is_sharded() &&
+              input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
+            "Block-sharded concat supports at most 16 input tensors (got {}). "
+            "Batching with intermediate shard specs is not supported for block-sharded concat.",
+            input_tensors.size());
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
         const size_t num_batches = tt::div_up(input_tensors.size(), max_tensors_per_concat);

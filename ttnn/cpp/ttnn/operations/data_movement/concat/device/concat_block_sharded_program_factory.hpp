@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include "concat_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
