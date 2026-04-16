@@ -762,14 +762,29 @@ class Generator(WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
                     )
-                    prefill_results.append(
-                        {
-                            "idx": idx,
-                            "model_id": model_id,
-                            "last_token_idx": last_token_idx,
-                            "hidden_states": hidden_states.cpu(blocking=False),
-                        }
-                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
                     continue
                 else:
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
@@ -780,14 +795,29 @@ class Generator(WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
                     )
-                    prefill_results.append(
-                        {
-                            "idx": idx,
-                            "model_id": model_id,
-                            "last_token_idx": last_token_idx,
-                            "hidden_states": hidden_states.cpu(blocking=False),
-                        }
-                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
                     continue
 
             if sampling_enabled:
