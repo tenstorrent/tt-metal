@@ -902,7 +902,7 @@ class TestImportGraphUnit:
                     "layout": "Layout.TILE",
                     "device_id": 0,
                     "address": 9999,
-                    "buffer_type": "DRAM",
+                    "buffer_type": "0",
                     "device_tensors": json.dumps([{"device_id": 0, "address": 9999}]),
                 },
                 "connections": [],
