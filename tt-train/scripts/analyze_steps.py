@@ -12,21 +12,39 @@ from typing import Dict, List, Optional
 import numpy as np
 
 
-def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
-    """Parse tt-train log content and extract step number, loss, and step time per step.
-
+def try_parse_tqdm_logs(content: str):
+    """
     Uses regex to find "Step: N", "Loss: X.Y", and "Time: X.Y ms" in order.
     All three match lists must have the same length (one entry per step).
-
-    Args:
-        content: Raw log file text.
-
-    Returns:
-        List of dicts, each with keys "step", "loss", "step_time" (int/float).
-
-    Raises:
-        ValueError: If the counts of step/loss/step_time matches differ.
     """
+
+    TRAINING_METRICS_RE = re.compile(
+        r"^Training:\s+.*? \| (?P<current>\d+)/(?P<total>\d+) .*? loss=(?P<loss>[0-9.eE+-]+).*? step_time=(?P<step_time>[0-9.eE+-]+)",
+        re.DOTALL,
+    )
+    step_summary = []
+
+    for line in content.splitlines():
+        line = line.rstrip("\n")
+        if not line.startswith("Training:") or "loss=" not in line:
+            continue
+        m = TRAINING_METRICS_RE.match(line)
+        if not m:
+            continue
+        step = int(m.group("current"))
+        loss = float(m.group("loss"))
+        step_time = float(m.group("step_time"))
+        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time)})
+
+    return step_summary
+
+
+def try_parse_logs(content: str):
+    """
+    Uses regex to find "Step: N", "Loss: X.Y", and "Time: X.Y ms" in order.
+    All three match lists must have the same length (one entry per step).
+    """
+
     step_pattern = r"Step:\s*(\d+)"
     loss_pattern = r"Loss:\s*([\d.]+)"
     step_time_pattern = r"Time:\s+([\d.]+)\s*ms"
@@ -50,6 +68,27 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
         step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time)})
 
     return step_summary
+
+
+def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
+    """Parse tt-train log content and extract step number, loss, and step time per step.
+
+    Args:
+        content: Raw log file text.
+
+    Returns:
+        List of dicts, each with keys "step", "loss", "step_time" (int/float).
+
+    Raises:
+        ValueError: If the counts of step/loss/step_time matches differ.
+    """
+    if step_summary := try_parse_logs(content):
+        return step_summary
+    if step_summary := try_parse_tqdm_logs(content):
+        return step_summary
+
+    # Should be unreachable
+    raise ValueError(f"Cannot parge log for step information.")
 
 
 def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, float]:

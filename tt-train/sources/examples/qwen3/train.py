@@ -325,7 +325,6 @@ def main():
         type=int,
         nargs="?",
         const=1,
-        default=0,
         help="Enable memory usage tracking. Optional int N = snapshot every N-th "
         "layer (default: every layer). Use --track_memory or --track_memory 4.",
     )
@@ -495,7 +494,7 @@ def main():
 
     # Start memory tracking if enabled
     memory_guard = None
-    if args.track_memory:
+    if args.track_memory is not None:
         print("Memory tracking enabled")
         memory_guard = MemoryUsageTracker.begin_capture()
 
@@ -508,7 +507,7 @@ def main():
     # 4. Create ttml model and load weights
     # ------------------------------------------------------------------
     # Memory snapshot before model creation
-    if args.track_memory:
+    if args.track_memory is not None:
         MemoryUsageTracker.snapshot("BEFORE_MODEL_CREATION")
 
     # Build LoRA config (None when disabled)
@@ -550,8 +549,8 @@ def main():
     vocab_padded = tile_pad(config.vocab_size)
 
     # Memory snapshot after model creation
-    if args.track_memory:
-        MemoryUsageTracker.snapshot("AFTER_MODEL_CREATION")
+    if args.track_memory is not None:
+        MemoryUsageTracker.snapshot("MODEL_CREATION")
 
     # ------------------------------------------------------------------
     # 4b. Validate checkpoint args early (before weight loading)
@@ -605,7 +604,7 @@ def main():
         )
 
     # Memory snapshot after weight loading
-    if args.track_memory:
+    if args.track_memory is not None:
         MemoryUsageTracker.snapshot("AFTER_WEIGHT_LOADING")
 
     # ------------------------------------------------------------------
@@ -647,7 +646,7 @@ def main():
     optimizer = ttml.optimizers.AdamW(trainable_params, adamw_config)
 
     # Memory snapshot after optimizer creation
-    if args.track_memory:
+    if args.track_memory is not None:
         MemoryUsageTracker.snapshot("AFTER_OPTIMIZER_CREATION")
 
     # ------------------------------------------------------------------
@@ -818,7 +817,7 @@ def main():
             t0 = _tlog(step, "forward", t0)
 
             # Memory snapshot after forward pass (only during first iteration)
-            if args.track_memory and not is_everything_compiled and micro_step == 0:
+            if args.track_memory is not None and not is_everything_compiled and micro_step == 0:
                 MemoryUsageTracker.snapshot("FORWARD_PASS")
 
             # Cross-entropy loss
@@ -841,7 +840,7 @@ def main():
             t0 = _tlog(step, "backward", t0)
 
             # Memory snapshot after backward pass (only during first iteration)
-            if args.track_memory and not is_everything_compiled and micro_step == 0:
+            if args.track_memory is not None and not is_everything_compiled and micro_step == 0:
                 MemoryUsageTracker.snapshot("BACKWARD_PASS")
 
             ctx.reset_graph()
@@ -874,7 +873,10 @@ def main():
         t0 = _tlog(step, "opt_step", t0)
 
         # Print memory usage after first iteration (compilation complete)
-        if args.track_memory and not is_everything_compiled:
+        if args.track_memory is not None and not is_everything_compiled:
+            total_params = sum(math.prod(p.shape()) for p in ttml_model.parameters().values())
+            print(f"Total parameters: {total_params:,}")
+
             is_everything_compiled = True
             finalize_memory(
                 memory_guard,
@@ -882,6 +884,8 @@ def main():
                 title="Memory Usage Report (after first iteration / compilation)",
             )
             memory_guard = None
+            ttml_model.track_memory = 0
+            ttml_model.model.track_memory = 0
 
         # Periodic checkpoint
         if args.save_dir and args.save_every > 0 and step % args.save_every == 0:
@@ -915,6 +919,7 @@ def main():
         postfix = {
             "loss": f"{step_loss:.4f}",
             "lr": f"{lr_now:.2e}",
+            "step_time": f"{step_time*1000:.2f}ms",
             "tok/s": f"{tokens_per_sec:.0f}",
         }
 

@@ -396,7 +396,7 @@ class Qwen3Model(AbstractModuleBase):
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None):
         hidden_states = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-        if self.track_memory:
+        if self.track_memory is not None and self.track_memory > 0:
             hidden_states = memory_snapshot(hidden_states, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
         if past_key_values is not None:
@@ -417,7 +417,7 @@ class Qwen3Model(AbstractModuleBase):
                     past_key_values,
                     position_offset=position_offset,
                 )
-            if self.track_memory and (i + 1) % self.track_memory == 0:
+            if self.track_memory is not None and self.track_memory > 0 and (i + 1) % self.track_memory == 0:
                 hidden_states = memory_snapshot(hidden_states, f"AFTER_LAYER_{i}_FWD", f"AFTER_LAYER_{i}_BWD")
         hidden_states = self.norm(hidden_states)
         return hidden_states
@@ -451,13 +451,13 @@ class Qwen3ForCausalLM(AbstractModuleBase):
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
         hidden_states = self.model(input_ids, attention_mask, past_key_values)
-        if self.track_memory:
+        if self.track_memory is not None and self.track_memory > 0:
             hidden_states = memory_snapshot(hidden_states, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
         if self.tie_word_embeddings:
             logits = linear(hidden_states, self.model.embed_tokens.tensor, None)
         else:
             logits = linear(hidden_states, self.lm_head_weight.tensor, None)
-        if self.track_memory:
+        if self.track_memory is not None and self.track_memory > 0:
             logits = memory_snapshot(logits, "AFTER_LM_HEAD_FWD", "AFTER_LM_HEAD_BWD")
         return logits
 
