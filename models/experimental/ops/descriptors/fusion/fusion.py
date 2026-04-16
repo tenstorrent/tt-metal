@@ -456,8 +456,10 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
                 for idx in updated:
                     op.input_tensors[idx] = None
                 updated.clear()
-            if op.output_tensors:
-                op.output_tensors = []
+                # Clear stale materialization outputs — dispatch() allocates fresh
+                # ones.  Only done for ops that use update() (persistent mode).
+                if op.output_tensors:
+                    op.output_tensors = []
         return _filter_results(outputs, container._default_results, results)
 
     cache_device = device
@@ -863,7 +865,8 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
+        if self._dispatch_state is None:
+            _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
@@ -996,7 +999,8 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
+        if self._dispatch_state is None:
+            _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
 
     def _build_internal(self, device=None):
