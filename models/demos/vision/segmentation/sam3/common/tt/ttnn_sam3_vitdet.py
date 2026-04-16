@@ -359,21 +359,23 @@ def tt_vit_block(
     # --- Residual connection ---
     x_torch = shortcut + attn_out
 
-    # --- Post-attention LayerNorm + MLP ---
-    shortcut2 = x_torch
-    ln2_w = block_params["norm2_weight"]
-    ln2_b = block_params["norm2_bias"]
-    normed2 = torch.nn.functional.layer_norm(x_torch, [C], ln2_w, ln2_b, eps=1e-5)
-
-    # Reshape for MLP: (B, H*W, C)
-    mlp_input = normed2.reshape(B, H * W, C)
-    tt_mlp_input = ttnn.from_torch(
-        mlp_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    # --- LN2 + MLP + residual2 fully on device ---
+    tt_x = ttnn.from_torch(
+        x_torch.reshape(B, H * W, C),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
 
-    # MLP
+    tt_normed = ttnn.layer_norm(
+        tt_x,
+        weight=block_params["norm2_weight_tt"],
+        bias=block_params["norm2_bias_tt"],
+        epsilon=1e-5,
+    )
+
     tt_mlp_out = tt_vit_mlp(
-        tt_mlp_input,
+        tt_normed,
         block_params["mlp_fc1_weight"],
         block_params["mlp_fc1_bias"],
         block_params["mlp_fc2_weight"],
@@ -381,11 +383,9 @@ def tt_vit_block(
         device=device,
     )
 
-    mlp_out = ttnn.to_torch(tt_mlp_out).float()
-    mlp_out = mlp_out.reshape(B, H, W, C)
+    tt_output = ttnn.add(tt_x, tt_mlp_out)
 
-    # --- Residual connection ---
-    output = shortcut2 + mlp_out
+    output = ttnn.to_torch(tt_output).float().reshape(B, H, W, C)
     return output
 
 
@@ -540,6 +540,14 @@ def preprocess_vit_block_weights(block):
     fc2_w = preprocess_linear_weight(block.mlp.fc2.weight.data)
     fc2_b = preprocess_linear_bias(block.mlp.fc2.bias.data)
 
+    # LN params as ttnn tensors for on-device LN.
+    norm2_w_tt = ttnn.from_torch(
+        block.norm2.weight.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    norm2_b_tt = ttnn.from_torch(
+        block.norm2.bias.data.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
     tt_params = {
         # Attention (ttnn tensors, not on device yet)
         "attn_qkv_weight": attn_params["qkv_weight"],
@@ -547,11 +555,12 @@ def preprocess_vit_block_weights(block):
         "attn_proj_weight": attn_params["proj_weight"],
         "attn_proj_bias": attn_params["proj_bias"],
         "freqs_cis": attn_params["freqs_cis"],
-        # LayerNorms (kept as torch tensors for CPU fallback)
+        # LayerNorms (kept as torch tensors for CPU LN1)
         "norm1_weight": block.norm1.weight.data.clone(),
         "norm1_bias": block.norm1.bias.data.clone(),
-        "norm2_weight": block.norm2.weight.data.clone(),
-        "norm2_bias": block.norm2.bias.data.clone(),
+        # LN2 as ttnn tensors (on-device LN2 fused with MLP residual).
+        "norm2_weight_tt": norm2_w_tt,
+        "norm2_bias_tt": norm2_b_tt,
         # MLP (ttnn tensors, not on device yet)
         "mlp_fc1_weight": fc1_w,
         "mlp_fc1_bias": fc1_b,
@@ -579,6 +588,7 @@ def move_block_params_to_device(block_params, device):
     for key in [
         "attn_qkv_weight", "attn_qkv_bias",
         "attn_proj_weight", "attn_proj_bias",
+        "norm2_weight_tt", "norm2_bias_tt",
         "mlp_fc1_weight", "mlp_fc1_bias",
         "mlp_fc2_weight", "mlp_fc2_bias",
     ]:
