@@ -42,24 +42,22 @@ jobs:
               { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
             ];
 
-            const rows = [];
+            const badges = [];
             for (const p of pipelines) {
               // Include branch filter so the link lands on runs for this PR's branch
               const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}?query=branch:${branchName}`;
               const badgeUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}/badge.svg?branch=${branchName}`;
 
               // Badge is live (re-rendered on every page load) and includes the pipeline name.
-              // Clicking it filters to runs for this branch. No separate text or run-link column needed.
-              rows.push(`| [![](${badgeUrl})](${dispatchUrl}) |`);
+              // Clicking it filters to runs for this branch.
+              badges.push(`[![](${badgeUrl})](${dispatchUrl})`);
             }
 
             const statusSection = [
               "### CI Status",
               "_Auto-generated on every push. Badges update live. Click a badge to filter runs by this branch._",
               "",
-              "| |",
-              "|:---:|",
-              ...rows,
+              badges.join(" "),
             ].join("\n");
 
             // Replace existing CI Status section if present, otherwise append
