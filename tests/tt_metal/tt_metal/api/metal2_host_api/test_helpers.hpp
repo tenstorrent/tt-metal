@@ -29,7 +29,7 @@ inline constexpr const char* MINIMAL_KERNEL_SOURCE = "void kernel_main() {}";
 // Spec Creation Helpers
 // ============================================================================
 
-// Helper to create a minimal valid KernelSpec for data movement
+// Helper to create a minimal valid KernelSpec for data movement (Gen2/Quasar)
 inline KernelSpec MakeMinimalDMKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
@@ -41,6 +41,27 @@ inline KernelSpec MakeMinimalDMKernel(
         .config_spec =
             DataMovementConfiguration{
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
+}
+
+// Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
+inline KernelSpec MakeMinimalGen1DMKernel(
+    const std::string& name,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
+    tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
+    return KernelSpec{
+        .unique_id = name,
+        .source = MINIMAL_KERNEL_SOURCE,
+        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .target_nodes = nodes,
+        .num_threads = 1,
+        .config_spec =
+            DataMovementConfiguration{
+                .gen1_data_movement_config =
+                    DataMovementConfiguration::Gen1DataMovementConfig{
+                        .processor = processor,
+                    },
             },
     };
 }
@@ -99,6 +120,30 @@ inline void BindDFBToKernel(
         .endpoint_type = endpoint_type,
         .access_pattern = access_pattern,
     });
+}
+
+// Helper to create a minimal valid ProgramSpec for Gen1 (WH/BH): DM producer (RISCV_0) + compute consumer
+inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", node, tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
+
+    auto dfb = MakeMinimalDFB("dfb_0", node);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {dm_kernel, compute_kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.workers =
+        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
+
+    return spec;
 }
 
 // Helper to create a minimal valid ProgramSpec with one DM and one compute kernel
