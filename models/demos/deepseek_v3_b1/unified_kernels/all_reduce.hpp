@@ -209,6 +209,7 @@ private:
 
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
         connection.open_finish();
+        connection.setup_stateful_send_cmd_bufs();
 
         constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         uint32_t offset = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
@@ -233,14 +234,9 @@ private:
                 header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
             }
             {
-                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_DATA");
-                connection.send_payload_without_header_non_blocking_from_address(
-                    src_base_addr + chunk_offset, payload_bytes);
-            }
-            {
-                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_HDR_SEND");
-                connection.send_payload_flush_non_blocking_from_address(
-                    reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+                DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_TRANSPORT");
+                connection.send_current_slot_stateful_non_blocking(
+                    src_base_addr + chunk_offset, payload_bytes, reinterpret_cast<uint32_t>(header));
             }
         };
 

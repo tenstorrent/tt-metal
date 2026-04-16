@@ -338,6 +338,40 @@ struct WorkerToFabricEdmSenderBase {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
 
+    FORCE_INLINE void setup_stateful_send_cmd_bufs(uint8_t noc = get_fabric_worker_noc()) const {
+        // In DM_DYNAMIC_NOC, write and write_reg traffic on a worker RISC alias to the same physical cmd buf.
+        // Program the state only after generic worker-side NOC setup is complete, and avoid unrelated writes on this
+        // RISC while the stateful send loop is active.
+        const uint64_t edm_core_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, noc);
+        ncrisc_noc_write_set_state</*posted=*/false, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, edm_core_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+
+        const uint64_t credit_noc_addr =
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
+        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
+            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
+    }
+
+    FORCE_INLINE void send_current_slot_stateful_non_blocking(
+        uint32_t payload_source_l1_addr,
+        uint32_t payload_size_bytes,
+        uint32_t header_source_l1_addr,
+        uint8_t noc = get_fabric_worker_noc()) {
+        constexpr uint32_t header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+        ASSERT(header_size_bytes <= NOC_MAX_BURST_SIZE);
+        ASSERT(payload_size_bytes <= NOC_MAX_BURST_SIZE);
+        ASSERT(header_size_bytes <= this->buffer_size_bytes);
+        ASSERT(payload_size_bytes <= this->buffer_size_bytes - header_size_bytes);
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+
+        const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
+        this->issue_payload_to_current_slot_stateful(slot_l1_addr, payload_source_l1_addr, payload_size_bytes, noc);
+        this->issue_header_to_current_slot_stateful(slot_l1_addr, header_source_l1_addr, noc);
+        this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
+    }
+
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
     // Advanced usage API:
@@ -607,6 +641,33 @@ private:
         } else {
             return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr, get_fabric_worker_noc());
         }
+    }
+
+    FORCE_INLINE uint32_t current_buffer_slot_l1_addr() const {
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            return this->edm_buffer_slot_addrs[this->get_buffer_slot_index()];
+        } else {
+            return this->edm_buffer_addr;
+        }
+    }
+
+    FORCE_INLINE void issue_payload_to_current_slot_stateful(
+        uint32_t slot_l1_addr,
+        uint32_t payload_source_l1_addr,
+        uint32_t payload_size_bytes,
+        uint8_t noc = get_fabric_worker_noc()) const {
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/false, /*update_counter=*/true, /*one_packet=*/false>(
+            noc,
+            this->data_noc_cmd_buf,
+            payload_source_l1_addr,
+            slot_l1_addr + sizeof(PACKET_HEADER_TYPE),
+            payload_size_bytes);
+    }
+
+    FORCE_INLINE void issue_header_to_current_slot_stateful(
+        uint32_t slot_l1_addr, uint32_t header_source_l1_addr, uint8_t noc = get_fabric_worker_noc()) {
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/false, /*update_counter=*/true, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, header_source_l1_addr, slot_l1_addr, sizeof(PACKET_HEADER_TYPE));
     }
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
