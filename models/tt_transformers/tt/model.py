@@ -289,7 +289,9 @@ class Transformer(LightweightModule):
         return host_inputs
 
     def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
-        tt_tokens = self.embd(tokens)
+        prefill_emb_seq_len = int(tokens.shape[-1])
+        emb_mem = self.args.get_prefill_activation_mem_config(seq_len=prefill_emb_seq_len)
+        tt_tokens = self.embd(tokens, memory_config=emb_mem)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
@@ -317,6 +319,7 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
+        prefill_emb_seq_len = int(tokens.shape[1])
         # For batched prefill, tokens come in as [padded_batch, S]
         # Each user's tokens are at their slot index in dimension 0
         # Reshape to [1, 1, 1, padded_batch * S] for embedding
@@ -337,7 +340,8 @@ class Transformer(LightweightModule):
 
         # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
-            tokens_embd = self.embd(tokens)
+            emb_mem = self.args.get_prefill_activation_mem_config(seq_len=prefill_emb_seq_len)
+            tokens_embd = self.embd(tokens, memory_config=emb_mem)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
