@@ -15,7 +15,7 @@ import torch
 from scipy.stats import pearsonr
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 # Add project root to path
 sys.path.insert(
@@ -59,7 +59,7 @@ def talker_config():
 # =============================================================================
 # RMSNorm Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestRMSNorm:
     """Tests for RMSNorm TTNN implementation."""
 
@@ -113,7 +113,7 @@ class TestRMSNorm:
 # =============================================================================
 # MLP Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestMLP:
     """Tests for MLP TTNN implementation."""
 
@@ -175,7 +175,7 @@ class TestMLP:
 # =============================================================================
 # Golden Output Tests (load from reference/golden/)
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestGoldenOutputs:
     """Tests comparing TTNN against pre-computed golden outputs."""
 
@@ -278,7 +278,7 @@ class TestGoldenOutputs:
 # =============================================================================
 # Attention Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestAttention:
     """Tests for Attention TTNN implementation."""
 
@@ -404,7 +404,7 @@ class TestAttention:
 # =============================================================================
 # DecoderLayer Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestDecoderLayer:
     """Tests for DecoderLayer TTNN implementation."""
 
@@ -558,7 +558,7 @@ class TestDecoderLayer:
 # =============================================================================
 # Talker Model Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestTalker:
     """Tests for Talker model structure (lightweight, no HF weights required)."""
 
@@ -625,7 +625,7 @@ class TestTalker:
 # =============================================================================
 # CodePredictor Model Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestCodePredictor:
     """Tests for CodePredictor model structure (lightweight, no HF weights required)."""
 
@@ -705,7 +705,7 @@ class TestCodePredictor:
 # =============================================================================
 # Speech Tokenizer Tests
 # =============================================================================
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(not (is_wormhole_b0() or is_blackhole()), reason="Requires Wormhole B0 or Blackhole")
 class TestSpeechTokenizer:
     """Tests for Speech Tokenizer TTNN implementation."""
 
