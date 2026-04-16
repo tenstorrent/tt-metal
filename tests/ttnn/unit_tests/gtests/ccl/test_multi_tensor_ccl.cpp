@@ -211,10 +211,11 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
 }
 
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensorNoHang) {
-    // REGRESSION TEST: EventSynchronize hang in MeshBuffer::wait_for_pending_events()
+    // REGRESSION TEST: multiple bugs fixed on branch nsexton/0-racecondition-hunt.
+    // This test exercises the full quiesce→all_gather→readback→destroy cycle across N iterations
+    // to stress all three race conditions simultaneously.
     //
-    // Branch: nsexton/0-racecondition-hunt
-    // Bug: wait_for_pending_events() would spin forever on a stale pre-reset event ID.
+    // ----- Bug 1: EventSynchronize hang in MeshBuffer::wait_for_pending_events() -----
     //
     // Sequence that triggers the hang (without the fix):
     //   1. all_gather() on parent mesh CQ records event E, stored in MeshBuffer
@@ -227,8 +228,30 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensorNoHang) {
     // Fix: check mesh_command_queue.in_use() before calling EventSynchronize; if the parent
     // mesh CQ was quiesced, all work was already drained — skip the stale event.
     //
-    // This test runs the full sequence multiple times in a loop to stress-test the fix.
-    // Without the fix, this test hangs on the first iteration (destructor of all_gathered_tensor).
+    // ----- Bug 2: AllGather writer exits before tt_fabric_mux terminates -----
+    //   (commits 3804c11fc3, 430292f6c6)
+    //
+    // The AllGather writer kernel was completing and returning to the dispatch layer
+    // while the fabric mux kernel was still running on an adjacent core, leading to
+    // the mux being reset mid-operation on the next iteration.
+    //
+    // Fix: writer now calls wait_for_fabric_endpoint_terminated() before exiting,
+    // polling the mux's L1 status address until FabricMuxStatus::TERMINATED is written.
+    //
+    // ----- Bug 3 (A/B): tt_fabric_mux TERMINATED write gated behind ETH teardown ACK -----
+    //   (commit ff78c87e44 — see https://github.com/tenstorrent/tt-metal/issues/42429)
+    //
+    // The mux wrote FabricMuxStatus::TERMINATED only *after* fabric_connection.close()
+    // completed in full, including close_finish() which spin-polls for an ETH router ACK.
+    // If the ETH ACK was delayed or never arrived (e.g. due to ARC flagging the NOC access
+    // to the ETH core as unsafe), TERMINATED was never written and Bug 2's fix would
+    // itself hang forever — a classic A/B deadlock.
+    //
+    // Fix: split close() into close_start() + TERMINATED write + close_finish() so the
+    // writer can unblock as soon as the close request is sent, while the mux still completes
+    // the full ETH handshake before signalling dispatch completion.
+    //
+    // Without all three fixes, this test hangs on iteration 1 or 2.
 
     constexpr int kIterations = 3;
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
