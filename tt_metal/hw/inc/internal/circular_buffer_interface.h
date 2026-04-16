@@ -128,19 +128,24 @@ __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uin
         return true;
     }
 
+    if (num_tiles > UINT16_MAX) {
+        return false;
+    }
+
+    uint16_t num_tiles16 = (uint16_t)num_tiles;
     uint16_t prev = last_count[cb_id];
 
-    if (prev > 0 && (uint16_t)num_tiles <= prev) {
+    if (prev > 0 && num_tiles16 <= prev) {
         prev = 0;
         step_size[cb_id] = 0;
     }
 
-    uint16_t step = (uint16_t)num_tiles - prev;
+    uint16_t step = num_tiles16 - prev;
     if (step_size[cb_id] > 0 && step != step_size[cb_id]) {
         return false;
     }
 
-    last_count[cb_id] = (uint16_t)num_tiles;
+    last_count[cb_id] = num_tiles16;
     step_size[cb_id] = step;
     return true;
 }

@@ -73,17 +73,20 @@ template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     std::uint32_t output = operand;
 
-    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
+    auto& cb = get_local_cb_interface(output);
+    std::uint32_t num_words = num_tiles * cb.fifo_page_size;
 
-    get_local_cb_interface(output).fifo_wr_ptr += num_words;
-    get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
+    LLK_ASSERT(cb.fifo_wr_ptr < cb.fifo_limit, "CB push_back: fifo_wr_ptr already at or past fifo_limit");
 
-    LLK_ASSERT(
-        get_local_cb_interface(output).fifo_wr_ptr <= get_local_cb_interface(output).fifo_limit,
-        "CB push_back: fifo_wr_ptr exceeds fifo_limit");
+    std::uint32_t remaining = cb.fifo_limit - cb.fifo_wr_ptr;
 
-    if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
-        get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;
+    LLK_ASSERT(remaining >= num_words, "CB push_back: fifo_wr_ptr would exceed fifo_limit");
+
+    cb.fifo_wr_ptr += (num_words <= remaining) ? num_words : remaining;
+    cb.fifo_wr_tile_ptr = 0;
+
+    if (cb.fifo_wr_ptr >= cb.fifo_limit) {
+        cb.fifo_wr_ptr -= cb.fifo_size;
     }
 
     llk_push_to_brisc(operand, num_tiles, num_words);

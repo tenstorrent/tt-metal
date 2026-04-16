@@ -256,7 +256,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
 #if ASSERT_ENABLED
-    cb_wait_front_validate(operand, 0, true);
+    cb_wait_front_validate(operand, /*num_tiles=*/0, /*reset=*/true);
 #endif
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
