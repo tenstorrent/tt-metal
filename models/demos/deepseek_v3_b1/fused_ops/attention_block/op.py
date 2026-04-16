@@ -1877,6 +1877,8 @@ class AttentionBlock:
             ("matmul5_out", matmul5_out_cb),
             ("matmul5_k_num_tiles", matmul5_k_num_tiles),
             ("matmul5_out_w_per_core", matmul5_out_w_per_core),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig TRISC CT args (compute on receiver core)
