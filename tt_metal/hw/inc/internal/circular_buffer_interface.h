@@ -144,9 +144,6 @@ __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uin
     if (step_size[cb_id] > 0 && step != step_size[cb_id]) {
         return false;
     }
-    if (!cb_access_divides_size_evenly(cb_id, (uint32_t)step)) {
-        return false;
-    }
 
     last_count[cb_id] = (uint16_t)num_tiles;
     step_size[cb_id] = step;
