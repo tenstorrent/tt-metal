@@ -57,7 +57,8 @@ def _try_run_ttnn(pixel_values: torch.Tensor):
 @pytest.mark.parametrize("img_size", [DEFAULT_INPUT_SIZE])
 def test_da3_metric_perf(img_size: int) -> None:
     torch.manual_seed(0)
-    pixel_values = torch.randn(1, 3, img_size, img_size)
+    batch_size = 4
+    pixel_values = torch.randn(batch_size, 3, img_size, img_size)
 
     print(f"Loading DA3-metric reference (img_size={img_size}) ...", flush=True)
     model = build_da3_metric(load_weights=True, img_size=img_size)
@@ -90,7 +91,7 @@ def test_da3_metric_perf(img_size: int) -> None:
         for _ in range(n_runs):
             _ = timed_target()
         elapsed = time.perf_counter() - t0
-    inference_speed = n_runs / max(elapsed, 1e-9)
+    inference_speed = (n_runs * batch_size) / max(elapsed, 1e-9)
 
     accuracy = 100.0 * max(_pcc(compare_output, ref_depth), 0.0)
 
