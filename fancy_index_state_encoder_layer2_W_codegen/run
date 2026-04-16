@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# Parse command line arguments
+TRACY_MODE=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -t|--tracy)
+            TRACY_MODE=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [-t|--tracy]"
+            exit 1
+            ;;
+    esac
+done
+
+# Check if TT_MLIR_HOME is set
+if [[ -z "${TT_MLIR_HOME}" ]]; then
+    echo "Error: TT_MLIR_HOME environment variable is not set"
+    exit 1
+fi
+# Check if TT_METAL_RUNTIME_ROOT is set
+if [[ -z "${TT_METAL_RUNTIME_ROOT}" ]]; then
+    export TT_METAL_RUNTIME_ROOT="${TT_MLIR_HOME}/third_party/tt-metal/src/tt-metal"
+    echo "TT_METAL_RUNTIME_ROOT is not set. Setting it to ${TT_METAL_RUNTIME_ROOT}"
+fi
+# Confirm python3 exists
+if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 could not be found"
+    exit 1
+fi
+# Check if VIRTUAL_ENV is set
+if [[ -z "${VIRTUAL_ENV}" ]]; then
+    echo "Error: VIRTUAL_ENV environment variable is not set. Please activate your virtual environment."
+    exit 1
+fi
+# If ttnn module is not in PYTHONPATH, add it
+if [[ ":$PYTHONPATH:" != *":${TT_METAL_RUNTIME_ROOT}/ttnn:"* ]]; then
+    # This covers the corner case where PYTHONPATH is not set, avoids leading colon
+    export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${TT_METAL_RUNTIME_ROOT}/ttnn"
+fi
+
+# If tracy module is not in PYTHONPATH, add it
+if [[ ":$PYTHONPATH:" != *":${TT_METAL_RUNTIME_ROOT}/tools/:"* ]]; then
+    export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${TT_METAL_RUNTIME_ROOT}/tools/"
+fi
+
+# Run main.py
+if [[ "${TRACY_MODE}" == true ]]; then
+
+    # Check if Tracy was enabled during build
+    if ! grep -q "ENABLE_TRACY:BOOL=ON" "${TT_METAL_RUNTIME_ROOT}/build/CMakeCache.txt"; then
+        echo "Error: Tracy profiler not enabled. Please rebuild with: -DTT_RUNTIME_ENABLE_PERF_TRACE=ON"
+        exit 1
+    fi
+
+    echo "PYTHONPATH is set to: $PYTHONPATH"
+
+    echo "Running main.py with Tracy profiler..."
+    python3 -m tracy -r -m -v -p --tracy-tools-folder $TT_METAL_RUNTIME_ROOT/build/tools/profiler/bin/ "main"
+else
+    echo "Running main.py..."
+    python3 main.py
+fi
