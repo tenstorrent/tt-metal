@@ -259,25 +259,33 @@ def forward_prefill_deepseek(
     # Step 7: Combine
     combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
 
-    # Step 8: Weighted sum via K-loop (avoids K=4->32 tile padding, 10x faster)
-    # Manual loop over K experts: slice + broadcast_mul + accumulate
+    # Step 8: Fused post-combine reduce
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
-    w_5d = ttnn.unsqueeze(w_reduce, dim=-1)  # [1,1,seq,K,1]
-    K = config.num_experts_per_tok
-    seq = pc.seq_len_per_chip
-    D = config.hidden_size
-    acc = None
-    for k in range(K):
-        expert_k = ttnn.slice(combined, (0, 0, 0, k, 0), (1, 1, seq, k + 1, D))
-        weight_k = ttnn.slice(w_5d, (0, 0, 0, k, 0), (1, 1, seq, k + 1, 1))
-        weighted = ttnn.mul(expert_k, weight_k)
-        if acc is None:
-            acc = weighted
-        else:
-            acc = ttnn.add(acc, weighted)
-    # acc is [1,1,seq,1,D] ROW_MAJOR — squeeze and tilize for all_reduce
-    summed = ttnn.reshape(acc, (1, 1, seq, D))
-    summed = ttnn.to_layout(summed, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    w_5d = ttnn.unsqueeze(w_reduce, dim=-1)
+    if w_5d.layout != ttnn.ROW_MAJOR_LAYOUT:
+        w_5d = ttnn.to_layout(w_5d, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    try:
+        summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            combined, w_5d, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    except Exception as _e:
+        from loguru import logger
+
+        logger.warning(f"FUSED FALLBACK: {_e}")
+        K = config.num_experts_per_tok
+        seq = pc.seq_len_per_chip
+        D = config.hidden_size
+        acc = None
+        for k in range(K):
+            expert_k = ttnn.slice(combined, (0, 0, 0, k, 0), (1, 1, seq, k + 1, D))
+            weight_k = ttnn.slice(w_5d, (0, 0, 0, k, 0), (1, 1, seq, k + 1, 1))
+            weighted = ttnn.mul(expert_k, weight_k)
+            if acc is None:
+                acc = weighted
+            else:
+                acc = ttnn.add(acc, weighted)
+        summed = ttnn.reshape(acc, (1, 1, seq, D))
+        summed = ttnn.to_layout(summed, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if mesh_device.shape[1] > 1:
         output = ttnn.all_reduce(summed, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
