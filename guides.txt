@@ -1,0 +1,32 @@
+Look at the current feature branch in tt-llk
+and local changes in tt-llk and tt-metal.
+This is supposed to implement BH fast tilize.
+All LLK tests are passing on ttsim and silicon.
+On tt-metal side scripts/run_safe_pytest.sh "tests/ttnn/unit_tests/operations/data_movement/test_tilize.py" is passing.
+
+Conv2d test are failing I got the simplest test isolated in tests/ttnn/unit_tests/operations/conv/test_conv2d_ones.py
+in conv input shape is rehspaed to [1, 1, B * img_w * img_h, Ci] and weights to [1, 1, Ci*kernel_h* kernel_w, Co]
+On LLK level for matmul operands are swapped weights go to srcA and wegihts to srcB.
+In this case for simplicity purposes weights and acivations are all ones.
+Still test fails with fast tilize and passes if code is tweaked to fallback to regular tilize.
+Interanlly conv will run image2col and on compute kernel it will get slices were wctivateions widht is Ci * kernel_w and that ill be inner dim for MM
+and ct dim for tilize in this case that will be 3 tiles.
+This will be repeated kernel_h times in this case 3, and it will fail for 3, if kernel h is 2 or 1 it will pass.
+Looks like accumulation bteween those iterations gets broken for path with fast tilize.
+
+We have local repo of /home/developer/ttsim-private whicih has improvements (you have to use latest code) to be able to run fast tilize on BH.
+You can use dockerfile/TTSIM_BH_LLK_SETUP.md to read up how to run LLK tests on ttsim.
+For running tt-metal tests with ttsim you can find the guide here https://github.com/tenstorrent/ttsim
+You can use tt-isa-documentation as reference https://github.com/tenstorrent/tt-isa-documentation and ttsim local repo as reference on how things work.
+For running silicn metal tests use scripts/run_safe_pytest.sh (this doesnt' work for ttsim)
+
+Lets figure out why is tests/ttnn/unit_tests/operations/conv/test_conv2d_ones.py failing you can use ttsim to compare fast tilize wiht regular path.
+Add any probing you need to diff state of srcA, srcB, dest registers and so on.
+
+Fast tilize on BH is different to fast tilize on wh in that it is using only srcA not both srcA and srcB.
+Packer is very differnt on BH to WH so  BH is using strided packer.
+
+LLK tests for basic feature correctneess:
+tt_metal/third_party/tt_llk/tests/python_tests/test_fast_tilize_full.py
+tt_metal/third_party/tt_llk/tests/python_tests/test_tilize_matmul_repro.py
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py
