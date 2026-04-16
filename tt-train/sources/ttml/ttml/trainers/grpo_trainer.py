@@ -147,7 +147,7 @@ def compute_advantages(rewards_np, group_size):
 
 
 def iter_batched_completions(
-    completion: GRPOCompletion,
+    completion: GrpoCompletion,
     prompts: Sequence[List[int]],
     batch_columns: dict,
     batch_size: int = 32,
@@ -245,7 +245,7 @@ def save_checkpoint(
 class GrpoTrainer:
     def __init__(
         self,
-        completion: GRPOCompletion,
+        completion: GrpoCompletion,
         dataset,
         config: GrpoConfig,
         reward_func: Callable,
