@@ -38,7 +38,6 @@ inline void calculate_selu(uint scale, uint alpha) {
 
         // Cody-Waite range reduction
         sfpi::vFloat tmp = x * SELU_CW_INV_LN2 + c231;
-        sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
         sfpi::vFloat k_f = tmp - c231;
         sfpi::vFloat r = k_f * SELU_CW_NEG_LN2_HI + x;
         r = r + k_f * SELU_CW_NEG_LN2_LO;
@@ -47,7 +46,7 @@ inline void calculate_selu(uint scale, uint alpha) {
 #ifdef INP_FLOAT32
         sfpi::vFloat h = PolynomialEvaluator::eval(
             r,
-            1.0000000000e+00f,
+            sfpi::vConst1,
             5.0000000000e-01f,
             1.6666504741e-01f,
             4.1666239500e-02f,
@@ -55,13 +54,13 @@ inline void calculate_selu(uint scale, uint alpha) {
             1.3948583510e-03f);
 #else
         sfpi::vFloat h = PolynomialEvaluator::eval(
-            r, 1.0000000000e+00f, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+            r, sfpi::vConst1, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
 #endif
         h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-        // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
+        constexpr int kC231Bias = 0x4B3FFF81;
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - kC231Bias);
         sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
         result = scale_alpha * result;
 
