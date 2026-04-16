@@ -390,7 +390,7 @@ jobs:
       - name: Create manifest PR
         if: steps.db-load.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           TEST_PATH: ${{ inputs.test_path }}
           TRACE_UID: ${{ needs.trace-model.outputs.trace-uid }}
           RUN_ID: ${{ github.run_id }}
