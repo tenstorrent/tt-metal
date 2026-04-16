@@ -85,10 +85,11 @@ def _pos_max_plus_one(pos: torch.Tensor) -> int:
 
 
 def _rope_lut_host(pos: torch.Tensor, D: int, base: float, dtype):
-    """Pre-indexed cos/sin LUTs (cy, sy, cx, sx) of shape (B, 1, N, D).
+    """Pre-indexed combined cos/sin LUTs of shape (B, 1, N, 2D).
 
-    Indexing cos[pos[..., 0]] etc. happens once per inference instead of every
-    RoPE call (which is ~96× per inference for encoder + decoder).
+    First D channels are vertical-pos cos/sin, last D are horizontal-pos.
+    Indexing cos[pos[..., 0]] etc. happens once per inference instead of
+    every RoPE call (~96× per inference for encoder + decoder).
     """
     key = (id(pos), D, base, dtype)
     lut = _ROPE_LUT_CACHE.get(key)
@@ -96,30 +97,35 @@ def _rope_lut_host(pos: torch.Tensor, D: int, base: float, dtype):
         return lut
     max_pos = _pos_max_plus_one(pos)
     cos, sin = _rope_cos_sin(D, max_pos, base, dtype)
-    cy = cos[pos[..., 0]][:, None, :, :].contiguous()
-    sy = sin[pos[..., 0]][:, None, :, :].contiguous()
-    cx = cos[pos[..., 1]][:, None, :, :].contiguous()
-    sx = sin[pos[..., 1]][:, None, :, :].contiguous()
-    lut = (cy, sy, cx, sx)
+    cy = cos[pos[..., 0]][:, None, :, :]
+    sy = sin[pos[..., 0]][:, None, :, :]
+    cx = cos[pos[..., 1]][:, None, :, :]
+    sx = sin[pos[..., 1]][:, None, :, :]
+    cos_full = torch.cat((cy, cx), dim=-1).contiguous()  # (B, 1, N, 2D)
+    sin_full = torch.cat((sy, sx), dim=-1).contiguous()
+    lut = (cos_full, sin_full)
     _ROPE_LUT_CACHE[key] = lut
     return lut
 
 
 def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) -> torch.Tensor:
-    """Apply DUSt3R 2D RoPE100 on host. tokens: (B, H, N, Dh), pos: (B, N, 2)."""
-    B, H, N, Dh = tokens.shape
-    assert Dh % 2 == 0
+    """Apply DUSt3R 2D RoPE100 on host. tokens: (B, H, N, Dh), pos: (B, N, 2).
+
+    Single multiply-add over the full Dh, with rotate-half applied independently
+    to the y-half (first Dh//2) and x-half (last Dh//2) of each head.
+    """
+    Dh = tokens.shape[-1]
     D = Dh // 2
-    cy, sy, cx, sx = _rope_lut_host(pos, D, base, tokens.dtype)
+    cos_full, sin_full = _rope_lut_host(pos, D, base, tokens.dtype)
 
-    def apply_1d(t, c, s):
-        t1, t2 = t.chunk(2, dim=-1)
-        rotated = torch.cat((-t2, t1), dim=-1)
-        return t * c + rotated * s
-
-    y = apply_1d(tokens[..., :D], cy, sy)
-    x = apply_1d(tokens[..., D:], cx, sx)
-    return torch.cat((y, x), dim=-1)
+    # rotate_half_split: split into 4 quarters [a, b, c, d] (each Dh//4) → [-b, a, -d, c].
+    Q = D // 2
+    a = tokens[..., :Q]
+    b = tokens[..., Q:2 * Q]
+    c = tokens[..., 2 * Q:3 * Q]
+    d = tokens[..., 3 * Q:]
+    rotated = torch.cat((-b, a, -d, c), dim=-1)
+    return tokens * cos_full + rotated * sin_full
 
 
 # ---------- Encoder block (device-resident) ----------
