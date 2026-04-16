@@ -345,6 +345,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             width=width,
             num_frames=81,
             num_inference_steps=2,
+            output_type="uint8",
         )
 
     @staticmethod

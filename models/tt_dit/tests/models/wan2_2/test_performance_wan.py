@@ -228,6 +228,7 @@ def test_pipeline_performance(
                     num_frames=num_frames,
                     num_inference_steps=2,  # Small number of steps to reduce test time.
                     traced=traced,
+                    output_type="uint8",
                 )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
