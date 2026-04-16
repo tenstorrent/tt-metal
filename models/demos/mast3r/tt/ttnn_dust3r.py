@@ -575,19 +575,25 @@ def full_decoder(
     tt_f1 = ttnn.linear(_t2d(feat1, device), full_decoder._emb_w, bias=full_decoder._emb_b)
     tt_f2 = ttnn.linear(_t2d(feat2, device), full_decoder._emb_w, bias=full_decoder._emb_b)
 
-    taps1: list[torch.Tensor] = []
-    taps2: list[torch.Tensor] = []
+    # Hold tap tensors on device through the loop, batch all downloads at the
+    # end so we pay one sync wave instead of three mid-loop syncs per branch.
+    dev_taps1: list = []
+    dev_taps2: list = []
     tap_layers = (0, 6, 11)
     for i in range(depth):
         nf1 = decoder_block_device_pre(tt_f1, tt_f2, pos, pos, full_decoder._w1[i], device)
         nf2 = decoder_block_device_pre(tt_f2, tt_f1, pos, pos, full_decoder._w2[i], device)
         tt_f1, tt_f2 = nf1, nf2
         if i in tap_layers:
-            taps1.append(ttnn.to_torch(tt_f1))
-            taps2.append(ttnn.to_torch(tt_f2))
+            dev_taps1.append(tt_f1)
+            dev_taps2.append(tt_f2)
 
-    out1 = ttnn.to_torch(ttnn.layer_norm(tt_f1, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6))
-    out2 = ttnn.to_torch(ttnn.layer_norm(tt_f2, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6))
+    tt_out1 = ttnn.layer_norm(tt_f1, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
+    tt_out2 = ttnn.layer_norm(tt_f2, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
+    out1 = ttnn.to_torch(tt_out1)
+    out2 = ttnn.to_torch(tt_out2)
+    taps1 = [ttnn.to_torch(t) for t in dev_taps1]
+    taps2 = [ttnn.to_torch(t) for t in dev_taps2]
     return out1, out2, taps1, taps2
 
 
