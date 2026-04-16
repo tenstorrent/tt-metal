@@ -28,29 +28,34 @@ TILE_WIDTH = 32
 
 
 def _skip_wh_ttsim_cross_layout(input_layout, output_layout, tt_input_dtype, tt_output_dtype):
-    """Skip cross-layout operations that hit WH ttsim Dstacc register limitations.
+    """Skip cross-layout operations that hit WH ttsim limitations.
 
-    After the tilize→typecast phase transition in RM→TILE, the Dstacc (pack intermediate
-    format) register retains the intermediate CB format instead of being updated to the
-    output format. This causes tensix_execute_pacr intermediate_format mismatch errors
-    for 32-bit input types and uint16→bf16. WH ttsim-specific; passes on BH ttsim and
-    real hardware.
+    WH ttsim has two classes of issues with cross-layout typecast:
+    1. TEN-3868 unpackr bug: 32-bit input types (Float32, Int32) cause the unpacker to
+       receive zeroed format registers on WH due to TEN-3868 HW W/A, aborting the simulation.
+       Affects both TILE→RM and RM→TILE, both same-dtype and cross-dtype.
+    2. Dstacc register mismatch: after the tilize→typecast phase transition in RM→TILE,
+       the Dstacc (pack intermediate format) register retains the intermediate CB format
+       instead of being updated to the output format. Also affects uint16→bf16 RM→TILE.
+
+    These issues are WH ttsim-specific; all tests pass on BH ttsim and real hardware.
+    To run locally on WH ttsim, comment out the TEN-3868 W/A in cunpack_common.h (per
+    ttsim-private README) — this fixes issue 1 but not issue 2.
     """
     if not os.environ.get("TT_METAL_SIMULATOR"):
         return
     if input_layout == output_layout:
         return
-    if tt_input_dtype == tt_output_dtype:
-        return
-
-    is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-    if not is_rm_to_tile:
-        return
 
     _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
+    is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
+
+    # TEN-3868: 32-bit input triggers unpackr abort (both directions, both same/cross dtype)
     if tt_input_dtype in _32bit_types:
-        pytest.skip("RM→TILE with 32-bit input triggers WH ttsim Dstacc format mismatch")
-    if tt_input_dtype == ttnn.uint16:
+        pytest.skip("32-bit input triggers WH ttsim TEN-3868 unpackr / Dstacc mismatch")
+
+    # Dstacc mismatch: RM→TILE with uint16 input and dtype change
+    if is_rm_to_tile and tt_input_dtype != tt_output_dtype and tt_input_dtype == ttnn.uint16:
         pytest.skip("uint16 RM→TILE triggers WH ttsim Dstacc format mismatch (format 9 vs 5)")
 
 
@@ -201,6 +206,7 @@ class TestTypecastSameDtypeLayoutTransforms:
     def test_same_dtype_layout_change(
         self, device, pt_dtype, tt_dtype, _, pcc, input_shape, input_layout, output_layout
     ):
+        _skip_wh_ttsim_cross_layout(input_layout, output_layout, tt_dtype, tt_dtype)
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_dtype)
         tt_input = ttnn.from_torch(torch_input, dtype=tt_dtype, layout=input_layout, device=device)
