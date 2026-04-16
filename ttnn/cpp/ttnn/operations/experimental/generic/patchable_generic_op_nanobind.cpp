@@ -20,6 +20,26 @@ namespace ttnn::operations::experimental::generic::detail {
 
 namespace {
 
+/// Patch the descriptor, wrap in MeshProgramDescriptor, and dispatch.
+/// Used by inline mode and the cold path (FusedOp.launch).
+void patchable_generic_op_with_address_refresh(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramDescriptor& program_descriptor,
+    const AddressSlots& address_slots) {
+    TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
+    auto* mesh_device = io_tensors.front().device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
+
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
+    mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
+
+    auto& desc_copy = mesh_program_descriptor.mesh_programs.back().second;
+    patch_stale_descriptor(desc_copy, io_tensors, address_slots);
+
+    (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_program_descriptor);
+}
+
 void dispatch_patched(
     const std::vector<Tensor>& input_tensors,
     const std::vector<Tensor>& output_tensors,
@@ -308,6 +328,17 @@ void bind_patchable_generic_op(nb::module_& mod) {
 
         Used by the cold path (``FusedOp.launch()``) where outputs already
         exist from ``build()``.  Inputs and outputs are separate vectors.
+        )doc");
+
+    mod.def(
+        "patchable_generic_op",
+        &patchable_generic_op_with_address_refresh,
+        nb::arg("io_tensors"),
+        nb::arg("program_descriptor"),
+        nb::arg("address_slots"),
+        R"doc(
+        Dispatch with a flat io_tensors list (inputs + outputs concatenated).
+        Used by inline mode and direct dispatch paths.
         )doc");
 
     nb::class_<FusionDispatchState>(mod, "FusionDispatchState", R"doc(
