@@ -1875,4 +1875,7 @@ class TtOlmoModelArgs(TtModelArgs):
             if snapshot_dirs:
                 base_path = snapshot_dirs[0]
 
-        return GPT2Tokenizer.from_pretrained(base_path)
+        tokenizer = GPT2Tokenizer.from_pretrained(base_path)
+        if not hasattr(tokenizer, "stop_tokens"):
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer

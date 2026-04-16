@@ -55,6 +55,7 @@ class TtLlamaAttention(LightweightModule):
 
         # OLMo has 5 local Q heads (not 8), requiring non-fused RoPE in decode mode
         self.is_olmo = getattr(configuration, "is_olmo", False)
+        self.use_fused_paged_update = not self.is_olmo  # Toggle for testing fused vs non-fused cache update
         self.n_local_heads_padded = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
         self.cluster_shape = configuration.cluster_shape
         self.capture_intermediates = False  # Set by parent decoder for PCC debug
@@ -811,27 +812,29 @@ class TtLlamaAttention(LightweightModule):
         if self.is_olmo:
             # OLMo: Fused RoPE requires K[-2] * K[-1] == 1024
             # K has 1 KV head: [1, batch, 1, 128] -> 1*128 = 128 ≠ 1024
-            # Expand K heads from 1 to 8, apply fused RoPE, then slice back to 1 head
+            # Expand K heads from 1 to 8, apply fused RoPE, keep expanded for fused cache update
             k_shape = k_heads_pre_rot_1BKD.shape
             k_mem_config = k_heads_pre_rot_1BKD.memory_config()
+            v_mem_config = v_heads_1BKD.memory_config()
 
-            # Get K's original shard grid (non-overlapping with Q)
+            # Get K's and V's original shard grids (non-overlapping with each other and Q)
             k_shard_grid = k_mem_config.shard_spec.grid
+            v_shard_grid = v_mem_config.shard_spec.grid
+
             # Move K to DRAM (interleaved) to allow repeat without sharding constraints
             k_interleaved = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(k_heads_pre_rot_1BKD)
 
-            # Tile K along the num_heads dimension: repeat 8 times [1, 8, 1, 128] -> [1, 8, 8, 128]
+            # Expand K: [1, 8, 1, 128] -> [1, 8, 8, 128] (8 copies of 1 KV head)
             k_expanded = ttnn.repeat(k_interleaved, ttnn.Shape([1, 1, 8, 1]))
             ttnn.deallocate(k_interleaved)
 
-            # Create a HEIGHT_SHARDED memory config for K using its ORIGINAL non-overlapping grid
-            # Shard shape changes from [1, 128] to [8, 128] to accommodate 8 heads
+            # HEIGHT_SHARDED on K's original non-overlapping grid with expanded shard shape
             k_expanded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
-                    k_shard_grid,  # Use K's original grid (non-overlapping with Q)
+                    k_shard_grid,
                     [8, 128],  # 8 heads * 128 head_dim per batch item
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
@@ -840,22 +843,30 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(k_expanded)
 
             # Apply fused RoPE (now K[-2]*K[-1] = 8*128 = 1024 ✓)
-            q_heads_1BQD, k_heads_expanded = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
                 q_heads_pre_rot_1BQD, k_expanded_sharded, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )
             ttnn.deallocate(q_heads_pre_rot_1BQD)
             ttnn.deallocate(k_expanded_sharded)
+            # K is now [1, 8, 8, 128] HEIGHT_SHARDED on k_shard_grid — keep expanded for fused cache update
 
-            # Slice K back to 1 head (all 8 copies are identical after RoPE)
-            # Move to DRAM first to avoid sharding issues with slice
-            k_heads_expanded_dram = ttnn.to_memory_config(k_heads_expanded, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(k_heads_expanded)
-            self._capture_attn("k_expanded_post_rope", k_heads_expanded_dram)
-            k_heads_1BKD = ttnn.slice(k_heads_expanded_dram, [0, 0, 0, 0], [1, k_shape[1], 1, k_shape[3]])
-            ttnn.deallocate(k_heads_expanded_dram)
-            self._capture_attn("k_post_rope_sliced", k_heads_1BKD)
-            # Move back to original memory config
-            k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, k_mem_config)
+            # Expand V: [1, 8, 1, 128] -> [1, 8, 8, 128] to match K for paged_fused_update_cache
+            v_interleaved = ttnn.to_memory_config(v_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(v_heads_1BKD)
+            v_expanded = ttnn.repeat(v_interleaved, ttnn.Shape([1, 1, 8, 1]))
+            ttnn.deallocate(v_interleaved)
+            v_expanded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    v_shard_grid,  # V's original non-overlapping grid
+                    [8, 128],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            v_heads_1BKD = ttnn.to_memory_config(v_expanded, v_expanded_mem_config)
+            ttnn.deallocate(v_expanded)
+            # V is now [1, 8, 8, 128] HEIGHT_SHARDED on v_shard_grid (non-overlapping with K)
         else:
             # Llama/Qwen: Use fused RoPE (both Q and K have 8 heads)
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
@@ -882,44 +893,8 @@ class TtLlamaAttention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        if self.is_olmo:
-            # OLMo: Use separate cache updates (non-fused version doesn't have 8-heads requirement)
-            # paged_fused_update_cache has hardcoded Llama70b shapes (requires 8 KV heads)
-            # Non-fused paged_update_cache requires TILE layout AND sharded
-            # Move to DRAM, tilize, then reshard with tile-aligned shape
-            k_dram = ttnn.to_memory_config(k_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
-            v_dram = ttnn.to_memory_config(v_heads_1BKD, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(k_heads_1BKD)
-            ttnn.deallocate(v_heads_1BKD)
-            k_tiled = ttnn.to_layout(k_dram, ttnn.TILE_LAYOUT)
-            v_tiled = ttnn.to_layout(v_dram, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(k_dram)
-            ttnn.deallocate(v_dram)
-            # Reshard with tile-aligned shape for paged_update_cache
-            # K/V shape after TILE padding: [1, 8, 32, 128] (padded num_kv_heads=32, head_dim=128)
-            # For HEIGHT_SHARDED with 8 cores: shard_height = 8*32/8 = 32, shard_width = 128
-            # Note: Column 7 is dispatch core (COL axis), use rows instead to get 8 cores
-            kv_shard_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(
-                        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))]
-                    ),  # column 0, rows 0-7
-                    [32, 128],  # shard shape: one batch item's worth (padded to tile)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            k_sharded = ttnn.to_memory_config(k_tiled, kv_shard_mem_config)
-            v_sharded = ttnn.to_memory_config(v_tiled, kv_shard_mem_config)
-            ttnn.deallocate(k_tiled)
-            ttnn.deallocate(v_tiled)
-            ttnn.experimental.paged_update_cache(keys, k_sharded, update_idxs_tensor=current_pos, page_table=page_table)
-            ttnn.experimental.paged_update_cache(
-                values, v_sharded, update_idxs_tensor=current_pos, page_table=page_table
-            )
-            ttnn.deallocate(k_sharded)
-            ttnn.deallocate(v_sharded)
+        if False:  # Non-fused path disabled — OLMo now uses fused path with expanded K/V [1,8,8,128]
+            pass
         else:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
@@ -1194,11 +1169,10 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        # OLMo: use bfloat16 for xqkv at all supported ISLs (≤ 8192) to preserve Q/K norm and
-        # RoPE precision. For ring SDPA (ISL > 4096), Q/K/V are cast to bfloat8_b just before
-        # the ring SDPA call (after QK-norm), not at the xqkv level.
+        # OLMo: always use bfloat16 for xqkv to preserve QK-norm and RoPE precision.
+        # bf8 at ISL > 8K causes CCL hang (bf8 barrier semaphore path deadlocks without warmup).
         if self.is_olmo:
-            xqkv_dtype = ttnn.bfloat16 if seq_len <= 8192 else self.ccl_dtype
+            xqkv_dtype = ttnn.bfloat16
         else:
             xqkv_dtype = self.ccl_dtype if self.TG else ttnn.bfloat16
         xqkv = ttnn.linear(
@@ -1223,7 +1197,7 @@ class TtLlamaAttention(LightweightModule):
 
         # Use QKV_BF16 (bfloat16 all-gather buffer) for all OLMo ISLs ≤ 8192 (xqkv is bf16).
         # For ISL > 8192, xqkv is bfloat8_b → use the standard "QKV" buffer.
-        qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 8192) else "QKV"
+        qkv_buffer_key = "QKV_BF16" if self.is_olmo else "QKV"
         _dbg_sync("qkv_allreduce_start")
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
@@ -1353,12 +1327,8 @@ class TtLlamaAttention(LightweightModule):
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
         # Determine SDPA path before K/V handling so we know which dtypes to keep.
-        # ring_distributed_sdpa needs seqlen//8 to be at least one tile (32).
-        # OLMo: always use non-ring SDPA for maximum precision (PCC > 0.999 at 1L for all ISLs).
-        # Flash-attention chunked implementation avoids OOM even at ISL 8k:
-        # - Sliding window (window=4096): O(8k×4k) attention, same as ISL 4k.
-        # - Full attention (window=None): O(8k×8k) but q_chunk=256/k_chunk=256 means ~9KB L1 per core.
-        # Non-OLMo models: ring SDPA for ISL > 4096 (original behavior).
+        # OLMo: standard SDPA (ring SDPA adds 2 extra all-gather ops per layer that hang at 32K).
+        # Ring SDPA PCC validated at 8K (0.9956) but the extra CCL ops deadlock at larger ISL.
         if self.is_olmo:
             ring_distributed_sdpa = False
         else:
@@ -1411,8 +1381,8 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
+        # SDPA
         # OLMo: always use bfloat16 Q/K/V for SDPA for maximum precision.
-        # Deallocate bf8 K/V (used only for cache fill) after the fill is done.
         if self.is_olmo:
             ttnn.deallocate(k_heads_1KSD_8b)
             ttnn.deallocate(v_heads_1VSD_8b)
@@ -1552,8 +1522,8 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # OLMo: WO always uses ttnn.linear with bfloat16 output (wo_dtype=bf16 for all ISLs ≤ 8192).
-        # Use WO_AG_BF16 (bfloat16 buffer) for all OLMo ISLs ≤ 8192; WO_AG (bfloat8_b) otherwise.
-        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len <= 8192 else "WO_AG"
+        # Use WO_AG_BF16 (bfloat16 buffer) for all OLMo ISLs.
+        wo_ag_key = "WO_AG_BF16" if self.is_olmo else "WO_AG"
         _dbg_sync("wo_allreduce_start")
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,

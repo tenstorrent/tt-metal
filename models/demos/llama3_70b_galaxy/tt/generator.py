@@ -663,6 +663,12 @@ class Generator(WarmupForwardMixin):
         )
         logger.info("Done Compiling Model")
 
+        # Reset CCL all-gather buffer indices before trace capture.
+        # The compile run leaves the buffer index in an arbitrary state;
+        # the trace must capture a clean starting point so repeated
+        # execution cycles the indices correctly.
+        self.model.tt_ccl.reset_gather_and_buffer_idx()
+
         # Get inputs ready for trace run
         tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
