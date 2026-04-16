@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 from typing import Dict
 
+import ml_dtypes
 import numpy as np
 
 import ttnn
@@ -67,18 +68,17 @@ def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray
     return out
 
 
-def _to_f32_4d(arr: np.ndarray) -> np.ndarray:
-    """Convert to float32 and reshape to 4D [1, 1, *, *]."""
+def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
+    """Convert to bfloat16 and reshape to 4D [1, 1, *, *]."""
     if arr.ndim == 1:
         arr = arr.reshape(1, 1, 1, -1)
     elif arr.ndim == 2:
         arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-    return arr.astype(np.float32)
+    return arr.astype(ml_dtypes.bfloat16)
 
 
 def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
-    arr = arr_4d.astype(np.float32) if arr_4d.dtype != np.float32 else arr_4d
-    restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+    restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
     param.assign(restored)
 
 
@@ -167,13 +167,12 @@ def load_from_safetensors(
                 )
 
         mapper = _make_tp_mapper(shard_type)
-        _assign_tensor(param, _to_f32_4d(combined), mapper=mapper)
+        _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
         print(f"  Combined k_proj + v_proj -> kv_linear for layer {layer_idx}")
 
     weight_tying = config.weight_tying
 
     for hf_name, hf_arr in all_tensors.items():
-        hf_arr = hf_arr.astype(np.float32)
         print(f"Loading tensor: {hf_name}, shape={hf_arr.shape}, dtype={hf_arr.dtype}")
 
         # ── Embedding ──
@@ -190,7 +189,7 @@ def load_from_safetensors(
             param = get_param(emb_param_name)
             tgt = param.shape()
             resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
-            _assign_tensor(param, _to_f32_4d(resized))
+            _assign_tensor(param, _to_bf16_4d(resized))
             continue
 
         # ── LM head ──
@@ -204,13 +203,13 @@ def load_from_safetensors(
                 full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
                 resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(resized), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
             continue
 
         # ── Final RMSNorm ──
         if hf_name in ("model.norm.weight", "norm.weight"):
             param = get_param("Llama/ln_fc/gamma")
-            _assign_tensor(param, _to_f32_4d(hf_arr))
+            _assign_tensor(param, _to_bf16_4d(hf_arr))
             continue
 
         # ── Per-layer weights ──
@@ -225,7 +224,7 @@ def load_from_safetensors(
                 f"{pfx2}.input_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/attention_norm/gamma")
-                _assign_tensor(param, _to_f32_4d(hf_arr))
+                _assign_tensor(param, _to_bf16_4d(hf_arr))
                 matched = True
                 break
 
@@ -235,7 +234,7 @@ def load_from_safetensors(
                 f"{pfx2}.post_attention_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/mlp_norm/gamma")
-                _assign_tensor(param, _to_f32_4d(hf_arr))
+                _assign_tensor(param, _to_bf16_4d(hf_arr))
                 matched = True
                 break
 
@@ -258,7 +257,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(w), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -301,7 +300,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(w), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -324,7 +323,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(w), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -347,7 +346,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(w), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -370,7 +369,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_f32_4d(w), mapper=mapper)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 

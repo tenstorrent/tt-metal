@@ -6,7 +6,6 @@
 
 import argparse
 import os
-import re
 import time
 
 import numpy as np
@@ -49,55 +48,6 @@ LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_IS_BIAS_TRAINABLE = False
 LORA_TRAINABLE_MODULES: list[str] = []
 LORA_DROPOUT = 0.05
-
-
-def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
-    """Validate that the MGD file's topology matches the requested mesh shape.
-
-    Reads the TT_MESH_GRAPH_DESC_PATH env var, parses the textproto to extract
-    device_topology dims and dim_types, then checks:
-      1. dims match the requested mesh_shape
-      2. the DDP axis (axis 1) uses RING topology
-    """
-    mgd_path = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if not mgd_path:
-        print("WARNING: TT_MESH_GRAPH_DESC_PATH not set, skipping MGD validation")
-        return
-
-    if not os.path.isfile(mgd_path):
-        print(f"WARNING: MGD file not found: {mgd_path}, skipping validation")
-        return
-
-    with open(mgd_path) as f:
-        content = f.read()
-
-    dims_match = re.search(r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content)
-    if not dims_match:
-        print(f"WARNING: Could not parse dims from MGD file: {mgd_path}")
-        return
-
-    mgd_dims = [int(d.strip()) for d in dims_match.group(1).split(",")]
-    if list(mgd_dims) != list(mesh_shape):
-        raise RuntimeError(
-            f"Mesh shape mismatch!\n"
-            f"  Requested mesh_shape: {mesh_shape}\n"
-            f"  MGD device_topology dims: {mgd_dims}\n"
-            f"Please ensure --ddp and --tp values match the MGD file."
-        )
-
-    types_match = re.search(r"device_topology\s*\{[^}]*dim_types\s*:\s*\[\s*([A-Z_,\s]+)\]", content)
-    if types_match:
-        dim_types = [t.strip() for t in types_match.group(1).split(",")]
-        ddp_axis = 1
-        if ddp_axis < len(dim_types) and dim_types[ddp_axis] != "RING":
-            raise RuntimeError(
-                f"DDP axis (axis {ddp_axis}) expected RING topology  "
-                f", but MGD has '{dim_types[ddp_axis]}'.\n"
-                f"  MGD dim_types: {dim_types}\n"
-                f"  MGD file: {mgd_path}"
-            )
-
-    print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
 def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = False) -> LlamaConfig:
@@ -293,16 +243,11 @@ def main():
     tp_size = args.tp
     use_ddp = dp_size > 1
     use_tp = tp_size > 1
-    mesh_shape = [dp_size, tp_size]
-
     if use_ddp and batch_size % dp_size != 0:
         raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({dp_size})")
 
     if use_tp and (args.save_every > 0 or args.resume):
         raise ValueError("Checkpointing (--save_every, --resume) is not supported with tensor parallelism (--tp > 1)")
-
-    if use_ddp or use_tp:
-        validate_mesh_graph_descriptor(mesh_shape)
 
     mesh = ttml.Mesh((dp_size, tp_size), ("dp", "tp"))
     ttml.open_device_mesh(mesh)
@@ -310,7 +255,7 @@ def main():
 
     if use_ddp or use_tp:
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
-        print(f"{mode} enabled: dp={dp_size}, tp={tp_size}, mesh_shape={mesh_shape}")
+        print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     if args.model_config is not None:

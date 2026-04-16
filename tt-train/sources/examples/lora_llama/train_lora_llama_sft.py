@@ -13,7 +13,6 @@ loop to :class:`SFTTrainer`.  DDP support is wired externally via:
 
 import argparse
 import os
-import re
 from functools import partial
 
 import ml_dtypes
@@ -152,35 +151,6 @@ def causal_lm_collate(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
-    """Validate that the MGD file topology matches the requested mesh shape."""
-    mgd_path = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if not mgd_path:
-        print("WARNING: TT_MESH_GRAPH_DESC_PATH not set, skipping MGD validation")
-        return
-    if not os.path.isfile(mgd_path):
-        print(f"WARNING: MGD file not found: {mgd_path}, skipping validation")
-        return
-
-    with open(mgd_path) as f:
-        content = f.read()
-
-    dims_match = re.search(r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content)
-    if not dims_match:
-        print(f"WARNING: Could not parse dims from MGD file: {mgd_path}")
-        return
-
-    mgd_dims = [int(d.strip()) for d in dims_match.group(1).split(",")]
-    if list(mgd_dims) != list(mesh_shape):
-        raise RuntimeError(
-            f"Mesh shape mismatch!\n"
-            f"  Requested mesh_shape: {mesh_shape}\n"
-            f"  MGD device_topology dims: {mgd_dims}\n"
-            f"Please ensure --ddp and --tp values match the MGD file."
-        )
-    print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
 
 def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = False) -> LlamaConfig:
@@ -332,16 +302,11 @@ def main():
 
     # ── Device ────────────────────────────────────────────────────────────────
 
-    mesh_shape = [dp_size, tp_size]
-
     if use_ddp and batch_size % dp_size != 0:
         raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({dp_size})")
 
     if use_tp and args.save_every > 0:
         raise ValueError("Checkpointing (--save_every) is not supported with tensor parallelism (--tp > 1)")
-
-    if use_ddp or use_tp:
-        validate_mesh_graph_descriptor(mesh_shape)
 
     mesh = ttml.Mesh((dp_size, tp_size), ("dp", "tp"))
     ttml.open_device_mesh(mesh)
@@ -349,7 +314,7 @@ def main():
 
     if use_ddp or use_tp:
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
-        print(f"{mode} enabled: dp={dp_size}, tp={tp_size}, mesh_shape={mesh_shape}")
+        print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
     # ── Data mapper ───────────────────────────────────────────────────────────
 
