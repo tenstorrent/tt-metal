@@ -116,36 +116,85 @@ def _get_traced_machine_entries(vector):
     return []
 
 
+def _parse_hardware_entry(entry):
+    """Parse a single traced_machine_info entry into a hardware tuple."""
+    board_type = entry.get("board_type")
+    device_series = entry.get("device_series")
+    card_count = entry.get("card_count")
+
+    if isinstance(device_series, list):
+        device_series = device_series[0] if device_series else None
+
+    if not board_type and not device_series and card_count is None:
+        return None
+
+    if card_count is not None:
+        try:
+            card_count = int(card_count)
+        except (TypeError, ValueError):
+            card_count = 0
+
+    return (board_type or "unknown", device_series or "unknown", card_count)
+
+
 def get_hardware_from_vector(vector):
-    """Extract a hardware tuple from traced_machine_info when present."""
+    """Extract a hardware tuple from traced_machine_info when present.
+
+    Returns the first valid hardware tuple.  For all hardware tuples use
+    ``get_all_hardware_from_vector`` instead.
+    """
     for entry in _get_traced_machine_entries(vector):
-        board_type = entry.get("board_type")
-        device_series = entry.get("device_series")
-        card_count = entry.get("card_count")
-
-        if isinstance(device_series, list):
-            device_series = device_series[0] if device_series else None
-
-        if not board_type and not device_series and card_count is None:
-            continue
-
-        if card_count is not None:
-            try:
-                card_count = int(card_count)
-            except (TypeError, ValueError):
-                card_count = 0
-
-        return (board_type or "unknown", device_series or "unknown", card_count)
-
+        hw = _parse_hardware_entry(entry)
+        if hw is not None:
+            return hw
     return None
 
 
+def get_all_hardware_from_vector(vector):
+    """Return *all* distinct hardware tuples from traced_machine_info."""
+    seen = set()
+    result = []
+    for entry in _get_traced_machine_entries(vector):
+        hw = _parse_hardware_entry(entry)
+        if hw is not None and hw not in seen:
+            seen.add(hw)
+            result.append(hw)
+    return result
+
+
 def group_vectors_by_hardware(vectors):
-    """Group vectors by their traced hardware tuple."""
+    """Group vectors by their traced hardware tuple.
+
+    When a vector carries multiple hardware entries (e.g. same config_hash
+    traced on both N300-1c and N300-4c), it is placed into **each** matching
+    hardware group so that it only runs on runners whose hardware actually
+    matches the traced context.  Each copy narrows ``traced_machine_info`` to
+    the single entry that belongs to that group, preventing cross-hardware
+    contamination at runtime.
+    """
     grouped = defaultdict(list)
     for vector in vectors:
-        hardware = get_hardware_from_vector(vector)
-        grouped[hardware].append(vector)
+        hw_tuples = get_all_hardware_from_vector(vector)
+        if not hw_tuples:
+            # No hardware metadata — put in the catch-all None group
+            grouped[None].append(vector)
+            continue
+
+        if len(hw_tuples) == 1:
+            # Common fast-path: single hardware — no copy needed
+            grouped[hw_tuples[0]].append(vector)
+        else:
+            # Multiple hardware entries — split into per-hardware copies,
+            # each with only the matching traced_machine_info entry so the
+            # runtime filter cannot accidentally pass on wrong hardware.
+            entries = _get_traced_machine_entries(vector)
+            for entry in entries:
+                hw = _parse_hardware_entry(entry)
+                if hw is None:
+                    continue
+                copy = dict(vector)
+                copy["traced_machine_info"] = entry
+                grouped[hw].append(copy)
 
     return grouped
 

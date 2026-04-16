@@ -81,7 +81,7 @@ void kernel_main() {
 
     // Input tensor accessor for remote NOC reads (updated for new arg count)
     constexpr auto input_tensor_args = TensorAccessorArgs<15>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
 
     // Calculate starting batch from global grid stick position
     // All grid points in one grid stick are in the same batch

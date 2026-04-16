@@ -171,13 +171,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
 
     // Compute floor(a/b)
-    // Input in LReg0, output in LReg1. LReg2/LReg3 are clobbered by _floor_body_(),
-    // so we must read them to inform the SFPI register allocator they are not immediately available.
-    sfpi::l_reg[sfpi::LRegs::LReg0] = div_result;
-    _floor_body_();
-    sfpi::vFloat floor_div = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vFloat _lreg2_clobbered_ = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vFloat _lreg3_clobbered_ = sfpi::l_reg[sfpi::LRegs::LReg3];
+    sfpi::vFloat floor_div = _floor_body_(div_result);
 
     // Compute remainder = a - floor(a/b) * b
     sfpi::vFloat result = a - floor_div * b;
