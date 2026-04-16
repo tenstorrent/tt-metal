@@ -46,8 +46,7 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
         tt_w, tt_b = cached
 
     tt_patches = ttnn.from_torch(patches, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.matmul(tt_patches, tt_w)
-    out = ttnn.add(out, tt_b)
+    out = ttnn.linear(tt_patches, tt_w, bias=tt_b)
     out_torch = ttnn.to_torch(out)  # (B, N, E)
     return out_torch
 
