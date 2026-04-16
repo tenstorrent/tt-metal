@@ -143,7 +143,9 @@ def main() -> int:
 
         cmd = process_binary_path(binary) + args
         print(f"Running {model_filename}: {' '.join(cmd)}")
+        step_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
+        print("Elapsed time: ", time.time() - step_start)
 
         # Record failing model run but continue to run remaining models
         if ret_code != 0:
