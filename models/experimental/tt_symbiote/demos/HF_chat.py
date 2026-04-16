@@ -40,7 +40,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
-from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model, TTNNBailingMoeV2ForCausalLM
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -137,6 +137,7 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
 
     model.eval()
     torch.set_grad_enabled(False)
+    TTNNBailingMoeV2ForCausalLM.patch_forward(model, mesh_device)
     paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     return model, tokenizer, paged_cache
 

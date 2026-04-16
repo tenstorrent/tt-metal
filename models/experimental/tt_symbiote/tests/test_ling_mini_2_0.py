@@ -28,7 +28,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
-from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
+from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model, TTNNBailingMoeV2ForCausalLM
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -128,6 +128,8 @@ def test_ling_mini_2_0(mesh_device):
 
     # Create paged KV cache
     paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+
+    TTNNBailingMoeV2ForCausalLM.patch_forward(model, mesh_device)
 
     print("Running inference with paged attention...")
     model.eval()

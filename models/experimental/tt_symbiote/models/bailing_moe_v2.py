@@ -12,7 +12,7 @@ from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask,
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
-from transformers.modeling_outputs import MoeModelOutputWithPast
+from transformers.modeling_outputs import CausalLMOutputWithPast, MoeModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
@@ -78,13 +78,10 @@ class TTNNBailingMoeV2Model(TTNNModule):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # retrieve input_ids and inputs_embeds
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        if inputs_embeds is not None:
+            batch_size, seq_length = list(inputs_embeds.shape)[:2]
         elif input_ids is not None:
             batch_size, seq_length = list(input_ids.shape)[:2]
-        elif inputs_embeds is not None:
-            batch_size, seq_length = list(inputs_embeds.shape)[:2]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
@@ -99,13 +96,14 @@ class TTNNBailingMoeV2Model(TTNNModule):
             past_key_values = DynamicCache()
 
         if inputs_embeds is None:
-            input_ids = ttnn.from_torch(
-                input_ids.cpu().to(torch.int32),
-                device=ttnn_object.device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_object.device),
-            )
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = ttnn.from_torch(
+                    input_ids.cpu().to(torch.int32),
+                    device=ttnn_object.device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_object.device),
+                )
             inputs_embeds = self.word_embeddings(input_ids)
 
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
@@ -113,7 +111,7 @@ class TTNNBailingMoeV2Model(TTNNModule):
         if position_ids is None:
             position_ids = ttnn.arange(past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1])
             position_ids = ttnn.unsqueeze(position_ids, 0)
-        else:
+        elif isinstance(position_ids, torch.Tensor):
             position_ids = ttnn.from_torch(
                 position_ids.cpu().to(torch.int32),
                 device=ttnn_object.device,
@@ -289,3 +287,148 @@ class TTNNBailingMoeV2Model(TTNNModule):
             attentions=all_self_attns,
             router_logits=all_router_logits,
         )
+
+
+class TTNNBailingMoeV2ForCausalLM(TTNNModule):
+    """TTNN wrapper for BailingMoeV2ForCausalLM with on-device
+    input token preprocessing and logits postprocessing.
+
+    Preprocessing: token ids → device → embedding lookup (all on device).
+    Postprocessing: lm_head → last-position slice (all on device), then
+    only the last-position logits are transferred to host.
+    """
+
+    @staticmethod
+    def from_torch(causal_lm):
+        new = TTNNBailingMoeV2ForCausalLM()
+        new.causal_lm = causal_lm
+        inner_model = causal_lm.model
+        new.word_embeddings = inner_model.model.word_embeddings
+        if isinstance(causal_lm.lm_head, TTNNModule):
+            causal_lm.lm_head._bypass_tensor_wrapping = True
+        return new
+
+    def preprocess_input_tokens(self, input_ids, attention_mask, position_ids):
+        """TTNN input tokens preprocessing.
+
+        Converts token ids to device, runs embedding lookup on device,
+        and converts position_ids to device.  Returns device-resident
+        inputs_embeds so the inner model skips its own embedding call.
+        """
+        device = self.device
+        multi_device = device.get_num_devices() > 1
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if multi_device else None
+
+        tt_input_ids = None
+        inputs_embeds = None
+
+        if input_ids is not None:
+            if isinstance(input_ids, torch.Tensor):
+                tt_input_ids = ttnn.from_torch(
+                    input_ids.cpu().to(torch.int32),
+                    device=device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+            else:
+                tt_input_ids = input_ids
+            inputs_embeds = self.word_embeddings(tt_input_ids)
+
+        if position_ids is not None and isinstance(position_ids, torch.Tensor):
+            position_ids = ttnn.from_torch(
+                position_ids.cpu().to(torch.int32),
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+
+        return tt_input_ids, inputs_embeds, attention_mask, position_ids
+
+    def postprocess_logits(self, hidden_states):
+        """TTNN logits post processing
+
+        Runs lm_head on device, slices the last sequence position on
+        device, then transfers only the last-position logits to host.
+        """
+        logits = self.causal_lm.lm_head(hidden_states)
+
+        if isinstance(logits, ttnn.Tensor):
+            shape = list(logits.shape)
+            if len(shape) >= 2 and shape[-2] > 1:
+                starts = [0] * len(shape)
+                ends = list(shape)
+                starts[-2] = shape[-2] - 1
+                logits = ttnn.slice(logits, starts, ends)
+
+            device = self.device
+            if device.get_num_devices() > 1:
+                mesh_composer = ttnn.ConcatMesh2dToTensor(device, device.shape, (0, -1))
+                logits = ttnn.to_torch(logits, mesh_composer=mesh_composer)
+            else:
+                logits = ttnn.to_torch(logits)
+            logits = logits.float()
+        else:
+            logits = logits.float()
+
+        return logits
+
+    def call(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        output_router_logits=None,
+        return_dict=None,
+        **kwargs,
+    ):
+        config = self.causal_lm.config
+        return_dict = return_dict if return_dict is not None else config.use_return_dict
+
+        tt_input_ids = None
+        if input_ids is not None and inputs_embeds is None:
+            tt_input_ids, inputs_embeds, attention_mask, position_ids = self.preprocess_input_tokens(
+                input_ids, attention_mask, position_ids
+            )
+
+        outputs = self.causal_lm.model(
+            input_ids=tt_input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            output_router_logits=output_router_logits,
+            return_dict=True,
+            **kwargs,
+        )
+
+        hidden_states = outputs[0]
+        logits = self.postprocess_logits(hidden_states)
+
+        if not return_dict:
+            return (logits,) + outputs[1:]
+
+        return CausalLMOutputWithPast(
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+    @staticmethod
+    def patch_forward(causal_lm, mesh_device):
+        """Patch the CausalLM forward with TTNN preprocessing/postprocessing."""
+        wrapper = TTNNBailingMoeV2ForCausalLM.from_torch(causal_lm)
+        wrapper._device = mesh_device
+        causal_lm.forward = wrapper.call
+        return wrapper
