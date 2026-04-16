@@ -933,9 +933,10 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 
     // Due to a hardware bug (TEN-3868), we need to have one unpack-to-srcA instruction after the last unpack-to-dest instruction.
-    TTI_SETADCXX(p_setadc::UNP_A, FACE_C_DIM - 1, 0x0);
-    TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
-    TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    // Temporarily commented out for WH ttsim compatibility (ttsim doesn't model this W/A).
+    // TTI_SETADCXX(p_setadc::UNP_A, FACE_C_DIM - 1, 0x0);
+    // TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
+    // TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)

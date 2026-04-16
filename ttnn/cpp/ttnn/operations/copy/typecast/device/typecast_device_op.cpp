@@ -175,27 +175,25 @@ ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
 
-    operation::Hash hash;
-
-    // For tile layout, only volume matters. For row-major, actual shape dimensions matter.
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
+    // For same-layout tile operations, only volume matters (tiles are distributed uniformly).
+    // For row-major and cross-layout transforms, actual dimensions matter (ntiles_per_row,
+    // nblocks, stick sizes depend on shape, not just volume).
+    if (input_tensor.layout() == Layout::TILE && !is_cross_layout(args, tensor_args)) {
+        return operation::hash_operation<TypecastDeviceOperation>(
             args,
             program_factory.index(),
             input_tensor.dtype(),
             input_tensor.memory_config(),
             input_shape.volume(),
             input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
     }
-    return hash;
+    return operation::hash_operation<TypecastDeviceOperation>(
+        args,
+        program_factory.index(),
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_shape,
+        input_tensor.layout());
 }
 
 bool TypecastDeviceOperation::skip_launch(

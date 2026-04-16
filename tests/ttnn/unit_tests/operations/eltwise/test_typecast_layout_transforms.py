@@ -27,6 +27,33 @@ TILE_WIDTH = 32
 # ---------------------------------------------------------------------------
 
 
+def _skip_wh_ttsim_cross_layout(input_layout, output_layout, tt_input_dtype, tt_output_dtype):
+    """Skip cross-layout operations that hit WH ttsim Dstacc register limitations.
+
+    After the tilize→typecast phase transition in RM→TILE, the Dstacc (pack intermediate
+    format) register retains the intermediate CB format instead of being updated to the
+    output format. This causes tensix_execute_pacr intermediate_format mismatch errors
+    for 32-bit input types and uint16→bf16. WH ttsim-specific; passes on BH ttsim and
+    real hardware.
+    """
+    if not os.environ.get("TT_METAL_SIMULATOR"):
+        return
+    if input_layout == output_layout:
+        return
+    if tt_input_dtype == tt_output_dtype:
+        return
+
+    is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
+    if not is_rm_to_tile:
+        return
+
+    _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
+    if tt_input_dtype in _32bit_types:
+        pytest.skip("RM→TILE with 32-bit input triggers WH ttsim Dstacc format mismatch")
+    if tt_input_dtype == ttnn.uint16:
+        pytest.skip("uint16 RM→TILE triggers WH ttsim Dstacc format mismatch (format 9 vs 5)")
+
+
 def _make_torch_input(shape, pt_dtype, low=0, high=100):
     if pt_dtype in (torch.int, torch.int32):
         return torch.randint(low, high, shape, dtype=pt_dtype)
@@ -146,18 +173,7 @@ class TestTypecastLayoutTransforms:
         input_layout,
         output_layout,
     ):
-        # RM→TILE with 32-bit output dtype: WH ttsim strict check rejects Dstacc vs In_data_format
-        # mismatch when fp32_dest_acc_en + Int32/Float32 output (JIT pack_src_format=Float32 but
-        # THCON In_data_format=Int32). Works on real hardware; ttsim-only limitation.
-        is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
-        if (
-            is_rm_to_tile
-            and tt_input_dtype != tt_output_dtype
-            and tt_output_dtype in _32bit_types
-            and os.environ.get("TT_METAL_SIMULATOR")
-        ):
-            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
+        _skip_wh_ttsim_cross_layout(input_layout, output_layout, tt_input_dtype, tt_output_dtype)
         torch.manual_seed(0)
         _run_typecast_and_verify(
             device,
@@ -286,15 +302,7 @@ class TestTypecastCombinedTransforms:
         input_sharded,
         output_sharded,
     ):
-        is_rm_to_tile = input_layout == ttnn.ROW_MAJOR_LAYOUT
-        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
-        if (
-            is_rm_to_tile
-            and tt_input_dtype != tt_output_dtype
-            and tt_output_dtype in _32bit_types
-            and os.environ.get("TT_METAL_SIMULATOR")
-        ):
-            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
+        _skip_wh_ttsim_cross_layout(input_layout, output_layout, tt_input_dtype, tt_output_dtype)
         torch.manual_seed(0)
         torch_input = _make_torch_input(input_shape, pt_input_dtype)
         sharded_mc = _make_sharded_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, input_shape)
@@ -400,13 +408,7 @@ class TestTypecastBfpLayoutTransform:
     @pytest.mark.parametrize("pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc", BFP_RM_TO_TILE_PAIRS)
     @pytest.mark.parametrize("input_shape", [[1, 1, 32, 32], [1, 1, 128, 128]])
     def test_rm_to_bfp_tile(self, device, pt_input_dtype, tt_input_dtype, tt_output_dtype, pcc, input_shape):
-        _32bit_types = {ttnn.int32, ttnn.uint32, ttnn.float32}
-        if (
-            tt_input_dtype != tt_output_dtype
-            and tt_output_dtype in _32bit_types
-            and os.environ.get("TT_METAL_SIMULATOR")
-        ):
-            pytest.skip("RM→TILE with 32-bit output triggers WH ttsim Dstacc vs In_data_format mismatch")
+        _skip_wh_ttsim_cross_layout(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, tt_input_dtype, tt_output_dtype)
         torch.manual_seed(0)
         _run_typecast_and_verify(
             device,
