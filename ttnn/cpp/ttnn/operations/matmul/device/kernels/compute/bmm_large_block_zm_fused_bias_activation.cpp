@@ -1,110 +1,99 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+/**
+ * @file bmm_large_block_zm_fused_bias_activation.cpp
+ * @brief Blocked matmul with optional fused bias, SFPU activation, transpose, and untilize.
+ *
+ * Full-featured bmm path used when any of: bias, activation, in0_transpose, untilize,
+ * DRAM sharding, or multi-block h/w dims are enabled. For the simple case see
+ * bmm_large_block_zm.cpp.
+ *
+ * Pipeline phases (each optional, selected by compile-time defines):
+ *   1. K-loop matmul (matmul_block helper): K-blocking, spill/reload, L1 accumulation.
+ *      - in0_transpose: TransposePreKBlock functor transposes input before each K-block.
+ *      - SFPU activation (no bias): PostComputeFn applies per sub-block on last K-block.
+ *      - PACK_RELU (no bias): helper enables relu on last K-block output.
+ *      - ROW_MAJOR_OUTPUT (factory-emitted define): helper does absolute-offset pack.
+ *      - SKIP_COMPUTE (microbench define): helper elides inner matmul LLK call.
+ *   2. Bias addition (add_bias_bcast_rows helper): reads partials, adds row-broadcast
+ *      bias, optionally applies SFPU activation, packs to output. Caller owns bias
+ *      CB wait/pop lifecycle since the reader may push bias only once across
+ *      multiple bh/batch iterations.
+ *   3. Untilize (reblock_and_untilize): converts tiled output to row-major.
+ *
+ * NOTE: The perf microbenchmark copy at
+ * tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/
+ *   bmm_large_block_zm_fused_bias_activation_copy.cpp
+ * is a standalone copy using direct LLK calls (cannot import ttnn kernel_lib).
+ */
 
-#include "api/compute/matmul.h"
+#include <cstdint>
+#include <type_traits>
+
 #include "api/compute/pack_untilize.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+
 #ifdef FUSE_BIAS
-#include "api/compute/bcast.h"
+#include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #endif
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-// Please update
-// tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
-// when making any changes to this file.
-// Have to keep a copy because cannot import ttnn into tests/tt_metal.
+// ─── Local helper functions ─────────────────────────────────────────────────
 
 /**
- * @brief Transposes a block of tiles from one circular buffer to another.
+ * @brief Transpose a block of tiles from one CB to another (WH swap per tile).
  *
- * This function reads a block of tiles from the input circular buffer (cb), performs a width-height
- * (WH) transpose on each tile, and writes the transposed tiles to the output circular buffer.
- * The operation is performed in blocks of `block_size` tiles for efficiency, with a separate loop
- * at the end to handle any leftover tiles when the total tile count is not divisible by
- * `block_size`. The default block size is 4, since there are guaranteed to be 4 tiles in the dst
- *               regs irrespective of dst sync mode or data format.
- *
- * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
- * @tparam block_size The number of tiles in each block to be transposed.
- * @param in0_transpose_cb_id Circular buffer ID to read the original tiles from.
- * @param in0_cb_id Circular buffer ID to which the transposed tiles are written.
+ * Used by the TransposePreKBlock functor below.
  */
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    experimental::CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
-    experimental::CircularBuffer in0_cb(in0_cb_id);
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
-    // Lets do 2 passes: One loop until last and one last for the left overs
+
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        in0_transpose_cb.wait_front(block_size);
+        cb_wait_front(in0_transpose_cb_id, block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
-        in0_transpose_cb.pop_front(block_size);
-
-        in0_cb.reserve_back(block_size);
+        cb_pop_front(in0_transpose_cb_id, block_size);
+        cb_reserve_back(in0_cb_id, block_size);
         tile_regs_wait();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             pack_tile(tile_idx, in0_cb_id);
         }
         tile_regs_release();
-        in0_cb.push_back(block_size);
+        cb_push_back(in0_cb_id, block_size);
     }
 
     if constexpr (last_block_size > 0) {
-        in0_transpose_cb.wait_front(last_block_size);
+        cb_wait_front(in0_transpose_cb_id, last_block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
-        in0_transpose_cb.pop_front(last_block_size);
-
-        in0_cb.reserve_back(last_block_size);
+        cb_pop_front(in0_transpose_cb_id, last_block_size);
+        cb_reserve_back(in0_cb_id, last_block_size);
         tile_regs_wait();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             pack_tile(tile_idx, in0_cb_id);
         }
         tile_regs_release();
-        in0_cb.push_back(last_block_size);
+        cb_push_back(in0_cb_id, last_block_size);
     }
 }
 
-FORCE_INLINE void reload_from_cb_to_dst(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
-    bool in1_transpose_tile,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    mm_partials_cb.wait_front(out_subblock_num_tiles);
-
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
-
-    mm_partials_cb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-}
-
+/**
+ * @brief Reblock and untilize matmul output from sub-block layout to row-major.
+ */
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
@@ -112,21 +101,17 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    experimental::CircularBuffer interm_cb(interm_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    interm_cb.wait_front(num_tiles_in_row_of_subblocks);
+    cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
-
-        out_cb.reserve_back(out_block_w);
+        cb_reserve_back(out_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
-                uint32_t tile_index = block_offset + within_block_index + w;
-                copy_tile(interm_cb_id, tile_index, w);
+                copy_tile(interm_cb_id, block_offset + within_block_index + w, w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -134,92 +119,183 @@ inline void reblock_and_untilize(
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
-        out_cb.push_back(out_block_w);
-
+        cb_push_back(out_cb_id, out_block_w);
         within_block_index += out_subblock_w;
     }
-    interm_cb.pop_front(num_tiles_in_row_of_subblocks);
+    cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
+// ─── Functors for matmul_block / add_bias_bcast_rows callbacks ──────────────
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+// Applied per output sub-block after matmul (no-bias) or after bias addition.
+struct SFPUPostCompute {
+    ALWI void operator()(uint32_t num_tiles) const {
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            SFPU_OP_FUNC_ACTIVATION
+        }
+    }
+};
+#endif
+
+/**
+ * PreKBlockFn: transposes input block before each K-block iteration.
+ * Reconfigures data formats for the transpose, runs the transpose, then reinits matmul.
+ * The matmul_block helper's L1_ACC management restores accumulation state afterward.
+ */
+template <
+    uint32_t in0_block_num_tiles_v,
+    uint32_t in0_transpose_cb_id_v,
+    uint32_t in0_cb_id_v,
+    uint32_t in1_cb_id_v,
+    uint32_t in1_transpose_tile_v,
+    uint32_t out_subblock_w_v,
+    uint32_t out_subblock_h_v,
+    uint32_t in0_block_w_v,
+    uint32_t mm_partials_cb_id_v>
+struct TransposePreKBlock {
+    ALWI void operator()(uint32_t, uint32_t, bool) const {
+        reconfig_data_format_srca(in1_cb_id_v, in0_transpose_cb_id_v);
+        transpose_wh_init_short(in0_transpose_cb_id_v);
+        PACK((pack_reconfig_data_format(in0_cb_id_v)));
+#ifdef PACKER_L1_ACC
+        PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+        transpose_tile_block<in0_block_num_tiles_v>(in0_transpose_cb_id_v, in0_cb_id_v);
+        mm_block_init_short_with_dt(
+            in0_cb_id_v,
+            in1_cb_id_v,
+            in0_transpose_cb_id_v,
+            in1_transpose_tile_v,
+            out_subblock_w_v,
+            out_subblock_h_v,
+            in0_block_w_v);
+        PACK((pack_reconfig_data_format(mm_partials_cb_id_v)));
+    }
+};
+
+// ─── kernel_main ────────────────────────────────────────────────────────────
+
 void kernel_main() {
-// RUNTIME ARGS
+    using namespace compute_kernel_lib;
+
 #ifdef MATMUL_DRAM_SHARDED
-    const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
-    // if not worker core, skip
-    if (not is_worker_core) {
+    if (get_arg_val<uint32_t>(0) != 1) {
         return;
     }
 #endif
 
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
-    constexpr uint32_t in0_block_num_tiles =
-        get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-    constexpr uint32_t in1_num_subblocks =
-        get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
-    constexpr uint32_t in1_block_num_tiles =
-        get_compile_time_arg_val(5);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);     // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);         // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);         // outer inner dim (in inner dim blocks)
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
-    constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
-    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
-    constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
-    // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
+    // ── Compile-time arguments ──────────────────────────────────────────
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);
+    constexpr uint32_t batch = get_compile_time_arg_val(13);
+    constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);
+    constexpr bool untilize_out = get_compile_time_arg_val(15);
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
     constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(17);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
+    // ── Circular buffer IDs ─────────────────────────────────────────────
     constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
                                                       : get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-    // When in0 needs to be transposed, the original data is read from cb_in0 (in0_transpose_cb_id),
-    // transposed, and the result is written to cb_in0_transposed (in0_cb_id), which is then used
-    // as input for the matmul call.
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
-
-    experimental::CircularBuffer in0_cb(in0_cb_id);
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    experimental::CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
-    experimental::CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
-    experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
-#endif
-
+    // ── Feature flags ───────────────────────────────────────────────────
 #ifdef IN1_TRANSPOSE_TILE
     constexpr uint32_t in1_transpose_tile = true;
 #else
     constexpr uint32_t in1_transpose_tile = false;
 #endif
 
-    constexpr bool spill = num_blocks_inner_dim > 1;
+    constexpr bool l1_acc =
+#ifdef PACKER_L1_ACC
+        true;
+#else
+        false;
+#endif
+
+    // PACK_RELU without bias: helper handles it via pack_relu template param.
+    // PACK_RELU with bias: caller manages RELU config between matmul and bias phases.
+    constexpr bool do_relu =
+#if defined(PACK_RELU) && !defined(FUSE_BIAS)
+        true;
+#else
+        false;
+#endif
+
+    // ROW_MAJOR_OUTPUT: factory opts in to absolute-offset packing; writers read row-major.
+    constexpr bool row_major_output =
+#ifdef ROW_MAJOR_OUTPUT
+        true;
+#else
+        false;
+#endif
+
+    // matmul_block packs its last K-block to interm when a downstream phase (bias, untilize)
+    // consumes from interm.
+    constexpr bool pack_last_to_interm =
+#ifdef FUSE_BIAS
+        true;
+#else
+        untilize_out;
+#endif
+
+    // ── Callback type aliases ───────────────────────────────────────────
+    using XposeFn = TransposePreKBlock<
+        in0_block_num_tiles,
+        in0_transpose_cb_id,
+        in0_cb_id,
+        in1_cb_id,
+        in1_transpose_tile,
+        out_subblock_w,
+        out_subblock_h,
+        in0_block_w,
+        mm_partials_cb_id>;
+    using NoPreFn = NoPreKBlock;
+    using NoPostFn = NoPostCompute;
+    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreFn>;
+
+#ifdef SFPU_OP_INIT_ACTIVATION
+    using PostFn = std::conditional_t<pack_last_to_interm, NoPostFn, SFPUPostCompute>;
+#else
+    using PostFn = NoPostFn;
+#endif
+
+    // ── Init ────────────────────────────────────────────────────────────
+#ifdef SFPU_OP_INIT_ACTIVATION
+    SFPU_OP_INIT_ACTIVATION
+#endif
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+
+    // ── Main loop: batch × output blocks ────────────────────────────────
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
-            // Check whether this batch is valid
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
@@ -231,203 +307,53 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                bool enable_reload = false;
-
+                // Reset packer state for this output block
 #ifdef PACK_RELU
-                // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
                 }
 #endif
-
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
-                for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
-                    bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-                    }
-#endif
-
-                    if constexpr (in0_transpose_tile) {
-                        reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
-                        transpose_wh_init_short(in0_transpose_cb_id);
-                        PACK((pack_reconfig_data_format(in0_cb_id)));
-#ifdef PACKER_L1_ACC
-                        PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
-                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm_block_init_short_with_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_transpose_cb_id,
-                            in1_transpose_tile,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
-                        PACK((pack_reconfig_data_format(mm_partials_cb_id)));
-                    }
-
-                    in0_cb.wait_front(in0_block_num_tiles);
-                    in1_cb.wait_front(in1_block_num_tiles);
-
-                    if (block == 0 && !last_out) {
-                        out_cb.reserve_back(out_block_num_tiles);
-                    }
-
-                    int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        int in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            tile_regs_acquire();
-                            if (enable_reload) {
-                                reload_from_cb_to_dst(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    mm_partials_cb_id,
-                                    in1_transpose_tile,
-                                    out_subblock_num_tiles,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                            }
-
-#ifndef SKIP_COMPUTE
-                            // Compute output sub-block
-                            uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
-
-#endif  // SKIP_COMPUTE
-
-                            if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                                    SFPU_OP_FUNC_ACTIVATION
-                                }
-#endif
-                                tile_regs_commit();
-                                // Pack out to output buffer
-                                mm_out_cb.reserve_back(out_subblock_num_tiles);
-                                tile_regs_wait();
-
-#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
-#endif
-
-#ifdef PACKER_L1_ACC
+                // ── Phase 1: K-loop matmul ──────────────────────────────
+                // Helper absorbs ROW_MAJOR_OUTPUT pack-strategy switch and SKIP_COMPUTE elision.
+                // Pass the "real" downstream out_cb (what the writer eventually consumes) so
+                // the helper's shared-memory-protection reserve targets the right CB. With
+                // FUSE_BIAS that's out_cb_id even though the matmul itself packs to partials;
+                // without bias it's whatever the untilize/writer phase reads.
+                constexpr uint32_t phase1_out_cb =
 #ifdef FUSE_BIAS
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
+                    out_cb_id;
 #else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
+                    mm_out_cb_id;
 #endif
-#endif
+                matmul_block<
+                    in1_transpose_tile,
+                    l1_acc,
+                    pack_last_to_interm,
+                    do_relu,
+                    row_major_output,
+                    PostFn,
+                    PreFn>(
+                    in0_cb_id,
+                    in1_cb_id,
+                    phase1_out_cb,
+                    mm_partials_cb_id,
+                    in0_block_w,
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    num_blocks_inner_dim,
+                    out_subblock_h,
+                    out_subblock_w,
+                    1,
+                    PostFn{},
+                    PreFn{});
 
-                                uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
-
-                                tile_regs_release();
-                                mm_out_cb.push_back(out_subblock_num_tiles);
-
-                            } else {
-                                tile_regs_commit();
-                                mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                                tile_regs_wait();
-
-#ifdef PACKER_L1_ACC
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                } else if (in0_transpose_tile) {
-                                    // For each block, l1_acc would have been enabled during the
-                                    // transpose stage. So let us put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#endif
-
-                                uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-
-                                tile_regs_release();
-                                mm_partials_cb.push_back(out_subblock_num_tiles);
-                            }
-
-                            in1_index_subblock_offset += out_subblock_w;
-                        }
-                        in0_index_subblock_offset += in0_subblock_num_tiles;
-                    }
-
-#ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                    if (block < num_blocks_inner_dim - 1) {
-                        // Wait/pop in subblock-sized steps so the step size
-                        // matches the bias section's wait_front(out_subblock_num_tiles),
-                        // satisfying the CB API requirement that all wait_front
-                        // increments on a given CB are identical.
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            mm_partials_cb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
-                    // never reload when with bias, bias uses interm buffer
-                    enable_reload = false;
-#else
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            mm_partials_cb.pop_front(out_subblock_num_tiles);
-                        }
-                    }
-                    if (block == num_blocks_inner_dim - 2) {
-                        enable_reload = true;
-                    }  // reload when last iteration
-#endif
-#else
-                    if constexpr (spill) {
-                        enable_reload = true;
-                    }
-#endif
-
-                    in0_cb.pop_front(in0_block_num_tiles);
-                    in1_cb.pop_front(in1_block_num_tiles);
-                }
-
+                // ── Phase 2: Bias addition ──────────────────────────────
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
-                // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
@@ -437,61 +363,31 @@ void kernel_main() {
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-                reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
-                // Reader only pushes bias once when num_blocks_w_dim == 1;
-                // the tiles stay in the CB for reuse across bh/batch iterations.
+                // Bias CB lifecycle: the reader pushes bias once when num_blocks_w_dim == 1
+                // (tiles stay fronted across all bh/batch iterations) and pushes per-iter
+                // when num_blocks_w_dim > 1. Wait on first fronting; pop only when consumed.
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                    bias_cb.wait_front(bias_ntiles);
+                    cb_wait_front(bias_cb_id, bias_ntiles);
                 }
-                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                    int in1_index_subblock_offset = 0;
-                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                        // Redundant wait since we know data was just pushed
-                        mm_partials_cb.wait_front(out_subblock_num_tiles);
-                        tile_regs_acquire();
-                        for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            uint32_t bcast_tile_idx = in1_index_subblock_offset;
-                            for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                                bcast_tile_idx++;
-                            }
-                        }
-// if there's no SFPU fusion, we commit the regs so packer can start packing
-#ifndef SFPU_OP_INIT_ACTIVATION
-                        tile_regs_commit();
-#endif
 
-                        mm_partials_cb.pop_front(out_subblock_num_tiles);
-
-// sfpu activation
 #ifdef SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-                        tile_regs_commit();
+                add_bias_bcast_rows<mm_partials_cb_id, bias_cb_id, untilize_mode_out_cb_id, SFPUPostCompute>(
+                    in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, SFPUPostCompute{});
+#else
+                add_bias_bcast_rows<mm_partials_cb_id, bias_cb_id, untilize_mode_out_cb_id>(
+                    in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);
 #endif
 
-                        // Pack out to output buffer
-                        untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, untilize_mode_out_cb_id);
-                        }
-                        tile_regs_release();
-                        untilize_mode_out_cb.push_back(out_subblock_num_tiles);
-
-                        in1_index_subblock_offset += out_subblock_w;
-                    }
-                }
                 if constexpr (num_blocks_w_dim > 1) {
-                    bias_cb.pop_front(bias_ntiles);
+                    cb_pop_front(bias_cb_id, bias_ntiles);
                 }
 #endif  // FUSE_BIAS
+
+                // ── Phase 3: Untilize ───────────────────────────────────
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-#endif  // PACK_RELU
+#endif
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
@@ -500,24 +396,23 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-#endif  // FUSE_BIAS
+#endif  // !FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                    for (uint32_t i = 0; i < in0_num_subblocks; ++i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
+
+                // ── Reconfigure for next output block ───────────────────
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 #ifdef FUSE_BIAS
-                    // reconfigure unpacker df for src A and src B
                     reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
 #else
-                    // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
-                    // reconfigure init for matmul
                     mm_block_init_short(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
