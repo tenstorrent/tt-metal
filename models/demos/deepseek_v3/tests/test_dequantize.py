@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Sequence
 
@@ -41,6 +42,9 @@ FULL_DEQUANT_COMPARE_TIMEOUT_SECONDS = 7200
 PRINT_TENSORS_ENV_VAR = "DEEPSEEK_V3_DEQUANT_PRINT_TENSORS"
 MAX_DIFF_INDICES_TO_PRINT = 20
 MAX_TENSOR_ELEMENTS_TO_PRINT = 100
+STACKED_EXPERT_WEIGHT_RE = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
 
 
 def _dequantize_reference_tensor(
@@ -132,6 +136,20 @@ def _print_tensor_comparison(
         if n_diffs > n_show:
             print(f"    ... and {n_diffs - n_show} more")
     print("---\n")
+
+
+def _expected_dequantized_weight_keys(orig_weight_keys: set[str], deq_keys: set[str]) -> set[str]:
+    if not any(".experts_stacked." in key for key in deq_keys):
+        return orig_weight_keys
+
+    expected_keys: set[str] = set()
+    for key in orig_weight_keys:
+        match = STACKED_EXPERT_WEIGHT_RE.match(key)
+        if match is None:
+            expected_keys.add(key)
+            continue
+        expected_keys.add(f"model.layers.{match.group('layer')}.mlp.experts_stacked.{match.group('projection')}.weight")
+    return expected_keys
 
 
 def _resolve_quantized_model_path(model_path: Path) -> Path | None:
@@ -291,8 +309,13 @@ def test_dequantized_checkpoint_has_all_original_weights(model_path):
     orig_keys = set(orig_index["weight_map"].keys())
     deq_keys = set(deq_index["weight_map"].keys())
 
-    # Expected in dequantized = all original keys except _scale_inv (folded into weight)
-    orig_weight_keys = {k for k in orig_keys if not k.endswith("_scale_inv")}
+    # Expected in dequantized = all original keys except _scale_inv (folded into weight).
+    # Stacked exports intentionally replace per-expert MoE tensors with one
+    # `experts_stacked.<projection>.weight` tensor per layer/projection.
+    orig_weight_keys = _expected_dequantized_weight_keys(
+        {k for k in orig_keys if not k.endswith("_scale_inv")},
+        deq_keys,
+    )
 
     missing = orig_weight_keys - deq_keys
     extra = deq_keys - orig_weight_keys

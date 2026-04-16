@@ -88,15 +88,7 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
     """
     if force_recalculate:
         logger.info("Forcing recalculating weights")
-        if weight_cache_path.exists():
-            logger.info(f"Deleting existing cache directory: {weight_cache_path}")
-            try:
-                if weight_cache_path.is_dir():
-                    shutil.rmtree(weight_cache_path)
-                else:
-                    weight_cache_path.unlink()
-            except OSError as e:
-                logger.warning(f"Failed to remove weight cache at {weight_cache_path}: {e}")
+        clear_weight_cache_path(weight_cache_path)
         return None
     if not config_path.exists():
         logger.info("Weight configuration file does not exist, forcing recalculating weights")
@@ -113,6 +105,18 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
 
     logger.info(f"Using weights cached at {weight_cache_path}")
     return normalize_weight_config_paths(weight_cache_path, weight_config)
+
+
+def clear_weight_cache_path(weight_cache_path: Path) -> None:
+    if weight_cache_path.exists():
+        logger.info(f"Deleting existing cache directory: {weight_cache_path}")
+        try:
+            if weight_cache_path.is_dir():
+                shutil.rmtree(weight_cache_path)
+            else:
+                weight_cache_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to remove weight cache at {weight_cache_path}: {e}")
 
 
 def get_weight_config(
@@ -139,7 +143,8 @@ def get_weight_config(
         weight_cache_path: Optional base path used only to preserve the historical conversion subdirectory layout for
             callers that key weight generation by this path. No on-disk weight cache is generated.
         mesh_device: TTNN mesh device
-        force_recalculate: Accepted for API compatibility. Weight conversion always happens directly in memory.
+        force_recalculate: Accepted for API compatibility. Pure in-memory conversion still runs on every call,
+            but emitted legacy caches are cleared before being regenerated.
         random_weights: If True, generate random weights from reference model
         model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
         single_layer: Optional single layer name (used for validation with random weights)
@@ -188,7 +193,10 @@ def get_weight_config(
         return cached_weight_config
 
     if force_recalculate:
-        logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
+        if emit_weight_cache:
+            clear_weight_cache_path(output_path)
+        else:
+            logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
 
     if state_dicts is None:
         logger.info("State dict was not provided, preparing from random weights or model path")

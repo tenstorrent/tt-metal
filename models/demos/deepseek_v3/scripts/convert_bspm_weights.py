@@ -108,9 +108,12 @@ class _BsprnStateDict:
                         raise ValueError(
                             f"Expected stacked expert tensor '{key}' to have rank 3, got {stacked_weight.ndim}"
                         )
+                    num_bspm_experts = min(stacked_weight.shape[0], codes.shape[0])
                     return torch.stack(
                         [
                             self._apply_bspm(stacked_weight[expert_idx], codes, expert_idx, proj_name)
+                            if expert_idx < num_bspm_experts
+                            else stacked_weight[expert_idx]
                             for expert_idx in range(stacked_weight.shape[0])
                         ]
                     ).contiguous()
@@ -148,6 +151,12 @@ class _BsprnStateDict:
             if codes is None:
                 missing += 1
             else:
+                expected_experts = getattr(hf_config, "n_routed_experts", None)
+                if expected_experts is not None and codes.shape[0] < expected_experts:
+                    logger.warning(
+                        f"Layer {layer_idx}: BSPM codes cover only {codes.shape[0]} of {expected_experts} experts; "
+                        "remaining experts will use raw weights."
+                    )
                 logger.debug(f"Layer {layer_idx}: BSPM codes shape {codes.shape} — OK")
         return missing
 

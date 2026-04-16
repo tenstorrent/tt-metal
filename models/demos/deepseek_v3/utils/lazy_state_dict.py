@@ -223,21 +223,26 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         layer_part = full_key[len(prefix) :].split(".", 1)[0]
         return (not layer_part.isdigit()) or (int(layer_part) < self._num_layers)
 
+    def _get_stacked_num_experts(self, stacked_full_key: str) -> int:
+        num_experts = self._stacked_num_experts.get(stacked_full_key)
+        if num_experts is None:
+            if stacked_full_key in self._cache:
+                num_experts = self._cache[stacked_full_key].shape[0]
+            else:
+                filename = self._full_to_file[stacked_full_key]
+                handle = self._get_handle(filename)
+                num_experts = handle.get_slice(stacked_full_key).get_shape()[0]
+            self._stacked_num_experts[stacked_full_key] = num_experts
+        return num_experts
+
     def _iter_stacked_expert_aliases(self, stacked_full_key: str) -> Iterator[str]:
         match = _STACKED_EXPERT_FULL_RE.match(stacked_full_key)
         if match is None:
             return
 
-        num_experts = self._stacked_num_experts.get(stacked_full_key)
-        if num_experts is None:
-            filename = self._full_to_file[stacked_full_key]
-            handle = self._get_handle(filename)
-            num_experts = handle.get_slice(stacked_full_key).get_shape()[0]
-            self._stacked_num_experts[stacked_full_key] = num_experts
-
         layer = match.group("layer")
         projection = match.group("projection")
-        for expert_idx in range(num_experts):
+        for expert_idx in range(self._get_stacked_num_experts(stacked_full_key)):
             yield f"model.layers.{layer}.mlp.experts.{expert_idx}.{projection}.weight"
 
     def __getitem__(self, key: str) -> torch.Tensor:
@@ -259,9 +264,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             raise KeyError(key)
 
         stacked_full_key, expert_idx = alias
-        stacked_tensor = self._load_tensor(stacked_full_key)
-        if expert_idx >= stacked_tensor.shape[0]:
+        if expert_idx >= self._get_stacked_num_experts(stacked_full_key):
             raise KeyError(key)
+        stacked_tensor = self._load_tensor(stacked_full_key)
         tensor = stacked_tensor[expert_idx]
         self._cache[full_key] = tensor
         return tensor
@@ -275,7 +280,11 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         full_key = self._full_key(key)
         if full_key in self._full_to_file and self._passes_layer_filter(full_key):
             return True
-        return self._resolve_stacked_expert_alias(full_key) is not None
+        alias = self._resolve_stacked_expert_alias(full_key)
+        if alias is None:
+            return False
+        stacked_full_key, expert_idx = alias
+        return expert_idx < self._get_stacked_num_experts(stacked_full_key)
 
     def __iter__(self) -> Iterator[str]:
         """

@@ -142,6 +142,32 @@ def test_bspm_state_dict_applies_overrides_to_stacked_expert_weights():
     assert torch.equal(result[1], stacked_weight[1])
 
 
+def test_bspm_state_dict_leaves_uncovered_stacked_experts_unmodified():
+    from models.demos.deepseek_v3.scripts.convert_bspm_weights import _BsprnStateDict
+
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_weight = torch.arange(3 * 32 * 32, dtype=torch.bfloat16).reshape(3, 32, 32)
+    state_dict = {stacked_key: stacked_weight}
+    hf_config = types.SimpleNamespace(first_k_dense_replace=3)
+
+    wrapped_state_dict = _BsprnStateDict(
+        state_dict,
+        hf_config,
+        Path("/tmp"),
+        "unused",
+        "B",
+        3.5,
+    )
+    wrapped_state_dict._codes_cache[3] = np.array([[[0], [1], [1]], [[0], [1], [1]]], dtype=np.int32)
+    wrapped_state_dict._qdq = lambda tensor, mant_bits: tensor + mant_bits
+
+    result = wrapped_state_dict[stacked_key]
+
+    assert torch.equal(result[0], stacked_weight[0] + 7)
+    assert torch.equal(result[1], stacked_weight[1] + 7)
+    assert torch.equal(result[2], stacked_weight[2])
+
+
 # ---------------------------------------------------------------------------
 # BSPM preprocessing helper
 # ---------------------------------------------------------------------------

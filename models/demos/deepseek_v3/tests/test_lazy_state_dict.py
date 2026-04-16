@@ -449,6 +449,23 @@ def test_stacked_expert_alias_resolves_per_expert_keys(tmp_path: Path):
     assert torch.equal(sub[sub_expert_key], stacked_tensor[2])
 
 
+def test_stacked_expert_alias_contains_rejects_out_of_range_experts(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    stacked_key = "model.layers.3.mlp.experts_stacked.gate_proj.weight"
+    stacked_tensor = torch.arange(24, dtype=torch.bfloat16).reshape(3, 2, 4)
+    safetensors.torch.save_file({stacked_key: stacked_tensor}, str(shard))
+    _write_index(model_dir, {stacked_key: shard.name})
+
+    state = load_state_dict(model_dir, "")
+    missing_expert_key = "model.layers.3.mlp.experts.3.gate_proj.weight"
+    assert missing_expert_key not in state
+    with pytest.raises(KeyError):
+        _ = state[missing_expert_key]
+
+
 def test_stacked_expert_iteration_exposes_logical_aliases(tmp_path: Path):
     model_dir = tmp_path / "model"
     model_dir.mkdir(parents=True, exist_ok=True)

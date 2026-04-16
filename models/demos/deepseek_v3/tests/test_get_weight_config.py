@@ -13,6 +13,7 @@ import pytest
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
+import models.demos.deepseek_v3.utils.weight_config as weight_config_module
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
@@ -107,6 +108,50 @@ def test_get_weight_config_allows_missing_weight_cache_path_for_direct_weights()
     )
 
     assert cfg == {"ok": True}
+
+
+def test_get_weight_config_emit_weight_cache_force_recalculate_clears_existing_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    emitted_weight_config = {"w0": "direct"}
+    seen: dict[str, object] = {}
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, output_path: Path, mesh_device):
+            return emitted_weight_config
+
+    output_path = tmp_path / "weight_cache" / "3_layers" / "mesh_4x8"
+    stale_file = output_path / "stale" / f"leftover{TENSOR_CACHE_EXTENSION}"
+    stale_file.parent.mkdir(parents=True, exist_ok=True)
+    stale_file.write_bytes(b"stale")
+
+    def fake_save_weight_config(root_path: Path, weight_config):
+        assert not stale_file.exists()
+        seen["root_path"] = root_path
+        seen["weight_config"] = weight_config
+        return {"saved": True}
+
+    def fake_deallocate_weight_config_tensors(weight_config):
+        seen["deallocated"] = weight_config
+
+    monkeypatch.setattr(weight_config_module, "save_weight_config", fake_save_weight_config)
+    monkeypatch.setattr(weight_config_module, "deallocate_weight_config_tensors", fake_deallocate_weight_config_tensors)
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=_make_hf_config(num_hidden_layers=3),
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=tmp_path / "weight_cache",
+        mesh_device=_FakeMeshDevice(shape=(4, 8)),
+        force_recalculate=True,
+        emit_weight_cache=True,
+    )
+
+    assert cfg == {"saved": True}
+    assert seen["root_path"] == output_path
+    assert seen["weight_config"] is emitted_weight_config
+    assert seen["deallocated"] is emitted_weight_config
 
 
 def test_get_weight_config_loads_legacy_cache_when_requested(tmp_path: Path) -> None:
