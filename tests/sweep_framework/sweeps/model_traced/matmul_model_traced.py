@@ -221,30 +221,31 @@ def run(
         ttnn.DRAM_MEMORY_CONFIG if (input_b_is_sharded and not has_program_config) else input_b_memory_config
     )
 
-    # Create tensors using interleaved→sharded for sharded configs to avoid
-    # TilizeDeviceOperation L1 circular buffer clashes
-    input_tensor_a = _create_tensor(
-        torch_input_tensor_a,
-        input_a_dtype,
-        input_a_layout,
-        device,
-        input_a_memory_config,
-        is_host,
-        is_mesh_device,
-        input_a_tensor_placement,
-    )
-    input_tensor_b = _create_tensor(
-        torch_input_tensor_b,
-        input_b_dtype,
-        input_b_layout,
-        device,
-        effective_b_mem,
-        is_host,
-        is_mesh_device,
-        input_b_tensor_placement,
-    )
-
+    # Create tensors and run op inside a single try/except — from_torch with
+    # TILE_LAYOUT triggers an internal tilize that can also hit single_block_size
+    # or L1 errors with traced sharded configs, not just the op itself.
     try:
+        input_tensor_a = _create_tensor(
+            torch_input_tensor_a,
+            input_a_dtype,
+            input_a_layout,
+            device,
+            input_a_memory_config,
+            is_host,
+            is_mesh_device,
+            input_a_tensor_placement,
+        )
+        input_tensor_b = _create_tensor(
+            torch_input_tensor_b,
+            input_b_dtype,
+            input_b_layout,
+            device,
+            effective_b_mem,
+            is_host,
+            is_mesh_device,
+            input_b_tensor_placement,
+        )
+
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
         output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

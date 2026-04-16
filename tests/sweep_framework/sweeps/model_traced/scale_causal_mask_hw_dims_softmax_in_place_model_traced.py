@@ -167,69 +167,72 @@ def run(
                     # Clamp to valid range
                     pass  # Let the op handle it with the original config
 
-    # Create input tensor with interleaved→sharded for sharded memory configs.
-    # Direct from_torch with sharded config triggers TilizeDeviceOperation which
-    # can clash with L1 circular buffers.
-    if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            input_tensor_a = create_tensor_on_mesh(
-                torch_input_a,
-                device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
-            )
-        elif _is_sharded(input_a_memory_config):
-            input_tensor_a = ttnn.from_torch(
-                torch_input_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            try:
-                input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
-            except Exception:
-                pass  # Stay on DRAM if shard conversion fails
-        else:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=input_a_memory_config,
-            )
-    else:
-        input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)
-
-    # Create mask tensor if provided
-    mask_tensor = None
-    if torch_mask is not None and input_b_dtype is not None:
-        mask_layout = input_b_layout if input_b_layout else ttnn.TILE_LAYOUT
-        mask_mem = input_b_memory_config if input_b_memory_config else ttnn.DRAM_MEMORY_CONFIG
-        if not is_host:
-            if is_mesh_device and input_b_tensor_placement:
-                mask_tensor = create_tensor_on_mesh(
-                    torch_mask,
-                    device,
-                    input_b_dtype,
-                    mask_layout,
-                    mask_mem,
-                    input_b_tensor_placement,
-                )
-            else:
-                mask_tensor = ttnn.from_torch(
-                    torch_mask,
-                    dtype=input_b_dtype,
-                    layout=mask_layout,
-                    device=device,
-                    memory_config=mask_mem,
-                )
-        else:
-            mask_tensor = ttnn.from_torch(torch_mask, dtype=input_b_dtype, layout=mask_layout)
-
+    # Wrap tensor creation AND op execution in a single try/except — from_torch
+    # with TILE_LAYOUT triggers an internal tilize that can hit single_block_size
+    # or L1 errors with traced sharded configs, not just the op itself.
     try:
+        # Create input tensor with interleaved→sharded for sharded memory configs.
+        # Direct from_torch with sharded config triggers TilizeDeviceOperation which
+        # can clash with L1 circular buffers.
+        if not is_host:
+            if is_mesh_device and input_a_tensor_placement:
+                input_tensor_a = create_tensor_on_mesh(
+                    torch_input_a,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    input_a_memory_config,
+                    input_a_tensor_placement,
+                )
+            elif _is_sharded(input_a_memory_config):
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                try:
+                    input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
+                except Exception:
+                    pass  # Stay on DRAM if shard conversion fails
+            else:
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+        else:
+            input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)
+
+        # Create mask tensor if provided
+        mask_tensor = None
+        if torch_mask is not None and input_b_dtype is not None:
+            mask_layout = input_b_layout if input_b_layout else ttnn.TILE_LAYOUT
+            mask_mem = input_b_memory_config if input_b_memory_config else ttnn.DRAM_MEMORY_CONFIG
+            if not is_host:
+                if is_mesh_device and input_b_tensor_placement:
+                    mask_tensor = create_tensor_on_mesh(
+                        torch_mask,
+                        device,
+                        input_b_dtype,
+                        mask_layout,
+                        mask_mem,
+                        input_b_tensor_placement,
+                    )
+                else:
+                    mask_tensor = ttnn.from_torch(
+                        torch_mask,
+                        dtype=input_b_dtype,
+                        layout=mask_layout,
+                        device=device,
+                        memory_config=mask_mem,
+                    )
+            else:
+                mask_tensor = ttnn.from_torch(torch_mask, dtype=input_b_dtype, layout=mask_layout)
+
         start_time = start_measuring_time()
         if mask_tensor is not None:
             output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
