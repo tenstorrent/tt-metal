@@ -11,7 +11,8 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import TrainerCallback
-from ttml.trainers import GRPOConfig, GRPOTrainer
+from ttml.trainers import GRPOTrainer
+from utils.config import read_yaml
 from utils.llama_completion import CompletionCtx
 from utils.llama_completion import LlamaCompletion
 
@@ -64,71 +65,24 @@ if __name__ == "__main__":
 
     dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
-    transformer_config = {
-        "model_type": "llama",
-        "num_heads": 32,
-        "num_groups": 8,
-        "embedding_dim": 2048,
-        "intermediate_dim": 8192,
-        "dropout_prob": 0.0,
-        "num_blocks": 16,
-        "weight_tying": "enabled",
-        "vocab_size": 32000,
-        "max_sequence_length": 1024,
-        "runner_type": "memory_efficient",
-        "theta": 500000.0,
-        "rope_scaling": {
-            "scaling_factor": 32.0,
-            "high_freq_factor": 4.0,
-            "low_freq_factor": 1.0,
-            "original_context_length": 8192,
-        },
-    }
-
-    device_config = {
-        "enable_ddp": False,
-        "mesh_shape": [1, 1],
-    }
-
-    optimizer_config = {
-        "type": "MorehAdamW",
-        "lr": 5.0e-6,
-        "beta1": 0.9,
-        "beta2": 0.99,
-        "epsilon": 1.0e-8,
-        "weight_decay": 0.01,
-        "amsgrad": False,
-        "kahan_summation": False,
-    }
+    config_path = os.path.join(
+        get_tt_metal_runtime_root(),
+        "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
+    )
+    transformer_config, device_config, optimizer_config, grpo_config = read_yaml(config_path)
 
     output_dir = (
         get_tt_metal_runtime_root()
         + "/generated/tt-train/grpo_run/"
         + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     )
-
-    config = GRPOConfig(
-        epsilon=0.2,
-        batch_size=2,
-        micro_batch_size=16,
-        num_iterations=1,
-        gradient_accumulation_steps=8,
-        logging_steps=1,
-        output_dir=output_dir,
-        checkpointing=True,
-        checkpoint_interval=5,
-        prompts_to_train=1600,
-        temperature=1.5,
-        max_completion_length=256,
-        num_generations=8,
-        warmup_steps=0,
-    )
+    grpo_config.output_dir = output_dir
 
     completion = LlamaCompletion(
         ctx=CompletionCtx(
-            max_tokens_to_complete=config.max_completion_length,
-            temperature=config.temperature,
-            completions_per_prompt=config.num_generations,
+            max_tokens_to_complete=grpo_config.max_completion_length,
+            temperature=grpo_config.temperature,
+            completions_per_prompt=grpo_config.num_generations,
         ),
         transformer_config=transformer_config,
         device_config=device_config,
@@ -138,7 +92,7 @@ if __name__ == "__main__":
     grpo_trainer = GRPOTrainer(
         completion=completion,
         dataset=dataset,
-        config=config,
+        config=grpo_config,
         reward_func=boolq_reward,
         optimizer_config=optimizer_config,
         callbacks=[GRPOMonitor(output_dir)],
