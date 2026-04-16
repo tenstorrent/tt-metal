@@ -233,7 +233,6 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
-
     // Track K read count for K chain forwarding (batch-level, for MLA mode)
     uint32_t k_total_reads = 0;
 
@@ -243,6 +242,10 @@ void kernel_main() {
 
     constexpr bool c_skip_v_fwd = true;
     constexpr bool c_skip_k_fwd = true;
+
+    // Profiling: isolate ring iteration 0 for cost-benefit analysis
+    constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
+    constexpr bool c_profile_only_ring_iter_0 = false;  // Set true to keep only iter 0 (skip iter 1+)
 
     /**
      * Iterate over ring indices.
@@ -254,6 +257,19 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+
+        // Profiling: skip iterations based on profiling mode (after sync to maintain device coordination)
+        if constexpr (c_profile_skip_ring_iter_0) {
+            if (ring_iter == 0) {
+                continue;
+            }
+        }
+        if constexpr (c_profile_only_ring_iter_0) {
+            if (ring_iter > 0) {
+                continue;
+            }
+        }
+
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;

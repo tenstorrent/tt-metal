@@ -415,8 +415,26 @@ void kernel_main() {
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+
+    // Profiling: isolate ring iteration 0 for cost-benefit analysis
+    constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
+    constexpr bool c_profile_only_ring_iter_0 = false;  // Set true to keep only iter 0 (skip iter 1+)
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+
+        // Profiling: skip iterations based on profiling mode (after sync to maintain device coordination)
+        if constexpr (c_profile_skip_ring_iter_0) {
+            if (ring_iter == 0) {
+                continue;
+            }
+        }
+        if constexpr (c_profile_only_ring_iter_0) {
+            if (ring_iter > 0) {
+                continue;
+            }
+        }
+
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 

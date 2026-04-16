@@ -216,6 +216,7 @@ def compute_math_utilization(
     core_count,
     is_causal=False,
     arch="blackhole",
+    ring_iter_mode="all",
 ):
     """
     Compute math utilization as a percentage (0-100).
@@ -230,9 +231,25 @@ def compute_math_utilization(
         core_count: Number of compute cores used.
         is_causal: Whether causal masking is used.
         arch: Architecture name ("blackhole" or "wormhole_b0").
+        ring_iter_mode: Which ring iterations were executed:
+            - "all": full ring (default)
+            - "skip_0": only ring_iter 1+ (non-causal iterations)
+            - "only_0": only ring_iter 0 (causal iteration)
     """
     constants = ARCH_CONSTANTS[arch]
-    mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+
+    if ring_iter_mode == "all":
+        # Full ring: local Q attends to full global K/V
+        mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+    elif ring_iter_mode == "only_0":
+        # Ring iter 0 only: local Q attends to local K/V only
+        mm_flops = compute_sdpa_flops(local_seqlen, local_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+    elif ring_iter_mode == "skip_0":
+        # Ring iter 1+: local Q attends to remote K/V only
+        remote_seqlen = total_seqlen - local_seqlen
+        mm_flops = compute_sdpa_flops(local_seqlen, remote_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+    else:
+        raise ValueError(f"Unknown ring_iter_mode: {ring_iter_mode}")
 
     cycles = duration_ns * constants["clock_ghz"]
     theoretical_flops = core_count * cycles * constants["mm_flops_per_cycle_per_core"]
