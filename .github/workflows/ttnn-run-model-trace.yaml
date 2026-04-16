@@ -782,6 +782,9 @@ jobs:
     name: Trigger validation
     needs: [homogenize-and-load]
     if: ${{ inputs.load-to-db && needs.homogenize-and-load.outputs.trace-run-id != '' }}
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:
