@@ -13,145 +13,136 @@ namespace ttnn::prim {
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     const auto& input = tensor_args.input;
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
 
-    tt::tt_metal::Program program = CreateProgram();
-
-    auto shard_spec = input.shard_spec().value();
-    auto all_cores = shard_spec.grid;
-    uint32_t ncores = shard_spec.num_cores();
+    const auto shard_spec = input.shard_spec().value();
+    const auto all_cores = shard_spec.grid;
 
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(
-        out_shard_spec.num_cores() == ncores,
+        out_shard_spec.num_cores() == shard_spec.num_cores(),
         "Output tensor should have same number of cores {} as input tensor {}",
         out_shard_spec.num_cores(),
-        ncores);
+        shard_spec.num_cores());
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat act_df = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tile_size(act_df);
-    uint32_t output_tile_size = tt::tile_size(out_df);
-
+    const uint32_t input_tile_size = tt::tile_size(act_df);
+    const uint32_t output_tile_size = tt::tile_size(out_df);
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
     uint32_t num_tile_per_core = 0;
-
     if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
-        uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
-        uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
+        const uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)TILE_WIDTH);
+        const uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
-            (shard_spec.shape[1] * datum_size(act_df)) % hal::get_l1_alignment() == 0,
+            (shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() == 0,
             "Shard width should be multiple of {} to satisfy L1 alignment",
             hal::get_l1_alignment());
-        size_t shard_height = shard_spec.shape[0];
-        size_t shard_width = shard_spec.shape[1];
-        size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);
+        const size_t shard_size_in_bytes = shard_spec.shape[0] * shard_spec.shape[1] * tt::datum_size(act_df);
         TT_FATAL(shard_size_in_bytes % input_tile_size == 0, "Shard Size must be multiple of input_tile_size");
-        num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value
+        num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;
     }
-
-    uint32_t in_cb_id = tt::CBIndex::c_0;
-    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-    uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
-    uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
-    uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
-            .set_page_size(in_cb_id, in_cb_pagesize)
-            .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    // output sharded CB
-    uint32_t out_cb_id = tt::CBIndex::c_2;
-    uint32_t aligned_output_tile_nbytes =
-        round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
-    uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
-    uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
-    tt::tt_metal::CircularBufferConfig out_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, out_df}})
-            .set_page_size(out_cb_id, out_cb_pagesize)
-            .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
-
-    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(tt::LogOp, "out_cb_id: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
-    log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
-    log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
+    TT_FATAL(src_buffer->buffer_type() != BufferType::DRAM, "Input buffer should be in L1");
+    TT_FATAL(dst_buffer->buffer_type() != BufferType::DRAM, "Output buffer should be in L1");
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
-    std::vector<uint32_t> reader_compile_time_args = {
-        in_cb_id,
-    };
+    const uint32_t aligned_input_tile_nbytes = round_up_to_mul32(input_tile_size);
+    const uint32_t aligned_output_tile_nbytes = round_up_to_mul32(output_tile_size);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
+    ProgramDescriptor program_descriptor;
 
-    std::map<std::string, std::string> kernel_defines;
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
-
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        1,                  // per_core_block_cnt
-        num_tile_per_core,  // per_core_block_size
-        in_cb_id,
-        out_cb_id};
-
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[in_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // ── Circular Buffers (sharded — globally allocated) ──────────────────
+    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = aligned_input_tile_nbytes * num_tile_per_core;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.buffer = src_buffer;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(in_cb_id),
+            .data_format = act_df,
+            .page_size = aligned_input_tile_nbytes});
+        program_descriptor.cbs.push_back(std::move(cb_desc));
     }
 
-    bool math_approx_mode = false;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = aligned_output_tile_nbytes * num_tile_per_core;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.buffer = dst_buffer;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(out_cb_id),
+            .data_format = out_df,
+            .page_size = aligned_output_tile_nbytes});
+        program_descriptor.cbs.push_back(std::move(cb_desc));
+    }
 
-    std::map<std::string, std::string> unary_defines;
-    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
-        "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-    unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+    // ── Reader kernel (sharded) ──────────────────────────────────────────
+    {
+        KernelDescriptor kernel_desc;
+        kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+        kernel_desc.core_ranges = all_cores;
+        kernel_desc.compile_time_args = {in_cb_id};
+        kernel_desc.common_runtime_args = {num_tile_per_core};
+        kernel_desc.config = ReaderConfigDescriptor{};
+        program_descriptor.kernels.push_back(std::move(kernel_desc));
+    }
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+    // ── Compute kernel ───────────────────────────────────────────────────
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (args.preserve_fp32_precision) {
+        unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    {
+        KernelDescriptor kernel_desc;
+        kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+        kernel_desc.core_ranges = all_cores;
+        kernel_desc.compile_time_args = {1, num_tile_per_core, in_cb_id, out_cb_id};
+        kernel_desc.defines = {
+            {"TYPECAST_LLK_INIT",
+             fmt::format(
+                 "typecast_tile_init<{0}u, {1}u>",
+                 static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+                 static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))},
+            {"TYPECAST_LLK",
+             fmt::format(
+                 "typecast_tile<{0}u, {1}u>",
+                 static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+                 static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))}};
+        kernel_desc.config = ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = unary_defines});
+            .math_approx_mode = false};
+        program_descriptor.kernels.push_back(std::move(kernel_desc));
+    }
 
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        all_cores,
-        {
-            static_cast<uint32_t>(num_tile_per_core),
-        });
+    return program_descriptor;
+}
+
+TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::create(
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    auto descriptor = create_descriptor(args, tensor_args, output);
+    Program program{descriptor};
+
+    // CB handles are assigned sequentially: in_cb=0, out_cb=1
+    constexpr CBHandle cb_src0 = 0;
+    constexpr CBHandle out_cb = 1;
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
 }
@@ -167,8 +158,8 @@ void TypecastShardedProgramFactory::override_runtime_arguments(
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
 }  // namespace ttnn::prim

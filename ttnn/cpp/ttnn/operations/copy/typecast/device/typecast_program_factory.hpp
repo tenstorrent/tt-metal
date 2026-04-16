@@ -6,6 +6,7 @@
 
 #include "typecast_device_op_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -26,6 +27,9 @@ struct TypecastProgramFactory {
         const TypecastParams& operation_attributes,
         const TypecastInputs& tensor_args,
         Tensor& output);
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output);
 };
 
 }  // namespace ttnn::prim

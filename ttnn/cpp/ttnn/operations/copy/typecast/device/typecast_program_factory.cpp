@@ -14,7 +14,7 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -23,8 +23,6 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     const auto input_dtype = args.input_dtype;
     const auto output_dtype = args.output_dtype;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
-
-    Program program{};
 
     const auto cb_data_format_input = datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size_input = tt::tile_size(cb_data_format_input);
@@ -43,18 +41,14 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     CoreRangeSet all_cores(std::vector<CoreRange>{});
     std::vector<CoreCoord> cores_vec;
     uint32_t num_cores = 0;
-
-    // Per-core item counts: cores_vec[i] processes items_per_core[i] items
     std::vector<uint32_t> items_per_core;
 
     if (args.sub_core_grids.has_value()) {
-        // Sub-core grid mode: distribute tiles uniformly across specified cores
         const auto& sub_core_grids = args.sub_core_grids.value();
         uint32_t ntiles = input.physical_volume() / TILE_HW;
         num_cores = sub_core_grids.num_cores();
         TT_FATAL(num_cores != 0, "number of cores cannot be 0");
 
-        // Find largest divisor of ntiles that is <= num_cores
         for (uint32_t c = num_cores; c >= 1; c--) {
             if (ntiles % c == 0) {
                 num_cores = c;
@@ -71,7 +65,6 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         const uint32_t items = ntiles / num_cores;
         items_per_core.assign(num_cores, items);
     } else {
-        // Standard mode: distribute pages across full grid
         const auto grid_size = device->compute_with_storage_grid_size();
         auto [nc, ac, cg1, cg2, n1, n2] = tt::tt_metal::split_work_to_cores(grid_size, num_pages, is_row_major);
         num_cores = nc;
@@ -88,52 +81,100 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         }
     }
 
+    ProgramDescriptor program_descriptor;
+
     // ── Circular Buffers ─────────────────────────────────────────────────
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    create_cb(src0_cb_index, program, all_cores, input_page_size, 2, cb_data_format_input);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = input_page_size * 2;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format_input,
+            .page_size = input_page_size});
+        program_descriptor.cbs.push_back(std::move(cb_desc));
+    }
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
-    create_cb(output_cb_index, program, all_cores, output_page_size, 2, cb_data_format_output);
+    {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = output_page_size * 2;
+        cb_desc.core_ranges = all_cores;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = cb_data_format_output,
+            .page_size = output_page_size});
+        program_descriptor.cbs.push_back(std::move(cb_desc));
+    }
 
-    // ── Reader/Writer kernels ────────────────────────────────────────────
+    // ── Reader kernel ────────────────────────────────────────────────────
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-    std::vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index};
+
+    KernelDescriptor::RuntimeArgs reader_rt_args;
+    uint32_t start_id = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto count = items_per_core[i];
+        reader_rt_args.emplace_back(cores_vec[i], std::vector<uint32_t>{src_buffer->address(), count, start_id});
+        start_id += count;
+    }
+
+    {
+        KernelDescriptor kernel_desc;
+        kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+        kernel_desc.core_ranges = all_cores;
+        kernel_desc.compile_time_args = reader_ct_args;
+        kernel_desc.runtime_args = std::move(reader_rt_args);
+        kernel_desc.config = ReaderConfigDescriptor{};
+        program_descriptor.kernels.push_back(std::move(kernel_desc));
+    }
+
+    // ── Writer kernel ────────────────────────────────────────────────────
+    std::vector<uint32_t> writer_ct_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
-    const auto reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_ct_args));
+    KernelDescriptor::RuntimeArgs writer_rt_args;
+    start_id = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto count = items_per_core[i];
+        writer_rt_args.emplace_back(cores_vec[i], std::vector<uint32_t>{dst_buffer->address(), count, start_id});
+        start_id += count;
+    }
 
-    const auto writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_ct_args));
+    {
+        KernelDescriptor kernel_desc;
+        kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        kernel_desc.core_ranges = all_cores;
+        kernel_desc.compile_time_args = writer_ct_args;
+        kernel_desc.runtime_args = std::move(writer_rt_args);
+        kernel_desc.config = WriterConfigDescriptor{};
+        program_descriptor.kernels.push_back(std::move(kernel_desc));
+    }
 
-    // ── Compute kernel ───────────────────────────────────────────────────
+    // ── Compute kernels ──────────────────────────────────────────────────
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    std::map<std::string, std::string> unary_defines;
-    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
-        "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
-    unary_defines["TYPECAST_LLK"] = fmt::format(
-        "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+    KernelDescriptor::Defines unary_defines = {
+        {"TYPECAST_LLK_INIT",
+         fmt::format(
+             "typecast_tile_init<{0}u, {1}u>",
+             static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+             static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))},
+        {"TYPECAST_LLK",
+         fmt::format(
+             "typecast_tile<{0}u, {1}u>",
+             static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+             static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))}};
 
     const auto compute_path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    // Create compute kernels — group by items_per_core count for efficiency
-    // For uniform distribution (sub_core_grids), one kernel covers all cores.
-    // For split_work_to_cores, up to two groups with different tile counts.
+    // Group cores by items_per_core count for efficiency
     std::map<uint32_t, CoreRangeSet> count_to_cores;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto count = items_per_core[i];
@@ -145,33 +186,57 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     }
 
     for (const auto& [count, core_range] : count_to_cores) {
-        std::vector<uint32_t> compute_args = {count, 1, src0_cb_index, output_cb_index};
-        CreateKernel(
-            program,
-            compute_path,
-            core_range,
-            ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = false,
-                .compile_args = compute_args,
-                .defines = unary_defines});
+        KernelDescriptor kernel_desc;
+        kernel_desc.kernel_source = compute_path;
+        kernel_desc.core_ranges = core_range;
+        kernel_desc.compile_time_args = {count, 1, src0_cb_index, output_cb_index};
+        kernel_desc.defines = unary_defines;
+        kernel_desc.config = ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .math_approx_mode = false};
+        program_descriptor.kernels.push_back(std::move(kernel_desc));
     }
 
-    // ── Runtime args ─────────────────────────────────────────────────────
-    uint32_t start_id = 0;
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const auto& core = cores_vec[i];
-        const auto count = items_per_core[i];
+    return program_descriptor;
+}
 
-        SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), count, start_id});
-        SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), count, start_id});
-        start_id += count;
+TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    using namespace tt::tt_metal;
+
+    auto descriptor = create_descriptor(args, tensor_args, output);
+    Program program{descriptor};
+
+    // Kernel handles are assigned sequentially: reader=0, writer=1
+    constexpr KernelHandle reader_kernel_id = 0;
+    constexpr KernelHandle writer_kernel_id = 1;
+
+    // Reconstruct cores_vec for override_runtime_arguments
+    const auto& input = tensor_args.input;
+    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const uint32_t num_pages = input.buffer()->num_pages();
+    std::vector<CoreCoord> cores_vec;
+
+    if (args.sub_core_grids.has_value()) {
+        uint32_t ntiles = input.physical_volume() / TILE_HW;
+        uint32_t num_cores = args.sub_core_grids.value().num_cores();
+        for (uint32_t c = num_cores; c >= 1; c--) {
+            if (ntiles % c == 0) {
+                num_cores = c;
+                break;
+            }
+        }
+        cores_vec = corerange_to_cores(args.sub_core_grids.value(), num_cores, true);
+    } else {
+        const auto grid_size = input.device()->compute_with_storage_grid_size();
+        auto [nc, ac, cg1, cg2, n1, n2] = split_work_to_cores(grid_size, num_pages, is_row_major);
+        cores_vec = corerange_to_cores(ac, std::nullopt, is_row_major);
     }
 
-    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, cores_vec}};
+    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, std::move(cores_vec)}};
 }
 
 void TypecastProgramFactory::override_runtime_arguments(
