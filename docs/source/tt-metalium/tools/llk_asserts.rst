@@ -254,6 +254,48 @@ Common failure scenarios:
 - Using narrow tiles or partial faces where not supported
 - Dimension mismatches in matrix multiplications
 
+Real-World Examples
+-------------------
+
+The following issues and PRs illustrate the most common patterns of LLK assert hits observed in practice and how they were resolved.
+
+**Issue** `#38346 <https://github.com/tenstorrent/tt-metal/issues/38346>`_ — *Create green runs of Sanity/BPC workflows when LLK_ASSERTS are enabled*
+
+The umbrella tracking issue that motivated systematic LLK assert work. When LLK asserts were first enabled across the CI suite, a large number of pre-existing tests failed — revealing that many kernels had been silently misusing the LLK API. The resolution strategy defined was: fix kernel code where the LLK API was misused, skip tests (with ``skip_with_llk_assert``) where further investigation was needed, and make nightly runs with LLK asserts enabled a reliable green baseline going forward.
+
+**Issue** `#39184 <https://github.com/tenstorrent/tt-metal/issues/39184>`_ — *Fix tests which hit LLK_ASSERT during unpack configuration verification*
+
+A detailed description of the most common HW configure assert pattern: the unpacker is configured during HW configure (or a reconfigure phase) with specific ``face_r_dim`` / ``num_faces`` values, but a different configuration is then passed to ``init`` or the execution block — causing the assert to fire on the mismatch. The issue includes a full reproduction recipe and an example ``dump_lightweight_asserts.py`` callstack:
+
+.. code-block:: text
+
+   #0 llk_unpack_tilizeA_B_init<false, 1, false, true>()
+      at llk_unpack_tilize_api.h:97
+   #1 ckernel::tilizeA_B_reduce_init<false, true>()
+      at tilize.h:79
+   #2 chlkc_unpack::unpack_main()
+      at compute_pool_2d.cpp:87
+
+   Arguments: operandA=1, operandB=2, ct_dim=1, num_faces=2,
+              unpA_face_r_dim=4, unpB_face_r_dim=1
+
+The callstack clearly points to the compute kernel (``compute_pool_2d.cpp``) as the source of the problem, not the test.
+
+**PR** `#39945 <https://github.com/tenstorrent/tt-metal/pull/39945>`_ — *Fix LLK_ASSERT hits for sdpa tests* *(kernel code fix)*
+
+Addressed LLK assert failures in SDPA/MLA kernels caused by unpacker configuration mismatches. The fixes were entirely in kernel code:
+
+1. **Fixed operand ordering** — ``reconfig_data_format(in0, in1)`` in ``sdpa_flash_decode.cpp`` was reordered to ``reconfig_data_format(in1, in0)`` to match the ``state_configure(in1, in0)`` call used by the matmul path.
+2. **Added missing reconfigure calls** — ``reconfig_data_format`` and ``pack_reconfig_data_format`` calls were added in ``compute_common.hpp`` to keep unpacker/packer configuration consistent before matmul init and execution in the SDPA inner loop.
+
+After the kernel fixes, all ``skip_with_llk_assert`` decorators were removed from the SDPA/MLA test files.
+
+**PR** `#40282 <https://github.com/tenstorrent/tt-metal/pull/40282>`_ — *Enrich LLK API with more customized hw (re)configure options* *(LLK API extension)*
+
+Addressed LLK assert failures in pooling-related kernels (``compute_pool_2d.cpp``) where the kernel legitimately needs to change ``face_r_dim`` or ``num_faces`` dynamically — for example, using different geometry for the last block. Because the existing LLK HW configure/reconfig API always derived these values from the circular buffer metadata, there was no way to express the kernel's intent without triggering an assert.
+
+The fix added new LLK pack/unpack reconfig API overloads that accept explicit ``face_r_dim`` and ``num_faces`` parameters, allowing kernels to configure hardware with geometry that differs from the CB metadata when there is a documented reason to do so. After the API was extended, ``skip_with_llk_assert`` was removed from multiple pool and reduction test files (``test_avgpool2d.py``, ``test_upsample.py``, ``test_rotate.py``, ``test_grid_sample.py``, ``test_adaptive_pool2d.py``, ``test_reduction.py``).
+
 See Also
 --------
 
