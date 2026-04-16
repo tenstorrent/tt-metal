@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,13 +17,12 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -33,6 +32,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 
 using namespace tt;
@@ -205,7 +205,7 @@ namespace tt::tt_metal {
 // This is meant to exercise noc_inline_dw_write API
 TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
-    const uint32_t stream_id = 0;
+    const uint32_t stream_id = 32;
     const uint32_t stream_reg = 4;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {

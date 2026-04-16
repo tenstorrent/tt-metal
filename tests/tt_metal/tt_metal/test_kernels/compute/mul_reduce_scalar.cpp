@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api/experimental/mul_reduce_scalar.h"
+#include "api/compute/experimental/mul_reduce_scalar.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

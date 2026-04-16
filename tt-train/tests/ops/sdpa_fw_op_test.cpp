@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -16,15 +15,18 @@
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"
@@ -485,30 +487,19 @@ void run_sdpa_test(const SDPATestConfig& config) {
     const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor =
-        xt::empty<float>({config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> query_shape{
+        config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
+    const std::array<std::size_t, 4> kv_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
 
-    xt::xarray<float> key_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -661,6 +652,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
     SDPATestConfig config{
@@ -676,6 +668,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
     SDPATestConfig config{
@@ -704,10 +697,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch_2Heads_1Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 1024U,
@@ -721,10 +710,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     SDPATestConfig config{
         .batch_size = 16U,
         .sequence_length = 1024U,
@@ -743,8 +728,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 
 TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
-
-    std::mt19937 gen(42);
 
     // Test Case 1: Minimum viable dimensions
     {
@@ -815,27 +798,16 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     const uint32_t num_heads = 2U;
     const uint32_t head_dim = d / num_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> split_shape{B, num_heads, S, head_dim};
 
-    xt::xarray<float> key_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);

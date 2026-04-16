@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
-
-import vllm.envs as envs
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
@@ -53,13 +51,12 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
-    if envs.VLLM_USE_V1:
-        # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
-        dp_attention_factor = mesh_device.shape[1]
-        assert (
-            tt_data_parallel % dp_attention_factor == 0
-        ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
-        tt_data_parallel = tt_data_parallel // dp_attention_factor
+    # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
+    dp_attention_factor = mesh_device.shape[1]
+    assert (
+        tt_data_parallel % dp_attention_factor == 0
+    ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
+    tt_data_parallel = tt_data_parallel // dp_attention_factor
 
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
@@ -109,13 +106,12 @@ def initialize_vllm_text_transformer_qwen(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
-    if envs.VLLM_USE_V1:
-        # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
-        dp_attention_factor = mesh_device.shape[1]
-        assert (
-            tt_data_parallel % dp_attention_factor == 0
-        ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
-        tt_data_parallel = tt_data_parallel // dp_attention_factor
+    # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
+    dp_attention_factor = mesh_device.shape[1]
+    assert (
+        tt_data_parallel % dp_attention_factor == 0
+    ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
+    tt_data_parallel = tt_data_parallel // dp_attention_factor
 
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
@@ -167,7 +163,8 @@ def input_processor_for_qwen_text(ctx, inputs):
 class LlamaForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_async_decode": True,
+        "supports_prefix_caching": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -207,7 +204,7 @@ class LlamaForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
@@ -252,7 +249,7 @@ class QwenForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_text(*args, **kwargs)
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)

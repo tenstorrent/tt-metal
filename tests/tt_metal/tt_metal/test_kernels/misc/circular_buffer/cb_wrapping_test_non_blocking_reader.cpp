@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,17 +18,10 @@ void core_agnostic_main();
 #ifdef COMPILE_FOR_BRISC
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/circular_buffer.h"
-
-void kernel_main() { core_agnostic_main(); }
 #else
-#include "compute_kernel_api/common.h"
-
+#include "api/compute/common.h"
 #include "experimental/circular_buffer.h"
-
 // We are in compute kernel land
-namespace NAMESPACE {
-void MAIN { core_agnostic_main(); }
-}  // namespace NAMESPACE
 #endif
 
 using namespace tt;
@@ -57,3 +50,5 @@ void core_agnostic_main() {
     }
 #endif
 }
+
+void kernel_main() { core_agnostic_main(); }

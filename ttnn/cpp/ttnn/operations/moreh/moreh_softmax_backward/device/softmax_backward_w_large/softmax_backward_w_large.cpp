@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
              fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // add(output * output_grad)
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    // We are guranteed to be in 4D going to 4D
+    // We are guaranteed to be in 4D going to 4D
     //<higher_dim,rep_dim,lower_dim,page_size>
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -42,8 +42,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, original_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;

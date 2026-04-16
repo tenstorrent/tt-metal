@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
  * then use MeshDevice::create() normally.
  */
 
+// UMD: re-exports tt::ARCH (used in configure_mock_mode parameter).
 #include <umd/device/types/arch.hpp>
 
 #include <cstdint>

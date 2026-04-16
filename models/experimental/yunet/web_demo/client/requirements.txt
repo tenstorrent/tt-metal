@@ -4,4 +4,4 @@ opencv-python>=4.8.0
 numpy
 requests
 av>=10.0.0
-Pillow
+Pillow>=12.1.1

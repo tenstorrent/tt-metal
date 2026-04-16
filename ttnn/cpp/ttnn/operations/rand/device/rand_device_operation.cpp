@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,22 +9,12 @@
 
 namespace ttnn::operations::rand {
 
-RandDeviceOperation::program_factory_t RandDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void RandDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
 }
 
 void RandDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
-void RandDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
@@ -51,11 +41,13 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
         operation_attributes.device);
 }
 
-tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    return tt::tt_metal::operation::hash_operation<RandDeviceOperation>(
+        operation_attributes.shape,
+        operation_attributes.dtype,
+        operation_attributes.layout,
+        operation_attributes.memory_config);
 }
 
 }  // namespace ttnn::operations::rand
@@ -69,11 +61,20 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed) {
+    uint32_t seed,
+    ttsl::SmallVector<bool> mesh_dim_is_sharded) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},
+            shape,
+            dtype,
+            layout,
+            memory_config,
+            std::addressof(device),
+            from,
+            to,
+            seed,
+            std::move(mesh_dim_is_sharded)},
         OperationType::tensor_args_t{});
 }
 }  // namespace ttnn::prim

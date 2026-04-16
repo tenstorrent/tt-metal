@@ -1,7 +1,7 @@
 add_library(ttnn_op_kv_cache ${LIB_TYPE})
 add_library(TTNN::Ops::KvCache ALIAS ttnn_op_kv_cache)
 
-target_precompile_headers(ttnn_op_kv_cache REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_kv_cache TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_kv_cache)
 set_target_properties(
     ttnn_op_kv_cache
@@ -27,6 +27,8 @@ target_sources(
         device/update_cache_device_operation.cpp
         device/fill_cache_multi_core_program_factory.cpp
         device/update_cache_multi_core_program_factory.cpp
+        device/zero_cache_range_device_operation.cpp
+        device/zero_cache_range_program_factory.cpp
         kv_cache.cpp
 )
 

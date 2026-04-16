@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,16 +11,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::sdpa_fw::device {
-
-SDPAForwardDeviceOperation::program_factory_t SDPAForwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SDPAForwardProgramFactory{};
-}
-
-void SDPAForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -263,9 +253,8 @@ ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     const auto& query_logical_shape = query_tensor.logical_shape();
     const auto& key_tensor = tensor_args.key;
     const auto& key_logical_shape = key_tensor.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, program_factory.index(), query_tensor.dtype(), query_logical_shape, key_logical_shape);
+        args, query_tensor.dtype(), query_logical_shape, key_logical_shape);
 
     return hash;
 }

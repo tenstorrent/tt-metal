@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -169,11 +169,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             }
         }
     }
-}
-
-void SliceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,9 @@
 #include <unordered_set>
 #include <optional>
 #include <filesystem>
+#include <string>
+#include <climits>
+#include <unistd.h>
 
 namespace tt::tt_fabric {
 
@@ -27,7 +30,7 @@ class TopologyMapper;
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
@@ -45,7 +48,10 @@ uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes);
 uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes);
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection direction);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;
@@ -70,3 +76,14 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
+
+namespace tt::tt_metal {
+
+// Get the local hostname
+inline std::string get_host_name() {
+    char hostname[HOST_NAME_MAX + 1];
+    gethostname(hostname, sizeof(hostname));
+    return std::string(hostname);
+}
+
+}  // namespace tt::tt_metal

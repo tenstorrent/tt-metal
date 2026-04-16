@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,6 @@ SKIPPED_OPS = [
     "ttnn.pearson_correlation_coefficient",  # Internal operation only.
     "ttnn.plus_one",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.hang_device_operation",  # Internal operation only.
-    "ttnn.slice_write",  # Experimental operation, but wrongly registered without ttnn.experimental.
     "ttnn.tosa_gather",  # TOSA operation omitted for docs.
     "ttnn.tosa_scatter",  # TOSA operation omitted for docs.
 ]

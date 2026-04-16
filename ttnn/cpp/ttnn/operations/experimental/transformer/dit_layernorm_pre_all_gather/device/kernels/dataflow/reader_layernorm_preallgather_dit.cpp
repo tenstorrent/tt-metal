@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ void kernel_main() {
     uint32_t scaler = get_arg_val<uint32_t>(4);
     generate_reduce_scaler(cb_reduce, scaler);
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
     uint32_t inp_tile_idx = tile_offset;
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,7 +131,8 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
+        first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+        operation_attributes.compute_kernel_config);
 
     shared_variables_t shared_vars{
         .multidevice_semaphores = multidevice_semaphores,
@@ -167,6 +168,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             shared_variables.program_artifacts.num_workers_per_direction,
             shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
             shared_variables.program_artifacts.num_cores_per_link,
+            shared_variables.program_artifacts.normalized_dim,
             shared_variables.barrier_semaphore,
             shared_variables.multidevice_semaphores,
             tensor_args.input_tensor,

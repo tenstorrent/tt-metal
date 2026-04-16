@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ void kernel_main() {
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
-    // buffers (Whis is most of the cases).
+    // buffers (This is most of the cases).
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
     // Create address generators for the input buffers. Consider these the
@@ -25,9 +25,9 @@ void kernel_main() {
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
     constexpr auto in0_args = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+    const auto in0 = TensorAccessor(in0_args, in0_addr);
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
+    const auto in1 = TensorAccessor(in1_args, in1_addr);
 
     // Loop over all the tiles and read them into the circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {

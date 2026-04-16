@@ -66,7 +66,7 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/ttnn"
         "${CMAKE_SOURCE_DIR}/ttnn/cpp"
         "${CMAKE_SOURCE_DIR}/tt_metal"
-        "${CMAKE_SOURCE_DIR}/tt_metal/include"
+        "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hostdevcommon/api"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/debug"
@@ -77,13 +77,14 @@ target_include_directories(
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/${ARCH_NAME_PREFIX}/noc"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/inc/${ARCH_NAME_PREFIX}/${ARCH_NAME_LOWER}_defines"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
-        "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_NAME_LOWER}/common/inc"
-        "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/common"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/common/inc"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/llk_lib"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/common"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_api/llk_sfpu"
         "${CMAKE_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_NAME_LOWER}/metal/llk_io"
-        "${CMAKE_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_NAME_LOWER}/common/inc/sfpu"
+        "${CMAKE_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_NAME_LOWER}/common/inc/sfpu"
 )
 
 # Add all the specific compiler flags needed for device code compilation

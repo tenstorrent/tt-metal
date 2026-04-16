@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -15,6 +15,7 @@ from typing import Optional
 import torch
 
 import ttnn
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
 @dataclass
@@ -44,6 +45,10 @@ class ThroughputExpertConfig:
     sparsity_block_size: int = 32
     swiglu_limit: float = 7.0
     alpha: float = 1.702
+    use_fused_gate_up: bool = True  # If True, fuse w1 and w3 into single matmul
+    pad_w1_w3: bool = False
+    pad_w2: bool = False
+    use_experimental_all_reduce: bool = False
 
     def __post_init__(self):
         """Validate and compute derived values."""
@@ -85,7 +90,7 @@ class AllToAllDispatchConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 1
+    num_links: int = 4
     topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
     subdevice_id: Optional[int] = None
     output_concat_dim: Optional[int] = 2  # 2 for tokens on seq_len dim (decode and prefill)
@@ -113,7 +118,7 @@ class AllToAllCombineConfig:
 
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
-    num_links: int = 1
+    num_links: int = 4
     topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
     output_shard_dim: int = 2  # 1 for batch dim, 2 for seq_len dim (prefer 2 for decode)
 
@@ -133,24 +138,42 @@ class ThroughputProgramConfig:
     """Program configuration for throughput-optimized expert computations.
 
     Provides matmul program configs for the MLP operations within each expert.
+    Supports separate configurations for fused and unfused gate/up projections.
     """
 
-    # Core grid sizes for sparse matmul
-    gate_up_cores: tuple[int, int] = (5, 9)
-    down_cores: tuple[int, int] = (5, 9)
+    # Core grid sizes for unfused gate/up projections
+    gate_up_cores: tuple[int, int] = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
+    down_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
 
-    # Sparse matmul parameters
-    # in0_block_w: int = 2
-    in0_block_w: int = 10
-    ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
-    out_subblock_h: int = 1
-    out_subblock_w: int = 1
-    per_core_M: int = 1
+    # Core grid sizes for fused gate/up projection (when use_fused_gate_up=True)
+    # If None, defaults to gate_up_cores
+    fused_gate_up_cores: tuple[int, int] | None = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
+
+    # Matmul parameters for unfused mode
+    in0_block_w: int = 15
+    ## K dimension = 2880 / 32 = 90 tiles. Factors: 10, 15, 18, 30, 45
+    ## in0_block_w=15 gives 6 iterations - good balance of register usage and memory efficiency
+    out_subblock_h: int = 1  # M is small (4 tiles)
+    out_subblock_w: int = 1  # Conservative for unfused
+
+    # Matmul parameters for fused mode (when use_fused_gate_up=True)
+    # Fused output is 2x wider (N=180 vs 90), so may benefit from different config
+    fused_in0_block_w: int | None = 30  # Same K blocking as unfused
+    fused_out_subblock_h: int | None = 1  # M is small
+    fused_out_subblock_w: int | None = 3  # Wider output (N=180) benefits from larger subblock
 
     def __post_init__(self):
         """Validate configuration."""
         self._validate_cores("gate_up_cores", self.gate_up_cores)
         self._validate_cores("down_cores", self.down_cores)
+        if self.fused_gate_up_cores is not None:
+            self._validate_cores("fused_gate_up_cores", self.fused_gate_up_cores)
 
     def _validate_cores(self, name: str, cores: tuple[int, int]):
         """Validate core grid dimensions."""
@@ -160,17 +183,19 @@ class ThroughputProgramConfig:
         if core_x <= 0 or core_y <= 0:
             raise ValueError(f"{name} must have positive dimensions, got {cores}")
 
-    def get_gate_up_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for gate/up projections.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.gate_up_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -178,24 +203,68 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
         )
 
-    def get_down_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_fused_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        """Get program config for FUSED gate/up projection.
+
+        This is used when use_fused_gate_up=True, where a single matmul produces
+        output of size 2*intermediate_size (twice the size of unfused).
+
+        Args:
+            n: Output feature dimension (2*intermediate_size for fused)
+            m: M dimension (total_tokens) for the matmul
+
+        Returns:
+            MatmulMultiCoreReuseMultiCast1DProgramConfig
+        """
+        # Use fused-specific cores if provided, otherwise default to gate_up_cores
+        cores = self.fused_gate_up_cores if self.fused_gate_up_cores is not None else self.gate_up_cores
+        core_x, core_y = cores
+
+        # Use fused-specific parameters if provided, otherwise default to unfused parameters
+        in0_block_w = self.fused_in0_block_w if self.fused_in0_block_w is not None else self.in0_block_w
+        out_subblock_h = self.fused_out_subblock_h if self.fused_out_subblock_h is not None else self.out_subblock_h
+        out_subblock_w = self.fused_out_subblock_w if self.fused_out_subblock_w is not None else self.out_subblock_w
+
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
+        per_core_N = n_tiles // (core_x * core_y)
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
+            per_core_N=max(1, per_core_N),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def get_down_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for down projection.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.down_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -203,7 +272,9 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,
@@ -211,38 +282,118 @@ class ThroughputProgramConfig:
         )
 
 
+@dataclass
+class FusedMoeGptConfig:
+    """Configuration and pre-allocated resources for the fused MoE decode flow.
+
+    The fused flow uses three ops instead of the dense all_to_all flow:
+      all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+
+    Pre-allocated resources (dispatch/combine output tensors and semaphores) are
+    reused across iterations to avoid per-call allocations.
+
+    Attributes:
+        tt_w0_w1: moe_gpt gate+up weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            prepare_w0_w1_tensor from experts_throughput.weights)
+        tt_w2: moe_gpt down weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            prepare_w2_tensor from experts_throughput.weights)
+        tt_dispatch_mapping: Expert mapping for all_to_all_dispatch_metadata and moe_gpt.
+            Both ops use [D, E] format: mapping[d, e] = linearized device ID that owns
+            global expert e. Formula: e // experts_per_device (same for all d).
+            Shape: [total_devices, num_experts] uint16, DRAM.
+        dispatch_sparse: Pre-allocated sparse buffer output from dispatch
+            [ring_devices, total_tokens, hidden_size] bfloat16, DRAM (sharded per device)
+        dispatch_indices: Pre-allocated expert indices output from dispatch
+            HEIGHT_SHARDED L1, [total_tokens, selected_k] uint16 per device
+        dispatch_scores: Pre-allocated expert scores output from dispatch
+            HEIGHT_SHARDED L1, [total_tokens, selected_k] bfloat16 per device
+        dispatch_semaphore: Global semaphore for dispatch synchronization
+        combine_preallocated: Pre-allocated combine output tensor, DRAM
+            Shape: [experts_per_cluster, M, hidden_size] per device
+        combine_semaphore: Global semaphore for selective_reduce_combine
+        cluster_axis: Mesh axis for the dispatch ring (default: 0, ring along rows)
+        combine_worker_cores: List of CoreCoord for selective_reduce_combine workers
+        combine_mux_cores: CoreRangeSet for selective_reduce_combine mux cores
+        combine_token_parallel_core_dim: Token-parallel core dimension (default: 4)
+        combine_data_parallel_core_dim: Data-parallel core dimension (default: 4)
+        num_links: Number of fabric links for all ops (default: 4)
+    """
+
+    # Weight tensors in moe_gpt format
+    tt_w0_w1: object  # ttnn.Tensor
+    tt_w2: object  # ttnn.Tensor
+
+    # Routing mapping tensor for dispatch (DRAM)
+    # Shape [total_devices, experts_per_ring] uint16, DRAM.
+    # Uses ring-local expert IDs: mapping[d, e] = (e // E) * mesh_cols + (d % mesh_cols)
+    tt_dispatch_mapping: object  # ttnn.Tensor
+
+    # Routing mapping tensor for moe_gpt (L1)
+    # Same data as tt_dispatch_mapping but in L1 memory (required by moe_gpt kernel).
+    tt_moe_gpt_mapping: object  # ttnn.Tensor
+
+    # Pre-allocated dispatch output tensors
+    dispatch_sparse: object  # ttnn.Tensor, DRAM
+    dispatch_indices: object  # ttnn.Tensor, HEIGHT_SHARDED L1
+    dispatch_scores: object  # ttnn.Tensor, HEIGHT_SHARDED L1
+    dispatch_semaphore: object  # ttnn.GlobalSemaphore
+
+    # Pre-allocated combine output tensor
+    combine_preallocated: object  # ttnn.Tensor, DRAM
+    combine_semaphore: object  # ttnn.GlobalSemaphore
+
+    # Core topology parameters
+    cluster_axis: int = 0
+    combine_worker_cores: object = None  # List[ttnn.CoreCoord], 16 cores
+    combine_mux_cores: object = None  # ttnn.CoreRangeSet
+    combine_token_parallel_core_dim: int = 4
+    combine_data_parallel_core_dim: int = 4
+    num_links: int = 4
+
+
 def create_expert_mapping_tensors(
     num_devices: int,
-    num_experts_per_device: int,
-    mesh_device,
-    cluster_axis: Optional[int] = None,
-    mesh_shape: tuple[int, int] = None,
+    num_experts_global: int = None,
+    mesh_device=None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    new_format: bool = False,
+    return_torch: bool = False,
+    cluster_axis: int = 0,
+    num_experts_per_device: int = None,
 ) -> ttnn.Tensor:
-    """Create expert-to-device mapping tensors for all_to_all operations.
+    """Create expert-to-device mapping tensors for all_to_all operations."""
+    if num_experts_global is None and num_experts_per_device is not None:
+        num_experts_global = num_experts_per_device * num_devices
+    num_experts_per_device = num_experts_global // num_devices
+    if new_format:
+        mesh_rows, mesh_cols = mesh_device.shape
+        num_replicated_devices = mesh_cols if cluster_axis == 0 else mesh_rows
+        experts_per_cluster = num_experts_global // num_replicated_devices
+        mapping = gen_expert_mapping(
+            num_devices,
+            num_replicated_devices,
+            cluster_axis,
+            num_experts_global,
+            experts_per_cluster,
+            num_experts_per_device,
+        )
+    else:
+        mapping = (
+            torch.eye(num_devices, dtype=torch.int32)
+            .repeat_interleave(num_experts_per_device, dim=0)
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
 
-    Args:
-        num_devices: Total number of devices
-        num_experts_per_device: Experts per device
-        mesh_device: TTNN mesh device
-
-    Returns:
-        Mapping tensor [1, 1, num_experts, num_devices]
-    """
-    # Create identity matrix showing which device owns which expert
-    # Shape: [num_experts, num_devices] where mapping[e, d] = 1 if expert e is on device d
-    mapping = (
-        torch.eye(num_devices, dtype=torch.int32)
-        .repeat_interleave(num_experts_per_device, dim=0)
-        .unsqueeze(0)
-        .unsqueeze(0)
-    )
+    if return_torch:
+        return mapping
 
     return ttnn.from_torch(
         mapping,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.uint16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 

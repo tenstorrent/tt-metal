@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -111,8 +111,8 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
     }
 }
 
-// More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
-// (dst_noc, VC..) have been specified.
+// More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
+// config (dst_noc, VC..) have been specified.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
@@ -321,9 +321,27 @@ public:
                     if (expected > buffer_end) {
                         expected -= buffer_size;
                     }
+
+                    // Allow writer to be one page ahead if round_to_page_size is true (writer has advanced
+                    // into the next page but we round down to the page boundary). This can happen when we do
+                    // write_pages_to_dispatcher<1, true> and the final write fills a page. The later check at the end
+                    // of the command with round_to_page_size=false will check that all the data is eventually written
+                    // out.
+                    bool one_page_ahead = false;
+                    if (round_to_page_size) {
+                        uint32_t expected_plus_page = expected + buffer_page_size;
+                        if (expected_plus_page > buffer_end) {
+                            expected_plus_page -= buffer_size;
+                        }
+                        one_page_ahead = (adjusted_writer_ptr == expected_plus_page) ||
+                                         ((expected_plus_page == buffer_end) && (adjusted_writer_ptr == buffer_base));
+                    }
+
                     // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
                     // it hasn't wrapped yet.
-                    ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)));
+                    ASSERT(
+                        (adjusted_writer_ptr == expected) ||
+                        ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)) || one_page_ahead);
                     watch_released_ptr_ = expected;
                 }
             }

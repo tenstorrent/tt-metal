@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -161,6 +161,7 @@ def test_clip_encoder(
         layer_norm_eps=hf_model.config.layer_norm_eps,
         attention_dropout=hf_model.config.attention_dropout,
         hidden_act=hf_model.config.hidden_act,
+        projection_dim=hf_model.config.projection_dim,
     )
 
     tt_clip = CLIPEncoder(

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,9 @@ from models.tt_dit.utils.substate import substate
         "large",
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2)], ids=["1x4", "2x2"])
+@pytest.mark.parametrize(
+    "mesh_device,submesh_shape", [[(2, 4), (1, 4)], [(4, 8), (1, 8)]], ids=["t3k", "glx"], indirect=["mesh_device"]
+)
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -84,8 +85,6 @@ def test_t5_single_layer(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
-
     # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
@@ -100,21 +99,25 @@ def test_t5_single_layer(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    embeddings_state_dict = {}
-    for key, value in hf_model.state_dict().items():
-        if key.startswith("encoder.embed_tokens.") or key.startswith(
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
-        ):
-            embeddings_state_dict[key] = value
+    state_dict = hf_model.state_dict()
 
-    tt_embedding.load_state_dict(embeddings_state_dict)
+    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
+    embeddings_state_dict = {
+        "token_embedding_weights": state_dict["encoder.embed_tokens.weight"],
+        "relative_attention_bias_weights": state_dict[
+            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"
+        ],
+    }
+
+    tt_embedding.load_torch_state_dict(embeddings_state_dict)
 
     layer = 23
 
     tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
 
-    tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))  # first layer weights
+    tt_encoder_layer.load_torch_state_dict(
+        substate(hf_model.state_dict(), f"encoder.block.{layer}")
+    )  # first layer weights
 
     tt_start_time = time.time()
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)

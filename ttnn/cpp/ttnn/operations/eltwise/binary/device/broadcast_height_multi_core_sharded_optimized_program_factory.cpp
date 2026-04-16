@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -159,7 +159,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
     uint32_t ncores_y = ncores / ncores_x;
-    TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be devisible by batch size of input1");
+    TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
     uint32_t Ht_per_batch_b = std::min((NC * H / TILE_HEIGHT) / bN, Ht);
     uint32_t batch_b = Ht / Ht_per_batch_b;
 

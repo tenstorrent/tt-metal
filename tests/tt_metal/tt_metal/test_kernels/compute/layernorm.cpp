@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,10 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -196,6 +196,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
             // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
+            // if (ht == 1) DEVICE_PRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();

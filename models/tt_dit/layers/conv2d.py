@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,14 +18,13 @@ from .module import Module, Parameter
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    import torch
     from typing_extensions import Self
 
 
 # TODO: Add support for coll and row parallel conv2d
 class Conv2d(Module):
     """
-    Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
+    Conv2d with support for tensor parallelism. Data and Sequence Parallelism TBD.
 
     """
 
@@ -39,12 +38,13 @@ class Conv2d(Module):
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
@@ -52,24 +52,26 @@ class Conv2d(Module):
         },
         (4, 4): {
             (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
             (1024, 1024, 128, 3): 8,
         },
         (2, 4): {
-            (128, 128, 16, 512): 8,
+            (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
             (128, 128, 512, 512): 4,
             (256, 256, 512, 512): 8,
             (512, 512, 512, 512): 16,
             (512, 512, 512, 256): 16,
             (512, 512, 256, 256): 4,
+            (512, 512, 128, 3): 4,
             (1024, 1024, 256, 256): 16,
             (1024, 1024, 256, 128): 16,
             (1024, 1024, 128, 128): 16,
@@ -78,25 +80,26 @@ class Conv2d(Module):
     }
     slice_default = {
         (512, 512, 512, 64): 16,
-        (128, 128, 16, 512): 8,
+        (128, 128, 16, 512): 4,  # max = ceil(128/32) = 4 for TILE DRAM_WIDTH
         (128, 128, 512, 512): 4,
         (256, 256, 512, 512): 8,
         (512, 512, 512, 512): 16,
         (512, 512, 512, 256): 16,
         (512, 512, 256, 256): 4,
+        (512, 512, 128, 3): 4,
         (1024, 1024, 256, 256): 16,
         (1024, 1024, 256, 128): 16,
         (1024, 1024, 128, 128): 16,
         (1024, 1024, 128, 3): 8,
     }
 
-    # TODO: Allow weight initilization?
+    # TODO: Allow weight initialization?
     def __init__(
         self,
-        in_channels: int | None,
-        out_channels: int | None,
+        in_channels: int,
+        out_channels: int,
         *,
-        kernel_size: Sequence[int] | int | None = None,
+        kernel_size: Sequence[int] | int,
         stride: Sequence[int] | int = 1,
         padding: Sequence[int] | int = 0,
         dilation: Sequence[int] | int = 1,
@@ -104,7 +107,6 @@ class Conv2d(Module):
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
-        torch_ref: torch.nn.Conv2d | None = None,
     ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
@@ -120,7 +122,7 @@ class Conv2d(Module):
             in_mesh_axis: Axis to shard input channels across mesh devices.
             out_mesh_axis: Axis to shard output channels across mesh devices.
             ccl_manager: CCL manager to use.
-            torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
+            torch_ref: Reference to the torch layer. Parameters from this will be used to initialize the layer
 
         The arguments in_mesh_axis and out_mesh_axis control how weights and biases are sharded
         across the mesh devices and how the input and output tensors are sharded.
@@ -138,20 +140,6 @@ class Conv2d(Module):
 
         in_mesh_axis_size = mesh_device.shape[in_mesh_axis] if in_mesh_axis is not None else 1
         out_mesh_axis_size = mesh_device.shape[out_mesh_axis] if out_mesh_axis is not None else 1
-
-        if torch_ref is not None:
-            assert not isinstance(torch_ref.padding, str)
-
-            in_channels = torch_ref.in_channels
-            out_channels = torch_ref.out_channels
-            kernel_size = torch_ref.kernel_size
-            stride = torch_ref.stride
-            padding = torch_ref.padding
-            dilation = torch_ref.dilation
-        else:
-            assert in_channels is not None, "in_channels must be provided if torch_ref is not provided"
-            assert out_channels is not None, "out_channels must be provided if torch_ref is not provided"
-            assert kernel_size is not None, "kernel_size must be provided if torch_ref is not provided"
 
         kernel_size = (kernel_size,) * 2 if isinstance(kernel_size, int) else tuple(kernel_size)
         stride = (stride,) * 2 if isinstance(stride, int) else tuple(stride)
@@ -188,9 +176,6 @@ class Conv2d(Module):
         self.in_mesh_axis_size = in_mesh_axis_size
         self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
-
-        if torch_ref is not None:
-            self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
     def from_torch(

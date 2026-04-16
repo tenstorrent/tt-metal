@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 
 void kernel_main() {
     uint32_t sub_Mt = get_compile_time_arg_val(0);

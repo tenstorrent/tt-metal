@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -145,10 +145,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     std::string compute_kernel_name =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
-    if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
-        compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-    }
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
 
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
 
@@ -244,7 +241,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs}};
+    return {std::move(program), {unary_writer_kernel_id, unary_reader_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
@@ -323,8 +320,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
 
-    // Create reader kernel
-    std::vector<uint32_t> compile_time_args(
+    // Common compile-time args shared by reader and writer (indices 0..8)
+    std::vector<uint32_t> common_compile_time_args(
         {stick_nbytes,
          cb_src0_index,
          aligned_stick_nbytes,
@@ -334,18 +331,24 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
          patches_per_core,
          cb_src1_index,
          is_l1_aligned});
-    TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
+
+    // Create reader kernel with src TensorAccessorArgs
+    auto reader_compile_time_args = common_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
-    // Create writer kernel
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // Create writer kernel with dst TensorAccessorArgs
+    auto writer_compile_time_args = common_compile_time_args;
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Set runtime arguments for each core
 
@@ -385,7 +388,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
+    return {std::move(program), {writer_kernel_id, reader_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(

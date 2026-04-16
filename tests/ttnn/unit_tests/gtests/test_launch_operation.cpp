@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -138,7 +138,7 @@ TEST_F(LaunchOperation2x4Test, UniformTensor) {
 TEST_F(LaunchOperation2x4Test, UnevenTensor) {
     auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
 
-    EXPECT_THAT(uneven_tensor.device_storage().coords, SizeIs(2));
+    EXPECT_THAT(uneven_tensor.device_storage().get_coords(), SizeIs(2));
 
     EXPECT_FALSE(all_tensors_have_uniform_storage(uneven_tensor));
     EXPECT_THAT(
@@ -167,7 +167,7 @@ TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
             ttnn::MeshCoordinate{1, 3}));
 
     // Filter the first 2 shards and the last 3 shards.
-    filter_tensor_shards(
+    auto filtered_tensor = filter_tensor_shards(
         {ttnn::MeshCoordinate{0, 0},
          ttnn::MeshCoordinate{0, 1},
          ttnn::MeshCoordinate{1, 1},
@@ -175,9 +175,9 @@ TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
          ttnn::MeshCoordinate{1, 3}},
         full_tensor);
 
-    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_FALSE(all_tensors_have_uniform_storage(filtered_tensor));
     EXPECT_THAT(
-        extract_tensor_coordinates(full_tensor),
+        extract_tensor_coordinates(filtered_tensor),
         ElementsAre(
             ttnn::MeshCoordinate{0, 0},  //
             ttnn::MeshCoordinate{0, 1},
@@ -186,23 +186,23 @@ TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
             ttnn::MeshCoordinate{1, 3}));
 
     // Filter the first and the last shards.
-    filter_tensor_shards(
+    filtered_tensor = filter_tensor_shards(
         {ttnn::MeshCoordinate{0, 0},  //
          ttnn::MeshCoordinate{1, 3}},
-        full_tensor);
+        filtered_tensor);
 
-    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_FALSE(all_tensors_have_uniform_storage(filtered_tensor));
     EXPECT_THAT(
-        extract_tensor_coordinates(full_tensor),
+        extract_tensor_coordinates(filtered_tensor),
         ElementsAre(
             ttnn::MeshCoordinate{0, 0},  //
             ttnn::MeshCoordinate{1, 3}));
 
     // Filter the rest.
-    filter_tensor_shards(/*tensor_coordinates=*/{}, full_tensor);
+    filtered_tensor = filter_tensor_shards(/*tensor_coordinates=*/{}, filtered_tensor);
 
-    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
-    EXPECT_THAT(extract_tensor_coordinates(full_tensor), IsEmpty());
+    EXPECT_FALSE(all_tensors_have_uniform_storage(filtered_tensor));
+    EXPECT_THAT(extract_tensor_coordinates(filtered_tensor), IsEmpty());
 }
 
 TEST_F(LaunchOperation2x4Test, LaunchOpFilterTensorShards) {

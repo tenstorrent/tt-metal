@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -172,17 +172,14 @@ class MotifPipeline:
                 padding_config=padding_config,
             )
 
-            if not cache.initialize_from_cache(
+            cache.load_model(
                 tt_model=tt_transformer,
-                torch_state_dict=transformer_state_dict,
+                get_torch_state_dict=lambda: transformer_state_dict,
                 model_name="motif-image-6b",
                 subfolder="transformer",
                 parallel_config=self._parallel_config,
                 mesh_shape=tuple(submesh_device.shape),
-                dtype="bf16",
-            ):
-                logger.info("Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_torch_state_dict(transformer_state_dict)
+            )
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)

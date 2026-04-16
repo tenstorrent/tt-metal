@@ -1,0 +1,5 @@
+# Dual 4x8 galaxies: c02u08 and c03u02 - Z-only connections between them.
+# Used for Z-direction fallback test.
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u08.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c03u08.yaml"

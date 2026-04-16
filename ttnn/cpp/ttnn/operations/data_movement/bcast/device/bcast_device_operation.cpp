@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,11 +50,6 @@ BcastDeviceOperation::program_factory_t BcastDeviceOperation::select_program_fac
 
     log_debug(tt::LogOp, "Selected bcast factory: {}", factory_name);
     return selected_factory;
-}
-
-void BcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void BcastDeviceOperation::validate_on_program_cache_miss(
@@ -230,7 +225,7 @@ Tensor BcastDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, tensor_args.input_a.device());
 }
 
-tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t BcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "BcastDeviceOperation::compute_program_hash is called");
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -28,6 +27,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
         DPRINT_DATA0(DPRINT << "Hello, I am running a void data movement kernel on NOC 0." << ENDL());
         DPRINT_DATA1(DPRINT << "Hello, I am running a void data movement kernel on NOC 1." << ENDL());
+        DEVICE_PRINT_DATA0("Hello, I am running a void data movement kernel on NOC 0.\n");
+        DEVICE_PRINT_DATA1("Hello, I am running a void data movement kernel on NOC 1.\n");
 
     }
     )";
@@ -51,12 +52,13 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
     #include "api/debug/dprint.h"
-    #include "compute_kernel_api.h"
+    #include "api/compute/compute_kernel_api.h"
 
 
     void kernel_main() {
 
         DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
+        DEVICE_PRINT_MATH("Hello, I am running a void compute kernel.\n");
 
     }
 
@@ -90,6 +92,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     void kernel_main() {
 
         DPRINT << "Hello, I am running a void ethernet kernel." << ENDL();
+        DEVICE_PRINT("Hello, I am running a void ethernet kernel.\n");
 
     }
     )";

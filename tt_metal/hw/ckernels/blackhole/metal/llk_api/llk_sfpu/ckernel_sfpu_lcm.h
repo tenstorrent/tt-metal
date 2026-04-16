@@ -16,39 +16,10 @@ namespace sfpu {
 
 // inputs are lreg0, lreg1. output is lreg4
 inline void calculate_sfpu_mul_u16_to_u32_body() {
-    // mask
-    TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0xff);
-    // copy
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-    // shift
-    TTI_SFPSHFT((-8) & 0xfff, 0, p_sfpu::LREG2, 1);
-    TTI_SFPSHFT((-8) & 0xfff, 0, p_sfpu::LREG3, 1);
-    // mask lowest 8 bits
-    TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-    TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
-    // cast to fp32
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
-    TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
-    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
-    // multiply in fp32
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
-    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
-    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
-    // cast back
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG4, p_sfpu::LREG4, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG7, p_sfpu::LREG7, 6);
-    // shift back
-    TTI_SFPSHFT(8, 0, p_sfpu::LREG5, 1);
-    TTI_SFPSHFT(8, 0, p_sfpu::LREG6, 1);
-    TTI_SFPSHFT(16, 0, p_sfpu::LREG7, 1);
-    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, SFPIADD_MOD1_CC_NONE);
-    TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG4, SFPIADD_MOD1_CC_NONE);
-    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG4, SFPIADD_MOD1_CC_NONE);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG4, sfpi::SFPMUL24_MOD1_UPPER);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG5, sfpi::SFPMUL24_MOD1_LOWER);
+    TTI_SFPSHFT(23, 0, p_sfpu::LREG4, 1); // SFPSHFT_MOD1_ARG_IMM
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);
 }
 
 template <int ITERATIONS = 8>

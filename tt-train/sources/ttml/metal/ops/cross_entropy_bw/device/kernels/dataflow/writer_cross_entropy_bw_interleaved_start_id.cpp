@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -27,7 +28,7 @@ void kernel_main() {
     const float scaler = uint32_to_float(scaler_bits);
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
     constexpr auto output_args = TensorAccessorArgs<3>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
 

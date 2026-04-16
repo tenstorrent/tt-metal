@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -10,23 +10,17 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
-from models.demos.deepseek_v3.tests.pytest_utils import (
-    build_expanded_test_ids,
-    expand_test_cases_with_position_ids_ranges,
-)
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -50,14 +44,9 @@ def generate_reference_io(
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        reference_model.load_state_dict(state_dict)
     else:
-        # This needs to be disabled as deterministic way to quantize weights is not supported
-        torch.use_deterministic_algorithms(False)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+        state_dict = reference_model.state_dict()
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None
@@ -89,6 +78,7 @@ def generate_reference_io(
 
 def run_test_forward_pass_decoder2d(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    fabric_config,
     module_path,
     reference_layer_idx,
     mode,
@@ -103,13 +93,20 @@ def run_test_forward_pass_decoder2d(
     state_dict,
     decode_position_ids: int | None = None,
 ):
+    configured_row_width = batch_size_per_row
+
     # Check params
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
-        batch_size = batch_size_per_row
+        # Like the MLA module test, this helper targets the row-batched prefill
+        # layout directly. The selected user_id picks which global row is updated,
+        # while the underlying prefill kernels operate on one full configured row.
+        assert (
+            configured_row_width == USERS_PER_ROW
+        ), f"Prefill coverage exercises a full row-wide layout of {USERS_PER_ROW} users"
+        reference_batch_size = configured_row_width
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
-        batch_size = batch_size_per_row * mesh_device.shape[0]
+        reference_batch_size = configured_row_width * mesh_device.shape[0]
 
     state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
         model_path,
@@ -117,7 +114,7 @@ def run_test_forward_pass_decoder2d(
         hf_config_short,
         reference_layer_idx,
         seq_len,
-        batch_size,
+        reference_batch_size,
         mode,
         state_dict,
         decode_position_ids,
@@ -125,12 +122,13 @@ def run_test_forward_pass_decoder2d(
 
     # Set up page config
     logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
+    user_id = None if mode == "decode" else torch.randint(0, configured_row_width * mesh_device.shape[0], ()).item()
     paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
 
+    is_real_weights = module_path is not None
     # Set up model config
     weight_config = get_test_weight_config(
         DecoderBlockClass,
@@ -139,8 +137,18 @@ def run_test_forward_pass_decoder2d(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_decoder_block",
+        real_weights=is_real_weights,
+        layer_id=module_path,
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(
+        DecoderBlockClass,
+        mode,
+        hf_config_short,
+        mesh_device,
+        fabric_config,
+        configured_row_width,
+    )
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
         paged_config,
@@ -176,7 +184,7 @@ def run_test_forward_pass_decoder2d(
     tt_page_table = MLA2D.create_page_table(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
-    rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+    rope_tensors = get_rope_tensors(hf_config_short, configured_row_width, seq_len, position_ids, mesh_device)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
@@ -193,37 +201,31 @@ def run_test_forward_pass_decoder2d(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
     )
 
+    if is_real_weights:
+        required_pcc = 0.9899
+    else:
+        required_pcc = 0.988
     # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=required_pcc)
 
 
-# Base test cases - ranges will be expanded into individual test cases
-# see documentation for expand_test_cases_with_position_ids_ranges for more details
-BASE_TEST_CASES = [
-    # mode, seq_len, batch_size_per_row, decode_position_ids
-    ("decode", 1, USERS_PER_ROW, None),
-] + [
-    ("prefill", seq_len, 1, None)
-    if seq_len == 128
-    else pytest.param(
-        "prefill",
-        seq_len,
-        1,
-        None,
-        marks=pytest.mark.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        ),
-    )
-    for seq_len in PREFILL_SEQ_LENS
-]
-EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
-EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)
+ROW_BATCHED_PREFILL_SEQ_LEN = (
+    (_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+) * ttnn.TILE_SIZE
+
+TEST_CASES, TEST_IDS = build_test_cases_and_ids(
+    USERS_PER_ROW,
+    ROW_BATCHED_PREFILL_SEQ_LEN,  # keep total prefill token budget scaled while respecting tile-aligned prefill kernels
+    include_decode_random_pos_ids=True,  # include decode random position_ids case
+)
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -238,16 +240,16 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
         pytest.param(
-            MoEDecoderBlock2D,
-            None,
-            3,
+            DecoderBlock2D,
+            "model.layers.0",
+            0,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
         pytest.param(
-            DecoderBlock2D,
-            "model.layers.0",
-            0,
+            MoEDecoderBlock2D,
+            None,
+            3,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
@@ -262,11 +264,12 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
-    EXPANDED_TEST_CASES,
-    ids=EXPANDED_TEST_IDS,
+    TEST_CASES,
+    ids=TEST_IDS,
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    device_params,
     module_path,
     reference_layer_idx,
     mode,
@@ -288,6 +291,7 @@ def test_forward_pass(
 
     test_closure(
         DecoderBlockClass,
+        device_params["fabric_config"],
         module_path,
         reference_layer_idx,
         mode,
@@ -301,6 +305,64 @@ def test_forward_pass(
         force_recalculate_weight_config,
         state_dict,
         decode_position_ids,
+    )
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "DecoderBlockClass, module_path, reference_layer_idx",
+    [
+        pytest.param(
+            DecoderBlock2D,
+            "model.layers.0",
+            0,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        pytest.param(
+            MoEDecoderBlock2D,
+            "model.layers.3",
+            3,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+    ],
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    DecoderBlockClass: type[DecoderBlock2DBase],
+    device_params,
+    module_path,
+    reference_layer_idx,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    model_path,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    run_test_forward_pass_decoder2d(
+        DecoderBlockClass,
+        device_params["fabric_config"],
+        module_path,
+        reference_layer_idx,
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        model_path=model_path,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
     )
 
 

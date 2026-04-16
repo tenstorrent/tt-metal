@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ namespace {
 /*
     This function compares two subchunks of data - one chunk is one stick, and one subchunk
     is the maximal length of a stick that can fit as much L1 memory as possible - this length
-    is shared betwen rows of `elements`, `test_elements` and `output` tensors.
+    is shared between rows of `elements`, `test_elements` and `output` tensors.
 */
 template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
@@ -103,12 +103,14 @@ void kernel_main() {
 
     constexpr uint32_t elements_element_size = ctas.elements_tensor_datum_size;
     constexpr uint32_t test_elements_element_size = ctas.elements_tensor_datum_size;
-    const auto elements_addr_gtor = TensorAccessor{
-        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size};
-    const auto test_elements_addr_gtor = TensorAccessor{
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto elements_addr_gtor = TensorAccessor(
+        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size);
+    const auto test_elements_addr_gtor = TensorAccessor(
         ctas.test_elements_accessor_args,
         test_elements_buffer_address,
-        ctas.test_elements_size * test_elements_element_size};
+        ctas.test_elements_size * test_elements_element_size);
 
     /*
         for every subchunk (part of a stick) of the elements tensor - to which an analogous output chunk

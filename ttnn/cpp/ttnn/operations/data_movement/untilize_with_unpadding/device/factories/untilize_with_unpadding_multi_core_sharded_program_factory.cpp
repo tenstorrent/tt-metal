@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
-    bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::tt_metal::Program program{};
@@ -54,7 +53,11 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     auto all_cores = shard_spec.grid;
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
+    uint32_t global_batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
+    uint32_t batch =
+        a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED
+            ? std::max(1u, (shard_spec.shape[0] * shard_spec.shape[1]) / (a.padded_shape()[-2] * a.padded_shape()[-1]))
+            : global_batch;
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
@@ -101,11 +104,14 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
     uint32_t sharded_output_cb_index;
     CBHandle cb_sharded_output;
     if (out_sharded) {
+        // The kernel advances the write pointer by aligned_page_size (which may be
+        // larger than block_row_size due to buffer alignment padding), so the CB
+        // page size must match to avoid overflow.
         std::tie(sharded_output_cb_index, cb_sharded_output) = create_cb(
             tt::CBIndex::c_17,
             program,
             all_cores,
-            block_row_size,
+            aligned_page_size,
             num_output_rows_unpadded,
             output_cb_data_format,
             output.buffer());
@@ -170,25 +176,15 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (
-        !use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-        unpack_to_dest_mode[tt::CBIndex::c_0] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
     CreateKernel(

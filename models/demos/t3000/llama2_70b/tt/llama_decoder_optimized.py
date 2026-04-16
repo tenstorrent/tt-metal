@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -212,7 +212,7 @@ class TtLlamaDecoder_optimized:
         )
 
         ### Fractured residual add
-        # Add attn output to residiual first in place to save memory
+        # Add attn output to residual first in place to save memory
         output = xs
         output = ttnn.add(
             output,

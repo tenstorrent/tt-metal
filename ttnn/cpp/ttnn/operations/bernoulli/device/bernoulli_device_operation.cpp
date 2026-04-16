@@ -1,17 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bernoulli_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::bernoulli {
-
-BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
 
 void BernoulliDeviceOperation::validate_inputs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
@@ -44,11 +40,6 @@ void BernoulliDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void BernoulliDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 BernoulliDeviceOperation::spec_return_value_t BernoulliDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
@@ -71,11 +62,14 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<BernoulliDeviceOperation>,
+        attrs.dtype,
+        attrs.memory_config,
+        attrs.compute_kernel_config,
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::bernoulli
@@ -95,7 +89,7 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
         seed,
         dtype.value_or(DataType::FLOAT32),
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,18 +57,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t
-MorehGroupNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MorehGroupNormBackwardGammaBetaGradFactory();
-}
-
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
-void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
@@ -171,7 +160,7 @@ moreh_group_norm_backward_gamma_beta_grad(
         are_required_outputs,
         gamma_grad_memory_config.value_or(output_grad.memory_config()),
         beta_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

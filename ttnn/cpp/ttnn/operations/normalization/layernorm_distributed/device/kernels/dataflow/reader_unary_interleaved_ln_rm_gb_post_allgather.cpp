@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,13 +35,10 @@ void kernel_main() {
     constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
     const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
     constexpr uint32_t cb_length = get_compile_time_arg_val(6);
@@ -51,15 +48,15 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
-    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 
@@ -163,7 +160,7 @@ void kernel_main() {
 }
 template <uint32_t t>
 void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
-    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 usefull, the next bad
+    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 useful, the next bad
     if constexpr (t == 0) {                              // TILE LAYOUT
         noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);  // Fills the second face with next 16 elements
     } else if constexpr (t == 1) {                                   // ROW MAJOR LAYOUT

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,17 +17,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-RMSAllGatherDeviceOperation::program_factory_t RMSAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return RMSAllGatherMeshWorkloadFactory{};
-}
-
-void RMSAllGatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
@@ -36,10 +25,11 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
-        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] == 32 &&
+        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&
             a.logical_shape()[3] % 32 == 0,
-        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where "
-        "M is a multiple of 32");
+        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,M,N) "
+        "where "
+        "M <= 32 and N is a multiple of 32");
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -226,7 +216,7 @@ Tensor RMSAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
@@ -234,9 +224,6 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,
         args.output_mem_config,
@@ -252,8 +239,7 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.use_noc1_only,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -281,7 +267,7 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
     using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 

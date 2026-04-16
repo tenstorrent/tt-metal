@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <cstdint>
+#include <utility>
 #include <unistd.h>
 
 #include <tt-metalium/device.hpp>
@@ -33,32 +34,32 @@ PinnedMemoryImpl::PinnedMemoryImpl(
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
 
-PinnedMemoryImpl::~PinnedMemoryImpl() { device_buffers_.clear(); }
+PinnedMemoryImpl::~PinnedMemoryImpl() {
+    drain_barrier_events();
+    device_buffers_.clear();
+}
 
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
-    buffer_size_(other.buffer_size_),
-    map_to_noc_(other.map_to_noc_),
-    host_offset_(other.host_offset_),
+    buffer_size_(std::exchange(other.buffer_size_, 0)),
+    map_to_noc_(std::exchange(other.map_to_noc_, false)),
+    use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
+    host_offset_(std::exchange(other.host_offset_, 0)),
     device_buffers_(std::move(other.device_buffers_)),
-    device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
-    other.buffer_size_ = 0;
-    other.map_to_noc_ = false;
-    other.host_offset_ = 0;
-}
+    device_to_mmio_map_(std::move(other.device_to_mmio_map_)),
+    barrier_events_(std::move(other.barrier_events_)) {}
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
     if (this != &other) {
+        drain_barrier_events();
         device_buffers_.clear();
 
-        buffer_size_ = other.buffer_size_;
-        map_to_noc_ = other.map_to_noc_;
-        host_offset_ = other.host_offset_;
+        buffer_size_ = std::exchange(other.buffer_size_, 0);
+        map_to_noc_ = std::exchange(other.map_to_noc_, false);
+        use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
+        host_offset_ = std::exchange(other.host_offset_, 0);
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
-
-        other.buffer_size_ = 0;
-        other.map_to_noc_ = false;
-        other.host_offset_ = 0;
+        barrier_events_ = std::move(other.barrier_events_);
     }
     return *this;
 }
@@ -190,7 +191,7 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
         return std::nullopt;
     }
     const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_ASSERT(!pcie_cores.empty());
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
@@ -264,12 +265,18 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     }
 }
 
-void* PinnedMemoryImpl::lock() {
+bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
+
+void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
         distributed::EventSynchronize(event);
         barrier_events_.pop_front();
     }
+}
+
+void* PinnedMemoryImpl::lock() {
+    drain_barrier_events();
     return get_host_ptr();
 }
 
@@ -308,6 +315,8 @@ bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device
 bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usable_from_noc(device_id); }
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
+
+bool PinnedMemory::lock_may_block() const { return pImpl->lock_may_block(); }
 
 void* PinnedMemory::lock() { return pImpl->lock(); }
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,11 +54,11 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
         case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::XIELU:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
@@ -97,8 +97,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
-        case UnaryOpType::LOGIT:
-        case UnaryOpType::RPOW: return true;
+        case UnaryOpType::RPOW:
+        case UnaryOpType::MISH:
+        case UnaryOpType::POLYGAMMA: return true;
         default: return false;
     }
     return false;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -88,7 +88,7 @@ def test_positional_embedding_inference(
 
     tt_aspect_ratios = aspect_ratios.tolist()
 
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
+    # config contains parameters for the whole multimodal network the subeset of vision branch is chosen instead
     model_repo_name = os.getenv("HF_MODEL")
     config = AutoConfig.from_pretrained(model_repo_name)
     reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)

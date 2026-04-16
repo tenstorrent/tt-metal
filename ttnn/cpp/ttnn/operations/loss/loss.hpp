@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,34 +8,21 @@
 #include <optional>
 
 #include "loss_types.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
+Tensor mse_loss(
+    const Tensor& ref,
+    const Tensor& prediction,
+    operations::loss::LossReductionMode mode = operations::loss::LossReductionMode::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-namespace operations::loss {
-
-struct MseLossOperation {
-    static Tensor invoke(
-        const Tensor& ref,
-        const Tensor& prediction,
-        LossReductionMode mode = LossReductionMode::NONE,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct MaeLossOperation {
-    static Tensor invoke(
-        const Tensor& ref,
-        const Tensor& prediction,
-        LossReductionMode mode = LossReductionMode::NONE,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-}  // namespace operations::loss
-
-constexpr auto mse_loss = ttnn::register_operation<"ttnn::mse_loss", operations::loss::MseLossOperation>();
-
-constexpr auto l1_loss = ttnn::register_operation<"ttnn::l1_loss", operations::loss::MaeLossOperation>();
+Tensor l1_loss(
+    const Tensor& ref,
+    const Tensor& prediction,
+    operations::loss::LossReductionMode mode = operations::loss::LossReductionMode::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn

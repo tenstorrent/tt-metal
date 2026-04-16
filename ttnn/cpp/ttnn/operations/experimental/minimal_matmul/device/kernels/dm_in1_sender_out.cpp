@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,11 +44,20 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
+    const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+
+#ifdef FUSE_TERNARY
+    // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
+    const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ternary_b_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t broadcast_ternary_b = get_arg_val<uint32_t>(argidx++);
+#endif  // FUSE_TERNARY
+
+    const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<21>();
-    const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
+    const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks)
     constexpr uint32_t out_tensor_args_cta_offset = in1_args.next_compile_time_args_offset();
@@ -59,8 +68,29 @@ void kernel_main() {
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in2_args = TensorAccessorArgs<in2_args_cta_offset>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr);
 #endif
+
+#ifdef FUSE_TERNARY
+// Calculate offset for ternary_a_args
+#ifdef FUSE_BIAS
+    constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
+#else
+    constexpr uint32_t ternary_a_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+#endif
+    constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
+
+    constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
+    constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);
+
+    constexpr auto ternary_a_args = TensorAccessorArgs<ternary_a_args_cta_offset>();
+    constexpr auto ternary_b_args = TensorAccessorArgs<ternary_a_args.next_compile_time_args_offset()>();
+    const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
+    const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
+
+#endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
@@ -96,6 +126,18 @@ void kernel_main() {
             device_k_block_counts,
             device_k_block_start_ids,
             forward_k_block_schedule);
+    }
+#endif
+
+#ifdef SRS_FUSE_OP_SIGNALER
+    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
+    uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+#ifdef FUSE_AG
+    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+#endif
+    OpSignaler srs_fuse_signaler;
+    if constexpr (is_output_writer) {
+        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
     }
 #endif
 
@@ -140,6 +182,8 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
+            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+            bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -224,6 +268,17 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
+#ifdef SRS_FUSE_OP_SIGNALER
+                if constexpr (is_output_writer) {
+                    // Synchronize and signal strided reduce scatter readers after
+                    // previous block has been produced and any data from this core has been written to NOC afterwards,
+                    // at the moment all cores are expected to be done writing their corresponding blocks.
+                    if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                        noc_async_write_barrier();
+                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                    }
+                }
+#endif
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -240,6 +295,24 @@ void kernel_main() {
             }
 #endif
 
+#ifdef FUSE_TERNARY
+            if constexpr (!is_output_writer) {
+                read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(
+                    ternary_a_reader,
+                    ternary_b_reader,
+                    out_shape,
+                    cb_id_ternary_a,
+                    cb_id_ternary_b,
+                    ternary_a_tile_size,
+                    ternary_b_tile_size,
+                    broadcast_ternary_b,
+                    m_tile,
+                    m_tile_end,
+                    n_tile,
+                    n_tile_end);
+            }
+#endif  // FUSE_TERNARY
+
             k_forward = !k_forward;
             // We have an output block to write out
 
@@ -251,7 +324,7 @@ void kernel_main() {
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
-            defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
+            defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
@@ -279,6 +352,12 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#ifdef SRS_FUSE_OP_SIGNALER
+                    if (is_last_block) {
+                        noc_async_write_barrier();
+                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                    }
+#endif
                 }
             }
         }

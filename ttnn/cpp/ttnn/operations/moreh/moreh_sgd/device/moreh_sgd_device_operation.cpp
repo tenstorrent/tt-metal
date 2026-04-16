@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,19 +30,9 @@ void MorehSgdOperation::validate_inputs(
     if (tensor_args.momentum_buffer_out.has_value()) {
         check_tensor(tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
     }
-}
-
-MorehSgdOperation::program_factory_t MorehSgdOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
 };
 
 void MorehSgdOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehSgdOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -126,7 +116,7 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
         momentum_initialized,
         param_out_memory_config.value_or(param_in.memory_config()),
         momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
-        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

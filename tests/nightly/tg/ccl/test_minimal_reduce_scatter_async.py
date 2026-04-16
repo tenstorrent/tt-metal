@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,25 +9,25 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
-    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters,cluster_axis",
     [
         # Perf variants (with tracing)
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # from CSV
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # from CSV
         # Check variants (without tracing)
-        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # from CSV
+        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 1),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # use batching when fused
+        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # use batching when fused
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # from CSV
     ],
     ids=[
         "batch_8-perf",
         "batch_4-perf",
-        "batch_1_sd35_spatial-perf",
+        "batch_1-perf",
         "deepseek_1-perf",
         "batch_1_sd35_prompt-check",
         "batch_2-check",
@@ -49,10 +49,10 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": 90112,
             },
-            ttnn.Topology.Linear,
+            ttnn.Topology.Ring,
         ),
         # (
         #    {
@@ -65,13 +65,13 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     ],
     indirect=["device_params"],
     ids=[
-        "fabric_linear",
+        "fabric_ring",
         # "fabric_manager_enabled_linear" # test removed due to issue 35320
     ],
 )
-@pytest.mark.parametrize("chunks_per_sync", [2])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [8])
+@pytest.mark.parametrize("chunks_per_sync", [1])
+@pytest.mark.parametrize("num_workers_per_link", [1])
+@pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_reduce_scatter_async(
     mesh_device,
@@ -89,9 +89,12 @@ def test_reduce_scatter_async(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
+    cluster_axis,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    if cluster_axis == 0:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,
@@ -191,7 +194,7 @@ def test_reduce_scatter_async_big_mesh(
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
@@ -222,15 +225,15 @@ def test_reduce_scatter_async_big_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 90112,
             },
-            ttnn.Topology.Linear,
+            ttnn.Topology.Ring,
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
 def test_reduce_scatter_async_quad_host_mesh(

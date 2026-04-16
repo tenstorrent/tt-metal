@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void kernel_main() {
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
     auto write_block = [&](uint32_t num_rows,
                            uint32_t start_row_id,
                            uint32_t start_column_id,
@@ -57,15 +57,25 @@ void kernel_main() {
         uint32_t start_column_id = get_arg_val<uint32_t>(3);
         uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(4);
         uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(5);
+        uint32_t sub_block_width_size = get_arg_val<uint32_t>(6);
+        uint32_t single_sub_block_size_row_arg = get_arg_val<uint32_t>(7);
 
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
             uint32_t this_block_num_rows = tile_height;
             if (start_row_id + tile_height > total_num_rows) {
                 this_block_num_rows = total_num_rows - start_row_id;
             }
-            if (this_block_num_rows > 0) {
-                write_block(
-                    this_block_num_rows, start_row_id, start_column_id, width_size, size_2d, single_block_size_row_arg);
+            for (uint32_t m = 0; m < width_size; m += sub_block_width_size) {
+                uint32_t start_column_id_u = start_column_id + m;
+                if (this_block_num_rows > 0) {
+                    write_block(
+                        this_block_num_rows,
+                        start_row_id,
+                        start_column_id_u,
+                        sub_block_width_size,
+                        size_2d,
+                        single_sub_block_size_row_arg);
+                }
             }
             start_row_id += tile_height;
         }

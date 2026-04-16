@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -69,10 +69,12 @@ struct DynamicInfo {
 struct StaticInfo {
     uint32_t version;
     uint16_t mesh_id;
+    uint16_t neighbor_mesh_id;
     uint8_t device_id;
+    uint8_t neighbor_device_id;
     uint8_t direction;
-    uint32_t fabric_config;
     DynamicStatistics supported_stats;
+    uint32_t fabric_config;
 };
 
 struct FabricTelemetryStaticOnly {

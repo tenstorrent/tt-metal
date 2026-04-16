@@ -1,4 +1,4 @@
-name: "[internal] Auto-retry post-commit"
+name: "[internal] Auto-retry sanity tests"
 
 on:
   workflow_dispatch:
@@ -13,12 +13,10 @@ on:
         type: number
   workflow_run:
     workflows:
-      - "All post-commit tests"
+      - "Sanity tests"
       - "(Single-card) Tests for new models"
-      # We push to main, but not part of APC. TGs are flaky so we are going
-      # to want to to
       - "zzz TG Quick tests"
-      - "apc nightly debug run"
+      - "Sanity tests nightly debug run"
     types:
       - completed
 
@@ -27,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
         shell: bash
@@ -83,8 +84,3 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/rerun-failed-jobs
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U014XCQ9CF8 # tt-rkim

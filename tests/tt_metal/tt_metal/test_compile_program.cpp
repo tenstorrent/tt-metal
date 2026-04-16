@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,14 +10,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -38,7 +36,7 @@ struct KernelCacheStatus {
 
 void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
-    detail::HashLookup::inst().clear();
+    jit_build_cache_clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
@@ -138,7 +136,7 @@ Program create_program(IDevice* /*device*/, const ProgramAttributes& program_att
         core,
         DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
-    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles)};
+    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles), /*use_dfbs=*/false};
 
     CreateKernel(
         program,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -184,7 +184,9 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         element_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    auto* input_buffer = input_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input tensor must be allocated on device for rotate operation");
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -207,19 +209,18 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             DUMMY_CB_ID,
             scalar_cb_index,
             DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
-            DUMMY_CB_ID,
             output_cb_index,
-            DUMMY_CB_ID,
             ONE_SCALAR_PER_CORE ? 1U : 0U,
             DUMMY_CB_ID,
             0U,
             0U,
-            0U,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
             1U,
             1U,
             1U,
@@ -227,14 +228,20 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             1U,
             1U,
             0U,
-        };
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            1U,
+            1U,
+            0U};
 
         return tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,
@@ -255,7 +262,9 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
     if (!any_sharded) {
         const uint32_t output_stick_size = input_channels * element_size;
         std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_stick_size, out_ntiles_c};
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+        auto* output_buffer = output_tensor.buffer();
+        TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
+        tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -342,6 +351,9 @@ void RotateDeviceOperation::BilinearProgramFactory::override_runtime_arguments(
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
+
+    TT_FATAL(src_buffer != nullptr, "Input tensor buffer must not be null in override_runtime_arguments");
+    TT_FATAL(dst_buffer != nullptr, "Output tensor buffer must not be null in override_runtime_arguments");
 
     const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);

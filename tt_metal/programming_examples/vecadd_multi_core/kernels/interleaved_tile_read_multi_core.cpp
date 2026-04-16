@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include <cstdint>
 
 void kernel_main() {
@@ -21,18 +21,18 @@ void kernel_main() {
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
-    // buffers. (Whis is most of the cases)
+    // buffers. (This is most of the cases)
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
-    // DPRINT_DATA0(DPRINT << "tile_size_bytes " <<  tile_size_bytes << ENDL());
+    // DEVICE_PRINT_DATA0("tile_size_bytes {}\n", tile_size_bytes);
     //  Create address generators for the input buffers. This is much faster
     //  then doing plain DRAM reads.
     //  Setting the page size to be tile_size_bytes works because we set it up
     //  explicitly in host code. This is usually a good idea as it makes coding
     //  easy. But may not be the most efficient way to do it in all cases.
     constexpr auto a_args = TensorAccessorArgs<2>();
-    const auto a = TensorAccessor(a_args, a_addr, tile_size_bytes);
+    const auto a = TensorAccessor(a_args, a_addr);
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, b_addr, tile_size_bytes);
+    const auto b = TensorAccessor(b_args, b_addr);
 
     // Calculate the range of tiles this core should process
     const uint32_t end_tile_id = start_tile_id + n_tiles;
@@ -56,9 +56,9 @@ void kernel_main() {
         // NOTE: Since circular buffers are backed by SRAM, we can actually
         // access them by casting the address to a pointer. This is not helpful
         // in most cases as the CPU is quite slow compared to the tensor/simd
-        // engines. But useful for debugging. uint16_t* ptr =
-        // (uint16_t*)cb_in0_addr; DPRINT << "cb_in0_addr: " << ptr << " " <<
-        // *ptr;
+        // engines. But useful for debugging.
+        // uint16_t* ptr = (uint16_t*)cb_in0_addr;
+        // DEVICE_PRINT("cb_in0_addr: {} {}\n", ptr, *ptr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
         cb_push_back(cb_in0, 1);

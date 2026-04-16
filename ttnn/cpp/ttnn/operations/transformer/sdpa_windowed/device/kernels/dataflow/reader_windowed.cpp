@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,16 @@ void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
                       true,
                       true)
                << ENDL();
+        DEVICE_PRINT(
+            "{}",
+            TileSlice(
+                cb_id,
+                tile_id,
+                SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
+                is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
+                true,
+                true));
     }
 }
 #endif
@@ -230,11 +240,10 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
-    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
-    const auto cu_window_seqlens_reader =
-        TensorAccessor(cu_window_seqlens_args, cu_window_seqlens_addr, cu_window_seqlens_tile_bytes);
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto cu_window_seqlens_reader = TensorAccessor(cu_window_seqlens_args, cu_window_seqlens_addr);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
@@ -273,7 +282,9 @@ void kernel_main() {
     cb_push_back(cb_cu_window_seqlens_in, 1);
     DPRINT_ARRAY_VIEW({
         DPRINT << "cu_window_seqlens_eles: " << cu_window_seqlens_eles << ENDL();
+        DEVICE_PRINT("cu_window_seqlens_eles: {}\n", cu_window_seqlens_eles);
         DPRINT << "cu_window_seqlens: " << ENDL();
+        DEVICE_PRINT("cu_window_seqlens:\n");
         cb_cu_window_seqlens_ptr.print();
     });
     // [INFO] all windows are diagonal
@@ -394,7 +405,7 @@ void kernel_main() {
                                 continue;
                             }
 
-                            // cases: the tile covers at least a window (potentailly multiple windows)
+                            // cases: the tile covers at least a window (potentially multiple windows)
                             uint32_t covered_window_q_start_idx, covered_window_k_start_idx, covered_window_q_end_idx,
                                 covered_window_k_end_idx;
                             do {
@@ -428,6 +439,7 @@ void kernel_main() {
 
                             DPRINT_ARRAY_VIEW({
                                 DPRINT << "  [COL ITER] WINDOW tile: in_mask_tile_id: " << in_mask_tile_id << ENDL();
+                                DEVICE_PRINT("  [COL ITER] WINDOW tile: in_mask_tile_id: {}\n", in_mask_tile_id);
                                 (dprint_cb_tile<true, true>(cb_mask_in, in_mask_tile_id));
                             });
                         }

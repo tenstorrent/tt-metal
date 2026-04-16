@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,10 +19,13 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "core/ttnn_all_includes.hpp"
 #include "serialization/serialization.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace {
 // Concept for trivially copyable types
@@ -362,28 +365,20 @@ TEST_F(FlatBufferFileTest, BFloat16TypeMismatchThrows) {
 
 namespace {
 template <typename T>
-std::vector<T> generate_random_vector(size_t size, uint32_t seed) {
-    std::vector<T> data(size);
-
+std::vector<T> make_serializer_fuzz_data(size_t size, uint32_t seed) {
     if constexpr (std::is_floating_point_v<T>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<T>(-10.0, 10.0); }, seed);
+        return ttml::test_utils::make_uniform_vector<T>(size, static_cast<T>(-10.0), static_cast<T>(10.0), seed);
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()},
-            []() { return std::uniform_real_distribution<float>(-10.0f, 10.0f); },
-            seed);
+        return ttml::test_utils::make_uniform_vector<bfloat16>(size, bfloat16{-10.0F}, bfloat16{10.0F}, seed);
     } else if constexpr (std::is_integral_v<T>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()},
-            []() {
-                return std::uniform_int_distribution<T>(
-                    std::numeric_limits<T>::min() / 2, std::numeric_limits<T>::max() / 2);
-            },
+        return ttml::test_utils::make_uniform_vector<T>(
+            size,
+            static_cast<T>(std::numeric_limits<T>::min() / 2),
+            static_cast<T>(std::numeric_limits<T>::max() / 2),
             seed);
+    } else {
+        static_assert(!std::is_same_v<T, T>, "Unsupported random vector type");
     }
-
-    return data;
 }
 
 // Create a random tensor with specified dtype, layout, and storage type
@@ -404,28 +399,28 @@ tt::tt_metal::Tensor create_random_tensor(
 
     switch (dtype) {
         case tt::tt_metal::DataType::BFLOAT16: {
-            auto data = generate_random_vector<bfloat16>(shape.volume(), seed);
+            auto data = make_serializer_fuzz_data<bfloat16>(shape.volume(), seed);
             tensor = ttml::core::from_vector<bfloat16, tt::tt_metal::DataType::BFLOAT16>(data, shape, device, layout);
             break;
         }
         case tt::tt_metal::DataType::FLOAT32: {
-            auto data = generate_random_vector<float>(shape.volume(), seed);
+            auto data = make_serializer_fuzz_data<float>(shape.volume(), seed);
             tensor = ttml::core::from_vector<float, tt::tt_metal::DataType::FLOAT32>(data, shape, device, layout);
             break;
         }
         case tt::tt_metal::DataType::UINT32: {
-            auto data = generate_random_vector<uint32_t>(shape.volume(), seed);
+            auto data = make_serializer_fuzz_data<uint32_t>(shape.volume(), seed);
             tensor = ttml::core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(data, shape, device, layout);
             break;
         }
         case tt::tt_metal::DataType::INT32: {
-            auto data = generate_random_vector<int32_t>(shape.volume(), seed);
+            auto data = make_serializer_fuzz_data<int32_t>(shape.volume(), seed);
             tensor = ttml::core::from_vector<int32_t, tt::tt_metal::DataType::INT32>(data, shape, device, layout);
             break;
         }
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::BFLOAT4_B: {
-            auto float_data = generate_random_vector<float>(shape.volume(), seed);
+            auto float_data = make_serializer_fuzz_data<float>(shape.volume(), seed);
             auto float_tensor = ttml::core::from_vector<float, tt::tt_metal::DataType::FLOAT32>(
                 float_data, shape, device, ttnn::Layout::TILE);
             auto cpu_float_tensor = float_tensor.cpu();
@@ -499,12 +494,6 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
 
     const TestParam& param = GetParam();
     const TensorTestCase& test_case = param;
-
-    // Skip FLOAT32 ROW_MAJOR tests (both DEVICE and HOST) - they fail with typecast errors
-    if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 && test_case.layout == tt::tt_metal::Layout::ROW_MAJOR) {
-        GTEST_SKIP() << "Skipping FLOAT32 ROW_MAJOR tensor serialization (API limitation: dump_tensor_flatbuffer "
-                        "requires TILE layout for FLOAT32)";
-    }
 
     const ttnn::Shape test_shape({1, 1, 32, 64});
 

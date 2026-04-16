@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,13 +22,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "print_tile_helpers.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -111,7 +110,8 @@ void RunTest(
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
     fixture->RunProgram(mesh_device, workload);
 
-    const auto* filename = "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
+    auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +
+        "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
     auto expected_output = expected_output_write + expected_output_read;
 
     EXPECT_TRUE(FilesMatchesString(filename, expected_output));

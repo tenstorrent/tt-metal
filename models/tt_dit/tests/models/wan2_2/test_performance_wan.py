@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,21 +17,31 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params, ring_params, ring_params_8k
+
+DEVICE_PARAMS = {"trace_region_size": 120000000}
 
 
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        expected_metrics = {
-            "encoder": 19.0,
-            "denoising": 800.0,
-            "vae": 9.0,
-            "total": 850.0,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.08,
+                "denoising": 240.0,
+                "vae": 5.0,
+                "total": 255.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.1,
+                "denoising": 800.0,
+                "vae": 9.0,
+                "total": 850.0,
+            }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 0.1,
             "denoising": 163.0,
             "vae": 18.2,
             "total": 192.0,
@@ -39,34 +49,35 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 185.0,
-                "vae": 8.0,
-                "total": 208.0,
+                "encoder": 0.1,
+                "denoising": 140.0,
+                "vae": 2.0,
+                "total": 142.1,
             }
         else:
             expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 440.0,
-                "vae": 8.0,
-                "total": 463.0,
+                "encoder": 0.1,
+                "denoising": 370.0,
+                "vae": 7.0,
+                "total": 375.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 27.0,
+            "encoder": 0.06,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
         }
-    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
-        assert is_blackhole(), "1x8 is only supported for blackhole"
+    elif tuple(mesh_device.shape) == (4, 32):
+        assert is_blackhole(), "4x32 is only supported for blackhole"
+        assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 23.0,
-            "denoising": 426.6,
-            "vae": 10.0,
-            "total": 449.3,
+            "encoder": 0.5,
+            "denoising": 75.0,
+            "vae": 5.0,
+            "total": 80.5,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
@@ -86,7 +97,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3)), "RGB")
+        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3), dtype=np.uint8), "RGB")
 
     return pipeline_cls, image_prompt, expected_metrics
 
@@ -94,20 +105,24 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # FSDP is needed for 2x2 with encoder now on device
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
-        "1x8sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -149,6 +164,7 @@ def test_pipeline_performance(
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
+    traced = mesh_shape == (4, 32)  # trace only for quadx32
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -196,25 +212,61 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        with torch.no_grad():
-            result = pipeline(
-                prompt=prompts[0],
-                image_prompt=image_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=2,  # Small number of steps to reduce test time.
-            )
+        if traced:
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts[0],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=2,  # Small number of steps to reduce test time.
+                    traced=traced,
+                )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
-    # Check output
+    # Performance measurement runs
+    logger.info("Running performance measurement iterations...")
+    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
+
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+
+        # Run pipeline with different prompt
+        prompt_idx = (i + 1) % len(prompts)
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                result = pipeline(
+                    prompt=prompts[prompt_idx],
+                    image_prompt=image_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                    seed=42,
+                    traced=traced,
+                )
+                ttnn.synchronize_device(mesh_device)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+        # Check output
+
+    pipeline.release_traces()
+
     if hasattr(result, "frames"):
         frames = result.frames
     else:
@@ -234,34 +286,14 @@ def test_pipeline_performance(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
+        if not is_ci_env:
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
-
-    # Performance measurement runs
-    logger.info("Running performance measurement iterations...")
-    num_perf_runs = 1  # For now use 1 prompt to minimize test time.
-
-    for i in range(num_perf_runs):
-        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
-
-        # Run pipeline with different prompt
-        prompt_idx = (i + 1) % len(prompts)
-        with benchmark_profiler("run", iteration=i):
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts[prompt_idx],
-                    image_prompt=image_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                )
-
-        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
@@ -322,8 +354,7 @@ def test_pipeline_performance(
                 )
         device_name_map = {
             (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (1, 8): "BH_LB",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(

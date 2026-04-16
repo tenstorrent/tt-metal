@@ -122,12 +122,21 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          set -eu
+          set -euo pipefail
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            uv pip install "$WHEEL_FILENAME"
+            WHEEL_FILES=(*.whl)
+            if [ ! -e "${WHEEL_FILES[0]}" ]; then
+              echo "::warning::No .whl file found in workspace. Skipping wheel installation."
+            elif [ ${#WHEEL_FILES[@]} -gt 1 ]; then
+              echo "::error::Multiple .whl files found in workspace: ${WHEEL_FILES[*]}. Please ensure only one wheel file is present."
+              exit 1
+            elif uv pip install "${WHEEL_FILES[0]}"; then
+              echo "INFO: Successfully installed wheel '${WHEEL_FILES[0]}' into venv"
+            else
+              echo "::warning::Failed to install wheel '${WHEEL_FILES[0]}'. Continuing anyway."
+            fi
           fi
 
           ${{ inputs.run_args }}

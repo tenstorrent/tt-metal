@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,17 +15,9 @@
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
-#ifdef TRISC_PACK
-    core_agnostic_main();
-#endif
-}
-}  // namespace NAMESPACE
+#include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include "debug/debug.h"
@@ -85,6 +77,10 @@ void core_agnostic_main() {
     if (*get_cb_tiles_received_ptr(CB_ID) != CHURN_TARGET) {
         DPRINT << "Not stopping at churn target as expected! Got: " << HEX() << *get_cb_tiles_received_ptr(CB_ID)
                << ". Expected: " << (std::uint32_t)CHURN_TARGET << ". Exiting" << ENDL();
+        DEVICE_PRINT(
+            "Not stopping at churn target as expected! Got: 0x{:x}, Expected: 0x{:x}. Exiting\n",
+            *get_cb_tiles_received_ptr(CB_ID),
+            (std::uint32_t)CHURN_TARGET);
         return;
     }
 
@@ -107,6 +103,8 @@ void core_agnostic_main() {
     if (*get_cb_tiles_acked_ptr(CB_ID) != expected_acked) {
         DPRINT << "Got: Acked: " << HEX() << *get_cb_tiles_acked_ptr(CB_ID)
                << ". Expected: " << (std::uint32_t)expected_acked << ENDL();
+        DEVICE_PRINT(
+            "Got: Acked: 0x{:x}, Expected: 0x{:x}\n", *get_cb_tiles_acked_ptr(CB_ID), (std::uint32_t)expected_acked);
         return;
     }
 
@@ -115,4 +113,14 @@ void core_agnostic_main() {
     // This would overwrite previous value if reserve returns prematurely.
     fill_step(WRITE_OVER_VALUE);
     cb_push_back(CB_ID, CB_STEP_SIZE);
+}
+
+void kernel_main() {
+#ifdef COMPILE_FOR_TRISC
+#ifdef TRISC_PACK
+    core_agnostic_main();
+#endif
+#else
+    core_agnostic_main();
+#endif
 }

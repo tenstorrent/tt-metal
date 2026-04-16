@@ -245,23 +245,71 @@ The `mesh_id` in rank bindings must match a `mesh_id` defined in your MGD. If yo
 
 ### 4.3 Running with tt-run
 
+Full launcher documentation: [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md). **`--rank-binding` and `--mesh-graph-descriptor` are mutually exclusive.**
+
+**Auto allocation (primary):** MGD + `--hosts`, or MGD + `--mock-cluster-rank-binding` (no `--hosts`). Rank bindings and rankfile are produced under `generated/ttrun/<cache_id>/` (Phase 1), then your program runs (Phase 2).
+
 ```bash
-tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
+tt-run --mesh-graph-descriptor path/to/mgd.textproto --hosts nodeA,nodeB [options] <program> [args...]
+tt-run --mesh-graph-descriptor path/to/mgd.textproto --mock-cluster-rank-binding mock_mapping.yaml [options] <program> [args...]
 ```
 
-Example:
+**Legacy:** pre-built rank bindings (multi-host usually passes a rankfile via `--mpi-args`).
 
 ```bash
+tt-run --rank-binding config.yaml [options] <program> [args...]
+```
+
+**Common Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--mesh-graph-descriptor` | **Auto allocation:** path to MGD (`.textproto`); do not combine with `--rank-binding` |
+| `--hosts` | **Auto allocation:** comma-separated host list (optional if `--mock-cluster-rank-binding` is set) |
+| `--mock-cluster-rank-binding` | Mock mapping YAML (`TT_METAL_MOCK_CLUSTER_DESC_PATH` per rank); works with **auto allocation** or **legacy** |
+| `--force-rediscovery` | **Auto allocation only:** always rerun Phase 1 / refresh cache |
+| `--rank-binding` | **Legacy:** path to rank binding YAML |
+| `--bare` | Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups |
+| `--tcp-interface <iface>` | Specify network interface for MPI TCP communication (e.g., `cnx1`). Uses btl_tcp_if_include instead of default exclusions |
+| `--mpi-args "<args>"` | Pass additional arguments to mpirun (quoted) |
+| `--dry-run` | Print the mpirun command without executing |
+| `-v, --verbose` | Show path resolution diagnostics, environment propagation, and MPI command details |
+
+**Examples:**
+
+```bash
+# Single-host execution (legacy rank binding file)
 tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml \
-       --mpi-args "--tag-output" \
        python3 my_multi_mesh_workload.py
+
+# Multi-host auto allocation (rankfile generated)
+tt-run --mesh-graph-descriptor my_mgd.textproto --hosts host1,host2 --tcp-interface cnx1 \
+       python3 my_workload.py
+
+# Multi-host legacy (explicit rankfile)
+tt-run --rank-binding config.yaml \
+       --mpi-args "--map-by rankfile:file=hosts_rankfile.txt" \
+       python3 my_workload.py
+
+# Multi-host legacy with explicit NIC
+tt-run --tcp-interface cnx1 --rank-binding config.yaml \
+       --mpi-args "--map-by rankfile:file=hosts_rankfile.txt" \
+       python3 my_workload.py
 ```
 
-`tt-run` spawns one process per rank and automatically manages per-rank environments:
-- `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts when multiple processes compile kernels simultaneously)
+**Default multihost MPI settings:** tt-run applies recommended MPI settings for multi-host clusters by default:
+- `--mca btl self,tcp`: Use TCP byte transfer layer for inter-node communication
+- `--mca btl_tcp_if_exclude docker0,lo`: Exclude Docker bridge and loopback interfaces
+
+If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to explicitly select the network interface. Use `--bare` to disable these settings for single-host or special setups.
+
+**Tagged Output:** `tt-run` always enables `--tag-output`, which prefixes each output line with rank information (e.g., `[1,0]<stdout>:`). This makes it easier to identify which rank produced each line of output when debugging distributed applications.
+
+**Automatic Environment Setup:** `tt-run` spawns one process per rank and automatically manages per-rank environments:
 - `TT_MESH_ID`: Mesh identifier from rank binding
 - `TT_MESH_GRAPH_DESC_PATH`: Path to topology descriptor
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
+- `TT_RUN_ORIGINAL_CWD`: Directory where tt-run was launched (for subprocess path resolution)
 
 Each process inherits these environment variables before your script starts. You don't need to parse them. The runtime reads them automatically when you open a device. This automatic environment setup prevents common pitfalls like cache conflicts where multiple processes try to write the same compiled kernel artifacts.
 
@@ -355,7 +403,7 @@ python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 - `4x2_multi_mesh_rank_binding.yaml` - 4 meshes (one per tray)
 - `4x4_multi_big_mesh_rank_binding.yaml` - 2 meshes with 2 ranks each (simulates multi-host)
 
-Use the generated YAML files with `tt-run` to test different partitioning schemes. For other systems (Closetbox, Blackhole), manually create rank binding files following the format shown in Section 5.2.
+Use the generated YAML files with `tt-run` (**legacy** `--rank-binding`) to test different partitioning schemes, or point **`tt-run --mesh-graph-descriptor`** at the same MGD with **`--hosts`** / **`--mock-cluster-rank-binding`** so Phase 1 generates bindings (see README_ttrun). For other systems (Closetbox, Blackhole), manually create rank binding files following the format shown in Section 5.2.
 
 ## 6. Fabric Configuration
 
@@ -512,12 +560,21 @@ Let's put everything together with a complete working example. This demonstrates
 **Key insight**: In Multi-Mesh SPMD, your code must be **rank-aware**. You use `ttnn.distributed_context_get_rank()` to determine which process you are, then branch accordingly. The sender creates a send socket, the receiver creates a recv socket. Both use the same `SocketConfig`, but internally the runtime configures them differently based on whether the rank matches `sender_rank` or `receiver_rank`.
 
 ```bash
-# Generate rank binding file (run once)
+# Generate rank binding file (run once) — optional if you use tt-run auto allocation with the same MGD
 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 
-# Run with tt-run on a Galaxy system
+# Run with tt-run on a Galaxy system (single-host, multi-process; legacy rank binding)
 tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml \
-       --mpi-args "--tag-output" \
+       python3 tests/ttnn/distributed/test_multi_mesh.py
+
+# Multi-host: auto allocation (example; use your MGD and host list)
+# tt-run --mesh-graph-descriptor path/from/rank_binding/mesh_graph_desc_path.textproto \
+#        --hosts host1,host2 --tcp-interface cnx1 \
+#        python3 tests/ttnn/distributed/test_multi_mesh.py
+
+# Multi-host legacy: explicit rankfile
+tt-run --tcp-interface cnx1 --rank-binding config.yaml \
+       --mpi-args "--map-by rankfile:file=hosts_rankfile.txt" \
        python3 tests/ttnn/distributed/test_multi_mesh.py
 ```
 
@@ -614,18 +671,20 @@ if __name__ == "__main__":
 | `RuntimeError: Distributed context not initialized` | Called `get_rank()` or `get_size()` before opening any device | Open a device first, or call `ttnn.init_distributed_context()` manually |
 | Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks. Mismatched socket configs will produce an error. |
 | `TT_VISIBLE_DEVICES` not working | Environment variable not set before device opens | Set `TT_VISIBLE_DEVICES` before importing `ttnn`, or use `env_overrides` in rank bindings |
-| Kernel compilation conflicts | Multiple processes sharing cache | Set unique `TT_METAL_CACHE` per process (done automatically by `tt-run`) |
 | Fabric initialization fails | Incorrect MGD, unstable hardware, or missing ethernet links | 1) Use `RELAXED` channel policy to allow fewer links than specified. 2) Verify ethernet links match MGD specification. 3) Run physical validation to ensure cluster is healthy: `python tests/tt_metal/distributed/test_physical_ethernet_link_ping.py` |
 
 ### Debugging Tips
 
 1. **Start with one rank**: Debug your workload with one process before scaling
-2. **Use `--tag-output`**: Pass `--mpi-args "--tag-output"` to `tt-run` to prefix output with rank numbers
-3. **Check device visibility**: Print `TT_VISIBLE_DEVICES` at script start to verify configuration
-4. **Barrier before close**: Always call `ttnn.distributed_context_barrier()` before closing devices
+2. **Tagged output is automatic**: `tt-run` always enables `--tag-output`, which prefixes output with rank numbers (e.g., `[0,0]<stdout>:`)
+3. **Use `--verbose`**: Shows path resolution diagnostics, environment variable propagation, and the full MPI command being executed
+4. **Check device visibility**: Print `TT_VISIBLE_DEVICES` at script start to verify configuration
+5. **Barrier before close**: Always call `ttnn.distributed_context_barrier()` before closing devices
+6. **Use `--dry-run`**: Preview the generated mpirun command without executing to verify configuration
 
 **Related Documentation**
 
+- [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md) - `tt-run` auto allocation, cache, legacy mode
 - [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) - Single-mesh programming model, tensor distribution, and collective operations
 - [TT-Distributed: Multi-Host Runtime](../TT-Distributed/MultiHostMeshRuntime.md) - Multi-host SPMD architecture for managing a single uniform logical mesh across multiple hosts
 - [TT-Fabric Architecture](../TT-Fabric/TT-Fabric-Architecture.md) - Network layer internals, routing, and deadlock avoidance

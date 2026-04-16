@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);        // input buffer address
     uint32_t target_address = get_arg_val<uint32_t>(runtime_args_counter++);       // target buffer address
@@ -28,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
-    constexpr uint32_t target_indexes_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
 
@@ -77,8 +77,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto input_args = TensorAccessorArgs<6>();
     constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row

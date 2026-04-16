@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 namespace tt::tt_metal {
 
-// Original types defined in data_types.hpp
+// Original types defined in kernel_types.hpp
 flatbuffer::DataMovementProcessor to_flatbuffer(DataMovementProcessor in) {
     switch (in) {
         case DataMovementProcessor::RISCV_0: return flatbuffer::DataMovementProcessor::RISCV_0;
@@ -85,6 +85,7 @@ flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input) {
         case tt::DataFormat::Tf32: return flatbuffer::DataFormat::Tf32;
         case tt::DataFormat::UInt8: return flatbuffer::DataFormat::UInt8;
         case tt::DataFormat::UInt16: return flatbuffer::DataFormat::UInt16;
+        case tt::DataFormat::Int16: return flatbuffer::DataFormat::Int16;
         case tt::DataFormat::Int32: return flatbuffer::DataFormat::Int32;
         case tt::DataFormat::UInt32: return flatbuffer::DataFormat::UInt32;
         case tt::DataFormat::RawUInt8: return flatbuffer::DataFormat::RawUInt8;

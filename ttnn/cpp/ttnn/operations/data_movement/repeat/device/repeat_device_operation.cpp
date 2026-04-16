@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,11 +42,6 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
         "Output tensor must have the same memory layout as input tensor");
-}
-
-void RepeatDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(

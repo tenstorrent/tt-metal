@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -13,7 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     generate_input_tensor,
     ttnn_layer_norm_sharded,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -316,4 +317,166 @@ def test_layer_norm_sharded_width_default_config(device, h, w, dtype):
     golden = ttnn.get_golden_function(ttnn.layer_norm)
     golden_output = golden(torch_input_tensor, weight=torch_weight[0], bias=torch_bias[0]).to(dtype)
 
-    assert_with_pcc(golden_output, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.9998,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.015,
+    )
+
+
+@pytest.mark.parametrize("grid_offset", [(1, 1), (2, 0), (0, 2)])
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("use_weight_bias", [True, False])
+def test_layer_norm_sharded_2d_with_grid_offset(device, grid_offset, use_welford, use_weight_bias):
+    """Test 2D reduce block-sharded layernorm with a non-zero grid origin."""
+
+    h, w = 64, 64  # 2x2 tiles
+    num_cores_h, num_cores_w = 2, 2
+    offset_x, offset_y = grid_offset
+
+    shard_height = h // num_cores_h  # 32
+    shard_width = w // num_cores_w  # 32
+    block_ht = shard_height // 32  # 1
+    block_wt = shard_width // 32  # 1
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(offset_x, offset_y),
+                    ttnn.CoreCoord(offset_x + num_cores_w - 1, offset_y + num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
+
+    torch_weight = None
+    torch_bias = None
+    tt_weight = None
+    tt_bias = None
+    if use_weight_bias:
+        torch_weight = generate_input_tensor(1, w, "random", torch.bfloat16)[0]
+        torch_bias = generate_input_tensor(1, w, "random_normal", torch.bfloat16)[0]
+        tt_weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ref_output = torch.nn.functional.layer_norm(torch_input, [w], weight=torch_weight, bias=torch_bias)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        tt_input,
+        use_welford,
+        block_ht=block_ht,
+        block_wt=block_wt,
+        subblock_w=1,
+        weight=tt_weight,
+        bias=tt_bias,
+    )
+
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+@pytest.mark.parametrize("grid_offset", [(2, 0), (1, 1)])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_welford):
+    """Test 1D mcast layernorm with a non-zero grid origin."""
+    torch.manual_seed(0)
+
+    h, w = 32, 128  # 1 tile row, 4 tile cols
+    num_cores_w = 4
+    offset_x, offset_y = grid_offset
+
+    shard_height = h  # full height → triggers mcast_1d (M == block_h)
+    shard_width = w // num_cores_w  # 32
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(offset_x, offset_y),
+                    ttnn.CoreCoord(offset_x + num_cores_w - 1, offset_y),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
+    ref_output = torch.nn.functional.layer_norm(torch_input, [w])
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        tt_input,
+        use_welford,
+        block_ht=1,
+        block_wt=1,
+        subblock_w=1,
+    )
+
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

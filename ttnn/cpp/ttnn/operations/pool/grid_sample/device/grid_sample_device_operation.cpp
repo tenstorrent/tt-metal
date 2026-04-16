@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -151,11 +151,6 @@ void GridSampleOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         max_tiles_per_reduction,
         input_tensor.padded_shape());
-}
-
-void GridSampleOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 TensorSpec GridSampleOperation::compute_output_specs(

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/math.hpp>
 #include <utility>
@@ -15,10 +16,6 @@
 
 namespace ttnn::operations::pool {
 
-Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return MultiCore{};
-}
-
 void validate_pool2d(
     const Tensor& input,
     const Pool2DType pool_type,
@@ -28,8 +25,8 @@ void validate_pool2d(
     const bool return_indices,
     const Layout& output_layout) {
     // check the input tensor
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Pool2D input must be on device!");
+    TT_FATAL(input.buffer() != nullptr, "Pool2D input must be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
@@ -42,10 +39,10 @@ void validate_pool2d(
         auto input_h = sliding_window_config.input_hw.first;
         auto input_w = sliding_window_config.input_hw.second;
         TT_FATAL(
-            input_h * input_w <= std::numeric_limits<uint16_t>::max(),
-            "Input HW {} will overflow uint16 indices max {}",
+            input_h * input_w <= std::numeric_limits<uint32_t>::max(),
+            "Input HW {} will overflow uint32 indices max {}",
             input_h * input_w,
-            std::numeric_limits<uint16_t>::max());
+            std::numeric_limits<uint32_t>::max());
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
@@ -66,7 +63,9 @@ void validate_pool2d(
     }
 }
 
-void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+// Validation is the same for both cache hit and miss
+static void validate_pool2d_operation(
+    const Pool2D::operation_attributes_t& op_attr, const Pool2D::tensor_args_t& tensor) {
     validate_pool2d(
         tensor.input_tensor_,
         op_attr.pool_type_,
@@ -77,15 +76,12 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
         op_attr.output_layout_);
 }
 
+void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+    validate_pool2d_operation(op_attr, tensor);
+}
+
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    validate_pool2d(
-        tensor.input_tensor_,
-        op_attr.pool_type_,
-        op_attr.sliding_window_config_,
-        op_attr.memory_config_,
-        op_attr.divisor_override_,
-        op_attr.return_indices_,
-        op_attr.output_layout_);
+    validate_pool2d_operation(op_attr, tensor);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
@@ -137,9 +133,12 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto output_spec_data = compute_output_specs(op_attr, tensor);
     if (op_attr.return_indices_) {
+        DataType index_dtype = get_index_data_type(
+            op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
+
         // the index output spec is the same as the input spec just with a different data type
         tt::tt_metal::TensorLayout output_layout_ind(
-            DataType::UINT16,
+            index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
             output_spec_data.tensor_layout().get_alignment());
@@ -151,17 +150,20 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
-tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto input_mem_config = tensor.input_tensor_.memory_config();
     auto in_dtype = tensor.input_tensor_.dtype();
     auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
         op_attr.pool_type_,
+        op_attr.output_layout_,
         op_attr.memory_config_,
+        op_attr.compute_kernel_config_,
         op_attr.divisor_override_,
         op_attr.count_include_pad_,
         op_attr.return_indices_,
+        op_attr.config_tensor_in_dram,
         input_mem_config,
         in_dtype,
         out_dtype);
@@ -173,31 +175,29 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     const auto& input_shape = input.logical_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
     uint32_t batch_size = sliding_window_config.batch_size;
-    uint32_t activation_h = sliding_window_config.input_hw.first;
-    uint32_t activation_w = sliding_window_config.input_hw.second;
-    uint32_t activation_c = input_shape[3];
-    uint32_t output_channels = input_shape[3];
+    uint32_t channels = input_shape[3];
 
     uint32_t filter_h = sliding_window_config.window_hw.first;
     uint32_t filter_w = sliding_window_config.window_hw.second;
-    uint32_t stride_h = sliding_window_config.stride_hw.first;
-    uint32_t stride_w = sliding_window_config.stride_hw.second;
-    uint32_t pad_h = sliding_window_config.get_pad_h();
-    uint32_t pad_w = sliding_window_config.get_pad_w();
 
-    // GS specific parameters
-    int num_cores = 9 * 12;
+    // Use sliding_window_config for output dimensions (accounts for dilation, ceil_mode, etc.)
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
+
+    // Use actual core count from the operation's core range
+    int num_cores = static_cast<int>(sliding_window_config.num_cores_nhw * sliding_window_config.num_cores_c);
+    if (num_cores == 0) {
+        num_cores = 1;
+    }
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
-    // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
-    int output_height = std::floor(((activation_h - filter_h + pad_h) / stride_h) + 1);
-    int output_width = std::floor(((activation_w - filter_w + pad_w) / stride_w) + 1);
+    // For pooling, each output element requires filter_h * filter_w operations per channel
+    // (comparisons for max pool, additions for avg pool), not cross-channel like convolution
+    int64_t num_ops_per_elem = filter_h * filter_w;
+    int64_t num_ops = num_ops_per_elem * output_height * output_width * channels * batch_size;
 
-    // Calculate number of mul/add / compare operations
-    int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element
-    int64_t num_mul_adds = num_mul_adds_per_elem * output_height * output_width * output_channels * batch_size;
-
-    int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
+    int ideal_dev_clock_cycles = std::ceil((float)num_ops / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input}, {outputs}, ideal_dev_clock_cycles);

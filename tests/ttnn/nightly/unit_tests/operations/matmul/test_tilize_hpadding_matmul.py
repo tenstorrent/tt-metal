@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+
+import ttnn
+from loguru import logger
+from tt_lib.utils import (
+    tilize_to_list,
+    tilize,
+    untilize,
+    _nearest_32,
+    pad_activation,
+)
+from models.common.utility_functions import skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+import torch
+
+
+def run_tilize_matmul_test(M, K, N, device):
+    a_shape = [1, 1, M, K]
+    a_shape_padded = [1, 1, _nearest_32(M), K]
+    b_shape = [1, 1, K, N]
+    output_shape = [1, 1, _nearest_32(M), N]
+    A = torch.randn(a_shape)
+    A_padded = pad_activation(A)
+    B = torch.randn(b_shape) - 0.95
+
+    a = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+    )
+    a_t = ttnn.tilize_with_zero_padding(a)
+    print("Shape of A_t - " + str(a_t.padded_shape))
+    b_t = ttnn.Tensor(
+        tilize_to_list(B),
+        b_shape,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+    print("Shape of B_t - " + str(b_t.padded_shape))
+    t2 = ttnn.matmul(a_t, b_t)
+    assert list(t2.padded_shape) == output_shape
+    tt_host_rm = t2.cpu().to_torch_with_padded_shape()
+    pyt_got_back = tt_host_rm.reshape(output_shape)
+    # TODO: add support to remove padding in untilize
+    pyt_got_back_rm = untilize(pyt_got_back)
+
+    ref_bmm = torch.matmul(A_padded.reshape(a_shape_padded[1:]), B.reshape(b_shape[1:]))
+    ref_bmm = ref_bmm.reshape(output_shape)
+    assert_numeric_metrics(
+        ref_bmm, pyt_got_back_rm, atol=0.002 * K, rtol=0.008 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )
+
+
+@skip_for_blackhole("Hanging on BH, see #12349")
+def test_tilize_hpadding_matmul(device):
+    run_tilize_matmul_test(4, 32 * 9, 32, device)

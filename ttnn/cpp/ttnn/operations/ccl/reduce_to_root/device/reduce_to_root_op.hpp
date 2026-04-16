@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::ccl {
@@ -83,16 +84,7 @@ struct ReduceToRootOp {
 
     using program_factory_t = std::variant<ReduceToRoot>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return ReduceToRoot{};
-    };
-
     static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        validate(operation_attributes, tensor_args);
-    };
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
         validate(operation_attributes, tensor_args);
     };

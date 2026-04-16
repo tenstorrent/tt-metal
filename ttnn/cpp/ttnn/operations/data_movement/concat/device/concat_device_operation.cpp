@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,11 +53,6 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     return ConcatS2IProgramFactory{};
 }
 
-void ConcatDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void ConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -66,7 +61,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
 
     const auto& first_input = input_tensors[0];
-    auto shape_first = first_input.padded_shape();
+    auto shape_first = first_input.logical_shape();
     TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -79,7 +74,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.layout() == first_input.layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.dtype() == first_input.dtype(), "All Tensors should have same dtypes.");
-        auto curr_shape = in_ref.padded_shape();
+        auto curr_shape = in_ref.logical_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[args.dim] = 0;
         // last tensor can support without any kernel changes
@@ -195,7 +190,7 @@ namespace {
 using namespace tt::constants;
 
 // Calculate maximum tensors per concat based on runtime args limit
-uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
+uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -207,8 +202,8 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //     - src0_cb_index: 1
     //     - num_input_tensors: 1
     //     - page_size_per_tensor[N]: N
-    //     - TensorAccessorArgs[N]: N (for interleaved buffers, 1 arg per tensor)
-    //   Total compile-time: 2 + 2N
+    //     - TensorAccessorArgs[N]: 2*N (args_config + aligned_page_size per tensor)
+    //   Total compile-time: 2 + 3N
     //
     //   Runtime args per core:
     //     - num_pages_per_core: 1
@@ -219,43 +214,29 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //     - page_id_per_tensor[N]: N
     //   Total runtime: 3 + 3N
     //
-    //   TOTAL ARGS VALIDATED: (2 + 2N) + (3 + 3N) = 5 + 5N
+    //   TOTAL ARGS: (2 + 3N) + (3 + 3N) = 5 + 6N
     //
-    // Empirical evidence (GitHub issue #22845):
-    //   - N=50: SUCCESS (5 + 250 = 255 ≤ 256) ✓
-    //   - N=55: FAILURE (5 + 275 = 280 > 256) ✗
-    //     Error: "278 unique+common runtime args ... Max allowable is 256"
+    // Theoretical limit: 5 + 6N <= 256  =>  N <= 41.8  =>  N_max = 41
     //
-    // Formula: 5 + 5N ≤ 256  =>  N ≤ 50.2  =>  N_max = 50
+    // Empirical testing shows N=47 works across all dispatch core types.
+    // We use 47 as a universal safe limit for interleaved concat.
     //
     // IMPORTANT: This limit does NOT depend on:
     //   - Tensor shape/size (only number of tensors matters)
-    //   - Hardware architecture (Wormhole vs Blackhole use same limit)
     //   - Tensor dtype (bfloat16 vs float32, etc.)
     //
     // It DOES depend on:
     //   - Memory layout (sharded vs interleaved - different kernels)
-    //   - Tensor layout (ROW_MAJOR vs TILE - affects TensorAccessorArgs)
 
     const bool is_sharded = input_tensors[0].is_sharded();
 
-    // Effective kernel limit (empirically determined to be 256, not 341)
-    constexpr uint32_t effective_args_limit = 256;
-
-    uint32_t base_args;
-    uint32_t args_per_tensor;
-
     if (is_sharded) {
         // Sharded concat uses different kernels with different arg patterns
-        // s2s_concat_multi_core (line 522-523 in concat_program_factory.cpp):
-        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors = 4
-        //   Runtime per kernel: 4 * num_input_tensors (per reader/writer)
-        //
-        // Using conservative estimate based on runtime args dominance
-        base_args = 4;
-        args_per_tensor = 4;
+        // Using conservative estimate
+        constexpr uint32_t effective_args_limit = 256;
+        constexpr uint32_t base_args = 4;
+        constexpr uint32_t args_per_tensor = 4;
 
-        // Safety margin: reduce by 10% for sharded due to potential additional overhead
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
         uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
@@ -263,30 +244,13 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 
         return std::max(2u, safe_max);
-    }  // Interleaved concat - precise calculation
-    // Formula: 5 + 5N ≤ 256
-    const Layout layout = input_tensors[0].layout();
-    base_args = 5;
-    args_per_tensor = 5;
+    }
 
-    uint32_t max_tensors = (effective_args_limit - base_args) / args_per_tensor;
+    // Universal safe limit for interleaved concat across all dispatch core types.
+    // See GitHub issue #42105 for details on why per-dispatch-type limits were unreliable.
+    constexpr uint32_t max_tensors = 47;
 
-    // Verify our calculation matches empirical evidence
-    uint32_t total_args_at_limit = base_args + (args_per_tensor * max_tensors);
-    log_debug(
-        tt::LogOp,
-        "ttnn.concat: Interleaved concat - max_tensors = {}, total_args = {} (limit = {}, layout = {}, dim = {})",
-        max_tensors,
-        total_args_at_limit,
-        effective_args_limit,
-        layout,
-        dim);
-    // Ensure variables are used even if log_debug is compiled out
-    (void)total_args_at_limit;
-    (void)layout;
-
-    // Should be exactly 50 based on our formula: (256 - 5) / 5 = 50.2 => 50
-    TT_FATAL(max_tensors == 50, "Unexpected max_tensors calculation: expected 50, got {}", max_tensors);
+    log_debug(tt::LogOp, "ttnn.concat: Interleaved concat - max_tensors = {}", max_tensors);
 
     return max_tensors;
 }
@@ -296,7 +260,8 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     const std::int64_t dim,
     const unsigned int groups,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
@@ -311,7 +276,9 @@ Tensor concat_impl(
     }
 
     // Handle large number of tensors by splitting into batches
-    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors, dim);
+    // calculate_max_tensors_per_concat returns the maximum safe value (47 for interleaved)
+    // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
+    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
@@ -337,7 +304,7 @@ Tensor concat_impl(
             }
 
             // Recursively concat this batch
-            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config);
+            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config, sub_core_grids);
             intermediate_results.push_back(std::move(batch_result));
 
             // Clear batch to release references
@@ -345,11 +312,11 @@ Tensor concat_impl(
         }
 
         // Final concat
-        return concat_impl(intermediate_results, dim, groups, output_mem_config);
+        return concat_impl(intermediate_results, dim, groups, output_mem_config, sub_core_grids);
     }
 
-    uint32_t ref_rank = input_tensors[0].padded_shape().rank();
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t ref_rank = input_tensors[0].logical_shape().rank();
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
         return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
@@ -386,11 +353,13 @@ Tensor concat_impl(
             // Already in target layout
             formatted_tensors.push_back(input_tensor);
         } else {
-            formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
+            // Pass sub_core_grids to to_layout if provided (now supported for INTERLEAVED tensors)
+            formatted_tensors.push_back(
+                ttnn::to_layout(input_tensor, target_layout, std::nullopt, std::nullopt, sub_core_grids));
         }
     }
 
-    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
+    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement
@@ -400,14 +369,16 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::prim::ConcatDeviceOperation;
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = normalized_dim,
             .groups = groups,
             .output_mem_config = output_mem_config,
+            .sub_core_grids = sub_core_grids,
         },
         OperationType::tensor_args_t{.input_tensors = input_tensors});
 }

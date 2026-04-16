@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -108,7 +108,8 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
-void write_to_device_buffer(
+// Returns true if pinned memory was used for the transfer
+bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,

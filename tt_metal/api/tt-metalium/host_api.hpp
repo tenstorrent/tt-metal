@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,6 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-struct Event;
 class Buffer;
 class GlobalSemaphore;
 class CoreRange;
@@ -149,43 +148,43 @@ Program CreateProgram();
 
 // clang-format off
 /**
- * Creates a data movement kernel with no compile time arguments and adds it to the program.
+ * Creates a data movement or compute kernel with the given config and adds it to the program.
  *
  * Return value: Kernel ID (uintptr_t)
  *
- * | Argument     | Description                                                                                                                                 | Type                                                     | Valid Range | Required |
- * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program      | The program to which this kernel will be added to                                                                                           | Program &                                                |             | Yes      |
- * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME/TT_METAL_KERNEL_PATH.    | const std::string &                                      |             | Yes      |
- * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on        | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config       | Config for data movement or compute kernel                                                                                                  | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ * | Argument     | Description                                                                                                                                 | Type                                                                     | Valid Range | Required |
+ * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------|----------|
+ * | program      | The program to which this kernel will be added to                                                                                           | Program &                                                                |             | Yes      |
+ * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME/TT_METAL_KERNEL_PATH.    | const std::string &                                                      |             | Yes      |
+ * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on        | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                 |             | Yes      |
+ * | config       | Config for data movement or compute kernel                                                                                                  | const std::variant<DataMovementConfig, ComputeConfig> &                  |             | Yes      |
  */
 // clang-format on
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+    const std::variant<DataMovementConfig, ComputeConfig>& config);
 
 // clang-format off
 /**
- * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
+ * Creates a data movement or compute kernel from source code with the given config and adds it to the program.
  *
  * Return value: Kernel ID (uintptr_t)
  *
- * | Argument           | Description                                                                                                                          | Type                                                     | Valid Range | Required |
- * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
- * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                      |             | Yes      |
- * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ * | Argument           | Description                                                                                                                          | Type                                                                    | Valid Range | Required |
+ * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------|----------|
+ * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                               |             | Yes      |
+ * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                                     |             | Yes      |
+ * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                |             | Yes      |
+ * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig, ComputeConfig> &                 |             | Yes      |
  */
 // clang-format on
 KernelHandle CreateKernelFromString(
     Program& program,
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+    const std::variant<DataMovementConfig, ComputeConfig>& config);
 
 // clang-format off
 // ==================================================
@@ -274,6 +273,8 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
  */
 // clang-format on
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
 
 // clang-format off
 /**
@@ -301,16 +302,12 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
- * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
+ * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | No       |
  */
 // clang-format on
 uint32_t CreateSemaphore(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
-    uint32_t initial_value,
-    CoreType core_type = CoreType::WORKER);
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value);
 
 // clang-format off
 /**
@@ -322,7 +319,7 @@ uint32_t CreateSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
@@ -340,7 +337,7 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
- * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
@@ -617,17 +614,6 @@ void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-// clang-format off
-/**
- * Host will query an event for completion status on device.
- * Return value: bool.  True if event is completed, false otherwise.
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**

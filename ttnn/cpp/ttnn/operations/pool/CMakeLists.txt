@@ -1,7 +1,7 @@
 add_library(ttnn_op_pool ${LIB_TYPE})
 add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 
-target_precompile_headers(ttnn_op_pool REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_pool TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
 set_target_properties(
@@ -12,7 +12,14 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*
+    generic/device/kernels/*
+    grid_sample/device/kernels/*
+    rotate/device/kernels/*
+    upsample/device/kernels/*
+)
 
 target_sources(
     ttnn_op_pool

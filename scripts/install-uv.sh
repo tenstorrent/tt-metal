@@ -267,8 +267,25 @@ install_uv_standalone() {
         return 1
     fi
 
-    # Execute the verified installer
-    sh "$temp_script"
+    # Set environment variables based on install mode
+    local env_vars=()
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        # System install: put uv in /usr/local/bin, don't modify shell profiles
+        env_vars=(
+            "UV_INSTALL_DIR=/usr/local/bin"
+            "UV_NO_MODIFY_PATH=1"
+        )
+        echo "System installation:"
+        echo "  UV_INSTALL_DIR=/usr/local/bin"
+        echo "  UV_PYTHON_INSTALL_DIR=/usr/local/share/uv (set in environment)"
+    fi
+
+    # Execute the verified installer with appropriate environment
+    if [[ ${#env_vars[@]} -gt 0 ]]; then
+        env "${env_vars[@]}" sh "$temp_script"
+    else
+        sh "$temp_script"
+    fi
     local install_result=$?
 
     rm -f "$temp_script"
@@ -279,13 +296,16 @@ install_uv_standalone() {
         return 1
     fi
 
-    # Standalone installer puts uv in ~/.local/bin (or ~/.cargo/bin for older versions)
-    ensure_local_bin_in_path
+    # For user installs, ensure PATH includes installation directory
+    if [[ "$INSTALL_MODE" == "user" ]]; then
+        # Standalone installer puts uv in ~/.local/bin (or ~/.cargo/bin for older versions)
+        ensure_local_bin_in_path
 
-    # Also check ~/.cargo/bin for older installer versions
-    local cargo_bin="${HOME}/.cargo/bin"
-    if [[ -d "$cargo_bin" ]] && [[ ":$PATH:" != *":$cargo_bin:"* ]]; then
-        export PATH="$cargo_bin:$PATH"
+        # Also check ~/.cargo/bin for older installer versions
+        local cargo_bin="${HOME}/.cargo/bin"
+        if [[ -d "$cargo_bin" ]] && [[ ":$PATH:" != *":$cargo_bin:"* ]]; then
+            export PATH="$cargo_bin:$PATH"
+        fi
     fi
 }
 
@@ -559,6 +579,11 @@ fi
 # Final verification
 if command -v uv &>/dev/null; then
     echo "uv installed successfully: $(uv --version)"
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+        echo ""
+        echo "For system installs, set UV_PYTHON_INSTALL_DIR in your environment:"
+        echo "  export UV_PYTHON_INSTALL_DIR=/usr/local/share/uv"
+    fi
 else
     echo "Error: uv not found after installation" >&2
     echo "This may indicate:" >&2

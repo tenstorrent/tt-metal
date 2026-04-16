@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,16 +18,14 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "fmt/base.h"
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -292,7 +290,7 @@ static DramBuffer prepare_reader(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {DEFAULT_INPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
@@ -324,7 +322,7 @@ static DramBuffer prepare_writer(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {DEFAULT_OUTPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(

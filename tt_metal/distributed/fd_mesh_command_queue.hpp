@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,8 @@
 namespace tt::tt_metal::tt_dispatch_tests::Common {
 class FDMeshCQTestAccessor;
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common
+
+#include "trace/trace_node.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -53,29 +55,6 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    // Trace capture utility functions
-    // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
-    // inside the appropriate trace staging vector (corresponding to the specified subgrid)
-    void capture_program_trace_on_subgrid(
-        const MeshCoordinateRange& sub_grid,
-        ProgramCommandSequence& program_cmd_seq,
-        bool stall_first,
-        bool stall_before_program,
-        uint32_t program_runtime_id);
-    // Captures a dispatch command to reset the expected number of workers. Used when the worker
-    // counter on the host overflows.
-    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // When running trace, the dispatch commands responsible for forwarding go signals must be
-    // captured on these subgrids.
-    void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_grids_set,
-        const SubDeviceId& sub_device_id,
-        uint32_t expected_num_workers_completed,
-        bool mcast_go_signals,
-        bool unicast_go_signals,
-        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -129,11 +108,18 @@ private:
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
+    struct MeshTraceNode {
+        std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        bool multicast_go_signals{false};
+        bool unicast_go_signals{false};
+        SubDeviceId sub_device_id;
+    };
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
-    std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
+    std::vector<MeshTraceNode> trace_nodes_;
 
     CoreCoord dispatch_core_;
     const CoreType dispatch_core_type_;
@@ -198,8 +184,11 @@ private:
     // so the main thread can handle the exception
     std::atomic<bool> thread_exception_state_ = false;
 
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
@@ -227,7 +216,8 @@ public:
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
         std::shared_ptr<CQSharedState>& cq_shared_state,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context);
 
     ~FDMeshCommandQueue() override;
 

@@ -19,6 +19,15 @@ on:
       build-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
 
 jobs:
   umd-unit-tests:
@@ -54,6 +63,8 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

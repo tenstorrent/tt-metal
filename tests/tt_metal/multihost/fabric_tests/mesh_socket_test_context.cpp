@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
+#include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
 #include <algorithm>
@@ -24,8 +25,9 @@ MeshSocketTestContext::~MeshSocketTestContext() { cleanup(); }
 
 void MeshSocketTestContext::initialize() {
     log_info(tt::LogTest, "Initializing MeshSocketTestContext...");
-    const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
-    local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
+    const char* mesh_id_env = std::getenv("TT_MESH_ID");
+    TT_FATAL(mesh_id_env != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
+    local_mesh_id_ = MeshId{std::stoi(mesh_id_env)};
     if (config_.physical_mesh_config.has_value()) {
         initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
     }

@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_rmsnorm_bcast_scalar_dest_reuse_api.h"
 #endif

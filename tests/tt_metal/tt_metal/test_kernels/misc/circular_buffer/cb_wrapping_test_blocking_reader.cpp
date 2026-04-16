@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,17 +15,9 @@
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
-#ifdef TRISC_UNPACK
-    core_agnostic_main();
-#endif
-}
-}  // namespace NAMESPACE
+#include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include <cstdint>
@@ -77,12 +69,24 @@ void core_agnostic_main() {
     }
 
     DPRINT << "Reader Wait" << ENDL();
+    DEVICE_PRINT("Reader Wait\n");
     riscv_wait(NUM_WAIT_CYCLES);
     DPRINT << "Reader Wait Done" << ENDL();
+    DEVICE_PRINT("Reader Wait Done\n");
 
     for (auto i = 0ul; i < 3; i++) {
         cb.wait_front(CB_STEP_SIZE);
         report_page(i);
         cb.pop_front(CB_STEP_SIZE);
     }
+}
+
+void kernel_main() {
+#ifdef COMPILE_FOR_TRISC
+#ifdef TRISC_UNPACK
+    core_agnostic_main();
+#endif
+#else
+    core_agnostic_main();
+#endif
 }

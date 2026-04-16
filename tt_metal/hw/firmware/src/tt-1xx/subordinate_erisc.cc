@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,12 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
+#include "internal/hw_thread.h"
 #include "core_config.h"
 
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 // clang-format on
 
@@ -70,8 +72,8 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -128,7 +130,7 @@ int main() {
     }
 #endif
 
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
     while (1) {
         WAYPOINT("W");
         while (*subordinate_erisc_run != RUN_SYNC_MSG_GO) {
@@ -136,9 +138,10 @@ int main() {
         }
         DeviceZoneScopedMainN(PROFILER_NAME);
 
-        flush_erisc_icache();
+        manually_flush_icache();
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, k_ProgrammableCoreType, PROCESSOR_INDEX);
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, k_ProgrammableCoreType, internal_::get_hw_thread_idx());
         my_relative_x_ =
             my_logical_x_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_x;
         my_relative_y_ =
@@ -146,8 +149,8 @@ int main() {
 
         WAYPOINT("R");
         uint32_t kernel_lma =
-            kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[PROCESSOR_INDEX];
+            kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr]
+                                     .kernel_config.kernel_text_offset[internal_::get_hw_thread_idx()];
 #if defined(COMPILE_FOR_AERISC)
         // Stack usage is not implemented yet for subordinate active eth (active_erisck.cc)
         reinterpret_cast<void (*)()>(kernel_lma)();
@@ -156,6 +159,7 @@ int main() {
         record_stack_usage(stack_free);
 #endif
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_subordinate_erisc_completion();
     }

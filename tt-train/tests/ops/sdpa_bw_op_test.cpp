@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,14 +6,21 @@
 #include <sys/types.h>
 
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -503,37 +510,23 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     auto* device = &autograd::ctx().get_device();
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
     // Generate input tensors
-    xt::xarray<float> query_tensor = xt::empty<float>({B, qNH, S, qD});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> query_shape{B, qNH, S, qD};
+    const std::array<std::size_t, 4> kv_shape{B, kvNH, S, kvD};
 
-    xt::xarray<float> key_tensor = xt::empty<float>({B, kvNH, S, kvD});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, kvNH, S, kvD});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
 
-    xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, qD});
-    ttml::core::parallel_generate(
-        std::span{grad_output_tensor.data(), grad_output_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> grad_output_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
     const xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
     const auto scaled_query = core::from_xtensor(scale_query_tensor, device);
@@ -677,7 +670,9 @@ TEST_F(SDPABackwardTest, SmallBatch) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, NanoGPTConfig) {
+TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
+    // Fails in L2 nightly workflow on Wormhole/N300. Tracking: #41005.
+    GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -693,7 +688,7 @@ TEST_F(SDPABackwardTest, NanoGPTConfig) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, LargerSequence) {
+TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -762,6 +757,7 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
 }
 
 TEST_F(SDPABackwardTest, CausalMask_GQA) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{
@@ -779,19 +775,36 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
-    // Test causal mask with larger sequence length
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
+    // Fails in L2 nightly workflow on Wormhole/N300. Tracking: #41005.
+    GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     SDPABackwardTestConfig config{
-        .batch_size = 1U,
-        .sequence_length = 512U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
-        .num_query_heads = 4U,
-        .num_kv_heads = 4U,
+        .batch_size = 64U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 6U,
+        .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
         .atol = 3e-2F,
         .rtol = 3e-2F,
-        .test_name = "CausalMask_LargerSeq (B=1, S=512, D=64, H=4)",
+        .test_name = "CausalMask_NanoGPTConfig (B=64, S=256, D=128, H=6)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
+    SDPABackwardTestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 8U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
 }

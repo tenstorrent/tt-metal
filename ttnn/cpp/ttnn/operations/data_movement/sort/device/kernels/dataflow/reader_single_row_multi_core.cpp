@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,15 +31,12 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr, tile_size_bytes);
+    const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Index tensor config
-    const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
-    const auto index_tensor_addr_gen =
-        TensorAccessor(index_tensor_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
-    // Sempahore setup
+    // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinator_to_cores_semaphore_id);
     noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore (Valid - we wait for 0)

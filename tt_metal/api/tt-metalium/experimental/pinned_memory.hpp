@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/device_types.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -132,6 +132,12 @@ public:
      * before the memory can be safely accessed via lock().
      */
     void add_barrier_event(const distributed::MeshEvent& event);
+
+    /**
+     * @brief Check if locking the pinned memory may block
+     * @return True if the lock may block, false otherwise
+     */
+    bool lock_may_block() const;
 
     /**
      * @brief Lock the pinned memory for host access

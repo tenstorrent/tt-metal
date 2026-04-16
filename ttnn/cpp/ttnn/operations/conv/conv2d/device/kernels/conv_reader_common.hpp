@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -232,7 +232,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             uint16_t second_row_width = leftover_row_width, third_row_width = 0;
             if constexpr (!output_image_width_full_tile) {
                 // If the output image width is not a multiple of the tile width, the first 'image width' might be split
-                // between three rows since we padd image width to tile size; otherwise, it is always split between
+                // between three rows since we pad image width to tile size; otherwise, it is always split between
                 // maximum two rows
                 const uint16_t interval_width = end_ind - start_ind + 1;
                 if (leftover_row_width > interval_width) {
@@ -341,7 +341,7 @@ void load_config_tensor_if_in_dram(uint32_t core_index) {
     constexpr uint32_t config_dram_addr = get_compile_time_arg_val(dram_addr_index);
     constexpr uint32_t config_page_size = get_compile_time_arg_val(page_size_index);
     const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
+    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
     uint64_t src_noc_addr = get_noc_addr(core_index, config_accessor);
 
     noc_async_read(src_noc_addr, get_write_ptr(cb_reader_index), config_page_size);
@@ -434,9 +434,6 @@ FORCE_INLINE void read_activation_data(
                         conv_act_c_read_bytes,
                         coalesced_read_bytes,
                         stride_h_bytes);
-                    if constexpr (act_block_w_extra_align_bytes) {
-                        l1_write_addr_act += act_block_w_extra_align_bytes;
-                    }
                 } else {
                     read_dilated_channels<weight_size_h, weight_size_w>(
                         l1_write_addr_act,
@@ -445,6 +442,9 @@ FORCE_INLINE void read_activation_data(
                         conv_act_c_read_bytes,
                         stride_h_bytes,
                         stride_w_bytes);
+                }
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
                 }
             }
         }

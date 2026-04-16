@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -56,7 +56,7 @@ def is_tracing_enabled():
 TORCH_NN_MODULE_CALL = torch.nn.Module.__call__
 
 
-# The following functions are overriden to capture input tensors
+# The following functions are overridden to capture input tensors
 TORCH_CREATION_OPERATION_NAMES = [
     "as_tensor",
     "from_numpy",

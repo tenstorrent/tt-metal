@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -22,8 +22,6 @@ struct RepeatDeviceOperation {
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

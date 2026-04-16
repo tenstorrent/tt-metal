@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
     constexpr auto output_args = TensorAccessorArgs<6>();
 
-    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
@@ -66,7 +66,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
 
-        const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+        const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
         enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
         noc_async_write_barrier();
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ml_dtypes
@@ -48,18 +48,14 @@ def do_test_numpy_autograd_conversion(
     if autograd_type:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, layout=layout, new_type=autograd_type
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
         else:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, new_type=autograd_type
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -67,9 +63,7 @@ def do_test_numpy_autograd_conversion(
     else:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, layout=layout
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -83,18 +77,20 @@ def do_test_numpy_autograd_conversion(
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
 
     if autograd_tensor:
-        assert (autograd_tensor.to_numpy() == numpy_tensor).all()
-        assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
-        for new_type in supported_autograd_types_except(autograd_type):
-            try:
-                assert (
-                    autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor
-                ).all()
-            except TypeError as e:
-                type_error = handle_error(e, expect_type_exception, type_error)
-            except RuntimeError as e:
-                runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
-    # sanity check: the occurence of an exception implies we were expecting it
+        try:
+            assert (autograd_tensor.to_numpy() == numpy_tensor).all()
+            assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
+        except RuntimeError as e:
+            runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
+        else:
+            for new_type in supported_autograd_types_except(autograd_type):
+                try:
+                    assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
+                except TypeError as e:
+                    type_error = handle_error(e, expect_type_exception, type_error)
+                except RuntimeError as e:
+                    runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
+    # sanity check: the occurrence of an exception implies we were expecting it
     assert (not type_error) or (type_error and expect_type_exception)
     assert (not runtime_error) or (runtime_error and expect_runtime_exception)
 
@@ -290,6 +286,38 @@ typecast_issue_cases = [
         ttnn.DataType.FLOAT32,
         ttnn.Layout.ROW_MAJOR,
     ),
+    # Row-major typecast requires padded_shape()[-1] to be a multiple of 32.
+    # default_tensor_data is 3x3, so these are expected runtime failures.
+    (
+        default_tensor_data,
+        np.float32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.int32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttnn.DataType.BFLOAT16,
+        ttnn.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        None,
+        ttnn.Layout.ROW_MAJOR,
+    ),
 ]
 
 """TODO: multiplication cases which get the wrong answer"""
@@ -462,9 +490,7 @@ def test_numpy_autograd_conversion(tensor_data, numpy_type, autograd_type, layou
     "tensor_data, numpy_type, autograd_type, layout",
     unsupported_format_cases,
 )
-def test_numpy_autograd_conversion_expecting_type_error(
-    tensor_data, numpy_type, autograd_type, layout
-):
+def test_numpy_autograd_conversion_expecting_type_error(tensor_data, numpy_type, autograd_type, layout):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -479,9 +505,7 @@ def test_numpy_autograd_conversion_expecting_type_error(
     "tensor_data, numpy_type, autograd_type, layout",
     typecast_issue_cases,
 )
-def test_numpy_autograd_conversion_expecting_runtime_error(
-    tensor_data, numpy_type, autograd_type, layout
-):
+def test_numpy_autograd_conversion_expecting_runtime_error(tensor_data, numpy_type, autograd_type, layout):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -497,18 +521,12 @@ def make_tensors(tensor_data, numpy_type, autograd_type, layout):
 
     if autograd_type:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, layout=layout, new_type=autograd_type
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
         else:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, new_type=autograd_type
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
     else:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, layout=layout
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
         else:
             autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor)
     return (numpy_tensor, autograd_tensor)
@@ -526,9 +544,7 @@ def test_binary_operators_add(tensor_data, numpy_type, autograd_type, layout):
     if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
         pytest.skip("Known typecast issue")
 
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     sum = autograd_tensor + autograd_tensor
     assert (sum.to_numpy() == (numpy_tensor + numpy_tensor)).all()
@@ -546,9 +562,7 @@ def test_binary_operators_diff(tensor_data, numpy_type, autograd_type, layout):
     if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
         pytest.skip("Known typecast issue")
 
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     diff = autograd_tensor - autograd_tensor
 
@@ -570,9 +584,7 @@ def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
     if (tensor_data, numpy_type, autograd_type, layout) in multiplication_issue_cases:
         pytest.skip("Known multiplication issue")
 
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     mul = autograd_tensor * autograd_tensor
     mul_float = autograd_tensor * 10.0
@@ -596,9 +608,7 @@ def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
     if (tensor_data, numpy_type, autograd_type, layout) in division_issue_cases:
         pytest.skip("Known division issue")
 
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     div = autograd_tensor.__div__(autograd_tensor)
 

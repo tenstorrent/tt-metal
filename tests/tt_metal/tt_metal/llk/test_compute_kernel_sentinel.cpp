@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -104,6 +104,7 @@ bool single_core_compute_kernel_sentinel(
     defines["FORCE_WATCHER_OFF"] = "1";
     defines["LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
     defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED"] = "1";
+    defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_DEFAULT_INJECTION"] = "1";
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 

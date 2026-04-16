@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,16 +8,16 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecutePrefixScan::invoke(
+ttnn::Tensor prefix_scan(
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
+    const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     return ttnn::prim::prefix_scan(a, bx, h_prev, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental

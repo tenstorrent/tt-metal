@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@ def run_device_perf(
     op_name="",
     has_signposts=False,
     device_analysis_types=["device_kernel_duration"],
+    op_support_count=None,
 ) -> dict:
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
@@ -41,8 +42,12 @@ def run_device_perf(
         results[f"MIN {d_col}"] = float("inf")
         results[f"MAX {d_col}"] = -float("inf")
 
+    profiler_kwargs = {}
+    if op_support_count is not None:
+        profiler_kwargs["op_support_count"] = op_support_count
+
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir, device_analysis_types)
+        run_device_profiler(command, subdir, device_analysis_types, **profiler_kwargs)
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
@@ -385,6 +390,7 @@ def run_model_device_perf_test(
     batch_size: int = 1,
     margin: float = 0.015,
     comments: str = "",
+    op_support_count: int = None,
 ):
     """
     Run device performance test for a model and validate results against expected performance.
@@ -402,6 +408,7 @@ def run_model_device_perf_test(
         batch_size (int, optional): Batch size for the model. Defaults to 1.
         margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
         comments (str, optional): Additional comments or settings description for the report. Defaults to "".
+        op_support_count (int, optional): Number of operations to support. Defaults to None.
 
     Raises:
         AssertionError: If the measured performance is outside the acceptable margin from expected performance.
@@ -410,7 +417,12 @@ def run_model_device_perf_test(
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+        command,
+        subdir=subdir,
+        num_iterations=num_iterations,
+        cols=cols,
+        batch_size=batch_size,
+        op_support_count=op_support_count,
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
     expected_results = check_device_perf(

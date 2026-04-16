@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,8 +32,9 @@ from models.tt_dit.utils.check import assert_quality
         "large",
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2)], ids=["1x4", "2x2"])
+@pytest.mark.parametrize(
+    "mesh_device,submesh_shape", [[(2, 4), (1, 4)], [(4, 8), (1, 8)]], ids=["t3k", "glx"], indirect=["mesh_device"]
+)
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -104,9 +105,6 @@ def test_t5_encoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # See weight state dict key names
-    # logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
-
     # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
@@ -126,7 +124,7 @@ def test_t5_encoder(
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_output = tt_encoder(tt_prompt, encoder_submesh)
+    tt_output = tt_encoder(tt_prompt)
 
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
-
-MorehNllLossUnreducedBackwardDeviceOperation::program_factory_t
-MorehNllLossUnreducedBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Factory{};
-}
-
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
@@ -79,11 +72,6 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_mis
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
 MorehNllLossUnreducedBackwardDeviceOperation::spec_return_value_t
 MorehNllLossUnreducedBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
@@ -124,7 +112,7 @@ ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreduce
     auto operation_attributes = OperationType::operation_attributes_t{
         ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : static_cast<uint32_t>(ignore_index),
         memory_config.value_or(target_tensor.memory_config()),
-        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

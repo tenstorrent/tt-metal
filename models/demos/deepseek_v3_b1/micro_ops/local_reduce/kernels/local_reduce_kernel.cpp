@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Local Reduce unified kernel
@@ -48,6 +48,7 @@ void kernel_main() {
         .in_cb = in_cb,
         .out_cb = out_cb,
     };
+    deepseek_compute_kernel_init();
 #endif
 
     deepseek_b1_ops::LocalReduce::Op<LocalReduceCTArgs, Core::is_active_core> local_reduce;

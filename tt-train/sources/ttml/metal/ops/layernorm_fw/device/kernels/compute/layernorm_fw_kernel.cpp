@@ -1,20 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/mask.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-
-namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -43,8 +41,6 @@ constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;           // broadcast
 constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalized x_hat
 
 constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
-
-constexpr uint32_t onetile = 1;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -491,7 +487,7 @@ inline void copy_rstd_to_output() {
     }
 }
 
-inline void MAIN {
+void kernel_main() {
     // Wait for constant inputs
     cb_wait_front(cb_scaler_idx, onetile);
     cb_wait_front(cb_eps_idx, onetile);
@@ -549,5 +545,3 @@ inline void MAIN {
         cb_pop_front(cb_mask_w_idx, onetile);
     }
 }
-
-}  // namespace NAMESPACE

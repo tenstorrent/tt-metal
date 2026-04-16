@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,11 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
-MorehDotOperation::program_factory_t MorehDotOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // For now we litteraly don't care and return a single factory. Whatever
-    return SingleCore{};
-}
 
 void MorehDotOperation::validate(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
@@ -40,11 +35,6 @@ void MorehDotOperation::validate(
 }
 
 void MorehDotOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-}
-
-void MorehDotOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 }
@@ -83,7 +73,7 @@ ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t mor
     auto operation_attributes = OperationType::operation_attributes_t{
         dtype.value_or(input_a.dtype()),
         memory_config.value_or(input_a.memory_config()),
-        init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input_a, input_b, output};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

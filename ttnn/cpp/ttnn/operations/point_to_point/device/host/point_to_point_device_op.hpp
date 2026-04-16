@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 namespace operations::point_to_point {
@@ -77,21 +78,9 @@ struct PointToPointOp {
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return SendReceive{};
-    };
-
     // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        validate(operation_attributes, tensor_args);
-    };
-
-    // Probably the same as on cache miss
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        ;
         validate(operation_attributes, tensor_args);
     };
 

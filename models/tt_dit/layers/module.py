@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,7 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
+        self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -133,9 +134,18 @@ class Module(ABC):
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
+        """Load PyTorch state dict into module parameters.
+
+        Args:
+            state_dict: Mapping of parameter names to PyTorch tensors.
+            strict: If `True`, raises ValueError on missing or unexpected keys.
+
+        Returns:
+            `IncompatibleKeys` containing lists of missing and unexpected keys.
+        """
         missing_keys = []
         unexpected_keys = []
-
+        self.evict_coresident_exclusions()
         self._load_torch_state_dict_inner(
             state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
         )
@@ -155,58 +165,26 @@ class Module(ABC):
     def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
         self.load_torch_state_dict(state_dict)
 
-    def save(self, directory: str | Path, /) -> None:
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        directory.mkdir(exist_ok=True)
+        directory.mkdir(exist_ok=True, parents=True)
 
         for name, child in self.named_children():
-            child.save(directory / name)
+            child.save(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            parameter.save(directory / f"{name}.tensorbin")
+            parameter.save(directory / f"{prefix}{name}.tensorbin")
 
-    def load(self, directory: str | Path, /) -> None:
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
-        if not directory.exists():
-            msg = f"directory does not exist: {directory}"
-            raise RuntimeError(msg)
+
+        self.evict_coresident_exclusions()
 
         for name, child in self.named_children():
-            child.load(directory / name)
+            child.load(directory, prefix=f"{prefix}{name}.")
 
         for name, parameter in self.named_parameters():
-            path = directory / f"{name}.tensorbin"
-            try:
-                parameter.load(path)
-            except LoadingError as err:
-                msg = f"{err} while loading '{path}'"
-                raise LoadingError(msg) from err
-
-        self._is_loaded = True
-
-    def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
-        cache_dict = {}
-
-        for name, child in self.named_children():
-            child_cache_dict = child.to_cached_state_dict(f"{path_prefix}{name}.")
-            cache_dict.update({f"{name}.{k}": v for k, v in child_cache_dict.items()})
-
-        for name, parameter in self.named_parameters():
-            cache_dict[name] = path = f"{path_prefix}{name}.tensorbin"
-            parameter.save(path)
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict: Mapping[str, str]) -> None:
-        def substate(state: Mapping[str, str], key: str) -> dict[str, str]:
-            prefix = f"{key}."
-            return {k.removeprefix(prefix): v for k, v in state.items() if k.startswith(prefix)}
-
-        for name, child in self.named_children():
-            child.from_cached_state_dict(substate(cache_dict, name))
-
-        for name, parameter in self.named_parameters():
-            path = cache_dict[name]
+            path = directory / f"{prefix}{name}.tensorbin"
             try:
                 parameter.load(path)
             except LoadingError as err:
@@ -227,6 +205,23 @@ class Module(ABC):
 
     def is_loaded(self) -> bool:
         return self._is_loaded
+
+    def register_coresident_exclusions(self, *args: Module) -> None:
+        """
+        Register modules that cannot be resident in memory at the same time as this module.
+        They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
+        Args:
+            *args: Modules that cannot be co-resident in memory with this module.
+        """
+        if self.coresident_exclusions is None:
+            self.coresident_exclusions = set()
+        self.coresident_exclusions.update(args)
+
+    def evict_coresident_exclusions(self) -> None:
+        """Evict the modules that cannot be resident in memory at the same time as this module."""
+        if self.coresident_exclusions is not None:
+            for module in self.coresident_exclusions:
+                module.deallocate_weights()
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -402,7 +397,12 @@ class Parameter:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        try:
+            tensor = ttnn.load_tensor(path, device=None if self.on_host else self.device)
+        except RuntimeError as err:
+            msg = f"TT-NN error «{err}»"
+            raise LoadingError(msg) from err
+        self.data = tensor
 
     @property
     def data(self) -> ttnn.Tensor:
@@ -427,6 +427,9 @@ class Parameter:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
                 raise LoadingError(msg)
+        elif value.device() is None:
+            msg = "expected device tensor, got host tensor"
+            raise LoadingError(msg)
         elif value.device() != self.device:
             msg = "device mismatch"
             raise LoadingError(msg)

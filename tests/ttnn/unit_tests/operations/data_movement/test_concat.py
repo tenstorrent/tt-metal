@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from models.common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
 
@@ -168,6 +169,15 @@ def test_concat(device, height, width, dim, dtype):
             ttnn.TILE_LAYOUT,
             False,
         ),
+        # Regression test for HEIGHT_SHARDED concat hang (unet decoder_2 op 32)
+        (
+            [((1, 1, 4096, 256), (64, 256)), ((1, 1, 4096, 256), (64, 256))],
+            (64, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.TILE_LAYOUT,
+            False,
+        ),
     ),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
@@ -238,6 +248,20 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     ),
 )
 def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, dtype, core_grid, layout):
+    # Test failing with watcher enabled on N300 only
+    if (
+        is_watcher_enabled()
+        and is_n300()
+        and input_shapes == ((1, 1, 512, 128), (1, 1, 512, 64))
+        and output_shape == (1, 1, 512, 192)
+        and core_grid == ttnn.CoreGrid(x=8, y=1)
+        and layout == ttnn.TILE_LAYOUT
+        and dtype == ttnn.int32
+        and groups == 1
+        and dim == 3
+    ):
+        pytest.skip("Test is hanging with watcher enabled github issue #29557")
+
     torch_input_tensors = [random_torch_tensor(dtype, shapes) for idx, shapes in enumerate(input_shapes)]
 
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -352,3 +376,74 @@ def test_concat_1d(device, layout, dim, input_shapes):
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize("num_inputs", [47, 48, 100])
+def test_concat_many_inputs(device, num_inputs):
+    """
+    Regression test for concat hang with many tiled inputs.
+    Fixed by commit 85d11279d27 (re-calculated batch size).
+    Previously hung at 48+ inputs with ETH dispatch on N300.
+    """
+    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
+    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(input_tensor)
+
+    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tiled_tensor)
+
+    output_host = ttnn.to_torch(output_tensor)
+    assert_equal(torch_expected, output_host)
+
+
+@pytest.mark.parametrize(
+    "input_shapes,dim",
+    [
+        (((1, 1, 32, 1024), (1, 1, 32, 1024)), 3),
+        (((1, 1, 32, 64), (1, 1, 32, 96)), 3),
+        (((1, 1, 64, 32), (1, 1, 64, 64)), 3),
+        (((1, 1, 128, 128), (1, 1, 128, 256)), 3),
+        (((1, 1, 256, 512), (1, 1, 256, 256)), 3),
+        (((1, 1, 32, 1024), (1, 1, 32, 1024)), 0),
+        (((1, 1, 32, 64), (1, 1, 32, 64)), 0),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 7))}),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+)
+def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids, memory_config):
+    shape_a, shape_b = input_shapes
+    a = torch.randn(shape_a, dtype=torch.bfloat16)
+    b = torch.randn(shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch.concat([a, b], dim=dim)
+
+    # Create input tensors with interleaved memory config
+    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
+    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
+
+    # Run concat with sub_core_grids
+    output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.99)

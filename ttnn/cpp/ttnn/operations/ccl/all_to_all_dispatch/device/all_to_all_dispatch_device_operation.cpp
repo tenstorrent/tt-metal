@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,6 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::ccl {
-
-AllToAllDispatchDeviceOperation::program_factory_t AllToAllDispatchDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllToAllDispatchSparse{};
-}
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

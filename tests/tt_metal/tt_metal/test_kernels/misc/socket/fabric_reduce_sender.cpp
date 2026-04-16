@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
@@ -39,8 +39,10 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-            uint64_t receiver_noc_coord_addr =
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
+            uint64_t receiver_noc_coord_addr = get_noc_addr(
+                downstream_enc.d2d.downstream_noc_x,
+                downstream_enc.d2d.downstream_noc_y,
+                sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
             fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
             data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{receiver_noc_coord_addr}, page_size);
             sender_fabric_connection.wait_for_empty_write_slot();

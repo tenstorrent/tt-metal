@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ema.hpp"
@@ -6,9 +6,9 @@
 #include "device/ema_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn {
 
-Tensor EmaOperation::invoke(
+Tensor ema(
     const Tensor& input_tensor,
     const float& alpha,
     std::optional<Tensor> optional_out,
@@ -20,7 +20,7 @@ Tensor EmaOperation::invoke(
     auto kernel_config = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi4,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true);
 
@@ -28,4 +28,4 @@ Tensor EmaOperation::invoke(
         input_tensor, alpha, grid_size, output_mem_config, kernel_config, std::move(optional_out));
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn

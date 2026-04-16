@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,18 +16,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-WindowedScaledDotProductAttentionDeviceOperation::program_factory_t
-WindowedScaledDotProductAttentionDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return WindowedSDPAProgramFactory{};
-}
-
-void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    validate_on_program_cache_miss(attrs, tensors);
-}
-
 void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     // Common validations for windowed SDPA
@@ -152,7 +140,7 @@ Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-tt::stl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     operation::Hash hash = operation::hash_operation<WindowedScaledDotProductAttentionDeviceOperation>(
         attrs.scale,
@@ -174,7 +162,7 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
                                                                     : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,12 +12,26 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
+namespace ttsl::json {
+template <typename T>
+struct to_json_t;
+template <typename T>
+struct from_json_t;
+}  // namespace ttsl::json
+
 namespace tt::tt_metal {
+
+// Forward declarations for friended free functions in the experimental namespace.
+// These are used to access experimental config params, which are not part of the official public API.
+class MemoryConfig;
+namespace experimental::per_core_allocation {
+bool is_per_core_allocation(const MemoryConfig& config);
+void set_per_core_allocation(MemoryConfig& config, bool enable);
+}  // namespace experimental::per_core_allocation
 
 class MemoryConfig final {
 public:
@@ -37,6 +51,9 @@ public:
     const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
     bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
+    // per_core_allocation access is through experimental::per_core_allocation free functions
+    friend bool experimental::per_core_allocation::is_per_core_allocation(const MemoryConfig&);
+    friend void experimental::per_core_allocation::set_per_core_allocation(MemoryConfig&, bool);
 
     MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
         return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
@@ -75,6 +92,9 @@ private:
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
     bool created_with_nd_shard_spec_ = false;
+    // per_core_allocation is experimental functionality
+    // access is through experimental::per_core_allocation free functions
+    bool per_core_allocation_ = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

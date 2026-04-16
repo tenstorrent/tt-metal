@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,11 +27,6 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
         return GatherProgramFactorySingleRowMultiCore{};
     }
     return GatherProgramFactorySingleRowSingleCore{};
-}
-
-void GatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void GatherDeviceOperation::validate_on_program_cache_miss(

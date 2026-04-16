@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt::DataFormat in0_cb_data_format,
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     uint32_t num_cores_x,
     uint32_t B,
     uint32_t M,
@@ -124,20 +124,28 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, {{"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}}));
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", tt::CBIndex::c_16}}));
 
     // Create compute kernel
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .compile_args = compute_kernel_args,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_out", tt::CBIndex::c_16},
+                {"cb_intermed0", (uint32_t)24}}});
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
@@ -272,7 +280,7 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();

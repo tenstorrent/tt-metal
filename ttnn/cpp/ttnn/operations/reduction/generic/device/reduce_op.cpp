@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,21 +13,19 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-using namespace tt::constants;
-
 namespace reduce_op_utils {
 
 std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<std::string, std::string> defines;
-    // TOOD(AP): need a sync with Reduce::Max from HLK headers
+    // TODO(AP): need a sync with Reduce::Max from HLK headers
     bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     std::string reduce_dim_str;
     switch (reduce_dim) {
         case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
         case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
         case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
-        default: TT_THROW("Invalid reduce_op!");
+        default: TT_THROW("Invalid reduce_dim!");
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
@@ -47,23 +45,32 @@ Tensor reduce_min(
     tt::tt_metal::ReduceOpDim reduce_dim,
     float scaler = 1.0f,
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt) {
     Tensor input = input_tensor;
     if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
-        input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
+        // Changing layout to TILE with +inf padding
+        auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
+        input = ttnn::tilize_with_val_padding(
+            input,
+            pad_shape,
+            std::numeric_limits<float>::infinity(),
+            output_mem_config,
+            std::nullopt,
+            true,
+            sub_core_grids);
     }
-    Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
-    Tensor max_reduce = detail::reduce(
-        n_input_tensor,
+    return detail::reduce(
+        input,
         tt::tt_metal::ReduceOpMath::MAX,
         reduce_dim,
         scaler,
         output_mem_config,
         std::nullopt,
-        compute_kernel_config);
-    Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
-    return min_tensor;
+        compute_kernel_config,
+        sub_core_grids,
+        true);
 }
 
 Tensor reduce(
@@ -74,9 +81,10 @@ Tensor reduce(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    bool negate) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
-        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
+        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
@@ -88,18 +96,29 @@ Tensor reduce(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        arch,
         std::nullopt,
-        MathFidelity::HiFi4,
+        is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    auto tilized_input =
-        ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());
-    if (is_multicore_hw) {
+    auto tilized_input = ttnn::tilize_with_val_padding(
+        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+
+    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
+    // scaler twice internally (once per dimension).  The host compensates with
+    // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
+    // However, sqrt of a negative number is NaN, so negative scalers
+    // must take the two-step W-then-H path where the scaler is applied once.
+    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,
@@ -109,7 +128,8 @@ Tensor reduce(
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
-            sub_core_grids);
+            sub_core_grids,
+            negate);
 
         return ttnn::prim::reduce(
             output_tensor,
@@ -119,7 +139,8 @@ Tensor reduce(
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
-            sub_core_grids);
+            sub_core_grids,
+            negate);
     }
     return ttnn::prim::reduce(
         tilized_input,
@@ -129,7 +150,8 @@ Tensor reduce(
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
         config,
-        sub_core_grids);
+        sub_core_grids,
+        negate);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

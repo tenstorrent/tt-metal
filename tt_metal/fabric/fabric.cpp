@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -112,7 +113,7 @@ void append_fabric_connection_rt_args(
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
-    // but the routing is simple and doesnt need any special inter-mesh handling
+    // but the routing is simple and doesn't need any special inter-mesh handling
     if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
@@ -161,8 +162,8 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    const auto forwarding_links = get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
         "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
@@ -435,7 +436,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
     }
 
     return get_forwarding_link_indices_in_direction(
-        src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {

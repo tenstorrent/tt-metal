@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -127,6 +127,7 @@ enum class SfpuType {
     gcd,
     lcm,
     softshrink,
+    hardshrink,
     hardsigmoid,
     threshold,
     where,
@@ -151,4 +152,9 @@ enum class SfpuType {
     unary_max_uint32,
     unary_min_uint32,
     addcdiv,
+    lerp,
+    xielu,
+    lgamma,
+    polygamma,
+    ne,
 };

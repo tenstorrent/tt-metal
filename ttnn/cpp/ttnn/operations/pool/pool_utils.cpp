@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
@@ -107,6 +107,17 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     return pconfig;
 }
 
+DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
+    uint32_t hw = in_h * in_w;
+    if (hw <= std::numeric_limits<uint16_t>::max()) {
+        return DataType::UINT16;
+    }
+    if (hw <= std::numeric_limits<uint32_t>::max()) {
+        return DataType::UINT32;
+    }
+    TT_THROW("Input HW {} is too large to be indexed with uint32", hw);
+}
+
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
     const DataType& input_dtype,
@@ -116,15 +127,21 @@ FactoryParameters get_factory_parameters(
     uint32_t in_channels,
     Pool2DType pool_type,
     bool return_indices,
+    uint32_t in_h,
+    uint32_t in_w,
     const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
-    auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+    // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
+    // since block float formats don't have a fixed datum size per element (they use block compression)
+    auto dtype = is_block_float(input_dtype) ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
-    tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
+    auto index_dtype = get_index_data_type(in_h, in_w);
+    tt::DataFormat index_format = datatype_to_dataformat_converter(index_dtype);
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
+
     uint32_t nbytes = datum_size(data_format);
     uint32_t index_nbytes = datum_size(index_format);
 
@@ -172,8 +189,129 @@ FactoryParameters get_factory_parameters(
     };
 }
 
-uint32_t calculate_L1_usage(
+uint32_t PoolCBSizes::local_cb_total() const {
+    uint32_t total = scalar_cb_pagesize * scalar_cb_npages;
+    if (has_second_scalar_cb) {
+        total += scalar_cb_pagesize * scalar_cb_npages;
+    }
+    total += clear_value_cb_size;
+    total += in_cb_pagesize * in_cb_npages;
+    if (has_split_reader) {
+        total += in_cb_pagesize * in_cb_npages;
+    }
+    total += mpwi_total_size;
+    total += pre_tilize_cb_pagesize * pre_tilize_cb_npages;
+    total += config_tensor_l1_size;
+    return total;
+}
+
+uint32_t PoolCBSizes::global_cb_total() const {
+    uint32_t total = sliding_window::align_buffer(out_cb_pagesize * out_cb_npages);
+    if (has_out_idx) {
+        total += sliding_window::align_buffer(out_idx_cb_pagesize * out_idx_cb_npages);
+    }
+    return total;
+}
+
+uint32_t PoolCBSizes::total() const { return local_cb_total() + global_cb_total(); }
+
+PoolCBSizes calculate_pool_cb_sizes(
+    const FactoryParameters& params,
+    bool one_scalar_per_core,
+    bool return_indices,
+    const Layout& output_layout,
+    const DataType& output_dtype,
+    const std::array<uint32_t, 2>& output_shard_shape,
+    bool config_tensor_in_dram) {
+    PoolCBSizes sizes;
+    const bool is_output_tiled = output_layout == Layout::TILE;
+
+    // Scalar CB (coefficient of reduce)
+    sizes.scalar_cb_pagesize = tt::tile_size(params.data_format);
+    sizes.scalar_cb_npages = params.multi_buffering_factor;
+    sizes.has_second_scalar_cb = params.is_avg_pool && params.split_reader && !one_scalar_per_core;
+
+    // Clear value CB (-inf for maxpool, 0 for avgpool)
+    sizes.clear_value_cb_size = tt::tile_size(params.data_format);
+
+    // Input CB
+    uint32_t in_cb_sz = 0;
+    if (return_indices || params.is_wide_reduction) {
+        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
+    } else {
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    }
+    sizes.in_cb_raw_size = in_cb_sz;
+    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
+    sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
+    sizes.in_cb_npages = params.multi_buffering_factor;
+    sizes.has_split_reader = params.split_reader;
+
+    // MPWI CBs (return_indices temporaries)
+    sizes.mpwi_total_size = 0;
+    if (return_indices) {
+        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        uint32_t idx_tile_size = params.index_nbytes * tile_elems;
+        uint32_t data_tile_size = params.nbytes * tile_elems;
+        // 1 data tile (pack_tmp_cb) + 6 index tiles (in_idx, pack_idx_tmp, right_inc,
+        // down_left_wrap_inc, up_left_wrap_inc, compute_idx_tmp)
+        sizes.mpwi_total_size = (6 * idx_tile_size) + data_tile_size;
+        if (params.is_large_kernel) {
+            // additional index tiles (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
+            sizes.mpwi_total_size += 2 * idx_tile_size;
+        }
+    }
+
+    // Pre-tilize CB (only for tiled output)
+    sizes.has_pre_tilize = is_output_tiled;
+    if (is_output_tiled) {
+        sizes.pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
+        sizes.pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
+    } else {
+        sizes.pre_tilize_cb_pagesize = 0;
+        sizes.pre_tilize_cb_npages = 0;
+    }
+
+    // Output CB (globally allocated, backed by output tensor buffer)
+    if (is_output_tiled) {
+        sizes.out_cb_pagesize = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+        sizes.out_cb_npages = output_shard_shape[0] * output_shard_shape[1] / tt::constants::TILE_HW;
+    } else {
+        sizes.out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_shard_shape[1]) * params.nbytes;
+        sizes.out_cb_npages = output_shard_shape[0] * params.out_ntiles_c;
+    }
+
+    // Output index CB (globally allocated, backed by output index tensor buffer)
+    sizes.has_out_idx = return_indices;
+    if (return_indices) {
+        sizes.out_idx_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_shard_shape[1]) * params.index_nbytes;
+        sizes.out_idx_cb_npages = sizes.out_cb_npages;
+    } else {
+        sizes.out_idx_cb_pagesize = 0;
+        sizes.out_idx_cb_npages = 0;
+    }
+
+    // Config tensor L1 CB (for DRAM-based config tensors)
+    sizes.config_tensor_l1_size = 0;
+    if (config_tensor_in_dram) {
+        sizes.config_tensor_l1_size =
+            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        if (!one_scalar_per_core) {
+            sizes.config_tensor_l1_size +=
+                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+        }
+    }
+
+    return sizes;
+}
+
+pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,
+    uint32_t in_h,
+    uint32_t in_w,
     uint32_t in_channels,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -183,8 +321,6 @@ uint32_t calculate_L1_usage(
     bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
-    uint32_t /*out_h*/,
-    uint32_t /*out_w*/,
     const MemoryConfig& input_memory,
     const MemoryConfig& output_memory,
     Pool2DType pool_type,
@@ -214,117 +350,31 @@ uint32_t calculate_L1_usage(
         in_channels,
         pool_type,
         return_indices,
+        in_h,
+        in_w,
         output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
-    // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * params.nbytes;
-    uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
-    uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-    uint32_t in_scalar_cb_size_1 = 0;
+    auto output_shard_shape = output_memory.shard_spec().value().shape;
+    PoolCBSizes sizes = calculate_pool_cb_sizes(
+        params,
+        one_scalar_per_core,
+        return_indices,
+        output_layout,
+        output_dtype,
+        {output_shard_shape[0], output_shard_shape[1]},
+        config_tensor_in_dram);
 
-    if (pool_type == Pool2DType::AVG_POOL2D && params.split_reader && !one_scalar_per_core) {
-        in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
-    }
-
-    uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
-
-    uint32_t in_cb_sz = 0;
-    if (return_indices || params.is_wide_reduction) {
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
-    } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-    }
-
-    uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
-    uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = params.multi_buffering_factor;
-    uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
-    uint32_t in_cb_config_1_size = 0;
-
-    if (params.split_reader) {
-        in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
-    }
-
-    uint32_t total_mpwi_cb_size = 0;
-    if (return_indices) {
-        // Add tile temporary CBs for return_indices
-        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
-        uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
-        // 1 data sized tile (pack_tmp_cb) and 6 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
-        // up_left_wrap_inc, compute_idx_tmp)
-        total_mpwi_cb_size = (6 * idx_tile_size) + data_tile_size;
-        if (params.is_large_kernel) {
-            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
-            total_mpwi_cb_size += 2 * idx_tile_size;
-        }
-    }
-
-    uint32_t out_cb_pagesize;
-    uint32_t out_cb_npages;
-    const bool is_output_tiled = output_layout == Layout::TILE;
-
-    if (is_output_tiled) {
-        out_cb_pagesize = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
-        out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
-                        tt::constants::TILE_HW;
-    } else {
-        out_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-            params.nbytes;
-        out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
-    }
-    uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
-
-    uint32_t pre_tilize_cb_size = 0;
-
-    if (is_output_tiled) {
-        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const uint32_t pre_tilize_cb_npages = 1;
-        pre_tilize_cb_size = pre_tilize_cb_pagesize * pre_tilize_cb_npages;
-    }
-
-    uint32_t out_idx_cb_config_size = 0;
-    if (return_indices) {
-        uint32_t out_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-            params.index_nbytes;
-        out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
-    }
-    uint32_t config_tensor_l1_CB_size = 0;
-    if (config_tensor_in_dram) {
-        auto output_shard_shape = output_memory.shard_spec().value().shape;
-        config_tensor_l1_CB_size =
-            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
-        if (!one_scalar_per_core) {
-            config_tensor_l1_CB_size +=
-                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
-        }
-    }
     log_trace(
         tt::LogOp,
-        "L1 Usage Breakdown: in_scalar_cb_size_0 = {}, in_scalar_cb_size_1 = {}, clear_value_cb_size = {}, "
-        "in_cb_config_0_size = {}, in_cb_config_1_size = {}, total_mpwi_cb_size = {}, pre_tilize_cb_size = {}, "
-        "config_tensor_l1_CB_size = {} "
-        "out_cb_config_size = {}, out_idx_cb_config_size = {}",
-        in_scalar_cb_size_0,
-        in_scalar_cb_size_1,
-        clear_value_cb_size,
-        in_cb_config_0_size,
-        in_cb_config_1_size,
-        total_mpwi_cb_size,
-        pre_tilize_cb_size,
-        config_tensor_l1_CB_size,
-        sliding_window::align_buffer(out_cb_config_size),
-        sliding_window::align_buffer(out_idx_cb_config_size));
+        "L1 Usage Breakdown: local_cb_size = {}, global_cb_size = {}, total = {}",
+        sizes.local_cb_total(),
+        sizes.global_cb_total(),
+        sizes.total());
 
-    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           total_mpwi_cb_size + pre_tilize_cb_size + config_tensor_l1_CB_size +
-           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
+    return pool_op_l1_usage{.local_cb_size = sizes.local_cb_total(), .global_cb_size = sizes.global_cb_total()};
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -332,7 +382,6 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const Layout& input_layout,
     CoreCoord compute_grid_size,
     const SlidingWindowConfig& sliding_window_config,
-    uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
@@ -341,10 +390,11 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const DataType& output_dtype,
     bool config_tensor_in_dram) {
     uint32_t batch_size = sliding_window_config.batch_size;
+    uint32_t channels = sliding_window_config.channels;
     auto output_shape = sliding_window_config.get_output_shape();
 
     struct l1_usage_config {
-        uint32_t l1_usage{};
+        pool_op_l1_usage l1_usage{};
         std::optional<ParallelConfig> config;
     };
 
@@ -374,10 +424,16 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             0);
 
         if (!input_parallel_config.has_value()) {
-            return {std::numeric_limits<uint32_t>::max(), input_parallel_config};
+            return {
+                pool_op_l1_usage{
+                    .local_cb_size = std::numeric_limits<uint32_t>::max(),
+                    .global_cb_size = std::numeric_limits<uint32_t>::max()},
+                input_parallel_config};
         }
-        uint32_t l1_usage = calculate_L1_usage(
+        pool_op_l1_usage l1_usage = calculate_L1_usage(
             input_dtype,
+            sliding_window_config.input_hw.first,
+            sliding_window_config.input_hw.second,
             sliding_window_config.channels,
             sliding_window_config.get_pad_h(),
             sliding_window_config.get_pad_w(),
@@ -387,8 +443,6 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             return_indices,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
-            sliding_window_config.get_output_shape()[1],
-            sliding_window_config.get_output_shape()[2],
             get_memconfig(input_parallel_config.value()),
             get_memconfig(input_parallel_config.value()),
             pool_type,
@@ -405,9 +459,9 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     auto l1_config_width = calc_l1_usage_inner(TensorMemoryLayout::WIDTH_SHARDED, ShardOrientation::ROW_MAJOR);
     auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::ROW_MAJOR);
 
-    uint32_t l1_usage_height = l1_config_height.l1_usage;
-    uint32_t l1_usage_width = l1_config_width.l1_usage;
-    uint32_t l1_usage_block = l1_config_block.l1_usage;
+    uint32_t l1_usage_height = l1_config_height.l1_usage.total();
+    uint32_t l1_usage_width = l1_config_width.l1_usage.total();
+    uint32_t l1_usage_block = l1_config_block.l1_usage.total();
 
     if (l1_usage_height > l1_usage_width) {
         if (l1_usage_width > l1_usage_block) {
@@ -486,7 +540,9 @@ void validate_input_params(
         dilation_h,
         dilation_w);
 
-    // check that padding is not excessive (should not be more than half the kernel size)
+    // Check that padding is not excessive (should not be more than half the kernel size).
+    // pad_right is intentionally excluded: DRAM slicing with TILE output can inflate it
+    // via width rounding in Pool2dSliceAttr::get_input_slice_and_padding.
     TT_FATAL(
         pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2 && pad_left <= kernel_size[1] / 2,
         "Pool2D: Padding ({}, {}, {}) should not exceed half of kernel size ({}, {})",
@@ -516,6 +572,191 @@ uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) 
                                    ? tt::tt_metal::hal::get_dram_alignment()
                                    : tt::tt_metal::hal::get_l1_alignment();
     return tt::round_up(stick_nbytes, alignment);
+}
+
+pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
+    uint32_t slice_input_height,
+    uint32_t slice_input_width,
+    uint32_t slice_output_height,
+    uint32_t slice_output_width,
+    const std::array<uint32_t, 4>& slice_padding,
+    const std::array<uint32_t, 2>& slice_ceil_pad,
+    bool return_indices,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    DataType input_dtype,
+    DataType dtype,
+    Layout input_layout,
+    Layout output_layout,
+    const tt::tt_metal::MemoryConfig& input_memory_config,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    bool config_tensor_in_dram) {
+    // The input_memory_config passed in is already computed for the SLICED input dimensions
+    // (see get_input_memory_config in generic_pools.cpp which calls get_pool_input_memory_config
+    // with the sliced shape). So we can use its shard_spec directly.
+    auto input_shard_shape = input_memory_config.shard_spec().value().shape;
+
+    // Halo always converts block float formats (BFLOAT8_B) to BFLOAT16 during untilization
+    // For FLOAT32 inputs, halo preserves FLOAT32; for UINT16, it preserves UINT16
+    // All other types (including BFLOAT8_B, BFLOAT4_B, BFLOAT16) become BFLOAT16
+    tt::tt_metal::DataType halo_working_dtype;
+    if (input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        halo_working_dtype = tt::tt_metal::DataType::FLOAT32;
+    } else {
+        halo_working_dtype = tt::tt_metal::DataType::BFLOAT16;
+    }
+    const uint32_t halo_datum_size = halo_working_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
+    // Halo input buffer: For TILE layout inputs, this holds the input CB which uses the original dtype
+    // But when calculating L1 for the halo operation itself, the data is in the untilize output CB
+    // which already uses halo_working_dtype. The input CB and untilize output CB coexist during halo.
+    uint32_t halo_input_cb_size = input_shard_shape[0] * input_shard_shape[1] * halo_datum_size;
+
+    // For tiled inputs, the untilize output CBs hold the converted data in halo_working_dtype
+    // For row-major inputs, there are no untilize CBs
+    // The halo writer reads from untilize CBs (if tiled) or input CB (if row-major) and writes to output buffer
+    const uint32_t pool_datum_size = halo_datum_size;
+    const tt::tt_metal::DataType pool_input_dtype = halo_working_dtype;
+
+    // Calculate halo output size using sliding window calculation
+    // Create a sliding window config with proper core distribution for halo calculation
+    sliding_window::SlidingWindowConfig halo_config = sliding_window_config;
+    halo_config.input_hw = {slice_input_height, slice_input_width};
+    halo_config.padding = slice_padding;
+    halo_config.core_range_set = input_memory_config.shard_spec().value().grid;
+    halo_config.snap_to_tile = (output_layout == tt::tt_metal::Layout::TILE);
+
+    // Get num_cores from the input memory config
+    uint32_t num_cores_nhw = 1;
+    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_cores_nhw = input_memory_config.shard_spec().value().grid.num_cores();
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
+        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
+        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            num_cores_nhw = grid_size.x;
+        } else {
+            num_cores_nhw = grid_size.y;
+        }
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_nhw = 1;
+    }
+
+    // Calculate num_cores_c from input_memory_config
+    uint32_t num_cores_c = 1;  // Default for HEIGHT_SHARDED
+    if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_c = input_memory_config.shard_spec().value().grid.num_cores();
+    } else if (input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        auto grid_size = input_memory_config.shard_spec().value().grid.bounding_box().grid_size();
+        auto shard_orientation = input_memory_config.shard_spec().value().orientation;
+        if (shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            num_cores_c = grid_size.y;
+        } else {
+            num_cores_c = grid_size.x;
+        }
+    }
+
+    halo_config.num_cores_nhw = num_cores_nhw;
+    halo_config.num_cores_c = num_cores_c;
+
+    uint32_t precise_halo_output_size =
+        sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
+    uint32_t halo_output_size = precise_halo_output_size * pool_datum_size;
+
+    // Calculate halo CB overhead (pad CBs and untilize CBs if input is tiled)
+    uint32_t halo_cb_overhead = 0;
+
+    // Pad CBs: 2 CBs with 1 page each of aligned stick size
+    const uint32_t stick_nbytes = input_shard_shape[1] * pool_datum_size;
+    const uint32_t alignment = tt::tt_metal::hal::get_l1_alignment();
+    uint32_t aligned_stick_nbytes = tt::round_up(stick_nbytes, alignment);
+    uint32_t pad_cb_size = 2 * aligned_stick_nbytes;  // 2 CBs
+    halo_cb_overhead += pad_cb_size;
+
+    // Untilize output CBs: needed if input is TILE layout
+    // Halo always operates on row-major data, so tiled inputs need untilization
+    // When untilizing, we need 2 CBs for 2 data movement cores
+    if (input_layout == tt::tt_metal::Layout::TILE) {
+        // Halo uses a fixed block size for untilization (UNTILIZE_BLOCK_SIZE = 32)
+        // The untilize CB is sized based on this block size, not the full shard height
+        constexpr uint32_t UNTILIZE_BLOCK_SIZE = 32;
+        uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], tt::constants::TILE_WIDTH);
+        uint32_t input_nblocks_per_core = tt::div_up(input_shard_shape[0], tt::constants::TILE_HEIGHT);
+
+        // Clamp block size to actual input height (same logic as halo implementation)
+        uint32_t clamped_block_size_height =
+            std::min(UNTILIZE_BLOCK_SIZE, input_nblocks_per_core * tt::constants::TILE_HEIGHT);
+        uint32_t output_ntiles = (clamped_block_size_height / tt::constants::TILE_HEIGHT) * ntiles_per_block;
+
+        // With double buffering: 2 * output_ntiles per CB
+        uint32_t untilize_out_cb_num_pages = 2 * output_ntiles;
+        uint32_t out_tile_size = tt::tile_size(datatype_to_dataformat_converter(pool_input_dtype));
+        uint32_t untilize_cb_size = 2 * untilize_out_cb_num_pages * out_tile_size;  // 2 CBs
+        halo_cb_overhead += untilize_cb_size;
+    }
+
+    // Create output memory config with correct output shard shape
+    auto input_shard_spec = input_memory_config.shard_spec().value();
+
+    // Calculate the actual pooled output size per core
+    uint32_t pool_output_nhw_per_core = slice_output_height * slice_output_width / num_cores_nhw;
+    if (output_layout == tt::tt_metal::Layout::TILE) {
+        pool_output_nhw_per_core = tt::round_up(pool_output_nhw_per_core, tt::constants::TILE_HEIGHT);
+    }
+
+    tt::tt_metal::ShardSpec output_shard_spec(
+        input_shard_spec.grid,
+        {pool_output_nhw_per_core,  // height = actual pooled output NHW per core
+         input_shard_shape[1]},     // width = C per core (unchanged from input)
+        input_shard_spec.orientation);
+    auto output_memory_config = tt::tt_metal::MemoryConfig(
+        input_memory_config.memory_layout(), input_memory_config.buffer_type(), output_shard_spec);
+
+    pool_op_l1_usage pool_l1 = calculate_L1_usage(
+        dtype,
+        sliding_window_config.input_hw.first,
+        sliding_window_config.input_hw.second,
+        sliding_window_config.channels,
+        slice_padding[0] + slice_padding[1],  // pad_h (top + bottom)
+        slice_padding[2] + slice_padding[3],  // pad_w (left + right)
+        slice_ceil_pad[0],
+        slice_ceil_pad[1],
+        sliding_window_config.ceil_mode,
+        return_indices,
+        sliding_window_config.window_hw.first,
+        sliding_window_config.window_hw.second,
+        input_memory_config,
+        output_memory_config,
+        pool_type,
+        count_include_pad,
+        divisor_override,
+        output_layout,
+        dtype,
+        config_tensor_in_dram);
+    uint32_t pool_cb_usage = pool_l1.total();
+
+    // Calculate actual pool output tensor size for memory tracking
+    // Pool output has same dtype as pool input (halo output), which is BFLOAT16/FLOAT32
+    uint32_t output_datum_size = pool_datum_size;
+    uint32_t output_tensor_size = pool_output_nhw_per_core * input_shard_shape[1] * output_datum_size;
+
+    // Total size calculation with memory reuse:
+    // During halo phase: halo_input_cb + halo_output + halo_cb_overhead
+    // After halo: halo_input_cb is deallocated, halo_output remains (and will be reused for pool input)
+    // During pool phase: halo_output (reused as pool input) + pool_cb_usage (includes all CBs and output buffer)
+    // Since halo_input_cb is deallocated before pool phase and halo_output is reallocated in its place,
+    // we only need to consider: max(halo_input_cb + halo_output + halo_cb_overhead, halo_output + pool_cb_usage)
+    uint32_t halo_phase_size = halo_input_cb_size + halo_output_size + halo_cb_overhead;
+    uint32_t pool_phase_size = halo_output_size + pool_cb_usage + output_tensor_size;
+    uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
+
+    return pool2d_slice_l1_usage{
+        .halo_input_size = halo_input_cb_size,
+        .halo_output_size = halo_output_size,
+        .pool_cb_size = pool_cb_usage,
+        .output_tensor_size = output_tensor_size,
+        .total_size = total_size};
 }
 
 }  // namespace ttnn::operations::pool

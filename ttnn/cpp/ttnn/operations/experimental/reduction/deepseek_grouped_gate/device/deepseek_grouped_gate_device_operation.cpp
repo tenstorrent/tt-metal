@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -38,11 +39,6 @@ void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_miss(
         attributes.n_activated_experts == 8,
         "n_activated_experts must be 8 at the moment. Got {}",
         attributes.n_activated_experts);
-}
-
-void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 DeepseekGroupedGateDeviceOperation::spec_return_value_t DeepseekGroupedGateDeviceOperation::compute_output_specs(
@@ -106,11 +102,4 @@ deepseek_grouped_gate(
 
 }  // namespace ttnn::prim
 
-namespace ttnn::operations::experimental::reduction {
-
-DeepseekGroupedGateDeviceOperation::program_factory_t DeepseekGroupedGateDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
-}  // namespace ttnn::operations::experimental::reduction
+namespace ttnn::operations::experimental::reduction {}  // namespace ttnn::operations::experimental::reduction

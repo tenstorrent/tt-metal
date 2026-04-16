@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -10,10 +10,10 @@
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/tile_move_copy.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -67,7 +67,8 @@ struct LocalReduce {
             constexpr bool apply_silu = CTArgs::apply_silu;
 
             // Initialize operations before waiting for data
-            binary_op_init_common(args.in_cb, args.in_cb, args.out_cb);
+            reconfig_data_format<false, true>(args.in_cb, args.in_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
             add_tiles_init(args.in_cb, args.in_cb, true /* acc_to_dest */);
             if constexpr (apply_silu) {
                 silu_tile_init();

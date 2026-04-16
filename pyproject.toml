@@ -21,6 +21,7 @@ dependencies = [
   "click>=8.1.7",
   "pandas>=2.0.3",
   "seaborn>=0.13.2",
+  "ml_dtypes",
 ]
 requires-python = ">=3.10"
 keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent", "libnuma", "libhwloc"]
@@ -66,7 +67,6 @@ fallback_version = "0.0.0.dev0"
 
 [tool.cibuildwheel]
 skip = "*-musllinux_*"
-build-verbosity = 2
 
 [tool.uv]
 # Use "copy" mode instead of the default "hardlink" or "symlink" modes.

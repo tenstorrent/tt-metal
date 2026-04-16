@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,11 +19,10 @@
 #include "strided_all_gather_async_device_operation_types.hpp"
 #include "strided_all_gather_async_program.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
 #include <utility>
 #include <vector>
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -35,9 +34,6 @@ struct StridedAllGatherAsync {
 
     using program_factory_t = std::variant<StridedAllGatherAsyncProgramFactory>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -58,7 +54,6 @@ Tensor strided_all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis,
-    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,

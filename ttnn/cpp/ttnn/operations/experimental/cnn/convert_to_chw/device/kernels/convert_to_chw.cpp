@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/transpose_wh.h"
 
 template <int BATCH_SIZE>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {

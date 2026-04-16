@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@ import json
 import importlib
 import os
 import pathlib
+import pkgutil
 import re
+import sys
 from types import ModuleType
 
 from loguru import logger
@@ -160,6 +162,9 @@ from ttnn._ttnn.fabric import (
     FabricManagerMode,
     FabricRouterConfig,
     set_fabric_config,
+    get_fabric_config,
+    get_tt_fabric_packet_header_size_bytes,
+    get_tt_fabric_max_payload_size_bytes,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
@@ -182,11 +187,19 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
+)
+
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
 )
 
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    DumpTensorMode,
     uint8,
     uint16,
     int32,
@@ -214,7 +227,9 @@ from ttnn.types import (
     CoreRange,
     CoreCoord,
     corerange_to_cores,
+    get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -255,11 +270,16 @@ from ttnn.types import (
     SemaphoreDescriptor,
     ProgramDescriptor,
     MeshProgramDescriptor,
+    merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
+    get_cb_address,
+    UnpackToDestMode,
+    compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
@@ -271,6 +291,9 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_optimal_dram_bank_to_logical_worker_assignment,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -352,10 +375,36 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
+import ttnn.operations
+
 import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
-import ttnn.operations
+# After experimental_loader creates ttnn.experimental, append all submodules from _experimental
+# This allows us to add new experimental modules without conflicting with experimental_loader
+if "ttnn.experimental" in sys.modules:
+    import ttnn._experimental
+
+    # Discover all submodules in _experimental
+    for _, name, ispkg in pkgutil.iter_modules(ttnn._experimental.__path__):
+        # Import the submodule
+        submodule = importlib.import_module(f"ttnn._experimental.{name}")
+
+        # Add it to the experimental module created by experimental_loader
+        setattr(sys.modules["ttnn.experimental"], name, submodule)
+
+        # Also register it as a submodule in sys.modules for import statements
+        sys.modules[f"ttnn.experimental.{name}"] = submodule
+
+        # Recursively register sub-submodules if it's a package
+        if ispkg and hasattr(submodule, "__path__"):
+            for _, subname, _ in pkgutil.walk_packages(submodule.__path__, f"{name}."):
+                full_internal_name = f"ttnn._experimental.{subname}"
+                full_external_name = f"ttnn.experimental.{subname}"
+                sub_submodule = importlib.import_module(full_internal_name)
+                sys.modules[full_external_name] = sub_submodule
+
+from ttnn.operations.unary import SigmoidMode
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -387,6 +436,11 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
@@ -395,12 +449,25 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    determine_expected_group_norm_dram_grid_size,
+    get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -442,7 +509,11 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+
+# Expose disaggregation in experimental namespace
+experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -461,6 +532,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util
@@ -485,3 +562,25 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+import atexit as _atexit
+
+
+def _ttnn_cleanup():
+    """Release Python-side references to C++ operation wrappers before interpreter shutdown.
+
+    nanobind's leak checker fires before module dicts are fully cleared on some
+    Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
+    reference count on C++ wrapper objects reaches zero before the check.
+    """
+    try:
+        from ttnn.decorators import REGISTERED_OPERATIONS
+
+        REGISTERED_OPERATIONS.operations.clear()
+    except Exception as e:
+        # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
+        logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
+
+
+_atexit.register(_ttnn_cleanup)
+del _atexit

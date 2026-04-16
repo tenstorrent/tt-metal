@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/types.hpp>
 
@@ -24,6 +23,9 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "ops/binary_ops.hpp"
+#include "tt-metalium/distributed_context.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;
@@ -63,6 +65,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def_prop_ro(
+            "tensor",
+            [](const TensorPtr& self) -> TensorPtr { return self; },
+            "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
@@ -285,7 +291,7 @@ void py_module(nb::module_& m) {
             },
             nb::rv_policy::reference,
             "Get distributed context");
-        py_auto_context.def("get_profiler", &AutoContext::get_profiler, "Get profiler");
+        py_auto_context.def("get_profiler", &AutoContext::get_profiler, nb::rv_policy::reference, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
 
@@ -309,6 +315,10 @@ void py_module(nb::module_& m) {
             [](AutoContext& self) -> const ParallelismContext& { return self.get_parallelism_context(); },
             nb::rv_policy::reference,
             "Get parallelism context");
+        py_auto_context.def(
+            "is_parallelism_context_initialized",
+            &AutoContext::is_parallelism_context_initialized,
+            "Check if parallelism context has been initialized");
     }
 
     {

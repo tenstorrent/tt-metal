@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,17 +61,7 @@ void MorehGroupNormOperation::validate_tensors(
     }
 }
 
-MorehGroupNormOperation::program_factory_t MorehGroupNormOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MorehGroupNormFactory();
-}
-
 void MorehGroupNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
-
-void MorehGroupNormOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
@@ -179,7 +169,7 @@ ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_retur
         memory_config.value_or(input.memory_config()),
         mean_memory_config.value_or(input.memory_config()),
         rstd_memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, gamma, beta, output, mean, rstd};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

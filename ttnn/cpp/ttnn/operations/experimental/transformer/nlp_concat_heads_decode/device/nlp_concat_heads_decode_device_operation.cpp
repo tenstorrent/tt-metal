@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,11 +17,6 @@ NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDevic
         return NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
     }
     return NLPConcatHeadsDecodeProgramFactory{};
-}
-
-void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(

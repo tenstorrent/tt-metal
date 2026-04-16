@@ -1,28 +1,19 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_align.hpp>
-#include "tt_metal/hw/inc/hostdev/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
 
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-struct SocketSenderSize {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
-    const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
-    const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
-};
 
 // Need to index the connections to properly read the FabricNodeId from peer descriptor.
 // This will get cleaned up with the improved socket APIs. See Issue #27207
@@ -54,7 +45,7 @@ std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const
     return connection_to_receiver_id;
 }
 
-// Get the maximum number of downstreams per sender core to calcalate size of the metadata buffer.
+// Get the maximum number of downstreams per sender core to calculate size of the metadata buffer.
 // This will get cleaned up along with improved socket APIs. See Issue #27207
 uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
     std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;
@@ -78,8 +69,12 @@ void validate_fabric_config_for_sockets(
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
-                                           // physical device
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt_fabric::FabricConfig::DISABLED,  // Fabric can be disabled as long as socket endpoints are on the same
+                                            // physical device
+
     };
 
     bool fabric_config_supported = supported_fabrics.contains(fabric_config);
@@ -337,13 +332,13 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = connections.size();                   // num_downstreams
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // write_ptr
                 config_data[md_offset++] = 0;                                    // bytes_sent
+                config_data[md_offset++] = connections.size();                   // num_downstreams
+                config_data[md_offset++] = 0;  // write_ptr (offset from downstream_fifo_addr)
                 config_data[md_offset++] = peer_config_buf_addr;                 // downstream_bytes_sent_addr
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
                 config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
-                config_data[md_offset++] = is_sender;                            // is_sender
+                config_data[md_offset++] = 0;                                    // is_d2h
 
                 // Write downstream encodings for each receiver of this sender core
                 uint32_t enc_offset = (idx * sender_total_size_bytes + sender_size.md_size_bytes +

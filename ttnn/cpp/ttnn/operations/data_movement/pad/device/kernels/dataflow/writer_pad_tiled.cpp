@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
 
-    const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, output_addr);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     cb_reserve_back(pad_val_cb_id, 1);
@@ -65,7 +65,7 @@ void kernel_main() {
 
         // We have two cases, if we are within the input region, we wait for the reader to send us the correct tile
         // Otherwise we simply write the padding tile we have in our circular buffer
-        uint64_t dst_noc_addr = get_noc_addr(output_page_offset, s0);
+        uint64_t dst_noc_addr = s0.get_noc_addr(output_page_offset);
         if (within_input_region) {
             cb_wait_front(input_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(input_cb_id);

@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-// #include "compute_kernel_api.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/reduce.h"
+// #include "api/compute/compute_kernel_api.h"
+#include "api/compute/tilize.h"
+#include "api/compute/reduce.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0

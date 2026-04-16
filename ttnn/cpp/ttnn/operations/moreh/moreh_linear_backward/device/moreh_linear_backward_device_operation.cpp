@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,11 +35,6 @@ MorehBiasAddBackwardOperation::program_factory_t MorehBiasAddBackwardOperation::
 }
 
 void MorehBiasAddBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehBiasAddBackwardOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -81,7 +76,7 @@ moreh_bias_add_backward(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         bias_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, bias, bias_grad};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

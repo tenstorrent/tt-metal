@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,10 @@
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
-namespace ttnn::operations::normalization {
 
-ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
+namespace ttnn {
+
+ttnn::Tensor layer_norm_post_all_gather(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& stats,
     float epsilon,
@@ -23,7 +24,7 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
         return ttnn::prim::layer_norm(
             input_tensor,
@@ -53,4 +54,4 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}));
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

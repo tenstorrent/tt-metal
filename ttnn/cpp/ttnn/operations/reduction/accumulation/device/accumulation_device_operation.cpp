@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
-
-AccumulationDeviceOperation::program_factory_t AccumulationDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AccumulationProgramFactory{};
-}
 
 void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -60,11 +55,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
 }
 
-void AccumulationDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.opt_output.has_value()) {
@@ -98,7 +88,6 @@ AccumulationDeviceOperation::tensor_return_value_t AccumulationDeviceOperation::
 operation::Hash AccumulationDeviceOperation::compute_program_hash(
     const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
     return operation::hash_operation<AccumulationDeviceOperation>(
-        select_program_factory(op_args, tensor_args).index(),
         op_args.dim,
         op_args.output_memory_config,
         op_args.flip,

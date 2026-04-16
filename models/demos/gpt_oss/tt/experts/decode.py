@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Decode forward pass for experts (seq_len=1)."""
@@ -146,7 +146,11 @@ def decode_forward(
     if tp > 1:
         # Note: apply_tensor_parallel_allreduce already handles deallocating the input tensor
         next_states = apply_tensor_parallel_allreduce(
-            next_states, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp
+            next_states,
+            mesh_config,
+            mesh_device,
+            seq_len,
+            ccl_manager,
         )
 
     # Final reshape

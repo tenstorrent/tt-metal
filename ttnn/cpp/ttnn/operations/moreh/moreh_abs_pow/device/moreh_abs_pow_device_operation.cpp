@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,12 +21,6 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-MorehAbsPowOperation::program_factory_t MorehAbsPowOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // Case for int32
-    return MorehAbsPowFactory{};
-}
-
 void validate_tensors(
     const MorehAbsPowOperation::operation_attributes_t& /*operation_attributes*/,
     const MorehAbsPowOperation::tensor_args_t& tensor_args) {
@@ -42,10 +36,6 @@ void MorehAbsPowOperation::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehAbsPowOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
 MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
@@ -81,7 +71,7 @@ ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation::tensor_return_valu
     const OperationType::operation_attributes_t operation_attributes{
         p,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     const OperationType::tensor_args_t tensor_args{input, output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

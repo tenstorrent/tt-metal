@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,11 +22,6 @@ NLPCreateQKVHeadsDecodeDeviceOperation::select_program_factory(
         return NLPCreateQKVHeadsDecodeShardedProgramFactory{};
     }
     return NLPCreateQKVHeadsDecodeInterleavedProgramFactory{};
-}
-
-void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
@@ -96,10 +91,6 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
 
     // Support maximum 32 heads for now
     TT_FATAL(
-        operation_attributes.num_q_heads <= 32,
-        "There are {} q heads only 32 are supported",
-        operation_attributes.num_q_heads);
-    TT_FATAL(
         operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
         "num_q_heads={} must be greater than or equal to num_kv_heads={}",
         operation_attributes.num_q_heads,
@@ -113,7 +104,7 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(
             num_cores >= 2 * num_users,
-            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+            "Input coregrid size is {}. Need cores at least double of num_users for decode when q and k heads are not "
             "overlapping "
             "coregrid",
             num_cores);
@@ -138,7 +129,7 @@ std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_ou
     const Shape& k_output_shape = v_output_shape;
 
     auto num_q_heads_padded = ((operation_attributes.num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = ((operation_attributes.num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((operation_attributes.num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
     CoreRangeSet output_core_grid = operation_attributes.output_mem_config.shard_spec().value().grid;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
@@ -19,6 +19,9 @@ class AllCloseThresholds:
     rtol: float
     atol: float
 
+
+# Poison value to ensure Welford's algorithm ignores padded elements (#31982)
+PAD_VALUE = -42
 
 allclose_thresholds = {
     # bfloat16 can accumulate a lot of error for fused ops. Rounding
@@ -34,17 +37,33 @@ allclose_thresholds = {
 def assert_output_accuracy(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
-        return assert_allclose(
-            torch_output, ttnn_output, rtol=allclose_thresholds[dtype].rtol, atol=allclose_thresholds[dtype].atol
+        assert_numeric_metrics(
+            torch_output,
+            ttnn_output,
+            rtol=allclose_thresholds[dtype].rtol,
+            atol=allclose_thresholds[dtype].atol,
+            check_frobenius=False,
+            check_pcc=False,
         )
     elif dtype == torch.float32:
         # torch.float32 data is not being robustly converted to tt tensors
         # (see https://github.com/tenstorrent/tt-metal/issues/33621).
         # So we'll use relative Frobenius norm of the error instead, which is
         # looser than allclose (since it's a global metric), but better than PCC.
-        return assert_relative_frobenius(torch_output, ttnn_output, threshold=0.01)
+        assert_numeric_metrics(
+            torch_output, ttnn_output, frobenius_threshold=0.01, check_pcc=False, check_allclose=False
+        )
     else:
         raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
+
+
+def create_recip_tensor(device, w, use_welford):
+    """Helper to create reciprocal tensor for non-sharded welford tests."""
+    if not use_welford:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -59,7 +78,8 @@ def test_layer_norm(device, h, w, use_welford, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
@@ -84,7 +104,10 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -111,7 +134,10 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -139,12 +165,14 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor,
         residual_input_tensor=residual_input_tensor,
         weight=weight,
         bias=bias,
         program_config=program_config,
+        recip_tensor=recip_tensor,
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -204,7 +232,8 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -231,7 +260,10 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -254,7 +286,10 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor, weight=weight, program_config=program_config, recip_tensor=recip_tensor
+    )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -277,7 +312,8 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -315,12 +351,30 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # Non-fp32 accumulation is inaccurate, so we'll just compare pcc
-    # to make sure it captures the general trend
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    # Non-fp32 accumulation is inaccurate
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.97,
+        rtol=0.2,
+        atol=0.2,
+        frobenius_threshold=0.15,
+    )
 
 
-@pytest.mark.parametrize("h, w", [(32, 2592), (32, 3232), (1024, 2880)])
+@pytest.mark.parametrize(
+    "h, w",
+    [
+        (32, 2592),
+        (32, 3232),
+        (1024, 2880),
+        # Unaligned shapes to test padding (Issue #31982)
+        (19, 2865),
+        (19, 4083),
+        (1001, 2865),
+        (1001, 4083),
+    ],
+)
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -335,24 +389,33 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor,
         residual_input_tensor=residual_input_tensor,
         weight=weight,
         bias=bias,
         program_config=program_config,
+        recip_tensor=recip_tensor,
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and use_welford and w == 3232:
-        # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    if dtype == torch.float32 and use_welford and w == 4083 and h == 19:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.02,
+            atol=0.04,
+            frobenius_threshold=0.02,
+        )
     else:
         assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -376,7 +439,8 @@ def test_l1_interleaved(device, use_welford, dtype):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=l1_interleaved_mem_config
     )
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -403,7 +467,14 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     if dtype == ttnn.bfloat16:
         assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
-        assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+        assert_numeric_metrics(
+            torch_output,
+            tt_output_torch,
+            pcc_threshold=0.987,
+            rtol=0.15,
+            atol=0.15,
+            frobenius_threshold=0.12,
+        )
 
 
 @pytest.mark.parametrize("h", [32, 2999, 32 * 64 + 18])
@@ -433,9 +504,11 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
 
     # Run layer norm
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_ttnn = ttnn.layer_norm(
         tt_input_tensor,
         program_config=program_config,
+        recip_tensor=recip_tensor,
     )
     output_ttnn = ttnn.to_torch(output_ttnn)
 
@@ -444,3 +517,11 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
 
     assert_output_accuracy(golden_output, output_ttnn)
+
+
+def test_layer_norm_inputs_requires_input_tensor():
+    """``LayerNormInputs()`` without an input tensor must raise."""
+    import pytest
+
+    with pytest.raises(TypeError):
+        ttnn.LayerNormInputs()

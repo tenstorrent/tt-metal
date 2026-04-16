@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,15 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
+ttnn::Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
+    const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     return ttnn::prim::repeat_and_interleave_eltwise_mul(a, b, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental

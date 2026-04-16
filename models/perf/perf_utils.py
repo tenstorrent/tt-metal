@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,8 @@ def merge_perf_files(fname, perf_fname, expected_cols):
     merge_res = open(fname, "w")
     if not repo.head.is_detached:
         merge_res.write(f"branch: {repo.active_branch} \n")
+    else:
+        merge_res.write(f"branch: detached HEAD \n")
     merge_res.write(f"hash: {repo.head.object.hexsha} \n")
     cols = ", ".join(expected_cols)
     merge_res.write(f"{cols} \n")

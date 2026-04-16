@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 void kernel_main() {

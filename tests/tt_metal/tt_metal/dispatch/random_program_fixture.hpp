@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,6 +14,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
@@ -259,7 +259,7 @@ private:
             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 
-        std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
+        std::variant<DataMovementConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
             const auto proc = this->get_processor(true);
@@ -268,14 +268,19 @@ private:
             eth_test_common::set_arch_specific_eth_config(std::get<EthernetConfig>(config));
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
+            config = DataMovementConfig{
+                .processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
         }
 
-        KernelHandle kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            cores,
+        KernelHandle kernel_id = std::visit(
+            [&](const auto& cfg) -> KernelHandle {
+                return CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+                    "dispatcher_kernel_size_and_runtime.cpp",
+                    cores,
+                    cfg);
+            },
             config);
         return kernel_id;
     }
@@ -388,8 +393,11 @@ protected:
     }
 
     distributed::MeshTraceId trace_programs() {
+        log_info(tt::LogTest, "Starting trace capture");
         const distributed::MeshTraceId trace_id = this->capture_trace();
+        log_info(tt::LogTest, "Trace capture complete, starting trace replay (50 iterations)");
         this->run_trace(trace_id);
+        log_info(tt::LogTest, "Trace replay complete");
         return trace_id;
     }
 
@@ -407,15 +415,21 @@ private:
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
+        log_info(tt::LogTest, "All workloads enqueued in trace, calling end_mesh_trace");
         this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+        log_info(tt::LogTest, "end_mesh_trace complete");
         return trace_id;
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
         auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
+            if (i % 10 == 0) {
+                log_info(tt::LogTest, "Replaying trace iteration {}", i);
+            }
             this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
+        log_info(tt::LogTest, "All trace iterations enqueued, calling Finish");
     }
 };
 

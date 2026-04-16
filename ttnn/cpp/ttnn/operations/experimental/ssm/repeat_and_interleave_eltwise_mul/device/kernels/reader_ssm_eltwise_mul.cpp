@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,14 +20,12 @@ void kernel_main() {
     constexpr uint32_t cb_in1_bcast_row = get_compile_time_arg_val(3);
 
     uint32_t l1_write_addr_in0;
-    uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     constexpr auto src0_args = TensorAccessorArgs<4>();
-    const auto s0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     uint32_t l1_write_addr_in1;
-    uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_face = 16;
@@ -57,7 +55,7 @@ void kernel_main() {
             cb_wait_front(cb_in1_transposed, onetile);
             uint64_t cb_in1_transposed_read_ptr = get_noc_addr(get_read_ptr(cb_in1_transposed));
 
-            // Manually unroll iterating across the tile to eliminate unncessary conditional checking
+            // Manually unroll iterating across the tile to eliminate unnecessary conditional checking
             // First + second face
             for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_face; tile_row_id++) {
                 cb_reserve_back(cb_in1_bcast_row, onetile);

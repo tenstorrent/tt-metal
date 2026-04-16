@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "compute_kernel_api/tilize_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
@@ -136,6 +136,7 @@ void kernel_main() {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
             // DPRINT << 'B' << ENDL();
+            // DEVICE_PRINT("B\n");
             for (uint32_t block_in0_w = 0; block_in0_w < num_blocks_in0_w; block_in0_w++) {
                 bool last_out = block_in0_w == (num_blocks_in0_w - 1);
                 if (tilize_in) {

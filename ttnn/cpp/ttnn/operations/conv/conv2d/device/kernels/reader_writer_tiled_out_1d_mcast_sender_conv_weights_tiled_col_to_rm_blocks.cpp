@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -125,11 +125,11 @@ void kernel_main() {
     // read in bias if enabled (done only once for all batches)
     constexpr uint32_t bias_pagesize =
         fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy but valid value in case bias is not enabled
-    const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr);
     bool load_bias = true;
 
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
@@ -221,6 +221,7 @@ void kernel_main() {
                     // loop over weight block tiles along w
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                         // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
+                        // DEVICE_PRINT("weight_tile_id={}\n", weight_tile_id);
                         noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
                         weight_write_l1_addr += weight_tile_nbytes;
                         weights_block_size_bytes += weight_tile_nbytes;
@@ -255,12 +256,6 @@ void kernel_main() {
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                 // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                 // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
-                // may not be sent in order they are issued
-                noc_async_writes_flushed();
-#endif
-
                 // We should also multicast the flag to destinations
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_semaphore_set_multicast(
@@ -314,12 +309,6 @@ void kernel_main() {
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc
                 // even though cmd bufs are different Also, this only works because we are setting VCs statically (using
                 // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not
-                // be sent in order they are issued
-                noc_async_writes_flushed();
-#endif
-
                 // We should also multicast the flag to destinations
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_semaphore_set_multicast(

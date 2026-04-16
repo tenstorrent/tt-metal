@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <optional>
 
 #include "autograd/tensor.hpp"
 #include "dropout_module.hpp"
@@ -22,7 +24,7 @@ public:
     explicit SingleHeadAttention(uint32_t embedding_dim, float dropout_prob);
 
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+        const autograd::TensorPtr& x, const std::optional<autograd::TensorPtr>& mask) override;
 };
 
 }  // namespace ttml::modules

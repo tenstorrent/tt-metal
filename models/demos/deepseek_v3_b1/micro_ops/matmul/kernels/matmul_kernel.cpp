@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Matmul unified kernel
@@ -49,10 +49,11 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    // CTArgs type alias (required for Op template) - out_w is compile-time for TRISC
+    // CTArgs type alias (required for Op template) - out_w, transpose, fused_activation are compile-time for TRISC
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
         get_named_compile_time_arg_val("matmul_out_w"),
-        get_named_compile_time_arg_val("matmul_transpose")>;
+        get_named_compile_time_arg_val("matmul_transpose"),
+        get_named_compile_time_arg_val("matmul_fused_activation")>;
 
     // Named compile-time args
     constexpr uint32_t in0_cb = get_named_compile_time_arg_val("matmul_in0");
@@ -67,6 +68,7 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+    deepseek_compute_kernel_init();
 #endif
 
     // ========================================================================

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,17 +12,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::experimental::prim {
-
-StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return StridedAllGatherAsyncProgramFactory{};
-}
-
-void StridedAllGatherAsync::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 void StridedAllGatherAsync::validate_on_program_cache_miss(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
 
@@ -47,9 +36,6 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "StridedAllGatherAsync::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
         attributes.dim,
         attributes.num_links,
@@ -57,14 +43,12 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.output_mem_config,
         attributes.topology,
         attributes.cluster_axis,
-        attributes.tiles_per_chunk,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.mm_cores_y,
         attributes.mm_block_ht,
         attributes.mm_block_wt,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -80,7 +64,6 @@ Tensor strided_all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis,
-    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,
@@ -111,7 +94,6 @@ Tensor strided_all_gather_async(
         ccl_topology,
         multi_device_global_semaphore,
         cluster_axis,
-        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,

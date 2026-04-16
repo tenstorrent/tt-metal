@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ops/embedding_op.hpp"
 
 #include <gtest/gtest.h>
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -26,15 +24,13 @@ protected:
 };
 
 TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
     auto weight_tensor = ttml::core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
-    autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
+    autograd::TensorPtr weight = autograd::create_tensor(weight_tensor, /* requires_grad */ true);
 
     uint32_t batch_size = 1;
     uint32_t sentence_size = 32;

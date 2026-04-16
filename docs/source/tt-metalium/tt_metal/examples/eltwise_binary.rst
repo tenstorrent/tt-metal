@@ -193,8 +193,7 @@ The compute kernel performs the actual elementwise addition. It initializes the 
 .. code-block:: cpp
 
     // tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -226,7 +225,6 @@ The compute kernel performs the actual elementwise addition. It initializes the 
             cb_pop_front(cb_in0, 1);
             cb_pop_front(cb_in1, 1);
         }
-    }
     }
 
 The writer kernel looks similar to the reader kernel. Instead of reading, it writes data back into DRAM and uses the appropriate API to do so.

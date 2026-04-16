@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t start_wt = get_arg_val<uint32_t>(2);        // Starting width tile index for this core
     const bool is32_bit_data = get_arg_val<uint32_t>(3) == 1;  // Flag indicating if indices data is 32-bit
 
-    // Compiletime args
+    // Compile time args
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);  // Input values circular buffer
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);  // Generated indices circular buffer
     constexpr uint32_t Ht = get_compile_time_arg_val(2);         // Total height tiles in tensor
@@ -27,15 +27,13 @@ void kernel_main() {
 
     // DRAM tensor accessor configuration
     constexpr auto s_args = TensorAccessorArgs<5>();
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(s_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(s_args, src_addr);
 
 #if not GENERATE_INDICES
     // Precomputed indices tensor accessor
     constexpr auto indices_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     const uint32_t src_indices_addr = get_arg_val<uint32_t>(4);
-    constexpr uint32_t indices_tile_bytes = get_tile_size(cb_id_in1);
-    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr, indices_tile_bytes);
+    const auto indices_accessor = TensorAccessor(indices_args, src_indices_addr);
 #endif  // not GENERATE_INDICES
 
     for (uint32_t i = start_ht; i < Ht; ++i) {

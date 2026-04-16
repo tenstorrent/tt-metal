@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
@@ -20,11 +20,15 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
+
+// Circular buffer ID used to indicate an unallocated/invalid CB
+constexpr uint32_t INVALID_CB_ID = 32;
+
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
 struct ScalarInfo {
-    // Scalar Info is used to store the information abpou the scalar used in avg pool op
+    // Scalar Info is used to store the information about the scalar used in avg pool op
     // start and end refer to indices of the output stick core is calculating.
     // These are directly mapped to the for loop that can be found in reader and compute kernel of the pool op
     // for (uint32_t i = 0; i < nsticks_per_core; ++i), start is first stick which should be reduced and multiplied by
@@ -37,11 +41,11 @@ struct ScalarInfo {
 
 // This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
 // adequate scalars for each output element that core should produce. It should be called only for avg pool operation
-// and only if the divisor_override is NOT set and the idea behind it is to generate config tesnor in cases where one
+// and only if the divisor_override is NOT set and the idea behind it is to generate config tensor in cases where one
 // scalar per core is not sufficient to create correct result. Those scenarios are ceil_mode == true and (ceil_pad_h > 0
 // || ceil_pad_w > 0) or count_include_pad == false || (pad_h > 0 || pad_w > 0). Both of these scenarios can be
 // irrelevant if the divisor_override is set, in which case we don't calculate the divisor since it is already passed as
-// an argument. It only adds scalars that are different than the scalar preeceding it not to have duplicates of data,
+// an argument. It only adds scalars that are different than the scalar preceding it not to have duplicates of data,
 // this is why we use start and end indices to know how many sequential output elements should be multiplied by the same
 // scalar value.
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
@@ -56,7 +60,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             config.pad_t + config.pad_b,
             config.pad_l + config.pad_r,
             config.divisor_override),
-        "Avg pool scalars config should be calulated only for ceil_mode == true and "
+        "Avg pool scalars config should be calculated only for ceil_mode == true and "
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
@@ -168,7 +172,6 @@ static Tensor create_scalar_config_tensor(
 
                 if (output_stick_n == n_dim) {
                     nhw_linear -= output_stick_n * config.out_w * config.out_h;
-                    output_stick_n = 0;
                     output_stick_h = 0;
                     output_stick_w = 0;
                 }
@@ -178,6 +181,13 @@ static Tensor create_scalar_config_tensor(
 
     constexpr uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * max_scalars_cnt;
+
+    TT_FATAL(
+        entries_per_core != 0,
+        "entries_per_core cannot be zero. max_scalars_cnt: {}, num_iterations: {}, in_memory_layout: {}",
+        max_scalars_cnt,
+        num_iterations,
+        in_memory_layout);
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
@@ -192,7 +202,7 @@ static Tensor create_scalar_config_tensor(
             break;
         }
         case TensorMemoryLayout::WIDTH_SHARDED: {
-            // With width sharded layout scalars should be calulated only once, so we push them back num_shards_c times
+            // With width sharded layout scalars should be calculated only once, so we push them back num_shards_c times
             // but have only one array of scalars
             uint32_t repeats = config_tensor_in_dram ? 1 : num_shards_c;
             push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, repeats);
@@ -213,13 +223,13 @@ static Tensor create_scalar_config_tensor(
     return Tensor(std::move(buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
-std::vector<uint16_t> generate_core_starting_indices(
+std::vector<uint32_t> generate_core_starting_indices(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
     const tt::tt_metal::TensorMemoryLayout shard_scheme,
     const uint32_t num_cores_x,
     const uint32_t ncores) {
-    std::vector<uint16_t> starting_indices;
+    std::vector<uint32_t> starting_indices;
     uint32_t repeat_factor = 0;
     switch (shard_scheme) {
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: repeat_factor = 1; break;
@@ -228,14 +238,13 @@ std::vector<uint16_t> generate_core_starting_indices(
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
     for (const auto& item : shard_boundaries) {
-        const auto& [output_shard_start, output_shard_end] = item.output_range;
-        const auto& [input_shard_start, input_shard_end] = item.input_range;
+        const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
             starting_indices.push_back(0);
             continue;
         }
-        TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
         for (uint32_t r = 0; r < repeat_factor; r++) {
             starting_indices.push_back(op_trace_metadata[output_shard_start]);
         }
@@ -270,12 +279,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_w,
     bool ceil_mode,
     bool return_indices,
-    std::vector<uint16_t> core_starting_indices,
+    std::vector<uint32_t> core_starting_indices,
     bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
-    const MemoryConfig& /*out_mem_config*/,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,
@@ -293,6 +301,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
+    const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
+    TT_FATAL(
+        max_in_nhw_per_core <= std::numeric_limits<uint16_t>::max(),
+        "Input nhw per core {} exceeds uint16_t limit, this will cause overflow because the reader indices are stored "
+        "as uint16_t",
+        max_in_nhw_per_core);
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -305,6 +319,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_c,
         pool_type,
         return_indices,
+        in_h,
+        in_w,
         output_layout);
     uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
@@ -314,6 +330,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
+
+    // Compute CB sizes centrally - used for both CB creation and L1 validation
+    auto output_shard_shape = outputs[0].shard_spec().value().shape;
+    PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
+        params,
+        one_scalar_per_core,
+        return_indices,
+        output_layout,
+        outputs[0].dtype(),
+        {output_shard_shape[0], output_shard_shape[1]},
+        config_tensor_in_dram);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
@@ -339,14 +366,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
-    const uint32_t in_scalar_cb_pagesize = tile_size(params.data_format);
-    const uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
+    const uint32_t in_scalar_cb_pagesize = cb_sizes.scalar_cb_pagesize;
+    const uint32_t in_scalar_cb_npages = cb_sizes.scalar_cb_npages;
     tt::tt_metal::create_cb(
         in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    uint32_t in_scalar_cb_id_1 = 32;
-    if (params.is_avg_pool && params.split_reader && !one_scalar_per_core) {
+    uint32_t in_scalar_cb_id_1 = INVALID_CB_ID;
+    if (cb_sizes.has_second_scalar_cb) {
         in_scalar_cb_id_1 = next_cb_index++;
         tt::tt_metal::create_cb(
             in_scalar_cb_id_1, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
@@ -356,9 +383,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
     uint32_t clear_value_cb_id = next_cb_index++;
-    tt::tt_metal::create_cb(
-        clear_value_cb_id, program, all_cores, tile_size(params.data_format), 1, params.data_format);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(params.data_format), 1);
+    tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, cb_sizes.clear_value_cb_size, 1, params.data_format);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, cb_sizes.clear_value_cb_size, 1);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -398,54 +424,49 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages);
-    uint32_t in_cb_sz = 0;
+    // in_nblocks_c is factory-specific (used for kernel args), derived from the shared in_cb_raw_size
     uint32_t in_nblocks_c = 1;
     if (return_indices || params.is_wide_reduction) {
-        // for return indices we use 1 whole tile per reduction to simplify logic
-        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
         in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
-    } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     // reader output == input to tilize
     const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
-    const uint32_t in_cb_page_padded = tt::round_up(
-        in_cb_sz,
-        tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = params.multi_buffering_factor;
+    uint32_t in_cb_id_1 = INVALID_CB_ID;          // input rows for "multiple (out_nelems)" output pixels
+    const uint32_t in_cb_pagesize = cb_sizes.in_cb_pagesize;
+    const uint32_t in_cb_npages = cb_sizes.in_cb_npages;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
-    if (params.split_reader) {
+    if (cb_sizes.has_split_reader) {
         in_cb_id_1 = next_cb_index++;
         tt::tt_metal::create_cb(in_cb_id_1, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
-    uint32_t in_idx_cb_id = 32;
-    uint32_t pack_tmp_cb_id = 32;
-    uint32_t pack_idx_tmp_cb_id = 32;
-    uint32_t right_inc_cb_id = 32;
-    uint32_t down_left_wrap_inc_cb_id = 32;
-    uint32_t up_left_wrap_inc_cb_id = 32;
-    uint32_t intra_kernel_right_inc_cb_id = 32;
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
-    uint32_t compute_tmp_idx_cb_id = 32;
-    uint16_t right_inc = 0;
-    uint16_t down_left_wrap_inc = 0;
-    uint16_t up_left_wrap_inc = 0;
-    uint16_t intra_kernel_right_inc = 0;
-    uint16_t intra_kernel_down_left_wrap_inc = 0;
+    uint32_t in_idx_cb_id = INVALID_CB_ID;
+    uint32_t pack_tmp_cb_id = INVALID_CB_ID;
+    uint32_t pack_idx_tmp_cb_id = INVALID_CB_ID;
+    uint32_t right_inc_cb_id = INVALID_CB_ID;
+    uint32_t down_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t up_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t intra_kernel_right_inc_cb_id = INVALID_CB_ID;
+    uint32_t intra_kernel_down_left_wrap_inc_cb_id = INVALID_CB_ID;
+    uint32_t compute_tmp_idx_cb_id = INVALID_CB_ID;
+    uint32_t right_inc = 0;
+    uint32_t down_left_wrap_inc = 0;
+    uint32_t up_left_wrap_inc = 0;
+    uint32_t intra_kernel_right_inc = 0;
+    uint32_t intra_kernel_down_left_wrap_inc = 0;
+    bool indexes_32_bit = false;
     if (return_indices) {
+        indexes_32_bit = params.index_format == tt::DataFormat::UInt32;
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         in_idx_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(in_idx_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.nbytes * tile_elems, 1);
+        tt::tt_metal::create_cb(
+            in_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.index_nbytes * tile_elems, 1);
         pack_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(pack_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_tmp_cb_id, params.nbytes * tile_elems, 1);
@@ -513,14 +534,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             // batches this means we process multiple top left positions within the kernel for a single top left
             // position in the tensor, so when we move the kernel to a new position in the tensor we need to subtract
             // the difference between the first top left index in the kernel and the last one
-            uint16_t sticks_per_chunk =
+            uint32_t sticks_per_chunk =
                 kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
-            uint16_t w_chunks =
+            uint32_t w_chunks =
                 kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : (kernel_w / sticks_per_chunk) + 1;
-            uint16_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
-            uint16_t first_top_left_kernel_index = 0;
-            uint16_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
-            uint16_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
+            uint32_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
+            uint32_t first_top_left_kernel_index = 0;
+            uint32_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
+            uint32_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
             right_inc -= index_correction;
             down_left_wrap_inc -= index_correction;
             up_left_wrap_inc -= index_correction;
@@ -535,32 +556,27 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const bool zero_pages = is_output_tiled && is_output_block_format;
 
     // Conditionally allocate temporary CB - only needed for TILED output
-    uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
+    uint32_t pre_tilize_cb_id = INVALID_CB_ID;
 
-    if (is_output_tiled) {
+    if (cb_sizes.has_pre_tilize) {
         pre_tilize_cb_id = next_cb_index++;
-        const uint32_t pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
-        const uint32_t pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
         tt::tt_metal::create_cb(
-            pre_tilize_cb_id, program, all_cores, pre_tilize_cb_pagesize, pre_tilize_cb_npages, params.data_format);
+            pre_tilize_cb_id,
+            program,
+            all_cores,
+            cb_sizes.pre_tilize_cb_pagesize,
+            cb_sizes.pre_tilize_cb_npages,
+            params.data_format);
         log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", pre_tilize_cb_id, pre_tilize_cb_pagesize, pre_tilize_cb_npages);
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}",
+            pre_tilize_cb_id,
+            cb_sizes.pre_tilize_cb_pagesize,
+            cb_sizes.pre_tilize_cb_npages);
     }
 
-    uint32_t out_cb_pagesize;
-    uint32_t out_cb_npages;
-
-    if (is_output_tiled) {
-        out_cb_pagesize = tt::tile_size(params.output_data_format);
-        out_cb_npages =
-            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
-    } else {
-        out_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
-            params.nbytes;  // there is just one row of channels after each reduction (or 1
-                            // block of c if its greater than 8 tiles)
-        out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
-    }
+    const uint32_t out_cb_pagesize = cb_sizes.out_cb_pagesize;
+    const uint32_t out_cb_npages = cb_sizes.out_cb_npages;
 
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++,
@@ -571,23 +587,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         params.output_data_format,
         outputs[0].buffer());
 
-    uint32_t out_idx_cb_id = 32;
+    uint32_t out_idx_cb_id = INVALID_CB_ID;
     tt::tt_metal::CBHandle out_idx_cb = 0;
-    if (return_indices) {
+    if (cb_sizes.has_out_idx) {
         TT_FATAL(
             outputs.size() == 2,
             "When return_indices is true, there should be two outputs, but got {}",
             outputs.size());
-        uint32_t out_idx_cb_npages = out_cb_npages;
-        uint32_t out_idx_cb_pagesize =
-            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
-            params.index_nbytes;
         std::tie(out_idx_cb_id, out_idx_cb) = tt::tt_metal::create_cb(
             next_cb_index++,
             program,
             all_cores,
-            out_idx_cb_pagesize,
-            out_idx_cb_npages,
+            cb_sizes.out_idx_cb_pagesize,
+            cb_sizes.out_idx_cb_npages,
             params.index_format,
             outputs[1].buffer());
     }
@@ -605,7 +617,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     tt::tt_metal::CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
-    uint32_t config_cb_id = 32;
+    uint32_t config_cb_id = INVALID_CB_ID;
     Tensor config_tensor;
     if (!one_scalar_per_core) {
         // create config tensor
@@ -677,7 +689,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         bf16_scalar,                                                                         // 9
         bf16_init_value,                                                                     // 10
         in_nblocks_c,                                                                        // 11
-        in_cb_sz,                                                                            // 12
+        cb_sizes.in_cb_raw_size,                                                             // 12
         params.max_rows_for_reduction,                                                       // 13
         ceil_pad_w,                                                                          // 14
         in_cb_id_0,                                                                          // 15
@@ -686,40 +698,41 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,                                                             // 18
         in_scalar_cb_id_0,                                                                   // 19
         in_scalar_cb_id_1,                                                                   // 20
-        in_idx_cb_id,                                                                        // 21
-        pack_tmp_cb_id,                                                                      // 22
-        pack_idx_tmp_cb_id,                                                                  // 23
-        right_inc_cb_id,                                                                     // 24
-        down_left_wrap_inc_cb_id,                                                            // 25
-        up_left_wrap_inc_cb_id,                                                              // 26
-        clear_value_cb_id,                                                                   // 27
-        (uint32_t)pool_type,                                                                 // 28
-        one_scalar_per_core,                                                                 // 29
-        config_cb_id,                                                                        // 30
-        in_nbytes_c,                                                                         // 31
-        shard_width_bytes,                                                                   // 32
-        params.multi_buffering_factor,                                                       // 33
-        stride_w,                                                                            // 34
-        dilation_h,                                                                          // 35
-        dilation_w,                                                                          // 36
-        (uint32_t)return_indices,                                                            // 37
-        pad_t,                                                                               // 38
-        pad_l,                                                                               // 39
-        right_inc,                                                                           // 40
-        down_left_wrap_inc,                                                                  // 41
-        up_left_wrap_inc,                                                                    // 42
-        (uint32_t)zero_pages,                                                                // 43
-        out_cb_id,                                                                           // 44
-        out_idx_cb_id,                                                                       // 45
-        intra_kernel_right_inc,                                                              // 46
-        intra_kernel_down_left_wrap_inc,                                                     // 47
-        intra_kernel_right_inc_cb_id,                                                        // 48
-        intra_kernel_down_left_wrap_inc_cb_id,                                               // 49
-        config_tensor_in_dram,                                                               // 50
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 51
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 52
-        reader_indices_storage.get_buffer()->address(),                                      // 53
-        reader_indices_storage.get_buffer()->page_size(),                                    // 54
+        clear_value_cb_id,                                                                   // 21
+        (uint32_t)pool_type,                                                                 // 22
+        one_scalar_per_core,                                                                 // 23
+        config_cb_id,                                                                        // 24
+        in_nbytes_c,                                                                         // 25
+        shard_width_bytes,                                                                   // 26
+        params.multi_buffering_factor,                                                       // 27
+        stride_w,                                                                            // 28
+        dilation_h,                                                                          // 29
+        dilation_w,                                                                          // 30
+        (uint32_t)zero_pages,                                                                // 31
+        config_tensor_in_dram,                                                               // 32
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 33
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 34
+        reader_indices_storage.get_buffer()->address(),                                      // 35
+        reader_indices_storage.get_buffer()->page_size(),                                    // 36
+        // MPWI-only args start here (for reader_mpwi.cpp, not used by reader_pool_2d.cpp)
+        in_idx_cb_id,                           // 37
+        pack_tmp_cb_id,                         // 38
+        pack_idx_tmp_cb_id,                     // 39
+        right_inc_cb_id,                        // 40
+        down_left_wrap_inc_cb_id,               // 41
+        up_left_wrap_inc_cb_id,                 // 42
+        pad_t,                                  // 43
+        pad_l,                                  // 44
+        right_inc,                              // 45
+        down_left_wrap_inc,                     // 46
+        up_left_wrap_inc,                       // 47
+        intra_kernel_right_inc,                 // 48
+        intra_kernel_down_left_wrap_inc,        // 49
+        out_cb_id,                              // 50
+        out_idx_cb_id,                          // 51
+        intra_kernel_right_inc_cb_id,           // 52
+        intra_kernel_down_left_wrap_inc_cb_id,  // 53
+        (uint32_t)indexes_32_bit,               // 54
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
@@ -753,43 +766,44 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
 
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,                     // 0
-        kernel_h * kernel_w,                    // 1
-        params.split_reader,                    // 2
-        0,                                      // 3 - max_out_nhw_per_core, used for grid sample but not for pool
-        in_c_per_shard_ceil,                    // 4
-        in_nblocks_c,                           // 5
-        params.max_rows_for_reduction,          // 6
-        in_cb_id_0,                             // 7
-        in_cb_id_1,                             // 8
-        in_scalar_cb_id_0,                      // 9
-        in_scalar_cb_id_1,                      // 10
-        in_idx_cb_id,                           // 11
-        pack_tmp_cb_id,                         // 12
-        pack_idx_tmp_cb_id,                     // 13
-        right_inc_cb_id,                        // 14
-        down_left_wrap_inc_cb_id,               // 15
-        up_left_wrap_inc_cb_id,                 // 16
-        out_cb_id,                              // 17
-        out_idx_cb_id,                          // 18
-        one_scalar_per_core,                    // 19
-        pre_tilize_cb_id,                       // 20
-        is_output_tiled,                        // 21
-        is_output_block_format,                 // 22
-        (uint32_t)return_indices,               // 23
-        stride_h,                               // 24
-        stride_w,                               // 25
-        in_h_padded,                            // 26
-        in_w_padded,                            // 27
-        eff_kernel_h,                           // 28
-        eff_kernel_w,                           // 29
-        pad_l,                                  // 30
-        intra_kernel_right_inc_cb_id,           // 31
-        intra_kernel_down_left_wrap_inc_cb_id,  // 32
-        compute_tmp_idx_cb_id,                  // 33
+        params.in_ntiles_c,             // 0
+        kernel_h * kernel_w,            // 1
+        params.split_reader,            // 2
+        0,                              // 3 - max_out_nhw_per_core, used for grid sample but not for pool
+        in_c_per_shard_ceil,            // 4
+        in_nblocks_c,                   // 5
+        params.max_rows_for_reduction,  // 6
+        in_cb_id_0,                     // 7
+        in_cb_id_1,                     // 8
+        in_scalar_cb_id_0,              // 9
+        in_scalar_cb_id_1,              // 10
+        out_cb_id,                      // 11
+        one_scalar_per_core,            // 12
+        pre_tilize_cb_id,               // 13
+        is_output_tiled,                // 14
+        is_output_block_format,         // 15
+        // MPWI-only args start here (for compute_mpwi.cpp, not used by compute_pool_2d.cpp)
+        in_idx_cb_id,                           // 16
+        pack_tmp_cb_id,                         // 17
+        pack_idx_tmp_cb_id,                     // 18
+        right_inc_cb_id,                        // 19
+        down_left_wrap_inc_cb_id,               // 20
+        up_left_wrap_inc_cb_id,                 // 21
+        out_idx_cb_id,                          // 22
+        stride_h,                               // 23
+        stride_w,                               // 24
+        in_h_padded,                            // 25
+        in_w_padded,                            // 26
+        eff_kernel_h,                           // 27
+        eff_kernel_w,                           // 28
+        pad_l,                                  // 29
+        intra_kernel_right_inc_cb_id,           // 30
+        intra_kernel_down_left_wrap_inc_cb_id,  // 31
+        compute_tmp_idx_cb_id,                  // 32
+        clear_value_cb_id,                      // 33
         kernel_h,                               // 34
         kernel_w,                               // 35
-        clear_value_cb_id                       // 36
+        (uint32_t)indexes_32_bit                // 36
     };
 
     // Get device arch for compute kernel config initialization
@@ -799,11 +813,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto device_compute_kernel_config = init_device_compute_kernel_config(
         device_arch,
         compute_kernel_config,
-        MathFidelity::HiFi4,
-        false,                                         // math_approx_mode
-        params.is_avg_pool && params.is_large_kernel,  // fp32_dest_acc_en
-        false,                                         // packer_l1_acc
-        params.is_large_kernel && return_indices       // dst_full_sync_en
+        tt::tt_metal::MathFidelity::HiFi4,
+        false,                                                             // math_approx_mode
+        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
+        false,                                                             // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
     );
 
     auto compute_config = tt::tt_metal::ComputeConfig{
@@ -851,51 +865,37 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
 
-            args.push_back((uint32_t)(start_row));
-            args.push_back((uint32_t)(start_col));
+            args.push_back(start_row);
+            args.push_back(start_col);
         }
         SetRuntimeArgs(program, reader0_kernel, core, args);
+        if (params.split_reader) {
+            SetRuntimeArgs(program, reader1_kernel, core, args);
+        }
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
-    auto temporary_size = calculate_total_cb_size(program);
+    // Validate local and global CB sizes separately to prevent two errors from cancelling out
+    // Note local CBs are non-globally-allocated (computed by the program); global CBs are tensor-backed.
+    auto actual_local_cb_size = calculate_total_cb_size(program);
 
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t l1_usage = calculate_L1_usage(
-        input.dtype(),
-        in_c,
-        pad_h,
-        pad_w,
-        ceil_pad_h,
-        ceil_pad_w,
-        ceil_mode,
-        return_indices,
-        kernel_h,
-        kernel_w,
-        out_h,
-        out_w,
-        input.memory_config(),
-        outputs[0].memory_config(),
-        pool_type,
-        count_include_pad,
-        divisor_override,
-        output_layout,
-        outputs[0].dtype(),
-        config_tensor_in_dram);
-
-    uint32_t output_cb_size = post_allocate_size - memory_used;
+    uint32_t actual_global_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
     bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
     TT_FATAL(
-        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
-        "Calculated CB size {} + {} = {} does not match with the actual CB size {}  ",
-        temporary_size,
-        output_cb_size,
-        temporary_size + output_cb_size,
-        l1_usage);
+        actual_local_cb_size == cb_sizes.local_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Local CB size mismatch: actual {} != expected {}",
+        actual_local_cb_size,
+        cb_sizes.local_cb_total());
+    TT_FATAL(
+        actual_global_cb_size == cb_sizes.global_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Global CB size mismatch: actual {} != expected {}",
+        actual_global_cb_size,
+        cb_sizes.global_cb_total());
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
@@ -974,7 +974,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& input = tensor_args.input_tensor_;
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
-    const auto& out_mem_config = op_attr.memory_config_;
     const auto& compute_kernel_config = op_attr.compute_kernel_config_;
     const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
@@ -1020,7 +1019,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
-    std::vector<uint16_t> core_starting_indices;
+    std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
         const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
         const uint32_t ncores = input.shard_spec().value().grid.num_cores();
@@ -1065,7 +1064,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_h,
         dilation_w,
         num_shards_c,
-        out_mem_config,
         compute_kernel_config,
         divisor_override,
         op_attr.memory_used,

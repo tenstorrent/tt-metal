@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,11 +22,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -269,7 +268,8 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
             .compile_args = writer_compile_time_args_dc});
 
     vector<uint32_t> compute_kernel_args = {
-        uint(cfg.num_tiles)  // per_core_tile_cnt
+        uint(cfg.num_tiles),  // per_core_tile_cnt
+        false                 // use_dfbs
     };
     CreateKernel(
         program_,

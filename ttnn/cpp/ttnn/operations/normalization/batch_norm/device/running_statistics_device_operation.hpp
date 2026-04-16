@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -36,6 +35,7 @@ struct RunningStatistics {
             tt::tt_metal::KernelHandle writer_kernel_id{};
             tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
+            bool any_float32{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -55,9 +55,7 @@ struct RunningStatistics {
     using program_factory_t = std::variant<RunningStatisticsProgramFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };

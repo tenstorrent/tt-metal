@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // KV Cache Branch unified kernel
@@ -39,40 +39,58 @@ void kernel_main() {
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
 
-    // Gather sender args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::SenderArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("dkv_gather_src_cb"),
-        get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("dkv_gather_row_major"),
-        get_write_ptr(get_named_compile_time_arg_val(
-            "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+    // Gather args: both sender and receiver on NCRISC (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("dkv_gather_src_cb"),
+                get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("dkv_gather_row_major"),
+                get_write_ptr(get_named_compile_time_arg_val(
+                    "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+            },
+        .receiver =
+            {
+                get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("dkv_gather_dst_cb"),
+                get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+            },
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs =
-        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<
+        get_named_compile_time_arg_val("Wt"),
+        get_named_compile_time_arg_val("Ht"),
+        get_named_compile_time_arg_val("cos_sin_page_size"),
+        get_named_compile_time_arg_val("total_Wt"),
+        get_named_compile_time_arg_val("start_tile_offset")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
-    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
+    constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
+    constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
+    constexpr uint32_t position_ids_tensor_address = get_named_compile_time_arg_val("position_ids_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
 
-    // Reader args: CB indices for sharded input signaling
     deepseek_b1_ops::Rope::ReaderArgs k_rope_args{
         .in_cb = k_rope_input_cb,
-        .cos_cb = cos_cb,
-        .sin_cb = sin_cb,
-        .trans_mat_cb = trans_mat_cb,
+        .cos_sin_cb = cos_sin_cb,
+        .cos_tensor_address = cos_tensor_address,
+        .sin_tensor_address = sin_tensor_address,
+        .position_ids_tensor_address = position_ids_tensor_address,
     };
 
 // ============================================================================
@@ -86,14 +104,10 @@ void kernel_main() {
     // Matmul writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
 
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
-    deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
-        get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("dkv_gather_dst_cb"),
-        get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+    // Gather: BRISC is no-op (ReceiverOnNCRISC mode)
+    deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
+        .sender = {},
+        .receiver = {},
     };
 
     deepseek_b1_ops::RMSNorm::WriterArgs kv_rmsnorm_args{};
@@ -126,13 +140,13 @@ void kernel_main() {
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
-        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
+        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb")>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(512))
     };
@@ -142,25 +156,20 @@ void kernel_main() {
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
-    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_sin_cb = get_named_compile_time_arg_val("cos_sin_cb");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
     constexpr uint32_t rotated_in_interm_cb = get_named_compile_time_arg_val("rotated_in_interm_cb");
-    constexpr uint32_t cos_interm_cb = get_named_compile_time_arg_val("cos_interm_cb");
-    constexpr uint32_t sin_interm_cb = get_named_compile_time_arg_val("sin_interm_cb");
     constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("out_cb");
 
     // Compute args: all CB indices
     deepseek_b1_ops::Rope::ComputeArgs k_rope_args{
         .in_cb = k_rope_input_cb,
-        .cos_cb = cos_cb,
-        .sin_cb = sin_cb,
+        .cos_sin_cb = cos_sin_cb,
         .trans_mat_cb = trans_mat_cb,
         .rotated_in_interm_cb = rotated_in_interm_cb,
-        .cos_interm_cb = cos_interm_cb,
-        .sin_interm_cb = sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
+    deepseek_compute_kernel_init();
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
@@ -182,12 +191,7 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
     }
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-        constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
         constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
-        unified_kernels::setup_sharded_buffer(cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(sin_cb, Wt);
         unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
     }
 #endif
@@ -207,7 +211,7 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("DKV_GATHER");
-        deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+        deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true> dkv_gather;
         dkv_gather(dkv_gather_args);
     }
 
@@ -238,7 +242,10 @@ void kernel_main() {
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
-    uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
+    uint32_t position_ids_addr = get_common_arg_val<uint32_t>(1);
+
+    volatile tt_l1_ptr uint32_t* position_ids_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_ids_addr);
+    uint32_t kv_cache_start_tile_id = position_ids_ptr[0];
 
     // Create TensorAccessor for DRAM interleaved tensor
     auto kv_cache_addr_gen = TensorAccessor(

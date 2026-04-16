@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,11 +50,6 @@ void RunningStatistics::validate_tensors(
     }
 }
 
-RunningStatistics::program_factory_t RunningStatistics::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return RunningStatisticsProgramFactory();
-}
-
 void RunningStatistics::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& [batch_mean, batch_var, running_mean, running_var] = tensor_args;
@@ -83,11 +78,6 @@ void RunningStatistics::validate_on_program_cache_miss(
             "running_var tensor must be interleaved");
     }
 
-    validate_tensors(operation_attributes, tensor_args);
-};
-
-void RunningStatistics::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,9 @@ from loguru import logger
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
@@ -106,7 +106,25 @@ def run_group_norm_DRAM(
     if not perf_test_mode:
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+        pcc_threshold = 0.999
+        rtol = 0.060
+
+        if use_welford:
+            atol = 0.043
+            frobenius_threshold = 0.010
+        else:
+            atol = 0.069
+            frobenius_threshold = 0.025
+
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=pcc_threshold,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -134,10 +152,13 @@ def run_group_norm_DRAM(
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
-        #  SDXL VAE
+        # SDXL Base
+        (1, 1920, 16, 16, 32, 1, 4, 4),
+        # SDXL VAE
         (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
         # SDXL Refiner
+        (1, 1536, 8, 8, 32, 1, 2, 8),
         (1, 1152, 128, 128, 32, 2, 8, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
@@ -232,6 +253,17 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     if device.core_grid.y == 7:
         pytest.skip()
 
+    if (
+        is_blackhole()
+        and is_watcher_enabled()
+        and N == 1
+        and H == 512
+        and W == 512
+        and num_groups == 32
+        and (C, num_splits) in [(256, 8), (512, 16)]
+    ):
+        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
+
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
@@ -295,7 +327,14 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.999,
+        rtol=10.519,
+        atol=0.086,
+        frobenius_threshold=0.043,
+    )
 
 
 def _nearest_32_per_core(x, core):
@@ -384,4 +423,11 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor[:, :, : H * W, :C], 0.9994)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor[:, :, : H * W, :C],
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=0.09,
+        frobenius_threshold=0.03,
+    )

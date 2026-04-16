@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ namespace ttnn::operations::grid_sample {
 using namespace tt;
 using namespace tt::tt_metal;
 
-ttnn::Tensor ExecuteGridSample::invoke(
+ttnn::Tensor grid_sample(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& grid,
     const std::string& mode,

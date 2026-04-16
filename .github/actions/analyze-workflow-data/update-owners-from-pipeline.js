@@ -7,7 +7,6 @@ const path = require('path');
  * Examples:
  *   t3k_unit_tests.yaml -> t3000-unit-tests
  *   t3k_demo_tests.yaml -> t3000-demo-tests
- *   ops/sanity/tests.yaml -> ops-sanity
  */
 function getWorkflowPrefix(filePath) {
   const relativePath = path.relative(path.join(__dirname, '../../..', 'tests/pipeline_reorg'), filePath);

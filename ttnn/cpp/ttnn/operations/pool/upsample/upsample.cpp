@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,10 +49,9 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
         input_tensor_reshaped,
         sliding_window_config,
-        0,      // pad_val
-        false,  // remote_read
-        false,  // transpose_mcast
-        input_tensor_reshaped.memory_config(),
+        0,       // pad_val
+        false,   // remote_read
+        false,   // transpose_mcast
         false);  // is_out_tiled
 
     return {haloed_tensor, sliding_window_config};
@@ -76,7 +75,7 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
 }
 
-ttnn::Tensor ExecuteUpSample::invoke(
+ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,
@@ -112,7 +111,7 @@ ttnn::Tensor ExecuteUpSample::invoke(
     // Validation is handled by the device operation's validate_on_program_cache_miss
 
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {

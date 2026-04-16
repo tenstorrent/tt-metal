@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ void kernel_main() {
     const uint32_t dst_addr0 = get_arg_val<uint32_t>(0);  // DRAM address for TopK values output tensor
     const uint32_t dst_addr1 = get_arg_val<uint32_t>(1);  // DRAM address for TopK indices output tensor
 
-    // Compiletime args
+    // Compile time args
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);      // Final values circular buffer
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);  // Final indices circular buffer
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
@@ -22,12 +22,10 @@ void kernel_main() {
 
     // Memory transfer configuration
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
 
     // Initialize DRAM tensor accessors for interleaved output format
-    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0, tile_bytes_values);
-    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1, tile_bytes_ind);
+    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0);
+    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1);
 
     // Process each height row sequentially, writing Kt tiles of TopK results
     for (uint32_t j = 0; j < Ht; ++j) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,8 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include <tt_stl/span.hpp>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -98,8 +98,8 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Implemention for when only one of the height dimension (rank - 2) and the width dimension is swapped with another
-    // dimension (dims = {..., rank - 2,
+    // Implementation for when only one of the height dimension (rank - 2) and the width dimension is swapped with
+    // another dimension (dims = {..., rank - 2,
     // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,16 +11,18 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.
@@ -114,6 +116,21 @@ void RunTest(
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
+        case HalProgrammableCoreType::DRAM: {
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+                log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            logical_core = CoreCoord{0, 0};
+            virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
+                logical_core,
+                DramConfig{.noc = tt_metal::NOC::NOC_0});
+            break;
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
@@ -204,6 +221,25 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(MeshWatcherFixture, TensixDramTestWatcherRingBufferDrisc) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "DRAM cores only support Slow Dispatch (Fast Dispatch not yet supported).");
+        GTEST_SKIP();
+    }
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        log_info(tt::LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
+        GTEST_SKIP();
+    }
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunTest(fixture, mesh_device, {DRAM, DM, 0});
             },
             mesh_device);
     }

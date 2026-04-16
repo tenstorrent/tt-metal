@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,13 +34,17 @@
 FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
         DPRINT << "eth_send_bytes\n";
+        DEVICE_PRINT("eth_send_bytes\n");
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
         DPRINT << "eth_wait_for_receiver_done\n";
+        DEVICE_PRINT("eth_wait_for_receiver_done\n");
         eth_wait_for_receiver_done();
     } else {
         DPRINT << "eth_wait_for_bytes\n";
+        DEVICE_PRINT("eth_wait_for_bytes\n");
         eth_wait_for_bytes(16);
         DPRINT << "wait eth_receiver_done\n";
+        DEVICE_PRINT("wait eth_receiver_done\n");
         eth_receiver_channel_done(0);
     }
 }
@@ -330,7 +334,7 @@ void kernel_main() {
             // advance sender channel state as soon as we receive an ack. Since we
             // may be the last active channel, and advance to done state just from ack
             // from the receiver ("I got a payload"), then we need to wait for done
-            // at the very end here. Otherise if we invoke another erisc op back-to-back,
+            // at the very end here. Otherwise if we invoke another erisc op back-to-back,
             // we may mess up transaction state because it's possible for receiver of this
             // op to send the completion done after that one has already started.
             uint32_t wait_count = 0;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
 #include "api/tensor/page.h"
 
 namespace tensor_accessor {
@@ -25,7 +24,6 @@ public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
     using PageMapping = typename Accessor::PageMapping;
 
-    using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
     using difference_type = std::ptrdiff_t;
     using reference = const Page&;
@@ -86,7 +84,7 @@ public:
         }
 
         do {
-            current_noc_addr += accessor.page_size;
+            current_noc_addr += accessor.get_aligned_page_size();
             current_page_id_in_shard++;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -110,7 +108,7 @@ public:
         }
 
         do {
-            current_noc_addr += steps * accessor.page_size;
+            current_noc_addr += steps * accessor.get_aligned_page_size();
             current_page_id_in_shard += steps;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;

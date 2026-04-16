@@ -1,15 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -21,6 +22,7 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
+    experimental::CircularBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_in0;
@@ -35,14 +37,21 @@ void kernel_main() {
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
+    experimental::CircularBuffer exp_cb_in0(cb_in0);
+    experimental::CircularBuffer exp_cb_in1(cb_in1);
+    experimental::CircularBuffer exp_cb_bcast(cb_bcast);
+    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
+    experimental::CircularBuffer exp_cb_left(cb_left);
+    experimental::CircularBuffer exp_cb_right(cb_right);
+
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        exp_cb_in0.wait_front(num_tiles_per_cycle);
+        exp_cb_in1.wait_front(num_tiles_per_cycle);
 
-        cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -51,13 +60,18 @@ void kernel_main() {
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        cb_push_back(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
 
-        cb_pop_front(cb_bcast, num_tiles_per_cycle);
+        exp_cb_bcast.pop_front(num_tiles_per_cycle);
+        // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
+        pack_reconfig_data_format(cb_llk_post, cb_out);
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
+#endif
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_llk_post, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
+        exp_cb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
@@ -104,8 +118,8 @@ void kernel_main() {
         }
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_left, num_tiles_per_cycle);
-        cb_pop_front(cb_right, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
+        exp_cb_left.pop_front(num_tiles_per_cycle);
+        exp_cb_right.pop_front(num_tiles_per_cycle);
     }
 }

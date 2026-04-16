@@ -20,6 +20,7 @@ on:
           # - llama3.1-70b
           - llama3.2-90b
           - mistral
+          - mistral-small-3.1-24b-vision
           - mixtral
           - grok
           - unet shallow
@@ -80,4 +81,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_llmbox"
       model: ${{ inputs.model || 'all' }}

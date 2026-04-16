@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 /**
  * Generate index tiles for TopK multicore local processing phase.
@@ -51,7 +53,6 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
             }  // k loop
         }  // j loop
     }  // i loop
-
     // Push the tile
     cb_push_back(cb_id, one_tile);
 }

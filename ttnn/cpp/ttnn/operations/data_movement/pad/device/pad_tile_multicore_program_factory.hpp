@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,8 @@ struct PadTileMulticoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     CoreCoord compute_with_storage_grid_size;
+    std::optional<CoreRangeSet> sub_core_grids;
+    std::vector<CoreCoord> cores_with_rtargs;
 };
 
 struct PadTileMulticoreProgramFactory {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -75,8 +75,6 @@ protected:
 };
 
 TEST_F(WeightTyingTest, ModelFC) {
-    // Skip with watcher enabled due to failure, see github issue #37193
-    SKIP_FOR_WATCHER();
     auto model = ModelFC();
     auto params = model.parameters();
     assert(params.size() == 3U);

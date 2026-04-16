@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,11 +22,6 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
                                     : mesh_view.num_devices();
 }
 }  // namespace detail
-
-MeshPartitionDeviceOperation::program_factory_t MeshPartitionDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MeshPartition{};
-}
 
 void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

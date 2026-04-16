@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,11 +11,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
-
-MoeExpertTokenRemapDeviceOperation::program_factory_t MoeExpertTokenRemapDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Multicore{};
-}
 
 void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {

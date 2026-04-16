@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,11 @@ namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;
 static constexpr uint32_t DRAM_PROFILER_ADDRESS_STALLED = 0xFFFFFFFF;
+
+// Static IDs need to be unique for these features
+// also must fit in 16 bits (timer_id & 0xFFFF)
+static constexpr uint32_t NOC_TRACING_STATIC_ID = 12345;
+static constexpr uint32_t NOC_DEBUGGING_STATIC_ID = 23456;
 
 enum BufferIndex {
     ID_HH,

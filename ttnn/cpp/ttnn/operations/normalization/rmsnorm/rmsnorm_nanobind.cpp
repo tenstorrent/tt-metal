@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "rmsnorm.hpp"
@@ -13,6 +14,21 @@
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_rms_norm(nb::module_& mod) {
+    // Bind rmsnorm_default_compute_config function
+    mod.def(
+        "rmsnorm_default_compute_config",
+        &ttnn::rmsnorm_default_compute_config,
+        nb::arg("arch"),
+        R"doc(
+        Returns the default compute kernel config for rmsnorm.
+
+        Args:
+            arch (tt.ARCH): The device architecture.
+
+        Returns:
+            ttnn.DeviceComputeKernelConfig: The default compute config for RMS norm (HiFi4, approx_mode=True, fp32_dest_acc_en=False).
+        )doc");
+
     const auto* doc = R"doc(
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
@@ -91,17 +107,16 @@ void bind_normalization_rms_norm(nb::module_& mod) {
     ttnn::bind_function<"rms_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::rms_norm,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("residual_input_tensor") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::rms_norm,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::normalization::detail

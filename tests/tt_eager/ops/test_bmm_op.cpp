@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <cstring>
 #include <exception>
 #include <optional>
@@ -15,8 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

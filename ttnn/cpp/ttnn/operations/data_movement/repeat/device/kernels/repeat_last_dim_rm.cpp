@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ Function reads from RM and writes to RM repeating the last dimension
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    // We are guranteed to be in 2D going to 2D
+    // We are guaranteed to be in 2D going to 2D
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -48,8 +48,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
-    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    const auto d = TensorAccessor(dst_args, dst_addr);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
     cb_reserve_back(cb_id_in0, 1);
@@ -85,7 +85,7 @@ void kernel_main() {
             // and we don't want target offset to be allocated and the for loop bounds computed
             uint32_t target_offset = original_page_size_bytes;
             for (uint32_t j = 0; j < num_doublings; j++) {
-                // This ensures the cur_page_size will be alligned to 16B so future walk retains allignment
+                // This ensures the cur_page_size will be aligned to 16B so future walk retains alignment
                 tt_memmove<false, false, false, 16 * original_page_size_bytes>(
                     data_location + target_offset, data_location, cur_page_size);
                 target_offset += cur_page_size;

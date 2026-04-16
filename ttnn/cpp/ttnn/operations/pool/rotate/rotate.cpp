@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 namespace ttnn::operations::rotate {
 
-Tensor Rotate::invoke(
+Tensor rotate(
     const Tensor& input_tensor,
     float angle,
     const std::optional<std::tuple<float, float>>& center,

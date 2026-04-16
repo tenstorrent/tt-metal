@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,9 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
+ttnn::Tensor rms_norm_pre_all_gather(
     const ttnn::Tensor& input_tensor,
     const DataType dtype,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
@@ -21,7 +21,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
         return ttnn::prim::layer_norm(
             input_tensor,
@@ -38,6 +38,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
+        std::nullopt,  // recip_tensor not needed for rmsnorm (second argument)
         ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,
         kernel_config_val,
@@ -45,4 +46,4 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
         use_2d_core_grid);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

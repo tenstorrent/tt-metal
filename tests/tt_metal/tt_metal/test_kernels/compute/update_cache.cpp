@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/common.h"
+#include "api/compute/untilize.h"
+#include "api/compute/tilize.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;

@@ -1,12 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "common/device_fixture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -16,7 +18,6 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -94,6 +95,9 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
+    if (multibank) {
+        writer_compile_time_args.emplace_back(tt::CBIndex::c_16);
+    }
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
     auto unary_writer_kernel = CreateKernel(
         program,
@@ -105,7 +109,7 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args});
 
-    std::vector<uint32_t> compute_kernel_args = {num_tensor_tiles};
+    std::vector<uint32_t> compute_kernel_args = {num_tensor_tiles, /*use_dfbs=*/false};
 
     CreateKernel(
         program,

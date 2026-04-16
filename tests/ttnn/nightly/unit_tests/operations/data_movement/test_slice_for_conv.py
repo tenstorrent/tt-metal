@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -140,7 +140,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ends[-1] = ttnn_output.shape[-1]
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
@@ -211,7 +211,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ends[-1] = ttnn_output.shape[-1]
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
@@ -281,7 +281,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
         )
 
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
-        ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
+        ttnn.experimental.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
     output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_input, output, 0.9999)
@@ -346,7 +346,9 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], pad_value)]
 
         memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
-        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        this_ttnn_output = ttnn.experimental.padded_slice(
+            ttnn_input, begins, ends, strides, memory_config=memory_config
+        )
         output = ttnn.to_torch(this_ttnn_output)
         output = torch.reshape(output, this_torch_output.shape)
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
@@ -418,7 +420,9 @@ def test_slice_block_sharded_for_conv2d(
             round_up(output_shape[3], core_x * pad_value),
         ]
         memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
-        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        this_ttnn_output = ttnn.experimental.padded_slice(
+            ttnn_input, begins, ends, strides, memory_config=memory_config
+        )
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         this_torch_output = this_torch_output[:, :, :, : output.shape[-1]]
         output = torch.reshape(output, this_torch_output.shape)
@@ -481,7 +485,9 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         ]
 
         memory_config = create_sharded_memory_config_from_parallel_config(output_shape, parallel_config, 1)
-        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        this_ttnn_output = ttnn.experimental.padded_slice(
+            ttnn_input, begins, ends, strides, memory_config=memory_config
+        )
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
         output = torch.reshape(output, this_torch_output.shape)
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)

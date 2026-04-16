@@ -11,6 +11,15 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_executable(example_lab_multicast)
+target_sources(example_lab_multicast PRIVATE lab_multicast/lab_multicast.cpp)
+target_link_libraries(
+    example_lab_multicast
+    PRIVATE
+        TT::Metalium
+        TTNN::CPP
+)
+
 install(
     DIRECTORY
         add

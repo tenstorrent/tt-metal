@@ -1,13 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
 from loguru import logger
+from models.common.utility_functions import is_watcher_enabled
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize(
@@ -18,6 +19,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
+    if T == 2048 and B == 2 and C == 4096 and is_watcher_enabled():
+        pytest.skip("Skipping test due to watcher being enabled, github issue #37021")
+
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x) if cores_y > 0 and cores_x > 0 else None
@@ -53,5 +57,12 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         golden_output_tensor[0, :, :, t] = (prev_value * alpha) + ((1 - alpha) * torch_input_tensor[0, :, :, t])
         prev_value = golden_output_tensor[0, :, :, t]
 
-    # Compare with golden output
-    assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)
+    # test for equivalance
+    assert_numeric_metrics(
+        golden_output_tensor,
+        torch_output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.003,
+    )

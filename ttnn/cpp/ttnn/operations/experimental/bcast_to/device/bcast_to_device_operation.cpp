@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,16 +27,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     }
 
     TT_THROW("Invalid subtile broadcast type");
-}
-
-BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-
-    switch (input.layout()) {
-        case Layout::TILE: return BcastToTileFactory{};
-        default: TT_THROW("BcastTo: Unsupported input layout");
-    }
 }
 
 void validate(
@@ -82,11 +72,6 @@ void validate(
 }
 
 void BcastToOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-};
-
-void BcastToOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 };

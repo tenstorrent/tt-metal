@@ -1,16 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "events.hpp"
 
 #include <memory>
-#include <tt-metalium/event.hpp>
 #include "tt-metalium/distributed.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
-
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::events {
 

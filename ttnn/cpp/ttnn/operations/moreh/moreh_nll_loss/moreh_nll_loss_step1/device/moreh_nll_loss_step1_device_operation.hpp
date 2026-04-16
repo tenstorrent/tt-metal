@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_helper.hpp"
@@ -52,14 +51,9 @@ struct MorehNllLossStep1DeviceOperation {
     };
 
     using program_factory_t = std::variant<Factory>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 

@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
-
-#include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -27,8 +25,6 @@ protected:
 };
 
 TEST_F(LinearRegressionFullTest, TestLinearRegressionFull) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 128;

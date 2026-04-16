@@ -250,8 +250,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
 
 .. code-block:: cpp
 
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t num_output_tiles = get_arg_val<uint32_t>(0); // Number of output tiles to produce
         uint32_t Kt = get_arg_val<uint32_t>(1); // Size of the inner dimension (K)
 

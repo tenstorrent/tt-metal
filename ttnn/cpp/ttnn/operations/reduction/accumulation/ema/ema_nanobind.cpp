@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
 #include "ttnn/types.hpp"
 
@@ -67,28 +67,17 @@ void bind_reduction_ema_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::ema);
-    bind_registered_operation(
+    ttnn::bind_function<"ema">(
         mod,
-        ttnn::ema,
         docstring,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const float& alpha,
-               const std::optional<Tensor>& optional_out,
-               const std::optional<CoreGrid>& core_grid,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) -> Tensor {
-                return self(input_tensor, alpha, optional_out, core_grid, memory_config, compute_kernel_config);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("alpha"),
-            nb::kw_only(),
-            nb::arg("out") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::ema,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("alpha"),
+        nb::kw_only(),
+        nb::arg("out") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

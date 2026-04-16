@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -47,6 +47,8 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
     // working memory to hold coalesced packet
@@ -61,7 +63,7 @@ void kernel_main() {
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
+    // clean up semaphore – needs to be done before the sender side semaphore increment if we're reusing the semaphore
     // in subsequent program cache hits
     noc_semaphore_set(local_semaphore_ptr, 0);
 
