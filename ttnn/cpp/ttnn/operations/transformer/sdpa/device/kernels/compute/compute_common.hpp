@@ -24,6 +24,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1721,7 +1722,7 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true) {
-    constexpr uint32_t dst_size = DST_ACCUM_MODE ? 4 : 8;
+    constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
@@ -1860,6 +1861,18 @@ void sdpa_inner_loop(
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 if (lw_mask.enabled) {
+                    // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
+                    // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
+                    // without the pop+push cycle below, reduce_c's cb_wait_front would return immediately
+                    // and unpack could start before the mask stamps land in L1.
+                    // Safe because cb_pop_front only moves rd_ptr (L1 data is untouched), and on a
+                    // single-buffered CB of size qk_chunk_tiles the re-reserved wr_ptr wraps back to the
+                    // same physical region holding the QK scores.
+                    // Warning: this won't work if cb_qk_im is double-buffered -- the stamps would land
+                    // in the other buffer, leaving the QK scores unmasked.
+                    cb_wait_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    cb_pop_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    cb_reserve_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                     lw_mask.template apply<dst_size>(
                         cb_mask_in,
                         cb_qk_im,
@@ -1874,6 +1887,7 @@ void sdpa_inner_loop(
                         local_n_mask_chunk_id,
                         joint_n_mask_chunk_id,
                         q_low_idx);
+                    cb_push_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                 }
