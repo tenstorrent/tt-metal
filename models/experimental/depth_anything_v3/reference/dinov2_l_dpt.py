@@ -54,9 +54,11 @@ class _Attention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, C = x.shape
+        # qkv.weight already has the q-rows pre-multiplied by 1/sqrt(head_dim)
+        # via `_fold_attention_scale_into_state_dict`, so q is implicitly scaled.
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
-        attn = (q * self.scale) @ k.transpose(-2, -1)
+        attn = q @ k.transpose(-2, -1)
         attn = attn.softmax(dim=-1)
         out = (attn @ v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
@@ -265,9 +267,31 @@ class DA3Metric(nn.Module):
         return depth
 
 
+def _fold_attention_scale_into_state_dict(remapped: dict) -> dict:
+    """Pre-multiply the q-rows of every block's qkv weight & bias by
+    1/sqrt(head_dim) so the runtime forward can drop the explicit scale op."""
+    out = dict(remapped)
+    head_dim = EMBED_DIM // NUM_HEADS
+    scale = head_dim**-0.5
+    block_indices = sorted(
+        {int(k.split(".")[2]) for k in remapped if k.startswith("backbone.blocks.")}
+    )
+    for i in block_indices:
+        wkey = f"backbone.blocks.{i}.attn.qkv.weight"
+        bkey = f"backbone.blocks.{i}.attn.qkv.bias"
+        # qkv.weight has shape (3*EMBED_DIM, EMBED_DIM); first EMBED_DIM rows are Q.
+        w = out[wkey].clone()
+        b = out[bkey].clone()
+        w[:EMBED_DIM] = w[:EMBED_DIM] * scale
+        b[:EMBED_DIM] = b[:EMBED_DIM] * scale
+        out[wkey] = w
+        out[bkey] = b
+    return out
+
+
 def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> dict:
     """Read only the `model.da3_metric.*` slice of the checkpoint and remap keys
-    onto the DA3Metric module above."""
+    onto the DA3Metric module above. Pre-folds attention scale into qkv."""
     from safetensors import safe_open
 
     state = {}
@@ -278,20 +302,13 @@ def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> di
                 continue
             state[k[len(prefix):]] = f.get_tensor(k)
 
-    # Remap backbone keys: pretrained.* -> backbone.*
     remapped = {}
     for k, v in state.items():
         if k.startswith("backbone.pretrained."):
-            new_k = "backbone." + k[len("backbone.pretrained."):]
-            # patch_embed.proj.{weight,bias}  -> backbone.patch_embed.proj.{...}
-            # blocks.{i}.* unchanged
-            # ls1.gamma / ls2.gamma unchanged (we already named them gamma)
-            remapped[new_k] = v
-        elif k.startswith("head."):
-            remapped[k] = v
+            remapped["backbone." + k[len("backbone.pretrained."):]] = v
         else:
             remapped[k] = v
-    return remapped
+    return _fold_attention_scale_into_state_dict(remapped)
 
 
 def build_da3_metric(load_weights: bool = True, img_size: int = DEFAULT_INPUT_SIZE) -> DA3Metric:
