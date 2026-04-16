@@ -843,6 +843,12 @@ class AttentionBlock:
         matmul_weights_cb_overlapped = cb_id_context.get_cb_id(
             matmul_weights_tensor.dtype, ttnn.TileDescriptor(matmul_weights_tensor.get_tile())
         )
+        # dkv_matmul (kv_a_proj) and trans_mat always use a separate CB from the q-matmul
+        # weights, so the unpacker can decode them at their own dtype/tile independent of
+        # the q-matmul CB.
+        dkv_matmul_weights_cb = cb_id_context.get_cb_id(
+            dkv_matmul_weights_tensor.dtype, ttnn.TileDescriptor(dkv_matmul_weights_tensor.get_tile())
+        )
         matmul_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         matmul_input_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         rmsnorm2_gamma_cb = cb_id_context.get_cb_id(
@@ -875,13 +881,15 @@ class AttentionBlock:
             data_format, TD_8x32
         )  # Output CB for CreateQHeads (linked to output tensor on receiver cores)
         qkv_rope_cos_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos/Sin CB for RoPE
-        qrope_trans_mat_cb = matmul_weights_cb_overlapped
+        # trans_mat shares the dkv_matmul CB (same dtype + tile), uses its own L1 address
+        # passed via runtime arg.
         assert (
-            trans_mat_tensor.dtype == matmul_weights_tensor.dtype
-        ), f"Qrope trans mat tensor dtype ({trans_mat_tensor.dtype}) must be equal to matmul weights tensor dtype ({matmul_weights_tensor.dtype})"
+            trans_mat_tensor.dtype == dkv_matmul_weights_tensor.dtype
+        ), f"trans_mat dtype ({trans_mat_tensor.dtype}) must equal dkv_matmul dtype ({dkv_matmul_weights_tensor.dtype})"
         assert (
-            trans_mat_tensor.get_tile() == matmul_weights_tensor.get_tile()
-        ), f"Qrope trans mat tensor tile ({trans_mat_tensor.get_tile()}) must be equal to matmul weights tensor tile ({matmul_weights_tensor.get_tile()})"
+            trans_mat_tensor.get_tile() == dkv_matmul_weights_tensor.get_tile()
+        ), f"trans_mat tile ({trans_mat_tensor.get_tile()}) must equal dkv_matmul tile ({dkv_matmul_weights_tensor.get_tile()})"
+        qrope_trans_mat_cb = dkv_matmul_weights_cb
         qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Rotated input intermediate CB for RoPE
@@ -1342,7 +1350,7 @@ class AttentionBlock:
         # KV Cache Branch
         # DKV Matmul (9x2)
         dkv_matmul_ncrisc_named_compile_time_args = [
-            ("dkv_matmul_in1", matmul_weights_cb_overlapped),
+            ("dkv_matmul_in1", dkv_matmul_weights_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
         ]
@@ -1351,7 +1359,7 @@ class AttentionBlock:
                 "dkv_matmul_in0",
                 matmul_input_cb,
             ),  # Inputs are multicasted from the main branch, same input as first matmul
-            ("dkv_matmul_in1", matmul_weights_cb_overlapped),
+            ("dkv_matmul_in1", dkv_matmul_weights_cb),
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
@@ -2017,10 +2025,20 @@ class AttentionBlock:
         ]
         sdpa_kv_cache_running_offset_mcast_core += rmsnorm_output_cb_descriptor.total_size
 
-        # CB: Fused matmul weights (single CB backing matmul1, matmul2, dkv_matmul)
+        # CB: Q-matmul weights — backs matmul1 (q_a) and matmul2 (q_b) in the fused buffer.
+        # matmul3, matmul4, matmul5 reuse this CB ID with their own buffer addresses
+        # supplied via runtime args.
         fused_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensors(
             matmul_weights_cb_overlapped,
-            [matmul_weights_tensor, matmul2_weights_tensor, dkv_matmul_weights_tensor],
+            [matmul_weights_tensor, matmul2_weights_tensor],
+            ref_fused_weights_tensor,
+            core_ranges=full_device_grid,
+        )
+        # CB: DKV/trans_mat weights — backs dkv_matmul (kv_a_proj) in the fused buffer.
+        # trans_mat reuses this CB ID with its own buffer address supplied via runtime arg.
+        dkv_matmul_weights_cb_descriptor = cb_descriptor_from_overlapped_tensors(
+            dkv_matmul_weights_cb,
+            [dkv_matmul_weights_tensor],
             ref_fused_weights_tensor,
             core_ranges=full_device_grid,
         )
@@ -3291,6 +3309,7 @@ class AttentionBlock:
             gamma_cb_descriptor,
             rmsnorm_output_cb_descriptor,
             fused_matmul_weights_cb_descriptor,
+            dkv_matmul_weights_cb_descriptor,
             matmul_output_cb_descriptor,
             matmul_input_cb_descriptor,
             rmsnorm2_gamma_cb_descriptor,

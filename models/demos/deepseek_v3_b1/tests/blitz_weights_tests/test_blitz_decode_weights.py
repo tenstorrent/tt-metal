@@ -193,7 +193,7 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dt
     kv_raw = torch.randn(cfg.kv_a_proj_shape, dtype=torch.bfloat16)
 
     logger.info("Building fused q_ab_proj + kv_a_proj weights ...")
-    qab_kva = fuse_q_ab_kv_a(q_a_raw, q_b_raw, kv_raw, submesh, dtype=dtype)
+    qab_kva = fuse_q_ab_kv_a(q_a_raw, q_b_raw, kv_raw, submesh, q_ab_dtype=dtype)
     q_a, q_b, kv = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)

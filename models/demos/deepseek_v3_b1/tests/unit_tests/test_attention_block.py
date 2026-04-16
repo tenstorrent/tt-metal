@@ -384,6 +384,8 @@ def test_attention_block(
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
         submesh,
+        q_ab_dtype=ttnn.bfloat4_b,
+        kv_dtype=ttnn.bfloat8_b,
     )
     matmul_weights_overlapped = qab_kva["q_a_proj"]
     matmul2_weights_overlapped = qab_kva["q_b_proj"]
@@ -395,6 +397,7 @@ def test_attention_block(
         torch_matmul3_weights_flat,
         torch_kv_b2_proj_weights,
         submesh,
+        dtype=ttnn.bfloat4_b,
     )
     matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
     kv_b2_overlapped = kv_b12["kv_b2_proj"]
@@ -507,6 +510,7 @@ def test_attention_block(
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
         submesh,
+        o_proj_dtype=ttnn.bfloat4_b,
     )
     o_proj_overlapped = o_norms["o_proj"]
     gamma_overlapped = o_norms["attn_norm"]
@@ -1113,7 +1117,10 @@ def test_attention_block(
             dev_eq = torch.equal(received, ref_device_output)
             assert dev_eq, f"Device {device_idx} output mismatch"
 
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
+        # Low position_ids exercise a nearly-empty KV cache, which amplifies bfp4 q-matmul
+        # quantization error; PCC recovers to >= 0.997 by position 511.
+        pcc_threshold = 0.99 if position_id < 511 else 0.997
+        passing, pcc = comp_pcc(torch_output_expected, received, pcc_threshold)
         max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
