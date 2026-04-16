@@ -19,10 +19,6 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
 void RandomizedInterMeshUnicast(BaseFabricFixture* fixture);
 
-// Returns the MPI rank that owns the given mesh_id, queried from the
-// control plane's global logical bindings (topology mapper).
-uint32_t get_rank_for_mesh_id(uint32_t target_mesh_id);
-
 void InterMeshLineMcast(
     BaseFabricFixture* fixture,
     FabricNodeId mcast_sender_node,
