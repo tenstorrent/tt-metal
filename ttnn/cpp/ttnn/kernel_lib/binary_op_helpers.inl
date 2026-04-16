@@ -18,6 +18,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 namespace compute_kernel_lib {
@@ -56,6 +57,28 @@ constexpr bool pops_caller_managed(BinaryInputPolicy p) { return p == BinaryInpu
 constexpr bool output_per_tile(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerTile; }
 constexpr bool output_per_chunk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::PerChunk; }
 constexpr bool output_bulk(BinaryOutputPolicy p) { return p == BinaryOutputPolicy::Bulk; }
+
+template <BinaryInputPolicy input_policy>
+ALWI void assert_binary_input_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
+    if constexpr (waits_per_tile(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= 1);
+    } else if constexpr (waits_per_chunk(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+    } else if constexpr (waits_upfront(input_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+    }
+}
+
+template <BinaryOutputPolicy output_policy>
+ALWI void assert_binary_output_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
+    if constexpr (output_per_tile(output_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= 1);
+    } else if constexpr (output_per_chunk(output_policy)) {
+        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+    } else {  // Bulk
+        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+    }
+}
 
 template <BinaryOpType op_type>
 constexpr EltwiseBinaryType map_to_eltwise_type() {
@@ -151,14 +174,47 @@ ALWI void binary_op(
     BinaryInputBlockShape shape,
     PostOp post_op,
     AccumT accum) {
+    // Static assertions (compile-time validation)
+    static_assert(
+        std::is_invocable_v<PostOp, uint32_t>,
+        "PostOp must be callable with a uint32_t argument");
+
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+
+    // Parameter validation
+    ASSERT(icb_a < NUM_CIRCULAR_BUFFERS);
+    if constexpr (!is_square) {
+        ASSERT(icb_b < NUM_CIRCULAR_BUFFERS);
+    }
+    ASSERT(ocb < NUM_CIRCULAR_BUFFERS);
+    ASSERT(icb_a != ocb);
+    if constexpr (!is_square) {
+        ASSERT(icb_b != ocb);
+    }
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_a, (DataFormat)unpack_src_format[icb_a])));
+    if constexpr (!is_square) {
+        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+    }
+    PACK(ASSERT(is_valid_cb_tile_page_size(ocb, (DataFormat)pack_dst_format[ocb])));
+    if constexpr (is_accumulator_enabled<AccumT>()) {
+        ASSERT(accum.cb_accumulator < NUM_CIRCULAR_BUFFERS);
+    }
+    ASSERT(shape.rows > 0);
+    ASSERT(shape.cols > 0);
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
     const uint32_t total_tiles_a = Ht * Wt;
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
+
+    // CB size validation
+    UNPACK((assert_binary_input_cb_size<input_a_policy>(icb_a, dest_limit, total_tiles_a)));
+    if constexpr (!is_square) {
+        UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, dest_limit, b_tile_count)));
+    }
+    PACK((assert_binary_output_cb_size<output_policy>(ocb, dest_limit, total_tiles_a)));
 
     // Data format reconfiguration
     if constexpr (reconfig_input(reconfig)) {
@@ -523,12 +579,37 @@ ALWI void binary_op_in_place(
     uint32_t icb_b,
     BinaryInputBlockShape shape,
     PostOp post_op) {
+    // Static assertions (compile-time validation)
+    static_assert(
+        std::is_invocable_v<PostOp, uint32_t>,
+        "PostOp must be callable with a uint32_t argument");
+
     constexpr uint32_t onetile = 1;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
+
+    // Parameter validation
+    ASSERT(cb_a < NUM_CIRCULAR_BUFFERS);
+    if constexpr (!is_square) {
+        ASSERT(icb_b < NUM_CIRCULAR_BUFFERS);
+        ASSERT(cb_a != icb_b);
+    }
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)unpack_src_format[cb_a])));
+    if constexpr (!is_square) {
+        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+    }
+    PACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)pack_dst_format[cb_a])));
+    ASSERT(shape.rows > 0);
+    ASSERT(shape.cols > 0);
 
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
+
+    // CB size validation — in-place requires all A tiles present
+    UNPACK(ASSERT(get_cb_num_pages(cb_a) >= Ht * Wt));
+    if constexpr (!is_square) {
+        UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, 1, b_tile_count)));
+    }
 
     // --- Data format reconfiguration ---
     // Switches unpacker to (cb_a, icb_b) and packer to cb_a.
