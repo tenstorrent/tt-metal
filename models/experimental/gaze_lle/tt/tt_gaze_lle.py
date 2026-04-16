@@ -59,17 +59,17 @@ class _BlockParams:
 def _dinov2_attention(x, p: _BlockParams, num_heads: int):
     hidden_states = ttnn.layer_norm(x, weight=p.norm1_w, bias=p.norm1_b, epsilon=1e-6)
     qkv = ttnn.linear(hidden_states, p.qkv_w, bias=p.qkv_b, core_grid=_CORE_GRID)
-    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads)
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=num_heads, transpose_key=False
+    )
     ttnn.deallocate(qkv)
 
     head_dim = hidden_states.shape[-1] // num_heads
-    q = ttnn.mul_(q, 1.0 / (head_dim**0.5))
-    scores = ttnn.matmul(q, k, core_grid=_CORE_GRID)
+    ctx = ttnn.transformer.scaled_dot_product_attention(
+        q, k, v, is_causal=False, scale=1.0 / (head_dim**0.5)
+    )
     ttnn.deallocate(q)
     ttnn.deallocate(k)
-    probs = ttnn.softmax_in_place(scores, numeric_stable=True)
-    ctx = ttnn.matmul(probs, v, core_grid=_CORE_GRID)
-    ttnn.deallocate(probs)
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx)
 
@@ -110,19 +110,19 @@ class _GazeBlockParams:
 
 
 def _gaze_block(x, p: _GazeBlockParams, num_heads: int):
-    # Attention
+    # Attention via fused scaled-dot-product-attention kernel.
     hidden_states = ttnn.layer_norm(x, weight=p.norm1_w, bias=p.norm1_b, epsilon=1e-6)
     qkv = ttnn.linear(hidden_states, p.qkv_w, bias=p.qkv_b, core_grid=_CORE_GRID)
-    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads)
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=num_heads, transpose_key=False
+    )
     ttnn.deallocate(qkv)
     head_dim = hidden_states.shape[-1] // num_heads
-    q = ttnn.mul_(q, 1.0 / (head_dim**0.5))
-    scores = ttnn.matmul(q, k, core_grid=_CORE_GRID)
+    ctx = ttnn.transformer.scaled_dot_product_attention(
+        q, k, v, is_causal=False, scale=1.0 / (head_dim**0.5)
+    )
     ttnn.deallocate(q)
     ttnn.deallocate(k)
-    probs = ttnn.softmax_in_place(scores, numeric_stable=True)
-    ctx = ttnn.matmul(probs, v, core_grid=_CORE_GRID)
-    ttnn.deallocate(probs)
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx)
     out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b, core_grid=_CORE_GRID)
