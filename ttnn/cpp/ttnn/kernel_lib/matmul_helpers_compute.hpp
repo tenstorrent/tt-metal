@@ -81,17 +81,6 @@ namespace detail {
 template <MatmulMode mode>
 ALWI void matmul_single(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_idx, uint32_t dst_idx);
 
-template <MatmulMode mode>
-ALWI void matmul_accumulate(
-    const MatmulConfig& cfg,
-    uint32_t in0_start,
-    uint32_t in1_start,
-    uint32_t dst_start,
-    uint32_t count,
-    uint32_t in0_stride,
-    uint32_t in1_stride,
-    uint32_t dst_stride);
-
 }  // namespace detail
 
 // =============================================================================

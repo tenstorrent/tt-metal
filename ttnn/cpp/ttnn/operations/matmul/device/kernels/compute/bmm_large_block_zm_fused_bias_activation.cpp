@@ -185,6 +185,13 @@ struct TransposePreKBlock {
 // portions of the kernel. The matmul_block helper cannot be used here because
 // it encapsulates the matmul calls.
 
+#if defined(SKIP_COMPUTE) && defined(ROW_MAJOR_OUTPUT)
+static_assert(
+    false,
+    "SKIP_COMPUTE is incompatible with ROW_MAJOR_OUTPUT: "
+    "SKIP_COMPUTE pushes per-subblock but ROW_MAJOR_OUTPUT writers wait per-row-group");
+#endif
+
 #ifdef SKIP_COMPUTE
 template <
     uint32_t in0_cb_id,
@@ -409,13 +416,8 @@ void kernel_main() {
         out_subblock_h,
         in0_block_w,
         mm_partials_cb_id>;
-#ifdef ROW_MAJOR_OUTPUT
     using NoPreFn = compute_kernel_lib::NoPreKBlock;
     using NoPostFn = compute_kernel_lib::NoPostCompute;
-#else
-    using NoPreFn = compute_kernel_lib::matmul_block_config::NoPreKBlock;
-    using NoPostFn = compute_kernel_lib::matmul_block_config::NoPostCompute;
-#endif
     using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreFn>;
 
     // ── Init ────────────────────────────────────────────────────────────

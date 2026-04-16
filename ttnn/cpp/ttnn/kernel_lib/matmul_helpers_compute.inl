@@ -31,17 +31,6 @@ ALWI void matmul_single(const MatmulConfig& cfg, uint32_t in0_idx, uint32_t in1_
     }
 }
 
-template <MatmulMode mode>
-ALWI void matmul_accumulate(
-    const MatmulConfig& cfg,
-    uint32_t in0_start, uint32_t in1_start, uint32_t dst_start,
-    uint32_t count, uint32_t in0_stride, uint32_t in1_stride, uint32_t dst_stride) {
-    for (uint32_t k = 0; k < count; ++k) {
-        detail::matmul_single<mode>(
-            cfg, in0_start + k * in0_stride, in1_start + k * in1_stride, dst_start + k * dst_stride);
-    }
-}
-
 }  // namespace detail
 
 // =============================================================================
@@ -77,6 +66,10 @@ ALWI void matmul_blocks_absolute(
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     bool retain_in0) {
+
+    // The inner loop uses block-level indexing (matmul_block LLK).
+    // TILE mode would require nested rt×ct loops with different stride logic.
+    static_assert(mode == MatmulMode::BLOCK, "matmul_blocks_absolute only supports BLOCK mode");
 
     const uint32_t out_subblock_h = cfg.rt_dim;
     const uint32_t out_subblock_w = cfg.ct_dim;

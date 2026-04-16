@@ -12,8 +12,6 @@
 
 namespace compute_kernel_lib {
 
-namespace matmul_block_config {
-
 // Default no-op post-compute functor.
 // Called per output sub-block on the last K-block, before packing.
 // Receives out_subblock_num_tiles. Tiles are in DST[0..num_tiles-1].
@@ -28,8 +26,6 @@ struct NoPostCompute {
 struct NoPreKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
-
-}  // namespace matmul_block_config
 
 /**
  * matmul_block: sub-blocked tiled matrix multiplication C = A × B with K-blocking.
@@ -93,8 +89,8 @@ template <
     bool packer_l1_acc = false,
     bool pack_last_to_interm = false,
     bool pack_relu = false,
-    typename PostComputeFn = matmul_block_config::NoPostCompute,
-    typename PreKBlockFn = matmul_block_config::NoPreKBlock>
+    typename PostComputeFn = NoPostCompute,
+    typename PreKBlockFn = NoPreKBlock>
 ALWI void matmul_block(
     uint32_t block_w,
     uint32_t in0_num_subblocks,
