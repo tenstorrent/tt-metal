@@ -16,6 +16,9 @@ def _t2d(t: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
 
 
+_PATCH_EMBED_CACHE: dict = {}
+
+
 def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device):
     """Patch embedding via im2col + matmul (equivalent to stride=kernel Conv2d).
 
@@ -32,16 +35,19 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
     patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()  # (B, hp, wp, C, p, p)
     patches = patches.reshape(B, N, C * p * p)
 
-    # Flatten weight to match: Conv2d weight (E, C, p, p) -> (C*p*p, E)
-    w_flat = weight.reshape(weight.shape[0], -1).t().contiguous()  # (C*p*p, E)
+    cache_key = (id(weight), id(device))
+    cached = _PATCH_EMBED_CACHE.get(cache_key)
+    if cached is None:
+        w_flat = weight.reshape(weight.shape[0], -1).t().contiguous()  # (C*p*p, E)
+        tt_w = ttnn.from_torch(w_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_b = ttnn.from_torch(bias.reshape(1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        _PATCH_EMBED_CACHE[cache_key] = (tt_w, tt_b)
+    else:
+        tt_w, tt_b = cached
 
     tt_patches = ttnn.from_torch(patches, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_w = ttnn.from_torch(w_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b = ttnn.from_torch(bias.reshape(1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
     out = ttnn.matmul(tt_patches, tt_w)
     out = ttnn.add(out, tt_b)
-
     out_torch = ttnn.to_torch(out)  # (B, N, E)
     return out_torch
 
