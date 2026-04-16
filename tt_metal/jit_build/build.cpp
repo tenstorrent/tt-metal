@@ -136,8 +136,11 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval"
-        " -flto=auto -ffast-math -fno-exceptions ";
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
+        "-flto=auto -ffast-math -fno-exceptions "
+        // The default (200) is too small to unroll loops that it is
+        // profitable for us to do so.
+        "--param=max-completely-peeled-insns=350 ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
