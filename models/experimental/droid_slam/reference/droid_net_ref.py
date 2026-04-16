@@ -132,9 +132,18 @@ class GraphAgg(nn.Module):
         net = net.view(batch * num, ch, ht, wd)
         _, ix = torch.unique(ii, return_inverse=True)
         net = self.relu(self.conv1(net))
-        net = net.view(batch, num, 128, ht, wd)
-        net = _scatter_mean(net, ix, dim=1)
-        net = net.view(-1, 128, ht, wd)
+        # scatter_mean(net, ix, dim=1) is an identity when `ix` is the
+        # range [0, num) in order — this is the common case in the SLAM
+        # front-end where `ii` already arrives as distinct keyframe
+        # sources per edge (no duplicates, no reordering). Skip the
+        # scatter in that case so torch.compile doesn't graph-break on
+        # scatter_add_.
+        if ix.numel() == num and bool(torch.equal(ix, torch.arange(num, device=ix.device))):
+            net = net.view(batch, num, 128, ht, wd).view(-1, 128, ht, wd)
+        else:
+            net = net.view(batch, num, 128, ht, wd)
+            net = _scatter_mean(net, ix, dim=1)
+            net = net.view(-1, 128, ht, wd)
         net = self.relu(self.conv2(net))
         eta = self.eta(net).view(batch, -1, ht, wd)
         upmask = self.upmask(net).view(batch, -1, 8 * 8 * 9, ht, wd)
