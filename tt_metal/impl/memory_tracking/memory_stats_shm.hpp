@@ -13,17 +13,22 @@
 namespace tt::tt_metal {
 
 // Maximum number of processes that can be tracked per device
-constexpr size_t MAX_PROCESSES = 64;
+constexpr size_t MAX_PROCESSES = 64u;
 
 // Maximum number of chips that can be tracked through a single device (gateway)
 // For N300: 1 local + 1 remote = 2; for larger meshes: 1 local + up to 15 remote = 16
-constexpr size_t MAX_CHIPS_PER_DEVICE = 16;
+constexpr size_t MAX_CHIPS_PER_DEVICE = 16u;
+
+// Sentinel value for unused ChipStats slots. Chip ID 0 is a valid device,
+// so we use UINT32_MAX (never a real chip ID) to mark empty entries.
+constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 
 // DeviceMemoryRegion structure version
 // IMPORTANT: Increment this version number whenever DeviceMemoryRegion, ChipStats,
 // or ProcessStats structures are modified (fields added/removed/reordered).
 // Readers should check this version to ensure compatibility with the SHM layout.
 // v2: asic_id now stores UMD chip_unique_id directly (matches SHM filename)
+//     chip_stats sentinel is CHIP_STATS_UNUSED (UINT32_MAX), not 0
 constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 2;
 
 // Shared memory region layout for per-device memory statistics
@@ -40,7 +45,7 @@ struct DeviceMemoryRegion {
     // SHM filename uses chip_unique_id: /dev/shm/tt_device_<chip_unique_id>_memory
     uint64_t board_serial;  // Reserved (0), use UMD board_id APIs for board correlation
     uint64_t asic_id;       // UMD chip_unique_id - globally unique, matches SHM filename
-    int32_t device_id;      // Logical Metal device ID (for convenience)
+    uint32_t device_id;     // Logical Metal device ID (stored as unsigned; Metal ChipId validated >= 0 before storing)
 
     // Aggregated device-wide statistics (updated atomically on every allocation)
     // These counters track total memory usage across ALL processes and ALL chips
@@ -54,7 +59,7 @@ struct DeviceMemoryRegion {
     // chip_stats[0] = gateway (local) chip allocations
     // chip_stats[1..N] = remote chip allocations accessed through this gateway
     struct ChipStats {
-        uint32_t chip_id;    // Metal chip ID (0 = unused slot)
+        uint32_t chip_id;    // Metal chip ID (CHIP_STATS_UNUSED = empty slot)
         uint32_t is_remote;  // 1 if remote chip, 0 if local (gateway)
         std::atomic<uint64_t> dram_allocated;
         std::atomic<uint64_t> l1_allocated;

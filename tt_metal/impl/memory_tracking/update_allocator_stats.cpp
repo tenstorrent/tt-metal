@@ -26,7 +26,7 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
     {
         std::lock_guard<std::mutex> lock(rate_limit_mutex);
         auto now = std::chrono::steady_clock::now();
-        auto& last = last_updates[device->id()];
+        auto& last = last_updates[static_cast<uint32_t>(device->id())];
 
         if (now - last < std::chrono::milliseconds(100)) {
             return;  // Skip update - too soon since last update
@@ -42,14 +42,12 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         region_->total_cb_allocated.store(cb_allocated, std::memory_order_relaxed);
 
         // Update timestamp
-        auto now = std::chrono::system_clock::now();
-        region_->last_update_timestamp =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+        region_->last_update_timestamp = current_timestamp_ns();
 
         // Update per-chip CB stats for this device
-        uint32_t chip_id = device->id();
+        uint32_t chip_id = static_cast<uint32_t>(device->id());
         for (auto & chip_stat : region_->chip_stats) {
-            if (chip_stat.chip_id == chip_id || chip_stat.chip_id == 0) {
+            if (chip_stat.chip_id == chip_id || chip_stat.chip_id == CHIP_STATS_UNUSED) {
                 chip_stat.chip_id = chip_id;
                 chip_stat.cb_allocated.store(cb_allocated, std::memory_order_relaxed);
                 break;
@@ -61,8 +59,7 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
             if (processe.pid == pid) {
                 // Update only locally-allocated CBs (query-based, accurate even with caching)
                 processe.cb_allocated = cb_allocated;
-                processe.last_update_timestamp =
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+                processe.last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
                 break;
             }
         }

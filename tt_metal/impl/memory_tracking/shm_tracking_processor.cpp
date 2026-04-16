@@ -39,16 +39,16 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
     // Check if this is a MeshDevice (backing buffer)
     const auto* mesh_device = dynamic_cast<const distributed::MeshDevice*>(buffer->device());
     if (mesh_device != nullptr) {
-        // For MeshDevice backing buffers, track on ALL underlying Device objects
-        // This may cause some over-counting if buffers are replicated, but ensures
-        // all devices are tracked. For sharded buffers, each device gets its portion.
+        // MeshBuffer::create() allocates a backing buffer on the MeshDevice with
+        // device_local_size (the per-device portion for sharded, or full size for
+        // replicated). Per-device buffers created by initialize_device_buffers() use
+        // the address-taking Buffer::create overload (owns_data_=false) and do NOT
+        // trigger track_allocate, so there is no double-counting.
+        // buffer->size() is already the correct per-device size in both layouts.
         std::lock_guard<std::mutex> tracking_lock(tracking_mutex_);
 
         auto underlying_devices = mesh_device->get_devices();
         size_t num_tracked = 0;
-
-        // Calculate size per device (assuming equal distribution for sharded buffers)
-        // For replicated buffers, this will cause over-counting, but it's better than missing data
         uint64_t size_per_device = buffer->size();
 
         // Track on all underlying Devices that have SHM provider
@@ -65,12 +65,15 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                             "device {} (mesh_device_id={}, type={}, size={} B, pid={})",
                             device->id(),
                             buffer->device()->id(),
-                            static_cast<int>(buffer->buffer_type()),
+                            static_cast<unsigned>(buffer->buffer_type()),
                             size_per_device,
                             getpid());
                     }
                     shm_provider->record_allocation(
-                        getpid(), size_per_device, to_shm_buffer_type(buffer->buffer_type()), device->id());
+                        getpid(),
+                        size_per_device,
+                        to_shm_buffer_type(buffer->buffer_type()),
+                        static_cast<uint32_t>(device->id()));
                     num_tracked++;
                 }
             }
@@ -84,7 +87,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                     "underlying device (mesh_device_id={}, num_devices={}, type={}, size={} B)",
                     buffer->device()->id(),
                     underlying_devices.size(),
-                    static_cast<int>(buffer->buffer_type()),
+                    static_cast<unsigned>(buffer->buffer_type()),
                     buffer->size());
             } else {
                 log_debug(
@@ -112,12 +115,15 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                     "ShmTrackingProcessor::track_allocate: Calling SHM record_allocation (device_id={}, type={}, "
                     "size={} B, pid={})",
                     buffer->device()->id(),
-                    static_cast<int>(buffer->buffer_type()),
+                    static_cast<unsigned>(buffer->buffer_type()),
                     buffer->size(),
                     getpid());
             }
             shm_provider->record_allocation(
-                getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
+                getpid(),
+                buffer->size(),
+                to_shm_buffer_type(buffer->buffer_type()),
+                static_cast<uint32_t>(buffer->device()->id()));
         } else {
             // SHM provider not available (might be disabled or not initialized)
             if (verbose_enabled_) {
@@ -126,7 +132,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                     "ShmTrackingProcessor::track_allocate: SHM provider is NULL for device {} (buffer type: {}, "
                     "size: {} B)",
                     buffer->device()->id(),
-                    static_cast<int>(buffer->buffer_type()),
+                    static_cast<unsigned>(buffer->buffer_type()),
                     buffer->size());
             } else {
                 static bool warned = false;
@@ -135,7 +141,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                         tt::LogMetal,
                         "SHM provider not available for device {} (buffer type: {})",
                         buffer->device()->id(),
-                        static_cast<int>(buffer->buffer_type()));
+                        static_cast<unsigned>(buffer->buffer_type()));
                     warned = true;  // Only warn once to avoid spam
                 }
             }
@@ -148,7 +154,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                 "ShmTrackingProcessor::track_allocate: dynamic_cast<Device*> failed (device_id={}, buffer_type={}, "
                 "size={} B, device_ptr={})",
                 buffer->device()->id(),
-                static_cast<int>(buffer->buffer_type()),
+                static_cast<unsigned>(buffer->buffer_type()),
                 buffer->size(),
                 static_cast<const void*>(buffer->device()));
         } else {
@@ -157,7 +163,7 @@ void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
                 log_warning(
                     tt::LogMetal,
                     "Failed to cast buffer->device() to Device* for buffer type {}",
-                    static_cast<int>(buffer->buffer_type()));
+                    static_cast<unsigned>(buffer->buffer_type()));
                 warned_cast = true;
             }
         }
@@ -172,7 +178,8 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
     // Check if this is a MeshDevice (backing buffer)
     const auto* mesh_device = dynamic_cast<const distributed::MeshDevice*>(buffer->device());
     if (mesh_device != nullptr) {
-        // For MeshDevice backing buffers, track on ALL underlying Device objects
+        // Mirror track_allocate: buffer->size() is device_local_size (correct for both
+        // sharded and replicated). No double-counting — see track_allocate comment.
         std::lock_guard<std::mutex> tracking_lock(tracking_mutex_);
 
         auto underlying_devices = mesh_device->get_devices();
@@ -186,7 +193,10 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
                 if (shm_provider) {
                     // Track deallocation on this underlying device
                     shm_provider->record_deallocation(
-                        getpid(), size_per_device, to_shm_buffer_type(buffer->buffer_type()), device->id());
+                        getpid(),
+                        size_per_device,
+                        to_shm_buffer_type(buffer->buffer_type()),
+                        static_cast<uint32_t>(device->id()));
                 }
             }
         }
@@ -201,7 +211,10 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
         auto* shm_provider = device->get_shm_stats_provider();
         if (shm_provider) {
             shm_provider->record_deallocation(
-                getpid(), buffer->size(), to_shm_buffer_type(buffer->buffer_type()), buffer->device()->id());
+                getpid(),
+                buffer->size(),
+                to_shm_buffer_type(buffer->buffer_type()),
+                static_cast<uint32_t>(buffer->device()->id()));
         }
     }
 }

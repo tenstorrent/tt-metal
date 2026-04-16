@@ -5,6 +5,7 @@
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -86,7 +87,8 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     // ALWAYS update identifiers, even when reattaching to existing SHM
     region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
     region_->asic_id = asic_id_;  // Full UMD chip_unique_id
-    region_->device_id = device_id_;
+    TT_ASSERT(device_id_ >= 0, "Negative device_id {} passed to SHM provider", device_id_);
+    region_->device_id = static_cast<uint32_t>(device_id_);
 
     // Check if tracking should be disabled (enabled by default)
     const auto& rtopts = MetalContext::instance().rtoptions();
@@ -192,7 +194,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
 
             // Reset per-chip stats
             for (auto & chip_stat : region_->chip_stats) {
-                if (chip_stat.chip_id != 0) {
+                if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
                     chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -233,7 +235,8 @@ void SharedMemoryStatsProvider::initialize_region() {
     // Set physical chip identification (for proper device correlation)
     region_->board_serial = 0;    // Reserved, use UMD APIs for board correlation
     region_->asic_id = asic_id_;  // Full UMD chip_unique_id
-    region_->device_id = device_id_;
+    TT_ASSERT(device_id_ >= 0, "Negative device_id {} in SHM initialize_region", device_id_);
+    region_->device_id = static_cast<uint32_t>(device_id_);
 
     // Initialize atomic counters to zero
     region_->total_dram_allocated.store(0, std::memory_order_relaxed);
@@ -244,7 +247,7 @@ void SharedMemoryStatsProvider::initialize_region() {
 
     // Initialize per-chip entries (for remote device tracking)
     for (auto & chip_stat : region_->chip_stats) {
-        chip_stat.chip_id = 0;  // 0 = unused
+        chip_stat.chip_id = CHIP_STATS_UNUSED;
         chip_stat.is_remote = 0;
         chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
         chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
@@ -254,7 +257,7 @@ void SharedMemoryStatsProvider::initialize_region() {
     }
 
     // Register the gateway chip itself (chip_id = device_id, is_remote = false)
-    region_->chip_stats[0].chip_id = device_id_;
+    region_->chip_stats[0].chip_id = static_cast<uint32_t>(device_id_);
     region_->chip_stats[0].is_remote = 0;
 
     // Clear per-process entries
@@ -280,7 +283,7 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
                 "SHM record_allocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
                 pid,
                 size,
-                static_cast<int>(type),
+                static_cast<unsigned>(type),
                 chip_id);
         }
         return;
@@ -288,7 +291,8 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
 
     if (verbose_enabled) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
-        const char* type_name = (static_cast<int>(type) < 5) ? type_names[static_cast<int>(type)] : "UNKNOWN";
+        auto type_idx = static_cast<size_t>(type);
+        const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
         log_info(
             tt::LogMetal,
             "SHM record_allocation: pid={}, type={}, size={} B ({} KB), chip_id={}, device_id={}, asic_id=0x{:x}",
@@ -360,7 +364,7 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
                 "SHM record_deallocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
                 pid,
                 size,
-                static_cast<int>(type),
+                static_cast<unsigned>(type),
                 chip_id);
         }
         return;
@@ -368,7 +372,8 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
 
     if (verbose_enabled) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
-        const char* type_name = (static_cast<int>(type) < 5) ? type_names[static_cast<int>(type)] : "UNKNOWN";
+        auto type_idx = static_cast<size_t>(type);
+        const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
         log_info(
             tt::LogMetal,
             "SHM record_deallocation: pid={}, type={}, size={} B ({} KB), chip_id={}, device_id={}, asic_id=0x{:x}",
@@ -525,8 +530,9 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
 }
 
 uint64_t SharedMemoryStatsProvider::current_timestamp_ns() {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    auto now = std::chrono::system_clock::now();
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    return static_cast<uint64_t>(ns);
 }
 
 std::string SharedMemoryStatsProvider::get_process_name(pid_t pid) {
@@ -555,7 +561,7 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
 
     // Not found, create new entry
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id == 0) {
+        if (chip_stat.chip_id == CHIP_STATS_UNUSED) {
             chip_stat.chip_id = chip_id;
             chip_stat.is_remote = 0;  // Will be set by register_chip if needed
             chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
@@ -589,7 +595,7 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
     }
 
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id != 0) {
+        if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
             ChipInfo info{};
             info.chip_id = chip_stat.chip_id;
             info.is_remote = (chip_stat.is_remote != 0);
