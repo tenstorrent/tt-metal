@@ -93,10 +93,11 @@ ttnn::Tensor routed_expert_ffn_default(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    auto activated = ttnn::multiply(/*lhs=*/gate_result, /*rhs=*/up_result);
+    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
+    up_result.deallocate();
 
     return ttnn::matmul(
-        /*input_tensor_a=*/activated,
+        /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
@@ -183,13 +184,7 @@ ttnn::Tensor routed_expert_ffn_optim_bh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    auto activated = ttnn::multiply(
-        /*lhs=*/gate_result,
-        /*rhs=*/up_result,
-        /*output_dtype=*/std::nullopt,
-        /*memory_config=*/ttnn::L1_MEMORY_CONFIG);
-
-    gate_result.deallocate();
+    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
     up_result.deallocate();
 
     // --- Down matmul config ---
@@ -198,7 +193,7 @@ ttnn::Tensor routed_expert_ffn_optim_bh(
     const uint32_t down_per_core_N = tt::div_up(N_down_tiles, GRID_X);
 
     const uint32_t down_in0_bw = best_in0_block_w(
-        K_down_tiles, down_per_core_M, down_per_core_N, activated, down_proj, compute_kernel_config, x.dtype());
+        K_down_tiles, down_per_core_M, down_per_core_N, gate_result, down_proj, compute_kernel_config, x.dtype());
 
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
 
@@ -216,7 +211,7 @@ ttnn::Tensor routed_expert_ffn_optim_bh(
     };
 
     return ttnn::matmul(
-        /*input_tensor_a=*/activated,
+        /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
@@ -304,14 +299,8 @@ ttnn::Tensor routed_expert_ffn_optim_wh(
         /*activation=*/std::nullopt,
         /*compute_kernel_config=*/compute_kernel_config);
 
-    // Keep activated in block-sharded L1 (same layout as gate/up output)
-    auto activated = ttnn::multiply(
-        /*lhs=*/gate_result,
-        /*rhs=*/up_result,
-        /*output_dtype=*/std::nullopt,
-        /*memory_config=*/gate_up_mem);
-
-    gate_result.deallocate();
+    // In-place multiply: result stays in gate_result's block-sharded L1 buffer
+    ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
     up_result.deallocate();
 
     // --- Down matmul config ---
@@ -346,7 +335,7 @@ ttnn::Tensor routed_expert_ffn_optim_wh(
     auto down_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, down_shard};
 
     return ttnn::matmul(
-        /*input_tensor_a=*/activated,
+        /*input_tensor_a=*/gate_result,
         /*input_tensor_b=*/down_proj,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
