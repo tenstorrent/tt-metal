@@ -9,38 +9,17 @@ import os
 import sys
 from pathlib import Path
 
-# Fix import path: ensure project root comes before script directory in sys.path
-# This prevents importing the local 'models/' subdirectory instead of the project 'models/' package
 script_dir = str(Path(__file__).resolve().parent)
 project_root = str(Path(__file__).resolve().parents[3])
 
-# Remove script directory from the beginning of sys.path if present
 if sys.path and sys.path[0] == script_dir:
     sys.path.pop(0)
-
-# Ensure project root is in sys.path
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import torch
-from torch import nn
-from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
-from models.experimental.tt_symbiote.modules.activation import TTNNSilu
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
-from models.experimental.tt_symbiote.utils.device_management import set_device
-from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.modules.attention import (
-    PagedAttentionConfig,
-    TTNNPagedAttentionKVCache,
-)
-from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
-from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model, TTNNBailingMoeV2ForCausalLM
+from models.experimental.tt_symbiote.models.ling import load_model, DEFAULT_MODEL_NAME
 
 MESH_DEVICE_MAP = {
     "N150": (1, 1),
@@ -88,63 +67,10 @@ def cleanup(mesh_device):
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def create_paged_kv_cache(model_config, device, batch_size=1):
-    config = PagedAttentionConfig(
-        block_size=64,
-        max_num_blocks=32,
-        batch_size=batch_size,
-    )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
-
-
-def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
-    print(f"Loading {model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True)
-
-    nn_to_ttnn = {
-        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
-        model.model.norm.__class__: TTNNDistributedRMSNorm,
-        nn.Embedding: TTNNBailingPaddedEmbedding,
-        model.model.rotary_emb.__class__: TTNNBailingRotaryEmbedding,
-    }
-    nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,
-        nn.SiLU: TTNNSilu,
-    }
-
-    nn_to_ttnn3 = {
-        model.model.__class__: TTNNBailingMoeV2Model,
-    }
-
-    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
-    modules3 = register_module_replacement_dict(model, nn_to_ttnn3, model_config=None)
-    type(model).device = property(lambda self: torch.device("cpu"))
-    set_device(model, mesh_device)
-
-    all_modules = {**modules1, **modules2, **modules3}
-    print(f"Preprocessing {len(all_modules)} TTNN module weights...")
-    for k, v in tqdm(all_modules.items()):
-        v.preprocess_weights()
-        v.move_weights_to_device()
-
-    model.eval()
-    torch.set_grad_enabled(False)
-    TTNNBailingMoeV2ForCausalLM.patch_forward(model, mesh_device)
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
-    return model, tokenizer, paged_cache
-
-
 def warmup(model, tokenizer, mesh_device, paged_cache):
+    import torch
+
     print("Warming up with zero inputs at seq_len = 256 ...")
-    vocab_size = model.config.vocab_size
     for seq_len in [256, 1024]:
         input_ids = torch.zeros((1, seq_len), dtype=torch.long, device=model.device)
         attention_mask = torch.ones((1, seq_len), dtype=torch.long, device=model.device)
@@ -200,9 +126,6 @@ def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
         if "token_type_ids" in inputs:
             del inputs["token_type_ids"]
 
-        # Reset KV cache values in-place (preserves device buffer addresses so
-        # decode traces remain valid) and release only prefill traces (different
-        # prompt lengths require new prefill captures each turn).
         paged_cache.reset()
 
         outputs = model.generate(
@@ -220,10 +143,10 @@ def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
 
 def main():
     parser = argparse.ArgumentParser(description="HF Chatbot with TTNN acceleration")
-    parser.add_argument("--model", default="inclusionAI/Ling-mini-2.0", help="HuggingFace model name")
+    parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="HuggingFace model name")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate per turn")
     args = parser.parse_args()
-    DispatchManager.DisableTiming()  # Disable timing during interactive chat
+    DispatchManager.DisableTiming()
     mesh_device = setup_mesh_device()
     try:
         model, tokenizer, paged_cache = load_model(mesh_device, args.model)

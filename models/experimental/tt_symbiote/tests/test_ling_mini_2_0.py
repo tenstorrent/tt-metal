@@ -7,53 +7,13 @@
 import os
 
 import pytest
-import torch
-from torch import nn
-from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.modules.activation import TTNNSilu
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWRowSharded,
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
+from models.experimental.tt_symbiote.models.ling import (
+    DEFAULT_MODEL_NAME,
+    load_model,
 )
-from models.experimental.tt_symbiote.utils.device_management import set_device
-from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.attention import (
-    PagedAttentionConfig,
-    TTNNPagedAttentionKVCache,
-)
-from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayerPadded
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.modules.embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
-from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model, TTNNBailingMoeV2ForCausalLM
-
-
-def create_paged_kv_cache(model_config, device, batch_size=1):
-    """Create a paged attention KV cache for Ling-mini-2.0.
-
-    Args:
-        model_config: Model configuration
-        device: TTNN device
-        batch_size: Batch size
-
-    Returns:
-        TTNNPagedAttentionKVCache instance
-    """
-    config = PagedAttentionConfig(
-        block_size=64,
-        max_num_blocks=32,
-        batch_size=batch_size,
-    )
-    return TTNNPagedAttentionKVCache(
-        num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
-        head_dim=model_config.head_dim,
-        config=config,
-        device=None,
-    ).to_device(device)
 
 
 @pytest.mark.parametrize(
@@ -82,21 +42,8 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 def test_ling_mini_2_0(mesh_device):
     """Test Ling-mini-2.0 model with TTNN acceleration."""
 
-    tokenizer = AutoTokenizer.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
-    nn_to_ttnn = {
-        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayerPadded,
-        model.model.norm.__class__: TTNNDistributedRMSNorm,
-        nn.Embedding: TTNNBailingPaddedEmbedding,
-        model.model.rotary_emb.__class__: TTNNBailingRotaryEmbedding,
-    }
-    nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,
-        nn.SiLU: TTNNSilu,
-    }
-    nn_to_ttnn_3 = {
-        model.model.__class__: TTNNBailingMoeV2Model,
-    }
+    model, tokenizer, paged_cache = load_model(mesh_device, DEFAULT_MODEL_NAME)
+
     messages = [
         {
             "role": "user",
@@ -112,28 +59,8 @@ def test_ling_mini_2_0(mesh_device):
     ).to(model.device)
     if "token_type_ids" in inputs:
         del inputs["token_type_ids"]
-    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
-    modules3 = register_module_replacement_dict(model, nn_to_ttnn_3, model_config=None)
-    # After replacing all nn.Modules with TTNNModules, HF's model.device
-    # (which calls next(self.parameters())) fails since no nn.Module params remain.
-    # Patch it to return cpu — HF uses this for placing generated token tensors.
-    type(model).device = property(lambda self: torch.device("cpu"))
-    set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2, **modules3}
-    print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
-    for k, v in tqdm(all_modules.items()):
-        v.preprocess_weights()
-        v.move_weights_to_device()
-
-    # Create paged KV cache
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
-
-    TTNNBailingMoeV2ForCausalLM.patch_forward(model, mesh_device)
 
     print("Running inference with paged attention...")
-    model.eval()
-    torch.set_grad_enabled(False)
 
     # Warmup run without trace
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
@@ -143,13 +70,14 @@ def test_ling_mini_2_0(mesh_device):
     paged_cache.reset()
 
     DispatchManager.clear_timings()
+    model._ttnn_causal_lm_wrapper.reset_perf_stats()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)
 
     decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
     print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")
 
-    # Verify output is coherent (non-empty generated text)
     assert len(decoded.strip()) > 0, "Generated output should not be empty"
 
+    model._ttnn_causal_lm_wrapper.print_perf_stats()
     DispatchManager.save_stats_to_file("ling_mini_2_0_paged_attention_timing_stats.csv")
     TracedRun.release_all()

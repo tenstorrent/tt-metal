@@ -5,6 +5,7 @@
 """TTNN BailingMoeV2 Model implementation."""
 
 from typing import Optional, List
+import time
 
 import torch
 import ttnn
@@ -15,6 +16,7 @@ from transformers.modeling_attn_mask_utils import (
 from transformers.modeling_outputs import CausalLMOutputWithPast, MoeModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import DispatchManager
 
 
 class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
@@ -35,20 +37,16 @@ class TTNNBailingMoeV2Model(TTNNModule):
     def from_torch(model):
         new_model = TTNNBailingMoeV2Model()
         new_model.model = model
-
-        # Bypass tensor wrapping/unwrapping for decoder layers.
-        # These sit under the HF BailingMoeV2Model (nn.Module), so
-        # set_device() would give them _bypass_tensor_wrapping=False.
-        # Bypassing is safe: no PyTorch ops touch hidden_states between
-        # layer calls, and each layer's forward already works with raw
-        # ttnn.Tensor objects.
+        new_model._bypass_tensor_wrapping = True
         for layer in model.layers:
             if isinstance(layer, TTNNModule):
                 layer._bypass_tensor_wrapping = True
-        # Also bypass the final norm layer
         if isinstance(model.norm, TTNNModule):
             model.norm._bypass_tensor_wrapping = True
-
+        if isinstance(getattr(model, "rotary_emb", None), TTNNModule):
+            model.rotary_emb._bypass_tensor_wrapping = True
+        if isinstance(getattr(model, "word_embeddings", None), TTNNModule):
+            model.word_embeddings._bypass_tensor_wrapping = True
         return new_model
 
     def call(
@@ -121,11 +119,8 @@ class TTNNBailingMoeV2Model(TTNNModule):
             )
 
         if self._use_flash_attention_2:
-            # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
         elif self._use_sdpa and not output_attentions:
-            # output_attentions=True can not be supported when using SDPA, and we fall back on
-            # the manual implementation that requires a 4D causal mask in all cases.
             attention_mask = _prepare_4d_causal_attention_mask_for_sdpa(
                 attention_mask,
                 (batch_size, seq_length),
@@ -133,14 +128,10 @@ class TTNNBailingMoeV2Model(TTNNModule):
                 past_seen_tokens,
             )
         else:
-            # 4d mask is passed through the layers
             attention_mask = _prepare_4d_causal_attention_mask(
                 attention_mask, (batch_size, seq_length), inputs_embeds, past_seen_tokens
             )
 
-        # Pre-convert attention_mask to ttnn.Tensor for bypass-enabled decoder layers.
-        # With _bypass_tensor_wrapping=True, fast_unwrap_to_device passes torch.Tensor
-        # unchanged, but TTNNSDPAAttention needs ttnn.Tensor for on-device SDPA.
         if attention_mask is not None and isinstance(attention_mask, torch.Tensor):
             mesh_mapper = (
                 ttnn.ReplicateTensorToMesh(ttnn_object.device) if ttnn_object.device.get_num_devices() > 1 else None
@@ -153,13 +144,13 @@ class TTNNBailingMoeV2Model(TTNNModule):
                 mesh_mapper=mesh_mapper,
             )
 
-        # embed positions
         hidden_states = inputs_embeds
 
-        # create position embeddings to be shared across the decoder layers
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        if self.num_nextn_predict_layers > 0:
+            position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        else:
+            position_embeddings = None
 
-        # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         all_router_logits = () if output_router_logits else None
@@ -167,6 +158,7 @@ class TTNNBailingMoeV2Model(TTNNModule):
         layers = self.layers[: -self.num_nextn_predict_layers] if self.num_nextn_predict_layers > 0 else self.layers
         mtp_layers = self.layers[-self.num_nextn_predict_layers :] if self.num_nextn_predict_layers > 0 else None
 
+        t_layers_begin = time.time()
         for layer_idx, decoder_layer in enumerate(layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -196,13 +188,8 @@ class TTNNBailingMoeV2Model(TTNNModule):
                 )
             hidden_states = layer_outputs[0]
 
-            # Update KV cache Python-side counters OUTSIDE the trace boundary.
-            # During trace replay, execute_trace only replays device ops;
-            # _seq_lengths increments inside paged_update_on_device / paged_fill_on_device
-            # do NOT execute. By updating here, the counters advance correctly
-            # in all phases (warmup, capture, replay).
             if past_key_values is not None and hasattr(past_key_values, "update_seq_length"):
-                seq_len = inputs_embeds.shape[1]  # prefill: SEQ_LEN, decode: 1
+                seq_len = inputs_embeds.shape[1]
                 past_key_values.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
             if use_cache:
@@ -214,7 +201,28 @@ class TTNNBailingMoeV2Model(TTNNModule):
             if output_router_logits and layer_outputs[-1] is not None:
                 all_router_logits += (layer_outputs[-1],)
 
+        if isinstance(hidden_states, ttnn.Tensor):
+            ttnn.synchronize_device(ttnn_object.device)
+        t_layers_end = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "TTNNBailingMoeV2Model",
+            "decoder_layers_device",
+            {},
+            t_layers_end - t_layers_begin,
+        )
+
         hidden_states = self.norm(hidden_states)
+        if isinstance(hidden_states, ttnn.Tensor):
+            ttnn.synchronize_device(ttnn_object.device)
+        t_norm_end = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "TTNNBailingMoeV2Model",
+            "final_norm_device",
+            {},
+            t_norm_end - t_layers_end,
+        )
         main_hidden_states = hidden_states
 
         # add hidden states from the last decoder layer
@@ -290,14 +298,6 @@ class TTNNBailingMoeV2Model(TTNNModule):
 
 
 class TTNNBailingMoeV2ForCausalLM(TTNNModule):
-    """TTNN wrapper for BailingMoeV2ForCausalLM with on-device
-    input token preprocessing and logits postprocessing.
-
-    Preprocessing: token ids → device → embedding lookup (all on device).
-    Postprocessing: lm_head → last-position slice (all on device), then
-    only the last-position logits are transferred to host.
-    """
-
     @staticmethod
     def from_torch(causal_lm):
         new = TTNNBailingMoeV2ForCausalLM()
@@ -306,15 +306,46 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         new.word_embeddings = inner_model.model.word_embeddings
         if isinstance(causal_lm.lm_head, TTNNModule):
             causal_lm.lm_head._bypass_tensor_wrapping = True
+        new._perf_stats = {
+            "prefill_count": 0,
+            "prefill_total": 0.0,
+            "prefill_preprocess": 0.0,
+            "prefill_layers": 0.0,
+            "prefill_postprocess": 0.0,
+            "decode_count": 0,
+            "decode_total": 0.0,
+            "decode_preprocess": 0.0,
+            "decode_layers": 0.0,
+            "decode_postprocess": 0.0,
+        }
         return new
 
-    def preprocess_input_tokens(self, input_ids, attention_mask, position_ids):
-        """TTNN input tokens preprocessing.
+    def reset_perf_stats(self):
+        for k in self._perf_stats:
+            self._perf_stats[k] = 0.0 if "count" not in k else 0
 
-        Converts token ids to device, runs embedding lookup on device,
-        and converts position_ids to device.  Returns device-resident
-        inputs_embeds so the inner model skips its own embedding call.
-        """
+    def print_perf_stats(self):
+        s = self._perf_stats
+        print("\n=== Ling-mini Prefill / Decode Timing ===")
+        if s["prefill_count"] > 0:
+            print(f"  Prefill  ({s['prefill_count']} call(s)):")
+            print(f"    Total          : {s['prefill_total']:.4f}s")
+            print(f"    Preprocess     : {s['prefill_preprocess']:.4f}s")
+            print(f"    Decoder layers : {s['prefill_layers']:.4f}s")
+            print(f"    Postprocess    : {s['prefill_postprocess']:.4f}s")
+        if s["decode_count"] > 0:
+            avg = s["decode_total"] / s["decode_count"]
+            print(f"  Decode   ({s['decode_count']} tokens):")
+            print(f"    Total          : {s['decode_total']:.4f}s  ({avg*1000:.1f} ms/token)")
+            avg_pre = s["decode_preprocess"] / s["decode_count"]
+            avg_lay = s["decode_layers"] / s["decode_count"]
+            avg_post = s["decode_postprocess"] / s["decode_count"]
+            print(f"    Preprocess     : {s['decode_preprocess']:.4f}s  ({avg_pre*1000:.1f} ms/token)")
+            print(f"    Decoder layers : {s['decode_layers']:.4f}s  ({avg_lay*1000:.1f} ms/token)")
+            print(f"    Postprocess    : {s['decode_postprocess']:.4f}s  ({avg_post*1000:.1f} ms/token)")
+        print("=========================================\n")
+
+    def preprocess_input_tokens(self, input_ids, attention_mask, position_ids):
         device = self.device
         multi_device = device.get_num_devices() > 1
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if multi_device else None
@@ -347,27 +378,41 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         return tt_input_ids, inputs_embeds, attention_mask, position_ids
 
     def postprocess_logits(self, hidden_states):
-        """TTNN logits post processing
-
-        Runs lm_head on device, slices the last sequence position on
-        device, then transfers only the last-position logits to host.
-        """
-        logits = self.causal_lm.lm_head(hidden_states)
-
-        if isinstance(logits, ttnn.Tensor):
-            shape = list(logits.shape)
+        if isinstance(hidden_states, ttnn.Tensor):
+            shape = list(hidden_states.shape)
             if len(shape) >= 2 and shape[-2] > 1:
                 starts = [0] * len(shape)
                 ends = list(shape)
                 starts[-2] = shape[-2] - 1
-                logits = ttnn.slice(logits, starts, ends)
+                hidden_states = ttnn.slice(hidden_states, starts, ends)
 
+        logits = self.causal_lm.lm_head(hidden_states)
+
+        if isinstance(logits, ttnn.Tensor):
             device = self.device
-            if device.get_num_devices() > 1:
+            num_devices = device.get_num_devices()
+
+            local_max = ttnn.max(logits, dim=-1)
+            local_idx = ttnn.argmax(logits, dim=-1)
+
+            if num_devices > 1:
                 mesh_composer = ttnn.ConcatMesh2dToTensor(device, device.shape, (0, -1))
-                logits = ttnn.to_torch(logits, mesh_composer=mesh_composer)
+                max_vals = ttnn.to_torch(local_max, mesh_composer=mesh_composer).float().flatten()
+                idx_vals = ttnn.to_torch(local_idx, mesh_composer=mesh_composer).int().flatten()
             else:
-                logits = ttnn.to_torch(logits)
+                max_vals = ttnn.to_torch(local_max).float().flatten()
+                idx_vals = ttnn.to_torch(local_idx).int().flatten()
+
+            vocab_size = self.causal_lm.config.vocab_size
+            if num_devices > 1:
+                vocab_per_device = vocab_size // num_devices
+                winning_device = max_vals.argmax().item()
+                global_idx = winning_device * vocab_per_device + idx_vals[winning_device].item()
+            else:
+                global_idx = idx_vals[0].item()
+
+            logits = torch.full((1, 1, vocab_size), float("-inf"))
+            logits[0, 0, global_idx] = 1e9
             logits = logits.float()
         else:
             logits = logits.float()
@@ -389,14 +434,29 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
         return_dict=None,
         **kwargs,
     ):
+        begin = time.time()
+        DispatchManager.set_current_module_name("BailingMoeV2ForCausalLM")
+
         config = self.causal_lm.config
         return_dict = return_dict if return_dict is not None else config.use_return_dict
 
+        t0 = time.time()
         tt_input_ids = None
         if input_ids is not None and inputs_embeds is None:
             tt_input_ids, inputs_embeds, attention_mask, position_ids = self.preprocess_input_tokens(
                 input_ids, attention_mask, position_ids
             )
+        t1 = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "BailingMoeV2ForCausalLM",
+            "preprocess_input_tokens",
+            {},
+            t1 - t0,
+        )
+
+        if past_key_values is not None and hasattr(past_key_values, "paged_fill_on_device"):
+            attention_mask = None
 
         outputs = self.causal_lm.model(
             input_ids=tt_input_ids,
@@ -411,9 +471,50 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
             return_dict=True,
             **kwargs,
         )
+        if isinstance(outputs[0], ttnn.Tensor):
+            ttnn.synchronize_device(self.device)
+        t2 = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "BailingMoeV2ForCausalLM",
+            "model_forward",
+            {},
+            t2 - t1,
+        )
 
         hidden_states = outputs[0]
         logits = self.postprocess_logits(hidden_states)
+        t3 = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "BailingMoeV2ForCausalLM",
+            "postprocess_logits",
+            {},
+            t3 - t2,
+        )
+
+        end = time.time()
+        DispatchManager.record_timing(
+            "TorchModules",
+            "BailingMoeV2ForCausalLM",
+            "TTNNBailingMoeV2ForCausalLM_forward",
+            {},
+            end - begin,
+        )
+        DispatchManager.set_current_module_name(None)
+
+        seq_len = (
+            input_ids.shape[-1]
+            if input_ids is not None
+            else (inputs_embeds.shape[1] if inputs_embeds is not None else 1)
+        )
+        phase = "prefill" if seq_len > 1 else "decode"
+        s = self._perf_stats
+        s[f"{phase}_count"] += 1
+        s[f"{phase}_total"] += end - begin
+        s[f"{phase}_preprocess"] += t1 - t0
+        s[f"{phase}_layers"] += t2 - t1
+        s[f"{phase}_postprocess"] += t3 - t2
 
         if not return_dict:
             return (logits,) + outputs[1:]
@@ -427,7 +528,6 @@ class TTNNBailingMoeV2ForCausalLM(TTNNModule):
 
     @staticmethod
     def patch_forward(causal_lm, mesh_device):
-        """Patch the CausalLM forward with TTNN preprocessing/postprocessing."""
         wrapper = TTNNBailingMoeV2ForCausalLM.from_torch(causal_lm)
         wrapper._device = mesh_device
         causal_lm.forward = wrapper.call
