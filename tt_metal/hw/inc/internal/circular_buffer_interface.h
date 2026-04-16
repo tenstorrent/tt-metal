@@ -127,6 +127,7 @@ __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uin
 
     if (reset) {
         last_count[cb_id] = 0;
+        step_size[cb_id] = 0;
         return true;
     }
 
