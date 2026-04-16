@@ -577,8 +577,10 @@ jobs:
             for dir in downloaded_legs/model-trace-leg-*/; do
               [[ -d "$dir" ]] || continue
               slug=$(basename "$dir" | sed 's/^model-trace-leg-//')
-              src="${dir}ttnn_operations_master.json"
-              if [[ -f "$src" ]]; then
+              # upload-artifact preserves the workspace-relative path, so the JSON
+              # may be nested (e.g. model_tracer/traced_operations/ttnn_operations_master.json)
+              src=$(find "$dir" -name "ttnn_operations_master.json" -maxdepth 6 | head -1)
+              if [[ -n "$src" && -f "$src" ]]; then
                 cp "$src" "legs/${slug}.json"
                 LEG_COUNT=$((LEG_COUNT + 1))
               fi
