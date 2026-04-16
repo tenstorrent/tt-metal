@@ -71,6 +71,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_sfpu_init_<SFPU_UNARY_OPERATION>();
+    test_utils::call_unary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
+        SFPU_UNARY_OPERATION);
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -88,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_sfpu_start_<DST_SYNC>(block_tile);
             // calling sfpu function from ckernel
             // this part is where parametrization of operation takes part
-            test_utils::call_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
+            test_utils::call_unary_sfpu_operation<APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
                 SFPU_UNARY_OPERATION, formats.math);
 
             _llk_math_eltwise_unary_sfpu_done_();

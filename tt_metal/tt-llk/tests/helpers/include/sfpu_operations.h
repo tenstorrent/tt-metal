@@ -13,7 +13,7 @@
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
-// 3. Add the case statement in call_sfpu_operation() switch below
+// 3. Add the case statements in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() switches below
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
@@ -42,8 +42,64 @@ using namespace ckernel;
 using namespace ckernel::sfpu;
 
 /**
- * Template function to call SFPU operations with parameterized iteration count
- * and optional math format for type-specific behavior.
+ * Calls only the init portion of a unary SFPU operation.
+ * Must be paired with a subsequent call_unary_sfpu_operation() for the calculate step.
+ *
+ * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
+ * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
+ * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
+ * @param operation The SFPU operation type to initialize
+ */
+template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool FAST_MODE = false, bool STABLE_SORT = false, bool CLAMP_NEGATIVE = false>
+void call_unary_sfpu_operation_init(SfpuType operation)
+{
+    switch (operation)
+    {
+        case SfpuType::acosh:
+        case SfpuType::asinh:
+            _init_inverse_hyperbolic_<APPROX_MODE>();
+            break;
+        case SfpuType::atanh:
+            _init_atanh_<APPROX_MODE>();
+            break;
+        case SfpuType::exp2:
+            _init_exp2_<APPROX_MODE>();
+            break;
+        case SfpuType::exponential:
+            _init_exponential_<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>();
+            break;
+        case SfpuType::gelu:
+            _init_gelu_<APPROX_MODE>();
+            break;
+        case SfpuType::hardsigmoid:
+            _init_hardsigmoid_<APPROX_MODE>();
+            break;
+        case SfpuType::log:
+            _init_log_<APPROX_MODE>();
+            break;
+        case SfpuType::log1p:
+            log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>();
+            break;
+        case SfpuType::reciprocal:
+            _init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en>();
+            break;
+        case SfpuType::rsqrt:
+            _init_rsqrt_<APPROX_MODE>();
+            break;
+        case SfpuType::sqrt:
+            _init_sqrt_<APPROX_MODE>();
+            break;
+        case SfpuType::tanh:
+            tanh_init<APPROX_MODE, is_fp32_dest_acc_en>();
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * Calls only the calculate portion of a unary SFPU operation.
+ * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
  *
  * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
  * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
@@ -52,7 +108,7 @@ using namespace ckernel::sfpu;
  * @param math_format Optional math format for operations that need format-specific behavior
  */
 template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool FAST_MODE = false, bool STABLE_SORT = false, bool CLAMP_NEGATIVE = false>
-void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, float fill_const_value = 5.0f)
+void call_unary_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, float fill_const_value = 5.0f)
 {
     switch (operation)
     {
@@ -60,15 +116,12 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             _calculate_abs_<APPROX_MODE, ITERATIONS>(ITERATIONS);
             break;
         case SfpuType::acosh:
-            _init_inverse_hyperbolic_<APPROX_MODE>();
             _calculate_acosh_<APPROX_MODE, ITERATIONS>();
             break;
         case SfpuType::asinh:
-            _init_inverse_hyperbolic_<APPROX_MODE>();
             _calculate_asinh_<APPROX_MODE, ITERATIONS>();
             break;
         case SfpuType::atanh:
-            _init_atanh_<APPROX_MODE>();
             _calculate_atanh_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::celu:
@@ -81,11 +134,9 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             _calculate_elu_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>(1);
             break;
         case SfpuType::exp2:
-            _init_exp2_<APPROX_MODE>();
             _calculate_exp2_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::exponential:
-            _init_exponential_<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>();
             if constexpr (APPROX_MODE && CLAMP_NEGATIVE)
             {
                 // In this case each call to _calculate_exponential_ processes 8 iterations
@@ -128,19 +179,15 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             }
             break;
         case SfpuType::gelu:
-            _init_gelu_<APPROX_MODE>();
             _calculate_gelu_<APPROX_MODE, ITERATIONS>();
             break;
         case SfpuType::hardsigmoid:
-            _init_hardsigmoid_<APPROX_MODE>();
             _calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS>();
             break;
         case SfpuType::log:
-            _init_log_<APPROX_MODE>();
             _calculate_log_<APPROX_MODE, false, ITERATIONS>(ITERATIONS, 0);
             break;
         case SfpuType::log1p:
-            log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>();
             calculate_log1p<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::negative:
@@ -154,11 +201,9 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             }
             break;
         case SfpuType::reciprocal:
-            _init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en>();
             _calculate_reciprocal_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
             break;
         case SfpuType::rsqrt:
-            _init_rsqrt_<APPROX_MODE>();
             _calculate_rsqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>(ITERATIONS);
             break;
         case SfpuType::silu:
@@ -168,14 +213,12 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             _calculate_sine_<APPROX_MODE, ITERATIONS>(ITERATIONS);
             break;
         case SfpuType::sqrt:
-            _init_sqrt_<APPROX_MODE>();
             _calculate_sqrt_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE>(ITERATIONS);
             break;
         case SfpuType::square:
             _calculate_square_<APPROX_MODE, ITERATIONS>();
             break;
         case SfpuType::tanh:
-            tanh_init<APPROX_MODE, is_fp32_dest_acc_en>();
             calculate_tanh<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::threshold:
@@ -209,7 +252,29 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
             _relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
             break;
         default:
-            return; // Unsupported op – should never happen
+            return;
+    }
+}
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+void call_binary_sfpu_operation_init()
+{
+    switch (BINOP)
+    {
+        case BinaryOp::ADD:
+        case BinaryOp::SUB:
+        case BinaryOp::MUL:
+        case BinaryOp::DIV:
+        case BinaryOp::RSUB:
+        case BinaryOp::XLOGY:
+        case BinaryOp::POW:
+            _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
+            break;
+        case BinaryOp::ADD_TOP_ROW:
+            _init_add_top_row_();
+            break;
+        default:
+            break;
     }
 }
 
@@ -225,7 +290,6 @@ void call_binary_sfpu_operation(const std::uint32_t dst_index_in0 = 0, const std
         case BinaryOp::RSUB:
         case BinaryOp::XLOGY:
         case BinaryOp::POW:
-            _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
             _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
             break;
         case BinaryOp::RSHFT:
@@ -238,7 +302,6 @@ void call_binary_sfpu_operation(const std::uint32_t dst_index_in0 = 0, const std
             _calculate_logical_right_shift_<APPROXIMATION_MODE, ITERATIONS, INT32, false>(dst_index_in0, dst_index_in1, dst_index_out);
             break;
         case BinaryOp::ADD_TOP_ROW:
-            _init_add_top_row_();
             // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
             {
                 constexpr DataFormat add_top_row_format = (BINOP == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(MATH_FORMAT) : DataFormat::Float32;
