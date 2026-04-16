@@ -1015,10 +1015,6 @@ class Generator(WarmupForwardMixin):
             device_tensors=device_inputs,
         )
 
-        # Reset CCL ring-buffer indices before every replay, not just capture.
-        # Reusing a traced prefill after earlier requests can otherwise inherit
-        # stale gather/barrier state and hang in execute_trace.
-        self.model.tt_ccl.reset_gather_and_buffer_idx()
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
