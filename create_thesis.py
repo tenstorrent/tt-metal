@@ -73,7 +73,7 @@ def setup_styles(doc):
 
 
 def setup_page(doc):
-    """Set page dimensions and margins."""
+    """Set page dimensions, margins, headers and footers to match ETF template."""
     section = doc.sections[0]
     section.page_width = PAGE_WIDTH
     section.page_height = PAGE_HEIGHT
@@ -81,6 +81,107 @@ def setup_page(doc):
     section.right_margin = MARGIN_RIGHT
     section.top_margin = MARGIN_TOP
     section.bottom_margin = MARGIN_BOTTOM
+    section.header_distance = Emu(449580)
+    section.footer_distance = Emu(449580)
+
+    # Enable different first page header/footer (title page has none)
+    section.different_first_page_header_footer = True
+
+    # -- First page header & footer: empty --
+    first_header = section.first_page_header
+    first_header.is_linked_to_previous = False
+    # Clear any default content
+    for p in first_header.paragraphs:
+        p.clear()
+
+    first_footer = section.first_page_footer
+    first_footer.is_linked_to_previous = False
+    for p in first_footer.paragraphs:
+        p.clear()
+
+    # -- Default header (pages 2+): thesis title + horizontal rule --
+    header = section.header
+    header.is_linked_to_previous = False
+    # Clear default paragraph
+    for p in header.paragraphs:
+        p_element = p._element
+        p_element.getparent().remove(p_element)
+
+    # Paragraph 1: thesis title
+    hp = header.add_paragraph()
+    hp.style = doc.styles["Header"]
+    run = hp.add_run("Генерисање унарних SFPU кернела помоћу AI агената")
+    run.font.size = Pt(10)
+
+    # Paragraph 2: horizontal rule (VML-based, matching template)
+    hr_p = header.add_paragraph()
+    hr_p.style = doc.styles["Header"]
+    hr_run = hr_p.add_run()
+    # VML horizontal rule matching the template
+    hr_xml = (
+        '<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:v="urn:schemas-microsoft-com:vml" '
+        'xmlns:o="urn:schemas-microsoft-com:office:office">'
+        '<v:rect id="_x0000_i1025" style="width:0;height:1.5pt" '
+        'o:hralign="center" o:hrstd="t" o:hr="t" fillcolor="#a0a0a0" stroked="f"/>'
+        "</w:pict>"
+    )
+    hr_run._element.append(parse_xml(hr_xml))
+
+    # -- Default footer (pages 2+): centered page number --
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    # Clear default content
+    for p in footer.paragraphs:
+        p_element = p._element
+        p_element.getparent().remove(p_element)
+
+    # Empty line above page number
+    fp1 = footer.add_paragraph()
+    fp1.style = doc.styles["Footer"]
+
+    # Centered page number field
+    fp2 = footer.add_paragraph()
+    fp2.style = doc.styles["Footer"]
+    fp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Build PAGE field: fldChar begin, instrText, fldChar separate, text, fldChar end
+    _add_page_number_field(fp2)
+
+    # Empty line below page number
+    fp3 = footer.add_paragraph()
+    fp3.style = doc.styles["Footer"]
+
+
+def _add_page_number_field(paragraph):
+    """Insert a PAGE number field into a paragraph, matching template structure."""
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    # fldChar begin
+    run1 = paragraph.add_run()
+    fldChar_begin = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="begin"/>')
+    run1._element.append(fldChar_begin)
+
+    # instrText
+    run2 = paragraph.add_run()
+    instrText = parse_xml(
+        f'<w:instrText {nsdecls("w")} xml:space="preserve">PAGE  </w:instrText>'
+    )
+    run2._element.append(instrText)
+
+    # fldChar separate
+    run3 = paragraph.add_run()
+    fldChar_sep = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="separate"/>')
+    run3._element.append(fldChar_sep)
+
+    # Placeholder text (Word updates this on open)
+    run4 = paragraph.add_run("1")
+    run4_rPr = run4._element.get_or_add_rPr()
+    run4_rPr.append(parse_xml(f'<w:noProof {nsdecls("w")}/>'))
+
+    # fldChar end
+    run5 = paragraph.add_run()
+    fldChar_end = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="end"/>')
+    run5._element.append(fldChar_end)
 
 
 def add_page_break(doc):
@@ -171,88 +272,172 @@ def add_table(doc, headers, rows, caption_text=None):
 # ──────────────────────────────────────────────
 # TITLE PAGE
 # ──────────────────────────────────────────────
+def _make_borderless_table(doc, rows, cols):
+    """Create a borderless table matching the template style."""
+    tbl = doc.add_table(rows=rows, cols=cols)
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Remove all borders via tblPr
+    tblPr = tbl._tbl.tblPr
+    borders_xml = parse_xml(
+        f'<w:tblBorders {nsdecls("w")}>'
+        '<w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        '<w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        '<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        '<w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        '<w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        '<w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+        "</w:tblBorders>"
+    )
+    tblPr.append(borders_xml)
+    return tbl
+
+
+def _no_spacing_centered(cell, text, size_pt=14, bold=False):
+    """Write centered No Spacing text in a cell, matching the template."""
+    p = cell.paragraphs[0]
+    p.style = cell.part.document.styles["No Spacing"] if hasattr(cell.part, "document") else p.style
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.first_line_indent = Pt(0)
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run(text)
+    run.font.size = Pt(size_pt)
+    run.bold = bold
+    return p
+
+
 def write_title_page(doc):
-    # University header
-    for _ in range(2):
+    # ── University header table: [logo | university + katedra | empty] ──
+    logo_path = os.path.join(IMG_DIR, "etf_logo.png")
+
+    tbl = _make_borderless_table(doc, 1, 3)
+
+    # Set column widths to match template (EMU)
+    for cell, width in zip(tbl.rows[0].cells, [Emu(1383030), Emu(3703320), Emu(1411605)]):
+        cell.width = width
+
+    # Col 0: ETF logo
+    cell0 = tbl.rows[0].cells[0]
+    cell0.text = ""
+    p0 = cell0.paragraphs[0]
+    p0.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p0.paragraph_format.first_line_indent = Pt(0)
+    if os.path.exists(logo_path):
+        run0 = p0.add_run()
+        run0.add_picture(logo_path, width=Inches(1.0))
+
+    # Col 1: University name + blank + Katedra
+    cell1 = tbl.rows[0].cells[1]
+    cell1.text = ""
+    p1 = cell1.paragraphs[0]
+    p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p1.paragraph_format.first_line_indent = Pt(0)
+    p1.paragraph_format.space_after = Pt(0)
+    run1 = p1.add_run("Универзитет у Београду - Електротехнички факултет")
+    run1.font.size = Pt(14)
+
+    # Blank line
+    p1b = cell1.add_paragraph()
+    p1b.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p1b.paragraph_format.first_line_indent = Pt(0)
+    p1b.paragraph_format.space_before = Pt(0)
+    p1b.paragraph_format.space_after = Pt(0)
+
+    # Katedra
+    p1c = cell1.add_paragraph()
+    p1c.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p1c.paragraph_format.first_line_indent = Pt(0)
+    p1c.paragraph_format.space_before = Pt(0)
+    p1c.paragraph_format.space_after = Pt(0)
+    run1c = p1c.add_run("Катедра за сигнале и системе")
+    run1c.font.size = Pt(14)
+
+    # Blank line
+    p1d = cell1.add_paragraph()
+    p1d.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p1d.paragraph_format.first_line_indent = Pt(0)
+
+    # Col 2: empty
+    cell2 = tbl.rows[0].cells[2]
+    cell2.text = ""
+
+    # ── Empty paragraphs before DIPLOMSKI RAD ──
+    for _ in range(6):
         p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.first_line_indent = Pt(0)
+        p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
 
-    add_centered_para(doc, "Универзитет у Београду", size=14, space_after=2)
-    add_centered_para(doc, "Електротехнички факултет", size=14, space_after=2)
-    add_centered_para(doc, "", size=14, space_after=4)
-    add_centered_para(doc, "Катедра за сигнале и системе", size=12, space_after=12)
+    # ── ДИПЛОМСКИ РАД — 20pt bold centered ──
+    add_centered_para(doc, "ДИПЛОМСКИ РАД", size=20, bold=True, space_after=4)
 
+    # ── Thesis title — 20pt bold centered ──
+    add_centered_para(
+        doc,
+        "Генерисање унарних SFPU кернела помоћу AI агената",
+        size=20,
+        bold=True,
+        space_after=4,
+    )
+
+    # ── Empty paragraphs before candidate/mentor ──
+    for _ in range(4):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.first_line_indent = Pt(0)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+
+    # ── Kandidat — centered, 14pt, bold label ──
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.first_line_indent = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run("Кандидат")
+    run.font.size = Pt(14)
+    run.bold = True
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.first_line_indent = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run("Владимир Игњатијевић, бр. индекса ЕР 2022/0006")
+    run.font.size = Pt(14)
+
+    # ── Blank line ──
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+
+    # ── Mentor — centered, 14pt, bold label ──
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.first_line_indent = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run("Ментор")
+    run.font.size = Pt(14)
+    run.bold = True
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.first_line_indent = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    run = p.add_run("Марија Новичић, асистент")
+    run.font.size = Pt(14)
+
+    # ── Empty paragraphs before city/date ──
     for _ in range(3):
         p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
 
-    add_centered_para(doc, "ДИПЛОМСКИ РАД", size=16, bold=True, space_after=16)
-
-    for _ in range(1):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_after = Pt(0)
-
-    add_centered_para(doc, "Генерисање унарних SFPU кернела", size=14, bold=True, space_after=2)
-    add_centered_para(doc, "помоћу AI агената", size=14, bold=True, space_after=24)
-
-    for _ in range(4):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_after = Pt(0)
-
-    # Candidate and mentor - left/right aligned in a table
-    tbl = doc.add_table(rows=2, cols=2)
-    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    # Remove borders
-    for row in tbl.rows:
-        for cell in row.cells:
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            tcBorders = parse_xml(
-                f'<w:tcBorders {nsdecls("w")}>'
-                '<w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
-                '<w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
-                '<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
-                '<w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
-                "</w:tcBorders>"
-            )
-            tcPr.append(tcBorders)
-
-    c = tbl.rows[0].cells[0]
-    c.text = ""
-    p = c.paragraphs[0]
+    # ── Beograd, mesec 2026. godine — 14pt centered ──
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.first_line_indent = Pt(0)
-    run = p.add_run("Кандидат")
-    run.font.size = Pt(11)
-
-    c = tbl.rows[1].cells[0]
-    c.text = ""
-    p = c.paragraphs[0]
-    p.paragraph_format.first_line_indent = Pt(0)
-    run = p.add_run("Владимир Игњатијевић, бр. индекса ЕР 2022/0006")
-    run.font.size = Pt(11)
-
-    c = tbl.rows[0].cells[1]
-    c.text = ""
-    p = c.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.paragraph_format.first_line_indent = Pt(0)
-    run = p.add_run("Ментор")
-    run.font.size = Pt(11)
-
-    c = tbl.rows[1].cells[1]
-    c.text = ""
-    p = c.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.paragraph_format.first_line_indent = Pt(0)
-    run = p.add_run("Марија Новичић, асистент")
-    run.font.size = Pt(11)
-
-    for _ in range(4):
-        p = doc.add_paragraph()
-        p.paragraph_format.space_after = Pt(0)
-
-    add_centered_para(doc, "Београд, април 2026. године", size=12)
+    run = p.add_run("Београд, април 2026. године")
+    run.font.size = Pt(14)
 
 
 # ──────────────────────────────────────────────
