@@ -66,6 +66,7 @@ class TTNNEmbedding(TTNNModule):
         return out
 
 
+@trace_enabled
 class TTNNBailingPaddedEmbedding(TTNNModule):
     """Padded embedding wrapper that pads sequence to power-of-2 before lookup.
 
@@ -147,6 +148,7 @@ class TTNNRotaryEmbeddingCompute(TTNNModule):
         return cos, sin
 
 
+@trace_enabled
 class TTNNBailingRotaryEmbedding(TTNNModule):
     """TTNN-accelerated rotary position embedding for Ling/Bailing models.
 

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ling-mini (Bailing MoE V2) decode: HF-compatible logits capture, mesh→torch, paged KV helpers."""
+"""Ling-mini (Bailing MoE V2) helpers: autoregressive decode with on-device logits capture and mesh→torch."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from transformers.generation.logits_process import (
 )
 
 import ttnn
-import models.experimental.tt_symbiote.core.run_config as _run_config
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import traced_kv_full_forward_scope
 from models.experimental.tt_symbiote.models.bailing_moe_v2 import TTNNBailingMoeV2Model
 from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
@@ -43,8 +43,27 @@ _LING_MESH_TO_TORCH_COMPOSER_CACHE_MAX = 64
 
 
 def clear_ling_mesh_to_torch_composer_cache() -> None:
-    """Clear cached ``mesh_composer`` objects (e.g. after closing a mesh or in tests)."""
+    """Drop cached mesh composers (e.g. after mesh teardown or in tests)."""
     _LING_MESH_TO_TORCH_COMPOSER_CACHE.clear()
+
+
+def token_ids_list_for_hf_decode(token_ids, tokenizer) -> list[int]:
+    """Clamp token ids to tokenizer range so Rust decode does not overflow on bad or out-of-range values."""
+    lim = max(0, len(tokenizer) - 1)
+    lim = min(lim, 2_147_483_647)
+    unk = getattr(tokenizer, "unk_token_id", None)
+    fallback = unk if unk is not None and 0 <= int(unk) <= lim else 0
+    out: list[int] = []
+    for x in token_ids:
+        try:
+            t = int(x)
+        except (TypeError, ValueError, OverflowError):
+            out.append(fallback)
+            continue
+        if t < 0 or t > lim:
+            t = fallback
+        out.append(t)
+    return out
 
 
 def _ling_extract_topology(tt_tensor: ttnn.Tensor) -> tuple[list[object], list[int]]:
@@ -74,7 +93,7 @@ def _ling_infer_mesh_composer(
     placements: list,
     dist_shape: list[int],
 ) -> object | None:
-    """Infer ``CppMeshToTensor``; placement rules aligned with ``models.common.auto_compose``."""
+    """Build a mesh composer for distributed tensors (topology-driven, aligned with auto_compose)."""
     if len(dist_shape) == 0 or (len(dist_shape) == 1 and dist_shape[0] == 1):
         return None
 
@@ -149,7 +168,7 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 
 
 def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_tokens, device):
-    """Strip unused fields, enforce prompt length vs model/KV budget, then move tensors to device."""
+    """Trim prompts to fit context/KV budget and move tensors to the target device."""
     out = {k: v for k, v in inputs.items() if k != "token_type_ids"}
 
     kv_max = paged_cache.config.max_seq_length
@@ -174,13 +193,7 @@ def preprocess_generation_inputs(inputs, model_config, paged_cache, max_new_toke
 
 @dataclass
 class DecodeParams:
-    """Decode-time logits controls for ``decode_with_logit_postprocess``.
-
-    With ``temperature > 0``, sampling uses ``ttnn.sampling`` on the last-row logits (device),
-    with ``top_k`` (cap 32) and ``top_p`` as supported by that op.  Greedy decode uses
-    ``ttnn.argmax``.  Repetition / no-repeat-ngram processors run on a CPU logits row from capture
-    then re-upload for ``ttnn.sampling`` when sampling is enabled.
-    """
+    """Sampling and logits-processor settings used by ``decode_with_logit_postprocess`` (greedy vs ttnn sampling)."""
 
     temperature: float = 0.0
     top_p: float = 0.95
@@ -207,7 +220,7 @@ def _token_is_eos(token_id: int, eos_token_id) -> bool:
 
 
 def generation_torch_device(model) -> torch.device:
-    """HF bookkeeping tensors during symbiote decode; resilient after TTNN replaces many submodules."""
+    """Pick a CPU-side torch device for HF bookkeeping tensors when the wrapped model has no clear ``.device``."""
     try:
         return model.device
     except (RuntimeError, ValueError, StopIteration, AttributeError):
@@ -228,14 +241,7 @@ def _mesh_replicate_mapper(mesh_device):
 
 
 def replicated_mesh_tt_to_torch(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
-    """Device mesh ``ttnn.Tensor`` → host ``torch.Tensor`` for Ling (ids, indices, …).
-
-    Infers ``mesh_composer`` from ``tensor.tensor_topology()`` (aligned with
-    ``models.common.auto_compose``) and caches composers by mesh + topology signature.
-
-    ``ttnn.ReplicateTensorToMesh`` is only valid as ``mesh_mapper`` on ``from_torch``, not as
-    ``mesh_composer`` here.
-    """
+    """Mesh ``ttnn.Tensor`` to host ``torch.Tensor``, inferring and caching a mesh composer from topology."""
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
         return ttnn.to_torch(tt_tensor)
     mesh_composer = _ling_cached_mesh_composer(tt_tensor, mesh_device)
@@ -249,22 +255,14 @@ def _clamp_vocab_id(token_id: int, vocab_size: int) -> int:
 
 
 def _trim_logits_to_vocab(logits_2d: torch.Tensor, vocab_size: int) -> torch.Tensor:
-    """Slice padded lm_head output (V_padded ≥ V_real) to the true vocab size.
-
-    TTNNLinearIColShardedWAllReduced pads columns to a tile multiple.  Positions
-    [V_real, V_padded) contain uninitialised values that win argmax and
-    corrupt the generated sequence.  Slice them away before any pick.
-    """
+    """Drop padded vocab columns from lm_head output so tile padding cannot win argmax."""
     if vocab_size <= 0 or logits_2d.shape[-1] <= vocab_size:
         return logits_2d
     return logits_2d[..., :vocab_size]
 
 
 def _resolve_captured_lm_logits_ttnn(captured):
-    """Return ``(ttnn.Tensor, mesh_composer|None)`` for lm_head capture.
-
-    Supports :class:`~models.experimental.tt_symbiote.core.tensor.TorchTTNNTensor` (``ttnn_tensor`` set)
-    or a raw :class:`ttnn.Tensor` when ``lm_head`` runs with ``_bypass_tensor_wrapping``."""
+    """Resolve captured lm_head output to ``(ttnn.Tensor, mesh_composer|None)`` for TorchTTNNTensor or raw tensor."""
     if isinstance(captured, ttnn.Tensor):
         return captured, None
     tt = getattr(captured, "ttnn_tensor", None)
@@ -276,11 +274,7 @@ def _resolve_captured_lm_logits_ttnn(captured):
 
 
 def _captured_logits_last_row_to_torch(captured, mesh_device) -> torch.Tensor:
-    """Last sequence row of lm_head logits on device, then composed ``to_torch``.
-
-    When ``seq_len > 1``, ``ttnn.slice`` keeps only the last token row before the
-    host read, so we transfer ``O(vocab)`` instead of ``O(seq * vocab)`` for logits.
-    """
+    """Slice last sequence position of captured logits on device, then ``to_torch`` (one vocab row)."""
     tt, mesh_composer = _resolve_captured_lm_logits_ttnn(captured)
     if tt is None:
         x = captured.to_torch.float()
@@ -310,10 +304,7 @@ def _captured_logits_last_row_to_torch(captured, mesh_device) -> torch.Tensor:
 
 
 def _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz: int) -> tuple:
-    """Shared: last-token logits as ``[1, V]`` bf16 ROW_MAJOR on device (slice, trim, reshape, cast).
-
-    Returns ``(work, to_free, orig_v, tt)`` where ``to_free`` lists tensors to deallocate (not ``tt``).
-    """
+    """Prepare last-token logits as ``[1,V]`` bf16 ROW_MAJOR on device; returns ``(work, to_free, orig_v, tt)``."""
     tt, _ = _resolve_captured_lm_logits_ttnn(captured)
     if tt is None:
         raise ValueError(
@@ -373,18 +364,7 @@ def _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz: int) -> tuple:
 
 
 def _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz: int) -> int:
-    """Greedy next token id with lm_head output kept on TTNN until ``argmax``.
-
-    **Why this exists (vs. :func:`_captured_logits_last_row_to_torch`):** greedy decode only needs
-    ``argmax(logits_last_row)``.  Pulling logits via ``ttnn.to_torch`` moves the **entire** vocab row
-    to the host each step.  This path slices the last sequence position and trims padded vocab on
-    device, runs ``ttnn.argmax``, then reads back **only** the small index tensor (no full-vocab
-    logits round-trip).
-
-    Use when HF logits processors are disabled.  Processors need CPU float rows, so they must keep
-    using :func:`_captured_logits_last_row_to_torch` — there is **no** silent CPU fallback from this
-    function; missing device logits (no ``ttnn.Tensor`` / ``ttnn_tensor``) raises.
-    """
+    """Greedy next token via ``ttnn.argmax`` on device logits (avoids full-vocab host transfer)."""
     work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz)
     tt_idx = None
     try:
@@ -400,7 +380,7 @@ def _device_greedy_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz
 
 
 def _device_sample_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz: int, params: DecodeParams) -> int:
-    """Sample next token via ``ttnn.sampling`` on captured lm_head logits (no full-vocab ``to_torch``)."""
+    """Sample next token with ``ttnn.sampling`` on captured on-device logits."""
     work, to_free, orig_v, tt = _lm_head_capture_last_row_bf16_1xv(captured, vocab_sz)
     try:
         return _ttnn_sampling_from_row_bf16(mesh_device, work, orig_v, params)
@@ -411,7 +391,7 @@ def _device_sample_token_id_from_lm_head_capture(captured, mesh_device, vocab_sz
 
 
 def _ttnn_sampling_from_row_bf16(mesh_device, tt_2d, orig_v: int, params: DecodeParams) -> int:
-    """Run ``ttnn.sampling`` from ``[1, orig_v]`` bf16 ROW_MAJOR logits **already on device** (no host vocab upload)."""
+    """``ttnn.sampling`` on a bf16 ROW_MAJOR logits row already resident on device."""
     pad_w = (-orig_v) % 32
     vp = orig_v + pad_w
 
@@ -488,7 +468,7 @@ def _ttnn_sampling_from_row_bf16(mesh_device, tt_2d, orig_v: int, params: Decode
 
 
 def _sample_next_id_ttnn_sampling(mesh_device, scores_1xV: torch.Tensor, params: DecodeParams, mesh_mapper) -> int:
-    """Host ``[1,V]`` logits → device row → ``ttnn.sampling`` (fallback when no on-device logits tensor)."""
+    """Upload host ``[1,V]`` logits to device then run ``ttnn.sampling`` (fallback path)."""
     if scores_1xV.dim() != 2 or scores_1xV.shape[0] != 1:
         raise ValueError("scores must be shape [1, vocab]")
     orig_v = int(scores_1xV.shape[-1])
@@ -503,7 +483,7 @@ def _sample_next_id_ttnn_sampling(mesh_device, scores_1xV: torch.Tensor, params:
 
 
 def _tt_tensor_replicated_token_id(mesh_device, token_id: int) -> ttnn.Tensor:
-    """Single replicated token id on mesh without ``torch.tensor`` (``ttnn.full``)."""
+    """One new token id as a replicated ``ttnn.full`` tensor on the mesh."""
     return ttnn.full(
         (1, 1),
         fill_value=token_id,
@@ -515,7 +495,7 @@ def _tt_tensor_replicated_token_id(mesh_device, token_id: int) -> ttnn.Tensor:
 
 
 def _hf_long_tensor_ids_batch1(ids_seq: list[int], device):
-    """HF ``prepare_inputs_for_generation`` expects ``torch.LongTensor`` ``[1, seq]`` (batch size 1)."""
+    """Build ``[1, seq]`` long tensor for HF ``prepare_inputs_for_generation``."""
     return torch.as_tensor([ids_seq], dtype=torch.long, device=device)
 
 
@@ -530,34 +510,19 @@ def _prompt_ids_to_mesh_tt(input_ids, mesh_device, mesh_mapper) -> ttnn.Tensor:
 
 
 def _greedy_argmax_logits_row(row) -> int:
-    """Argmax over vocab from a [1, V] row (Tensor or tensor-like); no ``torch.argmax``."""
+    """Greedy argmax on a small logits row without ``torch.argmax``."""
     v = row.reshape(-1).tolist()
     return _clamp_vocab_id(int(max(range(len(v)), key=lambda i: v[i])), len(v))
 
 
 def _int_flat0_from_ttnn_tt(tt, mesh_device) -> int:
-    """First element of a small TTNN tensor as Python ``int`` (e.g. sampled token id)."""
+    """Read scalar int from a small TTNN tensor via mesh ``to_torch``."""
     x = replicated_mesh_tt_to_torch(tt, mesh_device)
     return int(x.reshape(-1)[0].item())
 
 
 class _LmHeadCapture:
-    """Wraps lm_head ``call`` to capture on-device logits and return a dummy.
-
-    The HF CausalLM forward calls ``logits = logits.float()`` right after
-    ``self.lm_head(hidden_states)``.  That ``.float()`` triggers
-    ``__torch_dispatch__`` → ``_unwrap_to_torch`` → ``ttnn.to_torch()``
-    (expensive full-vocab device→host transfer, ~154ms × 128 steps ≈ 19s).
-
-    This wrapper:
-    1. Captures on-device logits as ``TorchTTNNTensor`` (``ttnn_tensor`` set) or a raw ``ttnn.Tensor``
-       when ``lm_head`` uses ``_bypass_tensor_wrapping``.
-    2. Returns a tiny CPU scalar instead so ``.float()`` becomes free.
-
-    ``decode_with_logit_postprocess`` reads ``cap.captured_result``;
-    ``outputs.logits`` (the dummy) is never used.
-    ``_update_model_kwargs_for_generation`` only touches ``past_key_values``.
-    """
+    """Intercept ``lm_head.call`` to stash on-device logits and return a cheap scalar so HF ``.float()`` avoids full-vocab ``to_torch``."""
 
     def __init__(self):
         self.captured_result = None
@@ -587,7 +552,7 @@ class _LmHeadCapture:
 
 
 def _causal_lm_forward_pure_ttnn(model, model_inputs: dict, mesh_device) -> CausalLMOutputWithPast:
-    """Run Ling via ``TTNNBailingMoeV2Model.forward_ttnn`` (ids on device, ``cache_position`` to paged attn)."""
+    """Causal LM forward using ``forward_ttnn`` with device-side ids and cache positions for paged KV."""
     base = model.model
     if not isinstance(base, TTNNBailingMoeV2Model):
         raise TypeError(f"_causal_lm_forward_pure_ttnn requires TTNNBailingMoeV2Model, got {type(base).__name__}")
@@ -641,7 +606,11 @@ def _causal_lm_forward_pure_ttnn(model, model_inputs: dict, mesh_device) -> Caus
             use_cache=True,
             return_dict=True,
         )
-        logits = lm(base_out.last_hidden_state)
+        if past_key_values is not None:
+            with traced_kv_full_forward_scope():
+                logits = lm(base_out.last_hidden_state)
+        else:
+            logits = lm(base_out.last_hidden_state)
     finally:
         if isinstance(lm, TTNNModule):
             lm._bypass_tensor_wrapping = prev_lm_bypass
@@ -652,6 +621,10 @@ def _causal_lm_forward_pure_ttnn(model, model_inputs: dict, mesh_device) -> Caus
             ttnn.deallocate(pos_ttnn)
 
     return CausalLMOutputWithPast(logits=logits, past_key_values=base_out.past_key_values)
+
+
+def prefill_forward_pure_ttnn(model, model_inputs: dict, mesh_device) -> CausalLMOutputWithPast:
+    return _causal_lm_forward_pure_ttnn(model, model_inputs, mesh_device)
 
 
 def decode_with_logit_postprocess(
@@ -666,36 +639,9 @@ def decode_with_logit_postprocess(
     prompt_ids_tt: ttnn.Tensor | None = None,
     decode_pure_ttnn: bool | None = None,
 ) -> ttnn.Tensor:
-    """Autoregressive decode; state is ``input_ids_tt`` on mesh (HF only for ``prepare_inputs_for_generation`` / ``model()``).
+    """Autoregressive decode: grows ``input_ids_tt`` on mesh using captured lm_head logits (greedy or sampling) and paged KV.
 
-    A wrapper on ``lm_head.call`` captures the raw on-device ``ttnn_tensor``
-    before HF's ``logits.float()`` triggers the expensive ``_unwrap_to_torch``
-    dispatch path.  The wrapper returns a tiny scalar so ``.float()`` is free.
-    Each forward must capture on-device logits from ``lm_head`` (``TorchTTNNTensor`` with
-    ``ttnn_tensor``, or raw ``ttnn.Tensor`` when ``lm_head`` uses bypass).  If capture fails, this raises — there is no fallback through HF
-    ``outputs.logits`` (TTNN-only decode path; see CLAUDE.md symbiote CPU–TTNN roundtrip removal).
-
-    If ``prompt_ids_tt`` is passed, it must match ``input_ids`` shape; the decode loop takes ownership and
-    will deallocate it (avoid passing a tensor you still need elsewhere).
-
-    Decode keeps token ids in a Python ``list`` (``ids_seq``) and builds HF ``input_ids`` via
-    :func:`_hf_long_tensor_ids_batch1` instead of ``torch.cat`` / mesh round-trips.
-    Greedy: ``ttnn.argmax`` on the captured last row (via :func:`_lm_head_capture_last_row_bf16_1xv`).
-    ``temperature > 0``: ``ttnn.sampling`` on that same device row (via
-    :func:`_device_sample_token_id_from_lm_head_capture`).  With logits processors, logits are
-    ``to_torch``'d once for HF processors, then ``ttnn.sampling`` if ``temperature > 0``.
-
-    PyTorch is only used inside small helpers (HF ``prepare_inputs_for_generation`` expects
-    integer token tensors); this function body has no ``torch.`` calls.
-
-    ``_TRACE_RUNNING`` is forced True for the whole decode loop: TracedRun replay is unsafe here
-    because paged KV and cache state change every step while a recorded trace replays fixed buffer
-    traffic — that mismatch yields wrong logits (e.g. repeated punctuation). Normal forward keeps
-    output correct and matches the intended perf profile for this path.
-
-    When ``decode_pure_ttnn`` is True (default) and ``model.model`` is :class:`TTNNBailingMoeV2Model`, Ling uses
-    :func:`_causal_lm_forward_pure_ttnn` (device ids + ``forward_ttnn``). Set env
-    ``SYMBIOTE_DECODE_PURE_TTNN=0`` or pass ``decode_pure_ttnn=False`` for ``model(**model_inputs)``.
+    Uses HF only for ``prepare_inputs_for_generation`` / kwargs updates; optional ``_causal_lm_forward_pure_ttnn`` avoids generic ``model()`` when enabled.
     """
     if decode_pure_ttnn is None:
         decode_pure_ttnn = os.environ.get("SYMBIOTE_DECODE_PURE_TTNN", "1") != "0"
@@ -742,9 +688,6 @@ def decode_with_logit_postprocess(
 
     vocab_sz = int(getattr(model.config, "vocab_size", None) or 0)
 
-    _prev_trace_running = _run_config._TRACE_RUNNING
-    _run_config._TRACE_RUNNING = True
-
     cap = _LmHeadCapture()
     cap.install(model.lm_head)
 
@@ -753,7 +696,18 @@ def decode_with_logit_postprocess(
     try:
         for _ in range(max_new_tokens):
             ids_for_hf = _hf_long_tensor_ids_batch1(ids_seq, bookkeeping_device)
-            model_inputs = model.prepare_inputs_for_generation(ids_for_hf, **model_kwargs)
+            past = model_kwargs.get("past_key_values")
+            next_sequence_length = None
+            if model_kwargs.get("use_cache") and past is not None:
+                try:
+                    sl = past.get_seq_length()
+                except TypeError:
+                    sl = past.get_seq_length(0)
+                if sl > 0:
+                    next_sequence_length = 1
+            model_inputs = model.prepare_inputs_for_generation(
+                ids_for_hf, next_sequence_length=next_sequence_length, **model_kwargs
+            )
             if decode_pure_ttnn and isinstance(model.model, TTNNBailingMoeV2Model):
                 outputs = _causal_lm_forward_pure_ttnn(model, model_inputs, mesh_device)
             else:
@@ -821,7 +775,6 @@ def decode_with_logit_postprocess(
                 break
 
     finally:
-        _run_config._TRACE_RUNNING = _prev_trace_running
         cap.uninstall(model.lm_head)
 
     ttnn.synchronize_device(mesh_device)

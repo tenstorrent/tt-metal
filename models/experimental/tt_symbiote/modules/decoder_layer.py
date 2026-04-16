@@ -87,7 +87,6 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Save residual (stays on device as TTNN tensor)
         residual = hs
 
-        # Input layernorm
         hs = self.input_layernorm(hs)
 
         # Attention — use cache_position (explicit kwarg) if provided,
@@ -116,11 +115,8 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Save new residual
         residual = hs
 
-        # Post-attention layernorm
         hs_normed = self.post_attention_layernorm(hs)
 
-        # MLP / MoE
-        # MLP (layer 0) or MoE (layers 1-19)
         mlp_out = self.mlp(hs_normed)
         router_logits = None
         if isinstance(mlp_out, tuple):
@@ -157,6 +153,7 @@ def _next_power_of_2(n: int, minimum=256) -> int:
     return result
 
 
+@trace_enabled
 class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
     """Decoder layer that pads the input sequence length to the next power of 2.
 

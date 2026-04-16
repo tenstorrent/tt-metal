@@ -682,6 +682,7 @@ class TTNNGlm4MoeMLP(TTNNModule):
         return x
 
 
+@trace_enabled
 class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
     pass
 
@@ -1497,10 +1498,7 @@ class TTNNMoE(TTNNModule):
 
 @trace_enabled
 class TTNNBailingMoE(TTNNMoE):
-    """TTNN MoE for BailingMoeV2 architecture (Ling-mini-2.0 model).
-
-    Trace replay applies on single-token decode (see ``HF_chat`` ``_TRACE_RUNNING`` gating).
-    """
+    """TTNN MoE for BailingMoeV2 architecture (Ling-mini-2.0 model)."""
 
     @classmethod
     def from_torch(cls, torch_moe):

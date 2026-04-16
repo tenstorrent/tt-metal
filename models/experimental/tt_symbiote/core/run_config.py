@@ -5,6 +5,7 @@
 import contextlib
 import os
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
@@ -909,6 +910,16 @@ class TraceEntry:
 _TRACE_ENABLED_CLASSES: Set[Type] = set()
 _TRACE_DISABLED_CLASSES: Set[Type] = set()
 _TRACE_RUNNING = False
+_TRACED_KV_SUBTREE: ContextVar[bool] = ContextVar("_TRACED_KV_SUBTREE", default=False)
+
+
+@contextlib.contextmanager
+def traced_kv_full_forward_scope():
+    tok = _TRACED_KV_SUBTREE.set(True)
+    try:
+        yield
+    finally:
+        _TRACED_KV_SUBTREE.reset(tok)
 
 
 def trace_enabled(cls: Type) -> Type:
@@ -1221,6 +1232,23 @@ class TracedRun(LightweightRun):
             if bypass:
                 return result
             return post_process_ttnn_module_output(self, result)
+
+        has_kv = (
+            func_kwargs.get("past_key_value") is not None
+            or func_kwargs.get("past_key_values") is not None
+            or kwds.get("past_key_value") is not None
+            or kwds.get("past_key_values") is not None
+        )
+        if has_kv or _TRACED_KV_SUBTREE.get():
+            tok = None
+            if has_kv and not _TRACED_KV_SUBTREE.get():
+                tok = _TRACED_KV_SUBTREE.set(True)
+            try:
+                result = NormalRun.module_run(self, *args, **kwds)
+            finally:
+                if tok is not None:
+                    _TRACED_KV_SUBTREE.reset(tok)
+            return result
 
         # Traced execution path — per-(module, cache_key) lifecycle:
         #   1st encounter: warm-up forward (no trace capture)

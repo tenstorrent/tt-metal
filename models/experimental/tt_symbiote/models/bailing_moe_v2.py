@@ -4,6 +4,7 @@
 
 """TTNN BailingMoeV2 Model implementation."""
 
+import contextlib
 from typing import Optional, List
 
 import torch
@@ -52,6 +53,10 @@ class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
         self.mtp_hidden_states = mtp_hidden_states
 
 
+from models.experimental.tt_symbiote.core.run_config import trace_enabled, traced_kv_full_forward_scope
+
+
+@trace_enabled
 class TTNNBailingMoeV2Model(TTNNModule):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`BailingMoeV2DecoderLayer`]
@@ -414,33 +419,39 @@ class TTNNBailingMoeV2Model(TTNNModule):
             next_decoder_cache = None
             layers = inner.layers
 
-            for decoder_layer in layers:
-                if output_hidden_states:
-                    all_hidden_states += (hidden_states,)
+            kv_layer_scope = (
+                traced_kv_full_forward_scope()
+                if (use_cache and past_key_values is not None)
+                else contextlib.nullcontext()
+            )
+            with kv_layer_scope:
+                for decoder_layer in layers:
+                    if output_hidden_states:
+                        all_hidden_states += (hidden_states,)
 
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    output_router_logits=output_router_logits,
-                    use_cache=use_cache,
-                    position_embeddings=position_embeddings,
-                    cache_position=cache_position,
-                )
-                hidden_states = layer_outputs[0]
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        output_router_logits=output_router_logits,
+                        use_cache=use_cache,
+                        position_embeddings=position_embeddings,
+                        cache_position=cache_position,
+                    )
+                    hidden_states = layer_outputs[0]
 
-                if use_cache:
-                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                    if use_cache:
+                        next_decoder_cache = layer_outputs[2 if output_attentions else 1]
 
-                if output_attentions:
-                    all_self_attns += (layer_outputs[1],)
+                    if output_attentions:
+                        all_self_attns += (layer_outputs[1],)
 
-                if output_router_logits and layer_outputs[-1] is not None:
-                    all_router_logits += (layer_outputs[-1],)
+                    if output_router_logits and layer_outputs[-1] is not None:
+                        all_router_logits += (layer_outputs[-1],)
 
-            hidden_states = inner.norm(hidden_states)
+                hidden_states = inner.norm(hidden_states)
             main_hidden_states = hidden_states
 
             if output_hidden_states:

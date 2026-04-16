@@ -2310,7 +2310,6 @@ class TTNNBailingMoEAttention(TTNNModule):
     """TTNN Attention for BailingMoeV2 (Ling-mini-2.0 model).
 
     Uses TTNNPagedAttentionKVCache for paged attention with on-device KV storage.
-    Trace replay applies on single-token decode (see ``HF_chat`` ``_TRACE_RUNNING`` gating).
     """
 
     def __init__(self):
@@ -2498,6 +2497,18 @@ class TTNNBailingMoEAttention(TTNNModule):
                 packer_l1_acc=True,
             )
 
+        pad_amount = 32 - (1 % 32)
+        pad_torch = torch.zeros(pad_amount, dtype=torch.int64)
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        self._pos_typecast_pad_buf = ttnn.from_torch(
+            pad_torch,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         # Initialize BailingRotarySetup (Meta-format cos/sin with identity padding)
         from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
@@ -2684,18 +2695,6 @@ class TTNNBailingMoEAttention(TTNNModule):
             if cp.dtype != ttnn.int32:
                 orig_size = cp.shape[0]
                 if orig_size % 32 != 0:
-                    pad_amount = 32 - (orig_size % 32)
-                    if not hasattr(self, "_pos_typecast_pad_buf") or self._pos_typecast_pad_buf is None:
-                        pad_torch = torch.zeros(pad_amount, dtype=torch.int64)
-                        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
-                        self._pos_typecast_pad_buf = ttnn.from_torch(
-                            pad_torch,
-                            device=self.device,
-                            dtype=cp.dtype,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                            mesh_mapper=mesh_mapper,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
                     cp = ttnn.concat([cp, self._pos_typecast_pad_buf], dim=-1)
                 cp = ttnn.typecast(cp, ttnn.int32)
                 if orig_size % 32 != 0:

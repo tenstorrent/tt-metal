@@ -29,6 +29,7 @@ from models.experimental.tt_symbiote.models.ling import (
     create_paged_kv_cache,
     decode_with_logit_postprocess,
     replicated_mesh_tt_to_torch,
+    token_ids_list_for_hf_decode,
 )
 
 
@@ -129,7 +130,8 @@ def test_ling_mini_2_0(mesh_device):
     output_ids = replicated_mesh_tt_to_torch(output_ids_tt, mesh_device).long()
     ttnn.deallocate(output_ids_tt)
     prompt_len = inputs["input_ids"].shape[-1]
-    decoded = tokenizer.decode(output_ids.reshape(-1)[prompt_len:].tolist())
+    gen_list = output_ids.reshape(-1)[prompt_len:].tolist()
+    decoded = tokenizer.decode(token_ids_list_for_hf_decode(gen_list, tokenizer))
     print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")
 
     # Verify output is coherent (non-empty generated text)

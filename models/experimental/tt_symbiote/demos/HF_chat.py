@@ -49,6 +49,7 @@ from models.experimental.tt_symbiote.models.ling import (
     generation_torch_device,
     preprocess_generation_inputs,
     replicated_mesh_tt_to_torch,
+    token_ids_list_for_hf_decode,
 )
 
 MESH_DEVICE_MAP = {
@@ -250,7 +251,10 @@ def chat_loop(
         try:
             outputs = replicated_mesh_tt_to_torch(outputs_tt, mesh_device).long().to(torch_dev)
             gen_ids = outputs[0, prompt_len:].tolist()
-            response = tokenizer.decode(gen_ids, skip_special_tokens=True)
+            response = tokenizer.decode(
+                token_ids_list_for_hf_decode(gen_ids, tokenizer),
+                skip_special_tokens=True,
+            )
         finally:
             ttnn.deallocate(outputs_tt)
         print(f"\nAssistant: {response}\n")
