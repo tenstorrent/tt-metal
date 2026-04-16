@@ -60,6 +60,14 @@ protected:
         // Setting TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 skips the body of these tests but
         // leaves them present so local reproducers and bisects continue to work. Remove
         // once the underlying hang is fixed.
+        //
+        // ERISC race condition fixes are confirmed working (branch nsexton/0-racecondition-hunt):
+        // CclAsyncOp.ReduceScatterSmall_PersistentFabric and all 19 FabricSendRecv2x4Tests now
+        // pass consistently. The remaining hang here is a distinct underlying issue: Tensix
+        // workers on the far N300 chips (device IDs 4-7, accessed via non-MMIO ETH fabric)
+        // perform an unsafe NOC access at 0x880030060 during "Enqueue dummy ops" after
+        // ttnn::all_gather. The hang manifests at dispatch_thread_pool_->wait() in
+        // enqueue_write_shards_nolock() and is not related to the ERISC firmware init race.
         if (const char* disable = std::getenv("TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP");
             disable != nullptr && std::string_view(disable) == "1") {
             GTEST_SKIP() << "Temporarily disabled via TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 "
