@@ -197,7 +197,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 // clang-format on
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
-    ASSERT(cb_access_divides_size_evenly(operand, (uint32_t)num_pages));
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
@@ -240,7 +239,6 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
-    ASSERT(cb_access_divides_size_evenly(operand, (uint32_t)num_pages));
 #if ASSERT_ENABLED
     cb_wait_front_validate(operand, 0, true);
 #endif

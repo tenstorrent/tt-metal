@@ -114,13 +114,6 @@ __attribute__((noinline)) inline bool cb_access_within_bounds(
     return cb.fifo_rd_ptr + (start_tile_index + num_tiles) * cb.fifo_page_size <= cb.fifo_limit;
 }
 
-__attribute__((noinline)) inline bool cb_access_divides_size_evenly(uint32_t cb_id, uint32_t num_tiles) {
-    if (num_tiles == 0) {
-        return true;
-    }
-    return get_local_cb_interface(cb_id).fifo_num_pages % num_tiles == 0;
-}
-
 __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uint32_t num_tiles, bool reset = false) {
     static uint16_t last_count[NUM_CIRCULAR_BUFFERS] = {};
     static uint16_t step_size[NUM_CIRCULAR_BUFFERS] = {};

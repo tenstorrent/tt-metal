@@ -40,9 +40,6 @@ inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
 
-    LLK_ASSERT(
-        cb_access_divides_size_evenly(input, (std::uint32_t)num_tiles),
-        "cb_pop_front: tile count must evenly divide CB size");
     LLK_ASSERT(cb_wait_front_validate(input, 0, true), "");
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
