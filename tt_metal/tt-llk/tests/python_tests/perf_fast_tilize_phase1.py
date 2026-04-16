@@ -35,7 +35,6 @@ def test_fast_tilize_unpack_perf(
     output_format,
     dest_acc,
     dimensions,
-    workers_tensix_coordinates,
 ):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
@@ -75,4 +74,4 @@ def test_fast_tilize_unpack_perf(
         compile_time_formats=True,
     )
 
-    configuration.run(perf_report, run_count=2, location=workers_tensix_coordinates)
+    configuration.run(perf_report, run_count=2)

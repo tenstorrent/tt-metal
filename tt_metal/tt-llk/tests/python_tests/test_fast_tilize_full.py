@@ -67,7 +67,7 @@ TILE_C = 32
         (4, 8),
     ],
 )
-def test_fast_tilize_full(formats, dest_acc, dimensions, workers_tensix_coordinates):
+def test_fast_tilize_full(formats, dest_acc, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -123,7 +123,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions, workers_tensix_coordina
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -224,7 +224,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions, workers_tensix_coordina
         (50, 4),
     ],
 )
-def test_fast_tilize_large(formats, dest_acc, dimensions, workers_tensix_coordinates):
+def test_fast_tilize_large(formats, dest_acc, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -267,7 +267,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions, workers_tensix_coordin
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(
         golden_tensor
     ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
@@ -301,9 +301,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions, workers_tensix_coordin
         (4, 4),
     ],
 )
-def test_fast_tilize_overflow_guard(
-    formats, dest_acc, dimensions, workers_tensix_coordinates
-):
+def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -354,7 +352,7 @@ def test_fast_tilize_overflow_guard(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
     tile_size = TILE_R * TILE_C
 
     # Skip accuracy check here — test_fast_tilize_full already covers that.
@@ -378,7 +376,7 @@ def test_fast_tilize_overflow_guard(
     last_g_addr = (
         stim.buf_res_addr + (tile_count + guard_tiles - 1) * stim.buf_res_tile_size
     )
-    core_loc = workers_tensix_coordinates  # already "x,y" string
+    core_loc = "0,0"  # already "x,y" string
     raw = read_from_device(core_loc, last_g_addr, num_bytes=10)
     marker = struct.unpack_from("<H", raw, 0)[0]
     assert (

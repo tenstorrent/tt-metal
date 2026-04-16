@@ -48,7 +48,7 @@ UNIT_DIM = 4
     dest_acc=[DestAccumulation.No],
     dimensions=[(1, 4)],
 )
-def test_fast_tilize_unpack(formats, dest_acc, dimensions, workers_tensix_coordinates):
+def test_fast_tilize_unpack(formats, dest_acc, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -91,7 +91,7 @@ def test_fast_tilize_unpack(formats, dest_acc, dimensions, workers_tensix_coordi
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     # Dump output for analysis: map each output row to input data

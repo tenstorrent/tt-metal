@@ -83,9 +83,7 @@ def make_stimuli(formats, act_dims, wt_dims, stimulus_type):
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_1_matmul_pretilized(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_1_matmul_pretilized(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -134,7 +132,7 @@ def test_1_matmul_pretilized(
         dest_acc=dest_acc,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert passed_test(golden, res_tensor, formats.output_format)
 
@@ -148,9 +146,7 @@ def test_1_matmul_pretilized(
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_2a_std_tilize_only(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_2a_std_tilize_only(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -195,7 +191,7 @@ def test_2a_std_tilize_only(
         dest_acc=dest_acc,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert len(res_tensor) == len(golden), f"Size: {len(res_tensor)} vs {len(golden)}"
     assert passed_test(golden, res_tensor, formats.output_format, print_pcc=True)
@@ -212,9 +208,7 @@ def test_2a_std_tilize_only(
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_2_std_tilize_matmul(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_2_std_tilize_matmul(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -265,7 +259,7 @@ def test_2_std_tilize_matmul(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     tile_size = TILE_R * TILE_C
     matmul_result = res[kt_dim * tile_size :]  # skip tilized A tiles
     assert len(matmul_result) == len(
@@ -284,9 +278,7 @@ def test_2_std_tilize_matmul(
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_3a_fast_tilize_only(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_3a_fast_tilize_only(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -325,7 +317,7 @@ def test_3a_fast_tilize_only(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert len(res_tensor) == len(golden), f"Size: {len(res_tensor)} vs {len(golden)}"
     assert passed_test(golden, res_tensor, formats.output_format, print_pcc=True)
@@ -342,9 +334,7 @@ def test_3a_fast_tilize_only(
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_3a_metal_api_pattern(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_3a_metal_api_pattern(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -383,7 +373,7 @@ def test_3a_metal_api_pattern(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert len(res_tensor) == len(golden), f"Size: {len(res_tensor)} vs {len(golden)}"
     assert passed_test(golden, res_tensor, formats.output_format, print_pcc=True)
@@ -400,9 +390,7 @@ def test_3a_metal_api_pattern(
     kt_dim=[2, 4],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_3b_fast_tilize_matmul(
-    formats, dest_acc, kt_dim, stimulus, workers_tensix_coordinates
-):
+def test_3b_fast_tilize_matmul(formats, dest_acc, kt_dim, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -453,7 +441,7 @@ def test_3b_fast_tilize_matmul(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     tile_size = TILE_R * TILE_C
     matmul_result = res[kt_dim * tile_size :]  # skip tilized A tiles
     assert len(matmul_result) == len(
@@ -473,7 +461,6 @@ def _run_tilize_matmul_niter(
     kt_dim,
     num_iters,
     stimulus,
-    workers_tensix_coordinates,
 ):
     row_dims = [TILE_R, kt_dim * TILE_C]
     wt_dims = [kt_dim * TILE_R, TILE_C]
@@ -539,7 +526,7 @@ def _run_tilize_matmul_niter(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     tile_size = TILE_R * TILE_C
 
     for i in range(num_iters):
@@ -563,9 +550,7 @@ def _run_tilize_matmul_niter(
     num_iters=[2],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_4_std_tilize_matmul_niter(
-    formats, dest_acc, kt_dim, num_iters, stimulus, workers_tensix_coordinates
-):
+def test_4_std_tilize_matmul_niter(formats, dest_acc, kt_dim, num_iters, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
     _run_tilize_matmul_niter(
@@ -575,7 +560,6 @@ def test_4_std_tilize_matmul_niter(
         kt_dim,
         num_iters,
         stimulus,
-        workers_tensix_coordinates,
     )
 
 
@@ -590,9 +574,7 @@ def test_4_std_tilize_matmul_niter(
     num_iters=[2],
     stimulus=["ones_A", "ones_B", "random"],
 )
-def test_5_fast_tilize_matmul_niter(
-    formats, dest_acc, kt_dim, num_iters, stimulus, workers_tensix_coordinates
-):
+def test_5_fast_tilize_matmul_niter(formats, dest_acc, kt_dim, num_iters, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
     _run_tilize_matmul_niter(
@@ -602,7 +584,6 @@ def test_5_fast_tilize_matmul_niter(
         kt_dim,
         num_iters,
         stimulus,
-        workers_tensix_coordinates,
     )
 
 
@@ -618,7 +599,6 @@ def _run_tilize_matmul_accum(
     kt_dim,
     num_iters,
     stimulus,
-    workers_tensix_coordinates,
 ):
     row_dims = [TILE_R, kt_dim * TILE_C]
     wt_dims = [kt_dim * TILE_R, TILE_C]
@@ -684,7 +664,7 @@ def _run_tilize_matmul_accum(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     tile_size = TILE_R * TILE_C
 
     # Dump ALL result buffer tiles for diagnostics
@@ -745,9 +725,7 @@ def _run_tilize_matmul_accum(
     num_iters=[1, 2, 3, 8],
     stimulus=["ones_A", "const_3_7", "random"],
 )
-def test_6_std_tilize_matmul_accum(
-    formats, dest_acc, kt_dim, num_iters, stimulus, workers_tensix_coordinates
-):
+def test_6_std_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
     _run_tilize_matmul_accum(
@@ -757,7 +735,6 @@ def test_6_std_tilize_matmul_accum(
         kt_dim,
         num_iters,
         stimulus,
-        workers_tensix_coordinates,
     )
 
 
@@ -772,9 +749,7 @@ def test_6_std_tilize_matmul_accum(
     num_iters=[1, 2, 3, 8],
     stimulus=["ones_A", "const_3_7", "random"],
 )
-def test_7_fast_tilize_matmul_accum(
-    formats, dest_acc, kt_dim, num_iters, stimulus, workers_tensix_coordinates
-):
+def test_7_fast_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
     _run_tilize_matmul_accum(
@@ -784,7 +759,6 @@ def test_7_fast_tilize_matmul_accum(
         kt_dim,
         num_iters,
         stimulus,
-        workers_tensix_coordinates,
     )
 
 
@@ -801,7 +775,7 @@ def test_7_fast_tilize_matmul_accum(
     stimulus=["const_3_7"],
 )
 def test_8_fast_tilize_matmul_accum_bfp_mop(
-    formats, dest_acc, kt_dim, num_iters, stimulus, workers_tensix_coordinates
+    formats, dest_acc, kt_dim, num_iters, stimulus
 ):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
@@ -812,5 +786,4 @@ def test_8_fast_tilize_matmul_accum_bfp_mop(
         kt_dim,
         num_iters,
         stimulus,
-        workers_tensix_coordinates,
     )

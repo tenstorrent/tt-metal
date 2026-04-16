@@ -39,9 +39,7 @@ def _skip_non_bh():
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
-def test_perf_fast_tilize(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
-):
+def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
     _skip_non_bh()
 
     # BFP / Float32 input not supported for tilize
@@ -52,9 +50,7 @@ def test_perf_fast_tilize(
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
 
-    _run_fast_tilize_perf(
-        perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
-    )
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 
 # ---------------------------------------------------------------------------
@@ -71,21 +67,15 @@ def test_perf_fast_tilize(
     rt_dim=[1, 2, 4, 8],
     ct_dim=[2, 4, 8],
 )
-def test_perf_fast_tilize_bfp(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
-):
+def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
     _skip_non_bh()
-    _run_fast_tilize_perf(
-        perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
-    )
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 
 # ---------------------------------------------------------------------------
 # Shared helper
 # ---------------------------------------------------------------------------
-def _run_fast_tilize_perf(
-    perf_report, formats, rt_dim, ct_dim, workers_tensix_coordinates
-):
+def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * 32, ct_dim * 32)
 
@@ -118,4 +108,4 @@ def _run_fast_tilize_perf(
         compile_time_formats=True,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

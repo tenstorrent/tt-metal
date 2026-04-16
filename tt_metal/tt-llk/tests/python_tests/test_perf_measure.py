@@ -19,7 +19,7 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @pytest.mark.parametrize("ct_dim", [2, 3, 4, 5, 6, 7, 8])
-def test_perf_measure(perf_report, ct_dim, workers_tensix_coordinates):
+def test_perf_measure(perf_report, ct_dim):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -51,7 +51,7 @@ def test_perf_measure(perf_report, ct_dim, workers_tensix_coordinates):
         compile_time_formats=True,
     )
 
-    cfg.run(perf_report, location=workers_tensix_coordinates)
+    cfg.run(perf_report)
 
     # Read profiler buffers right after L1_TO_L1 run
     from ttexalens.tt_exalens_lib import read_words_from_device
@@ -59,9 +59,7 @@ def test_perf_measure(perf_report, ct_dim, workers_tensix_coordinates):
     total_tiles = tile_count * 4  # LOOP_FACTOR=4
 
     for name, addr in [("Unpack", 0x16B000), ("Math", 0x16C000), ("Pack", 0x16D000)]:
-        data = read_words_from_device(
-            addr=addr, word_count=0x400, location=workers_tensix_coordinates
-        )
+        data = read_words_from_device(addr=addr, word_count=0x400)
         starts = {}
         zones = []
         for i in range(0, len(data), 2):

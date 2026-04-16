@@ -36,9 +36,7 @@ TILE_C = 32
     kt_dim=[1, 2],
     tilize_mode=["standard", "fast"],
 )
-def test_fast_tilize_matmul(
-    formats, dest_acc, kt_dim, tilize_mode, workers_tensix_coordinates
-):
+def test_fast_tilize_matmul(formats, dest_acc, kt_dim, tilize_mode):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -101,7 +99,7 @@ def test_fast_tilize_matmul(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     tile_size = TILE_R * TILE_C
 
     # --- Diagnostic: verify tilize output against standalone fast-tilize golden ---

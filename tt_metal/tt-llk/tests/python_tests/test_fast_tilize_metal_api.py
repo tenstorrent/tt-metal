@@ -33,9 +33,7 @@ TILE_C = 32
     dest_acc=[DestAccumulation.No],
     dimensions=[(1, 2), (1, 4), (1, 8), (2, 4), (2, 8), (10, 12)],
 )
-def test_fast_tilize_metal_api(
-    formats, dest_acc, dimensions, workers_tensix_coordinates
-):
+def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -78,7 +76,7 @@ def test_fast_tilize_metal_api(
         compile_time_formats=True,
     )
 
-    res = cfg.run(workers_tensix_coordinates).result
+    res = cfg.run().result
     assert len(res) == len(golden)
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert passed_test(golden, res_tensor, formats.output_format)

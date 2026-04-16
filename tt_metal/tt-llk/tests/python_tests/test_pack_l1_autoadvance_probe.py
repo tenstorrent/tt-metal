@@ -38,7 +38,7 @@ TILE_C = 32
     ],
     dest_acc=[DestAccumulation.No],
 )
-def test_pack_l1_autoadvance(formats, dest_acc, workers_tensix_coordinates):
+def test_pack_l1_autoadvance(formats, dest_acc):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
@@ -82,7 +82,7 @@ def test_pack_l1_autoadvance(formats, dest_acc, workers_tensix_coordinates):
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor
