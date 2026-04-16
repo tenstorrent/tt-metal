@@ -314,10 +314,19 @@ void MetalEnvImpl::teardown_fabric_config() {
                         log_warning(
                             tt::LogMetal,
                             "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
-                            "(status=0x{:08x}), continuing teardown",
+                            "(status=0x{:08x}), force-resetting ERISC to prevent stale NOC traffic",
                             chip_id,
                             chan_id,
                             status.empty() ? 0u : status[0]);
+                        // Force-halt the ERISC core that didn't terminate in time. Without this,
+                        // the still-running firmware generates NOC traffic that causes "unsafe ARC
+                        // access" errors when the next process opens the devices. The ERISC firmware
+                        // will be properly re-initialized on the next fabric bring-up.
+                        const auto virtual_eth_coord =
+                            cluster.get_virtual_coordinate_from_logical_coordinates(
+                                chip_id, eth_logical_core, CoreType::ETH);
+                        cluster.assert_risc_reset_at_core(
+                            tt_cxy_pair(chip_id, virtual_eth_coord), tt::umd::RiscType::ALL);
                         break;
                     }
                 }
