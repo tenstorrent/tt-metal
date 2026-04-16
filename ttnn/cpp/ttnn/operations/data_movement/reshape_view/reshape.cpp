@@ -336,6 +336,12 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
 
+    const auto [logical_shape, padded_shape] =
+        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
+        return tensor;
+    }
+
     // ND sharded tensors: convert to interleaved, reshape, then convert back.
     // The reshape op assumes legacy 2D shard specs throughout its internal paths.
     if (is_device_tensor(tensor) && tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
@@ -355,12 +361,6 @@ ttnn::Tensor ttnn::reshape(
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
 
-    const auto [logical_shape, padded_shape] =
-        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
-    // First Case, No reshape Required
-    if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
-        return tensor;
-    }
     PadValue default_pad_value;
     if (tensor.dtype() == DataType::BFLOAT8_B or tensor.dtype() == DataType::BFLOAT16 or
         tensor.dtype() == DataType::FLOAT32) {
