@@ -650,7 +650,6 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
             bias_padded,
             dtype=ttnn.bfloat16,
@@ -830,7 +829,6 @@ def run_matmul_2d_tiny_tile(
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -1000,7 +998,6 @@ def run_matmul_1d_tiny_tile(
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),

@@ -963,12 +963,6 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
     )
 
 
-import pytest
-import torch
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
 def run_linear(device, a, b, bias=None, optional_output=None):
     a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
