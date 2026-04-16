@@ -43,19 +43,21 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_elu(uint slope) {
     sfpi::vFloat alpha = Converter::as_float(slope);
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+    // 0x4B400000 - 127 = 0x4B3FFF81: c231 int pre-biased by IEEE 754 exponent of 1.0f
+    // Fuses k_int ISUB + bias IADD into a single ISUB in the setexp call
+    const sfpi::vInt c231_bias = 0x4B3FFF81;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat orig_x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to prevent exponent underflow (k < -127 wraps setexp)
-        sfpi::vFloat cw_x = orig_x;
+        // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
         sfpi::vFloat lo = -87.0f;
-        sfpi::vec_min_max(lo, cw_x);
+        sfpi::vec_min_max(lo, x);
 
         // Cody-Waite range reduction: x = k*ln(2) + r
-        sfpi::vFloat tmp = cw_x * CW_INV_LN2 + c231;
-        sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+        sfpi::vFloat tmp = x * CW_INV_LN2 + c231;
         sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * CW_NEG_LN2_HI + cw_x;
+        sfpi::vFloat r = k_f * CW_NEG_LN2_HI + x;
         r = r + k_f * CW_NEG_LN2_LO;
 
         // expm1(r) = r * h(r), Horner evaluation of h
@@ -63,15 +65,14 @@ inline void calculate_elu(uint slope) {
         for (int i = static_cast<int>(EXPM1_H_DEGREE) - 1; i >= 0; i--) {
             h = h * r + EXPM1_H[i];
         }
-        sfpi::vFloat p = r * h;
+        h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-        // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
-        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - c231_bias);
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
         result = alpha * result;
 
-        v_if(orig_x >= 0.0f) { result = orig_x; }
+        v_if(x >= 0.0f) { result = x; }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {

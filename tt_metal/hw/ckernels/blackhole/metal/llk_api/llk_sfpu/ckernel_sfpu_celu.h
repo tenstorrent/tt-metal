@@ -57,12 +57,12 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
         for (int i = static_cast<int>(CELU_EXPM1_H_DEGREE) - 1; i >= 0; i--) {
             h = h * r + CELU_EXPM1_H[i];
         }
-        sfpi::vFloat p = r * h;
+        h = r * h;
 
         // Reconstruct: exp(xr)-1 = (2^k - 1) + 2^k * expm1(r)
         // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
         sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
-        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
         result = alpha * result;
 
         v_if(x >= 0.0f) { result = x; }

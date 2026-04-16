@@ -41,15 +41,15 @@ inline void calculate_selu(uint scale, uint alpha) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to prevent exponent underflow
-        sfpi::vFloat cw_x = x;
+        // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
         sfpi::vFloat lo = -87.0f;
-        sfpi::vec_min_max(lo, cw_x);
+        sfpi::vec_min_max(lo, x);
 
         // Cody-Waite range reduction
-        sfpi::vFloat tmp = cw_x * SELU_CW_INV_LN2 + c231;
+        sfpi::vFloat tmp = x * SELU_CW_INV_LN2 + c231;
         sfpi::vInt k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
         sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * SELU_CW_NEG_LN2_HI + cw_x;
+        sfpi::vFloat r = k_f * SELU_CW_NEG_LN2_HI + x;
         r = r + k_f * SELU_CW_NEG_LN2_LO;
 
         // expm1(r) = r * h(r)
@@ -57,12 +57,12 @@ inline void calculate_selu(uint scale, uint alpha) {
         for (int i = static_cast<int>(SELU_EXPM1_H_DEGREE) - 1; i >= 0; i--) {
             h = h * r + SELU_EXPM1_H[i];
         }
-        sfpi::vFloat p = r * h;
+        h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
         // exexp_nodebias(vConst1) == 127 (raw IEEE 754 exponent of 1.0f)
         sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, 127 + k_int);
-        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * p;
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
         result = scale_alpha * result;
 
         v_if(x >= 0.0f) { result = scale_val * x; }
