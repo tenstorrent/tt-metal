@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ using address_t = uint32_t;
 
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
-constexpr uint32_t row_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(3);
 constexpr uint32_t num_packets_per_page = get_compile_time_arg_val(4);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(5);
@@ -54,7 +53,7 @@ void kernel_main() {
             .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
         constexpr auto tensor0_args = TensorAccessorArgs<7>();
-        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
+        auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 #endif
 
         uint32_t row_id = row_id_start;

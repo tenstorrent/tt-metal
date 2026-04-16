@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ void kernel_main() {
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     // Wait for Phase 1 to complete.
     if (barrier_count > 0) {

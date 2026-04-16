@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Gather unified kernel
@@ -42,47 +42,51 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(src_cb, src_num_pages);
     }
 
-    // Get receiver data address from runtime arg (dst CB doesn't exist on sender cores)
     uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
-    // Gather sender args (from compile-time args, passed to op as runtime args)
-    Gather::SenderArgs gather_args{
-        get_named_compile_time_arg_val("gather_dest_noc_x"),
-        get_named_compile_time_arg_val("gather_dest_noc_y"),
-        get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_src_cb"),
-        get_named_compile_time_arg_val("gather_src_num_pages"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather_row_major"),
-        receiver_data_addr,  // receiver_data_addr from runtime arg (output tensor buffer address)
-        get_named_compile_time_arg_val("gather_sender_idx"),
+    Gather::DMArgs gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                receiver_data_addr,
+                get_named_compile_time_arg_val("gather_sender_idx"),
+            },
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            },
     };
 
-// ============================================================================
-// BRISC (Receiver) - DataMovementProcessor.RISCV_0
-// Named compile-time args: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id,
-//                          noc1_receiver_semaphore_id, dst_cb, dst_num_pages
-// ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
-    Gather::ReceiverArgs gather_args{
-        get_named_compile_time_arg_val("gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_dst_cb"),
-        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    Gather::DMArgs gather_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            },
     };
 
-// ============================================================================
-// TRISC (Compute) - No-op (gather is dataflow only)
-// ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
-    // Gather compute args (no-op for TRISC)
     Gather::ComputeArgs gather_args{};
 #endif
 

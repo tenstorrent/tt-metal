@@ -148,7 +148,7 @@ jobs:
       - arch-wormhole_b0
       - topology-6u
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - in-service
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}

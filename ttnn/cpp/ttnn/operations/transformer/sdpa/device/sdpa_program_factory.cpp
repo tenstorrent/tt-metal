@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1222,11 +1222,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // When the injector is geometrically inside the mcast rect (not at min or max X),
-                // the hardware counts it as a destination slot, so num_dests must include it.
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,10 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -25,13 +27,22 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=2.471,
+        atol=65.280,
+        frobenius_threshold=0.007,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -45,15 +56,38 @@ def test_sum_global(device, batch_size, h, w, dtype):
     torch_output_tensor = torch.sum(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    if dtype == ttnn.float32:
+        pcc_threshold = 0.999
+        rtol = 0.012
+        atol = 32.640
+        frobenius_threshold = 0.02
+    elif dtype == ttnn.bfloat16:
+        pcc_threshold = 0.999
+        rtol = 0.009
+        atol = 65.280
+        frobenius_threshold = 0.009
+    else:
+        pcc_threshold = 0.999
+        rtol = 0.062
+        atol = 228.480
+        frobenius_threshold = 0.062
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("n", [1, 9])
@@ -68,10 +102,19 @@ def test_sum_4d(device, n, c, h, w, dim):
     torch_output_tensor = torch.sum(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.sum(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.005,
+        atol=472.500,
+        frobenius_threshold=0.005,
+    )
 
 
 @pytest.mark.parametrize(
@@ -99,9 +142,18 @@ def test_sum_nd_shard(device, shapes, keepdim):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(op_output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.001,
+        atol=0.194,
+        frobenius_threshold=0.001,
+    )
 
 
 @pytest.mark.parametrize(
@@ -129,10 +181,29 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
 
     # Prepare TTNN input/output
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.sum(input_tensor, sub_core_grids=sub_core_grids)
 
     # Compare
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    if dtype == ttnn.bfloat16:
+        pcc_threshold = 0.999
+        rtol = 1e-06
+        atol = 1e-06
+        frobenius_threshold = 1e-09
+    else:
+        pcc_threshold = 0.999
+        rtol = 0.015
+        atol = 4177.920
+        frobenius_threshold = 0.015
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

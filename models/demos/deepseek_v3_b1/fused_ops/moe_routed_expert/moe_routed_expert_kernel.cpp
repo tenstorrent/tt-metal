@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // MoE Routed Expert fused kernel
@@ -60,11 +60,13 @@ void kernel_main() {
     // Mcast (receiver)
     // ------------------------------------------------------------------------
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_dst_cb"),
-        get_named_compile_time_arg_val("mcast_dst_num_pages"),
-    };
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender = {},
+        .receiver = {
+            get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+            get_named_compile_time_arg_val("mcast_dst_cb"),
+            get_named_compile_time_arg_val("mcast_dst_num_pages"),
+        }};
 
     // ------------------------------------------------------------------------
     // Matmul (reader)
@@ -75,20 +77,24 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // Gather (sender - compute cores send to sender core)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::SenderArgs gather_args{
-        get_named_compile_time_arg_val("gather_dest_noc_x"),
-        get_named_compile_time_arg_val("gather_dest_noc_y"),
-        get_named_compile_time_arg_val("gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_src_cb"),
-        get_named_compile_time_arg_val("gather_src_num_pages"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("gather_row_major"),
-        get_named_compile_time_arg_val("gather_receiver_data_addr"),
-        0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+    deepseek_b1_ops::Gather::DMArgs gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("gather_dest_noc_x"),
+                get_named_compile_time_arg_val("gather_dest_noc_y"),
+                get_named_compile_time_arg_val("gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_src_cb"),
+                get_named_compile_time_arg_val("gather_src_num_pages"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("gather_row_major"),
+                get_named_compile_time_arg_val("gather_receiver_data_addr"),
+                0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+            },
+        .receiver = {},
     };
 
     // ------------------------------------------------------------------------
@@ -97,22 +103,14 @@ void kernel_main() {
     using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
-    // Index Mcast (receiver) - receives expert indices
+    // Index Mcast (no-op on NCRISC — receiver on BRISC)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("gate_proj_cb_index"),
-        get_named_compile_time_arg_val("index_mcast_num_pages"),
-    };
+    deepseek_b1_ops::Mcast::DMArgs index_mcast_args{.sender = {}, .receiver = {}};
 
     // ------------------------------------------------------------------------
-    // Expert Scale Mcast (receiver) - receives expert scale for scalar multiply
+    // Expert Scale Mcast (no-op on NCRISC — receiver on BRISC)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Mcast::ReceiverArgs expert_scale_mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("mul_cb_scalar_src"),
-        get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
-    };
+    deepseek_b1_ops::Mcast::DMArgs expert_scale_mcast_args{.sender = {}, .receiver = {}};
 
     // ------------------------------------------------------------------------
     // DRAM Streaming Matmul (reader - DRAM streaming uses NOC_0)
@@ -164,31 +162,31 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // down_proj_gather (sender - gate_proj cores send fused output to sender core)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::SenderArgs down_proj_gather_args{
-        get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
-        get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
-        get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("down_proj_gather_src_cb"),
-        get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("down_proj_gather_row_major"),
-        get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
-        get_named_compile_time_arg_val(
-            "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+    deepseek_b1_ops::Gather::DMArgs down_proj_gather_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
+                get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
+                get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("down_proj_gather_src_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
+                get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
+                get_named_compile_time_arg_val("down_proj_gather_row_major"),
+                get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
+                get_named_compile_time_arg_val(
+                    "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+            },
+        .receiver = {},
     };
 
     // ------------------------------------------------------------------------
-    // down_proj_mcast (receiver) - receives broadcasted fused output
+    // down_proj_mcast (no-op on NCRISC — receiver moved to BRISC)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Mcast::ReceiverArgs down_proj_mcast_args{
-        get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("down_proj_mcast_dst_cb"),
-        get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
-    };
+    deepseek_b1_ops::Mcast::DMArgs down_proj_mcast_args{.sender = {}, .receiver = {}};
 
     // ------------------------------------------------------------------------
     // down_proj DRAM Matmul (reader - DRAM streaming uses NOC_0)
@@ -286,19 +284,22 @@ void kernel_main() {
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        get_read_ptr(mcast_src_cb),
-        get_write_ptr(mcast_dst_cb),
-    };
+    deepseek_b1_ops::Mcast::DMArgs mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+                get_named_compile_time_arg_val("mcast_data_size_bytes"),
+                mcast_src_cb,
+                get_named_compile_time_arg_val("mcast_src_num_pages"),
+                get_read_ptr(mcast_src_cb),
+                get_write_ptr(mcast_dst_cb),
+            },
+        .receiver = {}};
 
     // ------------------------------------------------------------------------
     // Matmul (writer)
@@ -309,13 +310,17 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // Gather (receiver - sender core receives from compute cores)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::ReceiverArgs gather_args{
-        get_named_compile_time_arg_val("gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("gather_dst_cb"),
-        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs gather_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("gather_dst_cb"),
+                get_named_compile_time_arg_val("gather_dst_num_pages"),
+            },
     };
 
     // ------------------------------------------------------------------------
@@ -330,38 +335,52 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     constexpr uint32_t index_mcast_src_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
     constexpr uint32_t index_mcast_dst_cb = get_named_compile_time_arg_val("gate_proj_cb_index");
-    deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("index_mcast_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
-        index_mcast_src_cb,
-        get_named_compile_time_arg_val("index_mcast_num_pages"),
-        get_read_ptr(index_mcast_src_cb),
-        get_write_ptr(index_mcast_dst_cb),
-    };
+    deepseek_b1_ops::Mcast::DMArgs index_mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("index_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
+                get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
+                index_mcast_src_cb,
+                get_named_compile_time_arg_val("index_mcast_num_pages"),
+                get_read_ptr(index_mcast_src_cb),
+                get_write_ptr(index_mcast_dst_cb),
+            },
+        .receiver = {
+            get_semaphore(get_named_compile_time_arg_val("index_mcast_receiver_semaphore")),
+            get_named_compile_time_arg_val("gate_proj_cb_index"),
+            get_named_compile_time_arg_val("index_mcast_num_pages"),
+        }};
 
     // ------------------------------------------------------------------------
     // Expert Scale Mcast (sender) - broadcasts expert scale for scalar multiply
     // ------------------------------------------------------------------------
     constexpr uint32_t expert_scale_mcast_src_cb = get_named_compile_time_arg_val("gate_output_cb");
     constexpr uint32_t expert_scale_mcast_dst_cb = get_named_compile_time_arg_val("mul_cb_scalar_src");
-    deepseek_b1_ops::Mcast::SenderArgs expert_scale_mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
-        expert_scale_mcast_src_cb,
-        get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
-        get_read_ptr(expert_scale_mcast_src_cb),
-        get_write_ptr(expert_scale_mcast_dst_cb),
-    };
+    deepseek_b1_ops::Mcast::DMArgs expert_scale_mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
+                get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
+                expert_scale_mcast_src_cb,
+                get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
+                get_read_ptr(expert_scale_mcast_src_cb),
+                get_write_ptr(expert_scale_mcast_dst_cb),
+            },
+        .receiver = {
+            get_semaphore(get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore")),
+            get_named_compile_time_arg_val("mul_cb_scalar_src"),
+            get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
+        }};
 
     // DRAM Streaming Matmul (no-op for BRISC, handled by NCRISC)
     using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
@@ -380,13 +399,17 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // down_proj_gather (receiver - sender core receives fused output from gate_proj cores)
     // ------------------------------------------------------------------------
-    deepseek_b1_ops::Gather::ReceiverArgs down_proj_gather_args{
-        get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
-        get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id")),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id")),
-        get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
-        get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+    deepseek_b1_ops::Gather::DMArgs down_proj_gather_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id")),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id")),
+                get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
+                get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+            },
     };
 
     // ------------------------------------------------------------------------
@@ -394,19 +417,26 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     constexpr uint32_t down_proj_mcast_src_cb = get_named_compile_time_arg_val("down_proj_mcast_src_cb");
     constexpr uint32_t down_proj_mcast_dst_cb = get_named_compile_time_arg_val("down_proj_mcast_dst_cb");
-    deepseek_b1_ops::Mcast::SenderArgs down_proj_mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
-        get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
-        down_proj_mcast_src_cb,
-        get_named_compile_time_arg_val("down_proj_mcast_src_num_pages"),
-        get_read_ptr(down_proj_mcast_src_cb),
-        get_write_ptr(down_proj_mcast_dst_cb),
-    };
+    deepseek_b1_ops::Mcast::DMArgs down_proj_mcast_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore")),
+                get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
+                get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
+                down_proj_mcast_src_cb,
+                get_named_compile_time_arg_val("down_proj_mcast_src_num_pages"),
+                get_read_ptr(down_proj_mcast_src_cb),
+                get_write_ptr(down_proj_mcast_dst_cb),
+            },
+        .receiver = {
+            get_semaphore(get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore")),
+            get_named_compile_time_arg_val("down_proj_mcast_dst_cb"),
+            get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
+        }};
 
     // down_proj DRAM Matmul (no-op for BRISC, handled by NCRISC)
     using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
@@ -658,7 +688,15 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("MCAST_INDEX");
-        mcast(index_mcast_args);
+        deepseek_b1_ops::Mcast::Op<
+            McastCTArgs,
+            Core::is_sender_core,
+            Core::is_mcast_grid_core,
+            Core::is_gate_proj_core,
+            true,
+            /*ReceiverOnBrisc=*/true>
+            index_mcast;
+        index_mcast(index_mcast_args);
     }
 
     // ========================================================================
@@ -670,8 +708,9 @@ void kernel_main() {
             McastCTArgs,
             Core::is_sender_core,
             Core::is_mcast_grid_core,
-            Core::is_gate_proj_core,  // Only gate_proj cores receive expert scale
-            true>                     // pop_src
+            Core::is_gate_proj_core,
+            true,
+            /*ReceiverOnBrisc=*/true>
             expert_scale_mcast;
         expert_scale_mcast(expert_scale_mcast_args);
     }
@@ -693,8 +732,7 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("UP_PROJ");
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false, 0, false, true>
-            up_proj;
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true, false> up_proj;
         up_proj();
     }
 
@@ -731,7 +769,8 @@ void kernel_main() {
             Core::is_sender_core,
             Core::is_mcast_grid_core,
             Core::is_gate_proj_core,  // Same receivers as input mcast for down_proj
-            true>                     // pop_src
+            true,
+            /*ReceiverOnBrisc=*/true>
             down_proj_mcast;
         down_proj_mcast(down_proj_mcast_args);
     }
@@ -771,7 +810,7 @@ void kernel_main() {
     }
 #endif
     // Only need one teardown since all mcasts reuse the same semaphores
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();

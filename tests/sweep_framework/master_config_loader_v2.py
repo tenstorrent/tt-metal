@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import ttnn
-import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
 # Inline lead_models_filter state (avoids dependency on untracked/separate module)
@@ -42,10 +42,6 @@ class lead_models_filter:
     def get_lead_models_filter(cls) -> bool:
         return cls._lead_models_only
 
-
-# Set up logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -276,9 +272,13 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        # Use negative lookbehind to avoid matching subblock_h/subblock_w
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         inplace = re.search(r"inplace=(\d+)", value_str)
+        legacy_reduction = re.search(r"legacy_reduction=(\d+)", value_str)
+        legacy_rsqrt = re.search(r"legacy_rsqrt=(\d+)", value_str)
+        use_welford = re.search(r"use_welford=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -287,6 +287,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
             block_h=int(blk_h.group(1)),
             block_w=int(blk_w.group(1)),
             inplace=bool(int(inplace.group(1))) if inplace else False,
+            legacy_reduction=bool(int(legacy_reduction.group(1))) if legacy_reduction else False,
+            legacy_rsqrt=bool(int(legacy_rsqrt.group(1))) if legacy_rsqrt else False,
+            use_welford=bool(int(use_welford.group(1))) if use_welford else False,
         )
 
     if "LayerNormDefaultProgramConfig" in value_str:
@@ -295,8 +298,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        # Use negative lookbehind to avoid matching subblock_h/subblock_w
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -317,6 +321,12 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
     core_coord = None
@@ -444,6 +454,12 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
 
@@ -949,7 +965,7 @@ class MasterConfigLoader:
                     configs = self.master_data["operations"][transformer_base].get("configurations", [])
                     return self._normalize_configs(configs)
 
-        logger.warning(f"⚠️ No configurations found for operation: {operation_name}")
+        logger.warning(f"⚠️ Master trace lookup failed for operation '{operation_name}'. ")
         return []
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
@@ -1476,7 +1492,12 @@ class MasterConfigLoader:
             configs = self.get_operation_configs(operation_name)
 
             if not configs:
-                logger.warning(f"⚠️ No traced configurations found for {operation_name}")
+                logger.warning(
+                    f"⚠️ No usable configurations are available for '{operation_name}'. "
+                    f"Possible causes: the operation entry has no "
+                    f"configurations, or all configurations were filtered out "
+                    f"(TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY', 'unset')})."
+                )
                 # Return empty lists - sweep tests will handle defaults
                 return {
                     "input_shape": [[1, 32, 32]],
@@ -1696,7 +1717,6 @@ def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader
 
 if __name__ == "__main__":
     # Example usage
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     loader = MasterConfigLoader()
 
     # Test with add operation

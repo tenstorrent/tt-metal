@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,15 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_equal
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
+@pytest.mark.parametrize("h", [32, 64, 41, 10])
+@pytest.mark.parametrize("w", [32, 64, 31, 18])
 @pytest.mark.parametrize("dim", [-1, -2])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_max(device, batch_size, h, w, dim, dtype):
@@ -25,6 +27,7 @@ def test_max(device, batch_size, h, w, dim, dtype):
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.max(input_tensor, dim=dim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -32,13 +35,14 @@ def test_max(device, batch_size, h, w, dim, dtype):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size1", [2])
 @pytest.mark.parametrize("batch_size2", [32])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("h", [64, 15])
+@pytest.mark.parametrize("w", [64, 22])
 @pytest.mark.parametrize("dim", [-3])
 def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     torch.manual_seed(0)
@@ -47,6 +51,7 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.max(input_tensor, dim=dim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -54,11 +59,12 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("h", [64, 15])
+@pytest.mark.parametrize("w", [64, 22])
 @pytest.mark.parametrize("dim", [-2, -1, 0, 1])
 def test_max_2d(device, h, w, dim):
     torch.manual_seed(0)
@@ -67,6 +73,7 @@ def test_max_2d(device, h, w, dim):
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.max(input_tensor, dim=dim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -74,12 +81,13 @@ def test_max_2d(device, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
+@pytest.mark.parametrize("h", [32, 64, 41, 37, 10])
+@pytest.mark.parametrize("w", [32, 64, 31, 63, 18])
 def test_max_global(device, batch_size, h, w):
     torch.manual_seed(0)
 
@@ -87,12 +95,13 @@ def test_max_global(device, batch_size, h, w):
     torch_output_tensor = torch.max(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -122,6 +131,7 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=max_dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.max(input_tensor, dim=max_dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -129,4 +139,5 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # test for equivalance
+    assert_equal(torch_output_tensor, output_tensor)

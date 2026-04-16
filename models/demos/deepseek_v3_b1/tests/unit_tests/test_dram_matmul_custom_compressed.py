@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -13,6 +13,7 @@ Key difference from test_matmul_custom_compressed.py (L1 version):
 B lives in DRAM and is streamed in variable-size subblocks.
 """
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -21,7 +22,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import DRAMStreamingMatmulCompressed
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_matmul_custom_compressed import scale_tiles_for_mixed_formats
+from models.demos.deepseek_v3_b1.weights.prepare import _shuffle_dram_assignment
 
 
 def pad_to_dram_banks(num, tile_w, lcm):
@@ -252,3 +254,465 @@ def test_dram_matmul_compressed_4cores_mixed(device):
 def test_dram_matmul_compressed_4cores_mixed_bfp024(device):
     """[1, 7168] x [7168, 2048], mixed bfp4+bfp2, 2 cores per bank."""
     _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4", "bfp2", "bfp0"], cores_per_bank=4)
+
+
+# --- BSPM integration tests ---
+
+
+def test_dram_matmul_bspm_direct(device):
+    """[1, 7168] x [7168, 2048] using CompressedTensor.from_bspm() with real BSPM assignment.
+
+    Tests the BSPM assignment → packed representation → DRAMStreamingMatmulCompressed path
+    at R1 expert gate_proj shape using layer 4 expert 0 codes.
+
+    Requires BSPM_DIR env var pointing to BitSculpt results root.
+    """
+    import os
+    from pathlib import Path
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        import pytest
+
+        pytest.skip("BSPM_DIR not set")
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        import pytest
+
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    M, K, N = 1, 7168, 2048
+    tile_w = 32
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+
+    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    assignment = load_bspm_for_expert(
+        str(bspm_path), expert_idx=0, proj_idx=0, tile_rows=K // tile_w, tile_cols=N // tile_w
+    )
+    # Pad assignment columns if n_padded > N
+    if n_padded > N:
+        pad_cols = (n_padded - N) // tile_w
+        assignment = np.pad(assignment, ((0, 0), (0, pad_cols)), constant_values=1)  # pad with bfp4
+
+    # Apply the same tile permutation used by shuffle_tensor_tiles/shuffle_dram_tiles so that
+    # assignment[i] maps to the correct physical tile after the column-major reorder.
+    # Without this, from_bspm applies precision codes to the wrong physical tiles.
+    assignment = _shuffle_dram_assignment(assignment, num_banks)
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, n_padded)).float()
+
+    # Shuffle for DRAM column-major tile order (same as existing tests)
+    torch_b_shuffled = shuffle_tensor_tiles(torch_b, tile_w, num_banks)
+
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+            )
+        ]
+    )
+    b_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    ct = CompressedTensor.from_bspm(torch_b_shuffled, assignment, device=device, memory_config=b_mem_config)
+    logger.info(f"BSPM tile counts: {ct.tile_counts}")
+    assert ct.tile_counts.get("bfp4", 0) > 0, "Expected bfp4 tiles from BSPM assignment"
+    low_p = ct.tile_counts.get("bfp2", 0) + ct.tile_counts.get("bfp0", 0)
+    assert low_p > 0, "Expected bfp2/bfp0 tiles from BSPM assignment at 3.5 b/e"
+
+    torch_expected = (torch_a.float() @ torch_b.float()).bfloat16()
+
+    num_cores = len(primary_cores_list)
+    a_tile = ttnn.Tile([M, tile_w])
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_a = ttnn.from_torch(
+        torch_a.repeat(num_cores, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec),
+        tile=a_tile,
+    )
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, n_padded), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    Kt = K // tile_w
+    subblock_k = Kt // 4 if Kt > 8 else Kt
+    if subblock_k % 2 != 0:
+        subblock_k = max(2, subblock_k - 1)
+
+    ttnn_result = DRAMStreamingMatmulCompressed.op(ttnn_a, ct, ttnn_output, subblock_k=subblock_k)
+    output_torch = ttnn.to_torch(ttnn_result)[..., :N]
+    torch_expected = torch_expected[..., :N]
+
+    passing, pcc = comp_pcc(torch_expected, output_torch, 0.90)
+    logger.info(f"BSPM direct matmul PCC: {pcc}")
+    assert passing, f"BSPM direct matmul PCC too low: {pcc}"
+
+
+def test_dram_matmul_bspm_via_blitz(device):
+    """[1, 7168] x [7168, 2048] via prepare_routed_expert_weights() BSPM path.
+
+    Tests: prepare_routed_expert_weights(bspm_dir=...) → prepare_moe_routed_experts_bspm()
+    → CompressedTensor.from_bspm() → DRAMStreamingMatmulCompressed.
+
+    Requires BSPM_DIR env var pointing to BitSculpt results root.
+    """
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set")
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    M, K, N = 1, 7168, 2048
+    tile_w = 32
+    layer_idx = 4
+
+    torch.manual_seed(0)
+    gate_w = torch.randn(K, N).float()
+    up_w = torch.randn(K, N).float()
+    down_w = torch.randn(2048, 7168).float()
+
+    # State dict uses HF convention: (N_out, K_in) = transposed
+    state_dict = {
+        f"model.layers.{layer_idx}.mlp.experts.0.gate_proj.weight": gate_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.up_proj.weight": up_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.down_proj.weight": down_w.T.contiguous(),
+    }
+
+    result = prepare_routed_expert_weights(
+        device,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=1,
+        move_to_device=True,
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
+    )
+
+    ct = result.routed_gate_proj[0]
+    assert isinstance(ct, CompressedTensor), f"Expected CompressedTensor, got {type(ct)}"
+    logger.info(f"BSPM tile counts: {ct.tile_counts}")
+    assert ct.tile_counts.get("bfp4", 0) > 0, "Expected bfp4 tiles"
+    low_p = ct.tile_counts.get("bfp2", 0) + ct.tile_counts.get("bfp0", 0)
+    assert low_p > 0, "Expected bfp2/bfp0 tiles at 3.5 b/e"
+
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+    num_cores = len(primary_cores_list)
+    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_expected = (torch_a.float() @ gate_w.float()).bfloat16()
+
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_a = ttnn.from_torch(
+        torch_a.repeat(num_cores, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, n_padded), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    Kt = K // tile_w
+    subblock_k = Kt // 4 if Kt > 8 else Kt
+    if subblock_k % 2 != 0:
+        subblock_k = max(2, subblock_k - 1)
+
+    ttnn_result = DRAMStreamingMatmulCompressed.op(ttnn_a, ct, ttnn_output, subblock_k=subblock_k)
+    output_torch = ttnn.to_torch(ttnn_result)[..., :N]
+    torch_expected = torch_expected[..., :N]
+
+    passing, pcc = comp_pcc(torch_expected, output_torch, 0.90)
+    logger.info(f"BSPM matmul PCC: {pcc}")
+    assert passing, f"BSPM matmul PCC too low: {pcc}"
+
+
+def test_dram_matmul_bspm_down_proj(device):
+    """[1, 2048] x [2048, 7168] via prepare_routed_expert_weights() — down-proj shape (proj_idx=2).
+
+    Requires BSPM_DIR env var.
+    """
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set")
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    M = 1
+    K_gate, N_gate = 7168, 2048
+    K_down, N_down = 2048, 7168
+    tile_w = 32
+    layer_idx = 4
+
+    torch.manual_seed(0)
+    gate_w = torch.randn(K_gate, N_gate).float()
+    up_w = torch.randn(K_gate, N_gate).float()
+    down_w = torch.randn(K_down, N_down).float()
+
+    state_dict = {
+        f"model.layers.{layer_idx}.mlp.experts.0.gate_proj.weight": gate_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.up_proj.weight": up_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.down_proj.weight": down_w.T.contiguous(),
+    }
+
+    result = prepare_routed_expert_weights(
+        device,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=1,
+        move_to_device=True,
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
+    )
+
+    ct = result.routed_down_proj[0]
+    assert isinstance(ct, CompressedTensor), f"Expected CompressedTensor for down_proj, got {type(ct)}"
+    logger.info(f"Down-proj BSPM tile counts: {ct.tile_counts}")
+    assert ct.tile_counts.get("bfp4", 0) > 0, "Expected bfp4 tiles from BSPM"
+
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+    num_cores = len(primary_cores_list)
+    n_padded = pad_to_dram_banks(N_down, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in primary_cores_list]
+    )
+
+    torch_a = torch.randn((M, K_down), dtype=torch.bfloat16)
+    torch_expected = (torch_a.float() @ down_w.float()).bfloat16()
+
+    a_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, K_down], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_a = ttnn.from_torch(
+        torch_a.repeat(num_cores, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, a_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, [M, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros((M, n_padded), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec),
+        tile=ttnn.Tile([M, tile_w]),
+    )
+
+    Kt = K_down // tile_w
+    subblock_k = Kt // 4 if Kt > 8 else Kt
+    if subblock_k % 2 != 0:
+        subblock_k = max(2, subblock_k - 1)
+
+    ttnn_result = DRAMStreamingMatmulCompressed.op(ttnn_a, ct, ttnn_output, subblock_k=subblock_k)
+    output_torch = ttnn.to_torch(ttnn_result)[..., :N_down]
+    torch_expected = torch_expected[..., :N_down]
+
+    passing, pcc = comp_pcc(torch_expected, output_torch, 0.90)
+    logger.info(f"Down-proj BSPM matmul PCC: {pcc}")
+    assert passing, f"Down-proj BSPM matmul PCC too low: {pcc}"
+
+
+def test_dram_matmul_bspm_fallback(device):
+    """prepare_routed_expert_weights() falls back to uniform bfloat4_b when BSPM absent.
+
+    Uses layer_idx=0 which has no BSPM file (layer 0 is dense, only MoE layers 3+
+    have BSPM). Verifies the returned tensor is a plain ttnn.Tensor (not CompressedTensor).
+
+    Requires BSPM_DIR env var pointing to a real BitSculpt results root.
+    """
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set")
+
+    K, N = 7168, 2048
+    layer_idx = 0  # Dense layer — no BSPM file exists
+
+    torch.manual_seed(0)
+    gate_w = torch.randn(K, N).float()
+    up_w = torch.randn(K, N).float()
+    down_w = torch.randn(2048, 7168).float()
+
+    state_dict = {
+        f"model.layers.{layer_idx}.mlp.experts.0.gate_proj.weight": gate_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.up_proj.weight": up_w.T.contiguous(),
+        f"model.layers.{layer_idx}.mlp.experts.0.down_proj.weight": down_w.T.contiguous(),
+    }
+
+    result = prepare_routed_expert_weights(
+        device,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=1,
+        move_to_device=True,
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
+    )
+
+    t = result.routed_gate_proj[0]
+    assert not isinstance(t, CompressedTensor), (
+        f"Expected plain ttnn.Tensor fallback for layer {layer_idx}, got CompressedTensor. "
+        "Check that no BSPM file exists for layer 0 in the BSPM_DIR."
+    )
+    assert isinstance(t, ttnn.Tensor), f"Expected ttnn.Tensor, got {type(t)}"
+    assert t.dtype == ttnn.bfloat4_b, f"Fallback tensor should be bfloat4_b, got {t.dtype}"
+    logger.info(f"Fallback gate tensor: dtype={t.dtype}, shape={t.shape}")
+
+
+def test_dram_matmul_bspm_multi_expert(device):
+    """3 experts via prepare_routed_expert_weights() — validates DRAM contiguity.
+
+    Requires BSPM_DIR env var.
+    """
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    from models.demos.deepseek_v3_b1.weights.prepare import prepare_routed_expert_weights
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_DIR not set")
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    num_experts = 3
+    K_gate, N_gate = 7168, 2048
+    K_down, N_down = 2048, 7168
+    layer_idx = 4
+
+    torch.manual_seed(0)
+    state_dict = {}
+    gate_ws = []
+    for e in range(num_experts):
+        gw = torch.randn(K_gate, N_gate).float()
+        uw = torch.randn(K_gate, N_gate).float()
+        dw = torch.randn(K_down, N_down).float()
+        gate_ws.append(gw)
+        prefix = f"model.layers.{layer_idx}.mlp.experts.{e}"
+        state_dict[f"{prefix}.gate_proj.weight"] = gw.T.contiguous()
+        state_dict[f"{prefix}.up_proj.weight"] = uw.T.contiguous()
+        state_dict[f"{prefix}.down_proj.weight"] = dw.T.contiguous()
+
+    result = prepare_routed_expert_weights(
+        device,
+        state_dict,
+        layer_idx,
+        is_moe=True,
+        num_routed_experts=num_experts,
+        move_to_device=True,
+        bspm_dir=Path(bspm_dir) / "deepseek-r1-0528",
+    )
+
+    gate_list = result.routed_gate_proj
+    up_list = result.routed_up_proj
+    down_list = result.routed_down_proj
+
+    assert len(gate_list) == num_experts
+    assert len(up_list) == num_experts
+    assert len(down_list) == num_experts
+
+    for i, ct in enumerate(gate_list):
+        assert isinstance(ct, CompressedTensor), f"gate_list[{i}] expected CompressedTensor, got {type(ct)}"
+        counts = ct.tile_counts
+        assert counts.get("bfp4", 0) > 0, f"gate_list[{i}]: no bfp4 tiles"
+        low_p = counts.get("bfp2", 0) + counts.get("bfp0", 0)
+        assert low_p > 0, f"gate_list[{i}]: no bfp2/bfp0 tiles at 3.5 b/e"
+        logger.info(f"gate_list[{i}] tile counts: {counts}")
+
+    gate_addrs = [gate_list[i].get_data_l1_address() for i in range(num_experts)]
+    strides = [gate_addrs[i + 1] - gate_addrs[i] for i in range(num_experts - 1)]
+    logger.info(f"Gate expert DRAM addresses: {gate_addrs}")
+    logger.info(f"Gate expert DRAM strides: {strides}")
+
+    assert strides[0] > 0, "Expert addresses not increasing — experts may overlap"
+
+    constant_stride = all(s == strides[0] for s in strides)
+    if not constant_stride:
+        pytest.xfail(
+            f"Non-constant DRAM stride between BSPM experts: strides={strides}. "
+            "Variable-size CompressedTensors break kernel's fixed-stride expert indexing."
+        )
+    logger.info(f"Gate expert DRAM stride: {strides[0]} bytes — contiguity OK")
+
+
+def test_dram_matmul_bspm_cache_roundtrip(device, tmp_path):
+    """BSPM CompressedTensor TensorCache disk round-trip.
+
+    Skipped: CompressedTensor save/load via the new TensorCache is not yet
+    implemented (known gap — requires CompressedTensorTarget in weights/cache/).
+    """
+    import pytest
+
+    pytest.skip(
+        "CompressedTensor TensorCache round-trip not yet implemented. "
+        "Pending: CompressedTensorTarget + _store_compressed/_load_compressed in weights/cache/."
+    )

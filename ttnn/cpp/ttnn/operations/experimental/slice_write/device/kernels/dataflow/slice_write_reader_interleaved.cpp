@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,8 @@ void kernel_main() {
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
 
     uint32_t i_stick = start_id;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,7 +43,6 @@ void kernel_main() {
     constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -90,7 +89,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_out_id);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
 
-    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -149,7 +148,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
-                    const auto gamma = TensorAccessor(gamma_args, gamma_addr, page_size);
+                    const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
 
@@ -199,7 +198,7 @@ void kernel_main() {
                     // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
                     // Then copy the second set of 32 bytes into the second face
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
-                    const auto beta = TensorAccessor(beta_args, beta_addr, page_size);
+                    const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     cb_beta.reserve_back(num_cols_tile_gamma_beta);
 
@@ -241,7 +240,7 @@ void kernel_main() {
             // add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-            const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
+            const auto dst_a = TensorAccessor(out_args, out_addr);
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -60,20 +60,22 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
     constexpr uint32_t in0_B = get_compile_time_arg_val(20);
     constexpr uint32_t in1_B = get_compile_time_arg_val(21);
+    constexpr uint32_t in0_reuse_in_CB = get_compile_time_arg_val(22);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(22);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(23);
+    constexpr uint32_t batchB = get_compile_time_arg_val(23);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(24);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(25);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(25);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(26);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(27);
 
-    constexpr auto in0_args = TensorAccessorArgs<27>();
+    constexpr auto in0_args = TensorAccessorArgs<28>();
+
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -121,7 +123,7 @@ void kernel_main() {
     }
 
 #else
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 #ifndef IN0_SHARDED
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
@@ -133,7 +135,7 @@ void kernel_main() {
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
+    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -154,7 +156,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 
@@ -309,6 +311,29 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                             noc.async_read_barrier();
                         }
+
+                        {
+                            constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                            uint32_t in0_pad_base_addr = cb_in0.get_write_ptr();
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(ptr);
+                                    }
+                                }
+                            }
+                            if constexpr (in0_last_ktile_h > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                        auto ptr = in0_pad_base_addr +
+                                                   ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(ptr);
+                                    }
+                                }
+                            }
+                        }
 #endif  // IN0_SHARDED
 
 #ifndef SKIP_MCAST
@@ -384,7 +409,7 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // CB so compute kernel thinks it has new data
-        if (in0_B == 1 && in1_B > 1) {
+        if (in0_reuse_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
                     cb_in0.reserve_back(in0_block_num_tiles);

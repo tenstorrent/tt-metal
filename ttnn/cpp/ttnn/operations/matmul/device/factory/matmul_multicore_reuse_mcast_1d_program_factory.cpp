@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -367,6 +367,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -710,6 +711,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
+                {"bias_ntiles", in1_per_core_w},
             }});
 
     // Create circular buffers
@@ -1058,7 +1060,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1132,7 +1134,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
 
-    if (in0_B == 1 && in1_B > 1) {
+    bool reuse_in0_in_CB =
+        ((in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+         !fused_activation.has_value());
+
+    if (reuse_in0_in_CB) {
         in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
     } else if (in0_is_sharded) {
         in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
@@ -1177,6 +1183,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
+
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
@@ -1265,10 +1272,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)in1_B,  // batch
-
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
         // sparsity args
         (std::uint32_t)0,     // batchB
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1300,9 +1307,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
-        (std::uint32_t)K * N,                                        // KtNt
-        (std::uint32_t)((in0_B == 1 && in1_B > 1) ? in1_B : in0_B),  // batch
-        (std::uint32_t)bcast_batch,                                  // bcast_B
+        (std::uint32_t)K * N,                              // KtNt
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        (std::uint32_t)bcast_batch,                        // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1352,7 +1359,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
 
         // WRITER
         // out tensor args
@@ -1542,11 +1549,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         out_num_blocks_x,  // out_num_blocks_x
         out_num_blocks_y,  // out_num_blocks_y
 
-        out_subblock_h,               // out_subblock_h
-        out_subblock_w,               // out_subblock_w
-        out_subblock_num_tiles,       // out_subblock_num_tiles
-        bcast_batch ? in0_B : in1_B,  // batch (use in0_B when broadcasting in1, otherwise in1_B)
-        out_block_tiles,              // out_block_num_tiles
+        out_subblock_h,                     // out_subblock_h
+        out_subblock_w,                     // out_subblock_w
+        out_subblock_num_tiles,             // out_subblock_num_tiles
+        (reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        out_block_tiles,                    // out_block_num_tiles
 
         untilize_out,  // untilize_out
         false,         // get_batch_from_reader
@@ -1576,6 +1583,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
+                {"bias_ntiles", in1_per_core_w},
             }});
 
     // Create circular buffers
@@ -1886,7 +1894,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,

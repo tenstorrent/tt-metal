@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/pack_block.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_pack_untilize.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
 #include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
@@ -16,6 +18,8 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
@@ -164,7 +168,7 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 4, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -181,11 +185,11 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
     ckernel::sfpu::_init_sfpu_reciprocal_<false>();
-    sfpi::vFloat exp_top_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_top_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_top_4, scale_bf16);
-    sfpi::vFloat exp_bottom_4 = ckernel::sfpu::
-        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+    sfpi::vFloat exp_bottom_4 =
+        sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_bottom_4, scale_bf16);
     // Subtract 1. This is because the bcast mul accumulates to dest
     // Without -1: bcast = prev * exp + prev
@@ -250,6 +254,7 @@ void compute_sdpa_chunk(
     bool first_chunk,
     bool last_chunk,
     bool mask_chunk) {
+    static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
@@ -390,11 +395,11 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::vFloat diff_worker = worker_max_vec - cur_max;
 
         // Exponentials of differences
-        sfpi::vFloat exp_prev = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_prev =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker = ckernel::sfpu::
-            _calculate_exponential_piecewise_<SDPA_EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+        sfpi::vFloat exp_worker =
+            sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         if constexpr (!final_norm) {
@@ -475,6 +480,7 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
+        PACK((llk_pack_mop_config<false, false>(cb_cur_ms)));
         tile_regs_commit();
         cb_reserve_back(cb_cur_ms, 1);
         tile_regs_wait();
@@ -520,7 +526,7 @@ ALWI void sdpa_tail_l_block(
         pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
             cb_l_out, 1, block_index, 8, dense ? 2 : 4);
     } else {
-        pack_tile_block(0, cb_l_out, block_size);
+        pack_block_contiguous(0, cb_l_out, block_size);
     }
     if constexpr (manage_cbs) {
         if constexpr (!untilize) {
@@ -597,12 +603,14 @@ ALWI void sdpa_tail(
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }
+    if constexpr (!untilize) {
+        pack_block_contiguous_init(cb_l_out);
+    }
 
     // Phase 2: Process all L blocks
     // Untilize requires operating on all blocks at once
     if constexpr (untilize) {
-        // TODO: We can pre-initialize this
-        pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(
+        custom_pack_untilize_dest_init<block_size, num_blocks * block_size, false, TILE_C_DIM, dense>(
             cb_l_out, 8, dense ? 2 : 4);
         cb_reserve_back(cb_l_out, block_size * num_blocks);
     }

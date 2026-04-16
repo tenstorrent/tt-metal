@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -73,8 +74,10 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(31);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
-    // TensorAccessorArgs for all 4 tensors (starting at index 33)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<33>();
+    // Batch configuration (index 33) — read_batch_size not used by writer
+
+    // TensorAccessorArgs for all 4 tensors (starting at index 34)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<34>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -97,8 +100,11 @@ void kernel_main() {
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
 
-    // Read NOC coordinates for all cores (for inter-core barrier signaling)
-    uint64_t all_core_barrier_noc_addrs[2];
+    // Read NOC coordinates for all cores (for inter-core barrier signaling).
+    // num_cores = effective_num_links = min(num_links, 4).
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    ASSERT(num_cores <= MAX_WORKER_CORES);
+    uint64_t all_core_barrier_noc_addrs[MAX_WORKER_CORES];
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -165,7 +171,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     // Sentinel-terminated fabric send loop
     while (true) {
@@ -197,14 +203,15 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
-
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
     }
 
 #ifdef DEST_CHIP_ID
+    noc_async_write_barrier();
+
     // Exit semaphore exchange
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);

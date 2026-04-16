@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -96,13 +96,18 @@ def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[T
     return None
 
 
-def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] = None) -> ttnn.MeshDevice:
+def create_mesh_device(
+    mesh_shape: Tuple[int, int],
+    device_ids: Optional[list] = None,
+    l1_small_size: int = 79104,
+) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
 
     Args:
         mesh_shape: Tuple of (rows, cols) for mesh shape
         device_ids: Optional list of device IDs (deprecated, not used by API)
+        l1_small_size: L1 small buffer size (default 79104 to prevent OOM in model-traced sweeps)
 
     Returns:
         ttnn.MeshDevice instance
@@ -111,6 +116,7 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
     # The API automatically selects available devices based on the mesh shape
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=l1_small_size,
         dispatch_core_config=ttnn.DispatchCoreConfig(),
     )
 
@@ -196,6 +202,11 @@ def create_tensor_on_mesh(
         if isinstance(mesh_shape_raw, str):
             mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
         mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+        # Default empty/short mesh_shape to (1, 1)
+        if len(mesh_shape_tuple) == 0:
+            mesh_shape_tuple = (1, 1)
+        elif len(mesh_shape_tuple) == 1:
+            mesh_shape_tuple = (mesh_shape_tuple[0], 1)
 
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
@@ -309,6 +320,28 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
     Returns:
         torch.Tensor: Converted tensor
     """
+
+    # ttnn.to_torch() converts uint16 tensors to int16 by default, which
+    # causes sign-extension corruption for values > 32767.  Pass torch_dtype
+    # to prevent this.
+    def _get_torch_dtype(t):
+        """Return explicit torch dtype for integer TTNN dtypes to avoid sign-extension."""
+        try:
+            dt = t.dtype
+            if dt == ttnn.uint16:
+                return torch.int32
+            if dt == ttnn.uint32:
+                return torch.int64
+        except Exception:
+            pass  # dtype access may fail for host-side or freed tensors
+        return None
+
+    def _to_torch_safe(t):
+        torch_dtype = _get_torch_dtype(t)
+        if torch_dtype is not None:
+            return ttnn.to_torch(t).to(torch_dtype)
+        return ttnn.to_torch(t)
+
     # Check if this is a mesh tensor by checking the device attribute
     try:
         device = ttnn_tensor.device()
@@ -316,16 +349,18 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> t
         if device is not None and hasattr(device, "get_num_devices"):
             # If a mesh_composer is provided, use it to reassemble shards
             if mesh_composer is not None:
-                return ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+                result = ttnn.to_torch(ttnn_tensor, mesh_composer=mesh_composer)
+                torch_dtype = _get_torch_dtype(ttnn_tensor)
+                return result.to(torch_dtype) if torch_dtype is not None else result
             # Default: extract device 0 only (works for replicated tensors)
             device_tensors = ttnn.get_device_tensors(ttnn_tensor)
             if device_tensors and len(device_tensors) > 0:
-                return ttnn.to_torch(device_tensors[0])
+                return _to_torch_safe(device_tensors[0])
             # Fallback if get_device_tensors doesn't work
-            return ttnn.to_torch(ttnn_tensor)
+            return _to_torch_safe(ttnn_tensor)
         else:
             # Single device tensor - direct conversion
-            return ttnn.to_torch(ttnn_tensor)
+            return _to_torch_safe(ttnn_tensor)
     except Exception:
-        # Fallback: try direct conversion (for host tensors or edge cases)
-        return ttnn.to_torch(ttnn_tensor)
+        # Fallback: direct conversion for host tensors or when device() is unavailable
+        return _to_torch_safe(ttnn_tensor)

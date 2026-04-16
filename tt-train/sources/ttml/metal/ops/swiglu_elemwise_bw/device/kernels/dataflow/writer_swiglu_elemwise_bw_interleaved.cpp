@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_dL_dlinear1_idx);
     constexpr auto dL_dlinear1_args = TensorAccessorArgs<2>();
     constexpr auto dL_dgate_args = TensorAccessorArgs<dL_dlinear1_args.next_compile_time_args_offset()>();
-    const auto dL_dlinear1_gen = TensorAccessor(dL_dlinear1_args, dL_dlinear1_addr, tile_bytes);
-    const auto dL_dgate_gen = TensorAccessor(dL_dgate_args, dL_dgate_addr, tile_bytes);
+    const auto dL_dlinear1_gen = TensorAccessor(dL_dlinear1_args, dL_dlinear1_addr);
+    const auto dL_dgate_gen = TensorAccessor(dL_dgate_args, dL_dgate_addr);
 
     const uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,7 +101,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -113,6 +113,22 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
 
+#ifdef ARCH_BLACKHOLE
+    // For pack with tilize enabled, check if the original input format is 8-bit.
+    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
+    const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
+    const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
+    _llk_pack_init_<untilize, zero_output, tilize>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        false,  // partial_face,
+        false,  // narrow_tile,
+        num_tiles,
+        is_input_8bit_format);
+#else
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -122,6 +138,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         false,  // partial_face,
         false,  // narrow_tile,
         num_tiles);
+#endif
 }
 
 template <bool out_of_order_output, bool untilize>
