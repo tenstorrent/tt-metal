@@ -200,11 +200,22 @@ class DroidNet(nn.Module):
         self.cnet = BasicEncoder(output_dim=256, norm_fn="none")
         self.update = UpdateModule()
 
+    def _normalize(self, images):
+        # ImageNet normalization — BGR→RGB channel swap baked in via the
+        # reversed mean/std so the permutation can disappear into the
+        # fused prologue.
+        mean = torch.as_tensor(
+            [0.406, 0.456, 0.485], device=images.device, dtype=images.dtype
+        )
+        std = torch.as_tensor(
+            [0.225, 0.224, 0.229], device=images.device, dtype=images.dtype
+        )
+        return (images / 255.0 - mean[:, None, None]) / std[:, None, None]
+
     def extract_features(self, images):
-        images = images[:, :, [2, 1, 0]] / 255.0
-        mean = torch.as_tensor([0.485, 0.456, 0.406], device=images.device, dtype=images.dtype)
-        std = torch.as_tensor([0.229, 0.224, 0.225], device=images.device, dtype=images.dtype)
-        images = (images - mean[:, None, None]) / std[:, None, None]
+        # images arrive in BGR channel order (cv2-style). The reversed
+        # mean/std above does the implicit channel swap.
+        images = self._normalize(images)
         fmaps = self.fnet(images)
         net_hidden = self.cnet(images)
         net, inp = net_hidden.split([128, 128], dim=2)
