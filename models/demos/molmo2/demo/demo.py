@@ -3821,6 +3821,7 @@ def run_video_demo(
         video_path,
         prompt,
         num_frames=max_frames,  # HF processor uses num_frames param
+        apply_template=False,  # HF processor handles tokenization; no chat template needed
     )
     video_extraction_ms = (time.perf_counter() - video_extraction_start) * 1000
     n_frames = video_inputs["n_frames"]

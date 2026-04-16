@@ -15,6 +15,15 @@ No bias term, following Llama-style RMSNorm.
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+# HF Molmo2RMSNorm casts to float32 before computing variance+rsqrt.
+# Match by using HiFi4 with fp32 destination accumulation.
+_RMSNORM_COMPUTE_KERNEL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+
 
 class TextRMSNorm(LightweightModule):
     """
@@ -89,5 +98,5 @@ class TextRMSNorm(LightweightModule):
         Returns:
             Normalized tensor of shape [1, 1, seq_len, hidden_dim]
         """
-        # Use TTNN's rms_norm operation
-        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps)
+        # Use TTNN's rms_norm with fp32 accumulation to match HF's float32 cast
+        return ttnn.rms_norm(x, weight=self.weight, epsilon=self.eps, compute_kernel_config=_RMSNORM_COMPUTE_KERNEL)

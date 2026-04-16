@@ -305,27 +305,26 @@ class TextAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Q, K, V projections (column parallel - output is sharded across devices)
-        q = ttnn.linear(
+        # Fused QKV projection: one matmul then slice (better accumulation than 3 separate matmuls)
+        q_dim = self.num_heads_per_device * self.head_dim
+        kv_dim = self.num_kv_heads_per_device * self.head_dim
+        qkv = ttnn.linear(
             x,
-            self.wq,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            self.wqkv,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        k = ttnn.linear(
-            x,
-            self.wk,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        v = ttnn.linear(
-            x,
-            self.wv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Slice along last dim: [1, 1, seq_len, Q_dim + K_dim + V_dim] → Q, K, V
+        sq = qkv.shape[2]  # may be tile-padded
+        q = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, sq, q_dim))
+        k = ttnn.slice(qkv, (0, 0, 0, q_dim), (1, 1, sq, q_dim + kv_dim))
+        v = ttnn.slice(qkv, (0, 0, 0, q_dim + kv_dim), (1, 1, sq, q_dim + 2 * kv_dim))
+        ttnn.deallocate(qkv)
+        # Remove tile padding on sequence dim if present
+        if sq != seq_len:
+            q = ttnn.slice(q, (0, 0, 0, 0), (1, 1, seq_len, q_dim))
+            k = ttnn.slice(k, (0, 0, 0, 0), (1, 1, seq_len, kv_dim))
+            v = ttnn.slice(v, (0, 0, 0, 0), (1, 1, seq_len, kv_dim))
 
         # Reshape for multi-head attention (using per-device head counts)
         # Q: [1, 1, seq_len, num_heads_per_device * head_dim] -> [1, num_heads_per_device, seq_len, head_dim]
@@ -455,7 +454,7 @@ class TextAttention(LightweightModule):
         output = ttnn.linear(
             attn_output,
             self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
