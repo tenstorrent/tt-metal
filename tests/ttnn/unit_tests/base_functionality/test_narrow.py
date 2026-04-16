@@ -194,3 +194,27 @@ def test_narrow_mesh(input_shape, dim, start, length, memory_config, layout, mes
         ttnn_output, mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims=[0, 1]))
     )
     assert_equal(torch_result, output)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "input_shape, dim, start, length, memory_config, layout",
+    [((14336, 7168), 0, 0, 96, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.TILE_LAYOUT)],
+)
+def test_narrow_regression(input_shape, dim, start, length, memory_config, layout, dtype, device):
+    torch_input_tensor = torch.randn(input_shape, dtype=tt_dtype_to_torch_dtype[dtype])
+    torch_result = torch.narrow(torch_input_tensor, dim, start, length)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=memory_config
+    )
+    ttnn_output = ttnn.narrow(input_tensor, dim, start, length)
+
+    assert layout == ttnn_output.layout
+    assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
+    assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_result, output, 0.99)
