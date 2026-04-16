@@ -490,9 +490,11 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
         shows up as clicks at the start of the waveform and brief glitches mid-utterance (e.g. around
         digit-heavy words).
 
-        **Default ``1``:** host transpose for any ``T > 1`` (normal code2wav paths), so audio matches HF and
-        device DRAM is not spent on transpose. Set ``TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T`` to ``0`` to
-        use TTNN transpose only (faster when it fits; may OOM or sound wrong on mesh).
+        **Default ``1``:** host transpose when ``T > th`` (i.e. ``T > 1``), so single-frame ``T == 1`` steps
+        still use TTNN.  Forcing host for ``T == 1`` (``t_in >= th``) matched HF but changed effective
+        chain length vs the TTNN path in some builds and **truncated** final waveforms; keep ``>`` unless
+        you opt in via a future env.  Set ``TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T`` to ``0`` for TTNN-only
+        (faster; may OOM or sound wrong on mesh).
 
         Threshold uses ``max(1, v)`` so small positive env values apply as written.
         """

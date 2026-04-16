@@ -11,6 +11,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devic
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
+    distributed_config_col_sharded_last_dim,
     trace_enabled,
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
@@ -151,26 +152,17 @@ class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
         return self.torch_layer.padding_idx
 
     def set_output_tensors_config_impl(self, output_tensors):
-        """Match :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm` col-shard layout."""
+        """Match decoder norms via :func:`~models.experimental.tt_symbiote.core.run_config.distributed_config_col_sharded_last_dim`.
+
+        Allocate a **fresh** :class:`~models.experimental.tt_symbiote.core.run_config.DistributedTensorConfig`
+        per output tensor (same as :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm`).
+        Reusing one config object for every leaf led to incorrect metadata and **truncated** TTS in long runs.
+        """
 
         def set_col_sharded_config(e):
-            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
-                if self.device.get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
-                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
-
-                    def logical_shape_for_col_sharded(shape):
-                        shape_list = list(shape)
-                        shape_list[-1] = shape_list[-1] * self.device.get_num_devices()
-                        return tuple(shape_list)
-
-                    e.set_distributed_tensor_config(
-                        DistributedTensorConfig(
-                            mesh_mapper=mesh_mapper,
-                            mesh_composer=mesh_composer,
-                            logical_shape_fn=logical_shape_for_col_sharded,
-                        )
-                    )
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self.device is not None and self.device.get_num_devices() > 1:
+                    e.set_distributed_tensor_config(distributed_config_col_sharded_last_dim(self.device))
             return e
 
         if self.device is None or self.device.get_num_devices() <= 1:

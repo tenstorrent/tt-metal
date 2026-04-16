@@ -350,24 +350,6 @@ def _register_code_predictor_nn_to_ttnn(model) -> dict:
     return register_module_replacement_dict(cp, NN_TO_TTNN_CODE_PREDICTOR, model_config=None)
 
 
-def _restore_torch_rmsnorm_in_code_predictor(model) -> None:
-    """``code_predictor`` uses small head dims (e.g. 128); ``TTNNDistributedRMSNorm`` needs ``(dim//32) % mesh_width == 0``
-    and ``rms_norm_post_all_gather`` requires TILE-aligned gamma. Keep HF ``Qwen3OmniMoeRMSNorm`` there."""
-    talker = getattr(model, "talker", None)
-    cp = getattr(talker, "code_predictor", None) if talker is not None else None
-    if cp is None:
-        return
-
-    def _replace_under(m: torch.nn.Module) -> None:
-        for name, child in list(m.named_children()):
-            if isinstance(child, TTNNDistributedRMSNorm) and child.torch_layer is not None:
-                setattr(m, name, child.torch_layer)
-            else:
-                _replace_under(child)
-
-    _replace_under(cp)
-
-
 def _require_symbiote_run_mode():
     mode = os.environ.get("TT_SYMBIOTE_RUN_MODE")
     assert (
@@ -885,7 +867,6 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
-    _restore_torch_rmsnorm_in_code_predictor(model)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
 
@@ -929,6 +910,12 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 f"talker.code_predictor.model.layers[{i}].self_attn expected TTNNQwen3Attention "
                 f"(TalkerCodePredictorAttention on device), got {type(layer.self_attn)}"
             )
+            for attr in ("input_layernorm", "post_attention_layernorm"):
+                ln = getattr(layer, attr, None)
+                if ln is not None:
+                    assert isinstance(
+                        ln, TTNNDistributedRMSNorm
+                    ), f"talker.code_predictor.model.layers[{i}].{attr} expected TTNNDistributedRMSNorm, got {type(ln)}"
 
     if cp is not None and getattr(cp, "lm_head", None) is not None:
         heads = cp.lm_head
@@ -1025,7 +1012,6 @@ def test_qwen_omni(mesh_device):
     _register_code_predictor_nn_to_ttnn(model)
     register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
-    _restore_torch_rmsnorm_in_code_predictor(model)
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
