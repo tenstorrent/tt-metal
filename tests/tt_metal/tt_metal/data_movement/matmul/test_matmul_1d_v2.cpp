@@ -300,8 +300,8 @@ for (uint32_t i = 0; i < C; i++) {
     for (auto & i : matmul_cores_list) {
         vector<uint32_t> in0_read_output;
         detail::ReadFromDeviceL1(
-            device, matmul_cores_list[i], in0_mcast_output_addr, in0_output_total_bytes, in0_read_output);
-        const vector<uint32_t>& expected_in0_read_output = dim_r_to_in0_pages_map[matmul_cores_list[i].y];
+            device, i, in0_mcast_output_addr, in0_output_total_bytes, in0_read_output);
+        const vector<uint32_t>& expected_in0_read_output = dim_r_to_in0_pages_map[i.y];
         bool is_equal = (expected_in0_read_output == in0_read_output);
         if (!is_equal) {
             log_error(
