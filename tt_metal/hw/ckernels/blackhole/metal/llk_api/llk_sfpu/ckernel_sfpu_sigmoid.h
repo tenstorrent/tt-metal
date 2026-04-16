@@ -8,6 +8,8 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_recip.h"
 
 namespace ckernel {
 namespace sfpu {
