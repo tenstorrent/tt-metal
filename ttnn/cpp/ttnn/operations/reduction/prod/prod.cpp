@@ -23,12 +23,8 @@ inline Tensor compute_prod_all(const Tensor& input_a, const MemoryConfig& output
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.layout() != Layout::TILE) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
-
-        auto need_format = input_a.layout() != Layout::TILE || input_a.padded_shape() != a_pad_shape;
-        if (need_format) {
-            formatted_input_tensor =
-                ttnn::tilize_with_val_padding(input_a, a_pad_shape, PadValue(1.0f), input_a.memory_config());
-        }
+        formatted_input_tensor =
+            ttnn::tilize_with_val_padding(input_a, a_pad_shape, PadValue(1.0f), input_a.memory_config());
     }
 
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
@@ -39,13 +35,7 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
-        auto out_shape = temp.padded_shape();
-        out_shape = ttnn::Shape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
-        auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
-        if (need_format) {
-            formatted_input_tensor =
-                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
-        }
+        formatted_input_tensor = ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
     }
     // Apply prod
     ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
