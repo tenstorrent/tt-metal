@@ -41,9 +41,11 @@ set -o pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
+TRIAGE_JSON_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
+TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 
 # --- Detect simulator mode ---
 SIM_MODE=false
@@ -155,7 +157,8 @@ else
         echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
         echo "TT_TEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
     fi
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
+    mkdir -p "${TRIAGE_JSON_DIR}"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
@@ -312,6 +315,10 @@ if [[ -s "$TRIAGE_LOG" ]]; then
             tail -50 "$WATCHER_LOG" >&2
             echo "=== END WATCHER LOG ===" >&2
             echo "" >&2
+        fi
+
+        if [[ -f "$TRIAGE_JSON" ]]; then
+            echo "TT_TEST: JSON triage: ${TRIAGE_JSON}" >&2
         fi
     fi
 

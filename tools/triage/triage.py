@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>] [--output-format=<format>] [--json-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -24,6 +24,8 @@ Options:
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
+    --output-format=<format>         Output format: 'table' (default Rich tables) or 'json' (machine-parseable JSON). [default: table]
+    --json-path=<path>               Additionally write JSON output to this file path (works with any --output-format).
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -41,6 +43,7 @@ Owner:
 # Check if tt-exalens is installed
 from collections import defaultdict
 from enum import Enum
+import json
 import heapq
 import inspect
 import os
@@ -186,6 +189,9 @@ def recurse_field(verbose: int = 0):
 # Level 2 (-vv): Include internal debug fields
 _verbose_level = 0
 
+# Module-level flag to control output format ("table" or "json")
+_output_format = "table"
+
 
 def set_verbose_level(level: int):
     """Set the global verbose level for field serialization."""
@@ -197,6 +203,18 @@ def get_verbose_level() -> int:
     """Get the current verbose level for field serialization."""
     global _verbose_level
     return _verbose_level
+
+
+def set_output_format(fmt: str):
+    """Set the global output format ('table' or 'json')."""
+    global _output_format
+    _output_format = fmt
+
+
+def get_output_format() -> str:
+    """Get the current output format."""
+    global _output_format
+    return _output_format
 
 
 @dataclass
@@ -385,12 +403,20 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     if console is not None:
         return
 
+    # Set output format early so other init code can check it
+    output_format = args["--output-format"] or "table"
+    set_output_format(output_format)
+
     # When redirecting to file, use a larger width to avoid wrapping.
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
+    # In JSON mode, suppress all Rich console output and progress bars.
+    if _output_format == "json":
+        width = 10000
+    else:
+        width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
     console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
-    progress_disabled = bool(args["--disable-progress"])
+    progress_disabled = bool(args["--disable-progress"]) or _output_format == "json"
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -667,6 +693,80 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         console.print(table)
 
 
+# Rich markup pattern for stripping [blue], [/], [error], etc.
+_RICH_TAG_RE = re.compile(r"\[/?[a-zA-Z_.]*\]")
+
+
+def _strip_rich_markup(text: str) -> str:
+    """Remove Rich console markup tags from a string."""
+    return _RICH_TAG_RE.sub("", text)
+
+
+def _serialize_obj_to_dict(obj, flds) -> dict:
+    """Convert a triage dataclass to a plain dict, respecting verbose level and recursion."""
+    from dataclasses import fields as dc_fields, is_dataclass
+
+    row: dict[str, Any] = {}
+    for f in flds:
+        metadata = f.metadata
+        if metadata.get("verbose", 0) > _verbose_level:
+            continue
+        if metadata.get("dont_serialize"):
+            continue
+        if metadata.get("recurse"):
+            value = getattr(obj, f.name)
+            if is_dataclass(value):
+                row.update(_serialize_obj_to_dict(value, dc_fields(value)))
+        elif metadata.get("additional_fields"):
+            all_values = [getattr(obj, f.name)]
+            all_values.extend(getattr(obj, af) for af in metadata["additional_fields"])
+            key = metadata.get("serialized_name", f.name)
+            row[key] = _strip_rich_markup(metadata["serializer"](all_values))
+        elif metadata.get("serializer"):
+            key = metadata.get("serialized_name", f.name)
+            row[key] = _strip_rich_markup(metadata["serializer"](getattr(obj, f.name)))
+    return row
+
+
+def serialize_result_json(script: "TriageScript | None", result, failures: list[str], warnings: list[str]) -> dict:
+    """Serialize a single script's result to a JSON-compatible dict."""
+    from dataclasses import fields as dc_fields, is_dataclass
+
+    entry: dict[str, Any] = {}
+    if script is not None:
+        entry["script"] = script.name
+
+    if failures:
+        entry["failures"] = [_strip_rich_markup(f) for f in failures]
+    if warnings:
+        entry["warnings"] = [_strip_rich_markup(w) for w in warnings]
+
+    if result is None:
+        if script and script.failed:
+            entry["status"] = "fail"
+            if script.failure_message:
+                entry["error"] = _strip_rich_markup(script.failure_message)
+        elif failures:
+            entry["status"] = "fail"
+        else:
+            entry["status"] = "pass"
+        return entry
+
+    entry["status"] = "ok"
+
+    if isinstance(result, list) and len(result) == 0:
+        entry["data"] = []
+        return entry
+
+    if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
+        entry["data"] = str(result)
+        return entry
+
+    items = result if isinstance(result, list) else [result]
+    entry["data"] = [_serialize_obj_to_dict(item, dc_fields(item)) for item in items]
+    return entry
+
+
 def _enforce_dependencies(args: ScriptArguments) -> None:
     """Enforce approved `ttexalens` version unless skipped.
 
@@ -853,7 +953,18 @@ def run_script(
     script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
-    serialize_result(script, result)
+
+    if _output_format == "json":
+        with FAILURE_CHECKS_LOCK:
+            failures = FAILURE_CHECKS[:]
+            FAILURE_CHECKS.clear()
+        with WARNING_CHECKS_LOCK:
+            warnings = WARNING_CHECKS[:]
+            WARNING_CHECKS.clear()
+        entry = serialize_result_json(script, result, failures, warnings)
+        print(json.dumps({"scripts": [entry]}, indent=2))
+    else:
+        serialize_result(script, result)
 
     if force_exit:
         # Remove nanobind leak check to avoid false positives on exit
@@ -927,6 +1038,14 @@ def main():
     _enforce_dependencies(args)
     context = _init_ttexalens(args)
 
+    json_mode = _output_format == "json"
+    json_path = args["--json-path"]
+    collect_json = json_mode or json_path
+    json_results: list[dict] = []
+
+    # Needed to drain failure/warning globals for JSON collection
+    global FAILURE_CHECKS, WARNING_CHECKS
+
     with create_progress() as progress:
         scripts_task = progress.add_task("Script execution", total=len(script_queue))
 
@@ -940,7 +1059,7 @@ def main():
         else:
             # Execute all scripts
             triage_init_end = time()
-            if args["--print-script-times"]:
+            if args["--print-script-times"] and not json_mode:
                 utils.INFO(f"Triage initialization time: {triage_init_end - triage_start:.2f}s")
             total_time = triage_init_end - triage_start
             serialization_time = 0.0
@@ -948,17 +1067,47 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    utils.INFO(f"{script.name}:")
-                    utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    if not json_mode:
+                        utils.INFO(f"{script.name}:")
+                        utils.WARN(f"  Cannot run script due to failed dependencies.")
                     script.failed = True
                     script.failure_message = "Cannot run script due to failed dependencies."
+                    if collect_json and not script.config.data_provider:
+                        json_results.append(serialize_result_json(script, None, [], []))
                 else:
                     start_time = time()
                     result = script.run(args=args, context=context)
                     end_time = time()
                     total_time += end_time - start_time
                     execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
-                    if script.config.data_provider:
+                    if not script.config.data_provider:
+                        if collect_json:
+                            # Drain check logs for JSON collection.
+                            # In json_mode this is the only consumer; in table+json-path
+                            # mode we drain here first and pass copies to serialize_result.
+                            with FAILURE_CHECKS_LOCK:
+                                failures = FAILURE_CHECKS
+                                FAILURE_CHECKS = []
+                            with WARNING_CHECKS_LOCK:
+                                warnings = WARNING_CHECKS
+                                WARNING_CHECKS = []
+                            json_results.append(serialize_result_json(script, result, failures, warnings))
+                            if not json_mode:
+                                # Re-inject so serialize_result can display them
+                                with FAILURE_CHECKS_LOCK:
+                                    FAILURE_CHECKS = failures
+                                with WARNING_CHECKS_LOCK:
+                                    WARNING_CHECKS = warnings
+                        if not json_mode:
+                            if script.config.data_provider:
+                                pass  # unreachable — guarded above
+                            else:
+                                start_time = time()
+                                serialize_result(script, result, execution_time)
+                                end_time = time()
+                                total_time += end_time - start_time
+                                serialization_time += end_time - start_time
+                    elif not json_mode:
                         if result is None:
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
@@ -970,18 +1119,26 @@ def main():
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
                             utils.INFO("  pass")
-                    else:
-                        start_time = time()
-                        serialize_result(script, result, execution_time)
-                        end_time = time()
-                        total_time += end_time - start_time
-                        serialization_time += end_time - start_time
                 progress.advance(scripts_task)
-            if args["--print-script-times"]:
+            if args["--print-script-times"] and not json_mode:
                 print()
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    if json_mode:
+        print(json.dumps({"scripts": json_results}, indent=2))
+
+    if json_path and json_results:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
+            with open(json_path, "w") as f:
+                json.dump({"scripts": json_results}, f, indent=2)
+            if not json_mode:
+                utils.INFO(f"JSON triage written to {json_path}")
+        except Exception as e:
+            if not json_mode:
+                utils.WARN(f"Failed to write JSON triage: {e}")
 
     triage_summary_path = args["--triage-summary-path"]
     if triage_summary_path:
@@ -989,9 +1146,11 @@ def main():
             os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
             with open(triage_summary_path, "w") as f:
                 f.write(_build_triage_summary(script_queue))
-            utils.INFO(f"Triage summary written to {triage_summary_path}")
+            if not json_mode:
+                utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
-            utils.WARN(f"Failed to write triage summary: {e}")
+            if not json_mode:
+                utils.WARN(f"Failed to write triage summary: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
