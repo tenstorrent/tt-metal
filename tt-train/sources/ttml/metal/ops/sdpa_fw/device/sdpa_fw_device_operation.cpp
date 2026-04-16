@@ -172,15 +172,15 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             preallocated_intermediate,
             "Preallocated Intermediate",
             tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+            tt::tt_metal::DataType::FLOAT32);
 
         auto interm_shape = preallocated_intermediate.padded_shape();
-        // intermediate shape: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
-        constexpr uint32_t kIntermediateWidth = 64U;
+        // intermediate shape: (B, q_heads, S, 32) - 1 FP32 tile: logsumexp = max + log(sum_exp)
+        constexpr uint32_t kIntermediateWidth = 32U;
         TT_FATAL(
             interm_shape[0] == qBt && interm_shape[1] == qHt && interm_shape[2] == qSt &&
                 interm_shape[3] == kIntermediateWidth,
-            "Preallocated intermediate shape must be (B, q_heads, S, 64). Got preallocated intermediate shape={}, "
+            "Preallocated intermediate shape must be (B, q_heads, S, 32). Got preallocated intermediate shape={}, "
             "q_heads={}",
             interm_shape,
             qHt);
@@ -211,12 +211,12 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
             output_specs.push_back(tensor_args.preallocated_intermediate->tensor_spec());
         } else {
             auto shape = tensor_args.query.logical_shape();
-            // intermediate shape: (B, q_heads, S, 64) - max_val at col 0, recip_sum_exp at col 32
-            shape[-1] = 64U;
+            // intermediate shape: (B, q_heads, S, 32) - 1 FP32 tile: logsumexp = max + log(sum_exp)
+            shape[-1] = 32U;
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(
-                    tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+                    tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
         }
     }
 
