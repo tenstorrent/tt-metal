@@ -185,13 +185,18 @@ class TtGazeLLE:
             x_tt = _dinov2_block(x_tt, p, self.num_heads)
         x_tt = ttnn.layer_norm(x_tt, weight=self.final_norm_w, bias=self.final_norm_b, epsilon=1e-6)
 
-        # Slice off CLS + reg tokens (first 1 + num_reg_tokens rows) on host then re-upload.
-        # ttnn.slice on second-to-last dim at arbitrary indices isn't ergonomic; round-trip a
-        # small window instead.
-        x_host = ttnn.to_torch(x_tt)
-        ttnn.deallocate(x_tt)
-        patch_tokens = x_host[:, 1 + self.num_reg_tokens :].contiguous()
-        return _to_device(patch_tokens, self.device)
+        # Slice CLS + register tokens off on device. Fallback to host round-trip if unsupported.
+        total_prefix = 1 + self.num_reg_tokens
+        shape = x_tt.shape
+        try:
+            patch_tokens = ttnn.slice(x_tt, [0, total_prefix, 0], [shape[0], shape[1], shape[2]])
+            ttnn.deallocate(x_tt)
+            return patch_tokens
+        except Exception:
+            x_host = ttnn.to_torch(x_tt)
+            ttnn.deallocate(x_tt)
+            patch_tokens = x_host[:, total_prefix:].contiguous()
+            return _to_device(patch_tokens, self.device)
 
     @torch.no_grad()
     def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]]):
