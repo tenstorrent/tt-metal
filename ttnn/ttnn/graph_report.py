@@ -1048,7 +1048,7 @@ def import_graph(
                     "stacking_level": 0,
                 }
                 dealloc_subgraph = [capture_start, node_copy, capture_end]
-                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph)), r)
+                captured_graph_batch.append((operation_id, json.dumps(dealloc_subgraph), r))
 
                 operation_counter += 1
             else:
