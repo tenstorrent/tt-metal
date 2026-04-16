@@ -963,7 +963,7 @@ class Attention(LightweightModule):
                 x_11SH,
                 self.wqkv,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None, prefill_seq_len=seq_len),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
@@ -972,15 +972,16 @@ class Attention(LightweightModule):
         if self.wqkv_bias_prefill is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
-        qkv_ar_memcfg = self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL)
-        xqkv_fused = tt_all_reduce(
-            xqkv_fused,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            memory_config=qkv_ar_memcfg,
-            dtype=self.ccl_dtype,
-        )
+        if self.num_devices > 1:
+            qkv_ar_memcfg = self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL, prefill_seq_len=seq_len)
+            xqkv_fused = tt_all_reduce(
+                xqkv_fused,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                memory_config=qkv_ar_memcfg,
+                dtype=self.ccl_dtype,
+            )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -996,7 +997,9 @@ class Attention(LightweightModule):
         ttnn.deallocate(x_11SH)
 
         # split qkv into heads
-        create_head_memcfg = self.args.get_attn_create_head_output_mem_config(Mode.PREFILL, None)
+        create_head_memcfg = self.args.get_attn_create_head_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=seq_len
+        )
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -1126,10 +1129,12 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
             )
+            l1_prefill_seq_len = seq_len
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
             # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
             sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
+            l1_prefill_seq_len = sdpa_seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -1158,7 +1163,9 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
-        concat_heads_memcfg = self.args.get_attn_concat_heads_output_mem_config(Mode.PREFILL, None)
+        concat_heads_memcfg = self.args.get_attn_concat_heads_output_mem_config(
+            Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
+        )
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=concat_heads_memcfg,
@@ -1184,9 +1191,11 @@ class Attention(LightweightModule):
                 )
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, pad_to_1024 // 1024, 1024, -1])
 
-        # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            ag_memcfg = self.args.get_attn_all_gather_output_mem_config(Mode.PREFILL, None)
+        # Non fused All Gather Matmul (multi-device only; single-chip skips fabric CCL)
+        if self.use_fused_all_gather_matmul and self.num_devices > 1:
+            ag_memcfg = self.args.get_attn_all_gather_output_mem_config(
+                Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len
+            )
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,
@@ -1201,7 +1210,7 @@ class Attention(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
-        wo_memcfg = self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None)
+        wo_memcfg = self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None, prefill_seq_len=l1_prefill_seq_len)
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -1217,9 +1226,11 @@ class Attention(LightweightModule):
                 output_11SH = output_11SH[:, :, :seq_len, :]
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
-        if not self.use_fused_all_gather_matmul:
-            out_ar_memcfg = self.args.get_attn_all_reduce_output_mem_config(Mode.PREFILL)
+        # Attention output all-reduce (tt_all_reduce no-ops on 1×1 mesh; skip call on single device)
+        if not self.use_fused_all_gather_matmul and self.num_devices > 1:
+            out_ar_memcfg = self.args.get_attn_all_reduce_output_mem_config(
+                Mode.PREFILL, prefill_seq_len=l1_prefill_seq_len
+            )
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
