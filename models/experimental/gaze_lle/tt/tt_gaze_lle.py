@@ -177,9 +177,11 @@ class TtGazeLLE:
         self.proj_w = _to_device(linear_w, device)
         self.proj_b = _to_device(ref_model.linear.bias.unsqueeze(0), device)
 
-        # pos_embed (dim=256, featmap_h, featmap_w) → (1, H*W, 256)
-        pe = ref_model.pos_embed.permute(1, 2, 0).reshape(1, -1, ref_model.dim).contiguous()
-        self.gaze_pos_embed = _to_device(pe, device)
+        # pos_embed (dim=256, featmap_h, featmap_w) → (1, H*W, 256). Kept on host and
+        # fused with the per-frame head_map*head_token contribution so device sees a
+        # single add instead of two.
+        pe_host = ref_model.pos_embed.permute(1, 2, 0).reshape(1, -1, ref_model.dim).contiguous()
+        self.gaze_pos_embed_host = pe_host
         # head_token.weight: (1, 256)
         self.head_token = ref_model.head_token.weight  # kept on host for per-frame head_map mult
         if inout:
@@ -222,17 +224,16 @@ class TtGazeLLE:
         b = images.shape[0]
 
         feat_tt = self._backbone_forward_to_patch_tokens(images)
-        # Project 768 -> 256 on device and add pos_embed.
+        # Project 768 -> 256 on device.
         x_tt = ttnn.linear(feat_tt, self.proj_w, bias=self.proj_b, core_grid=_CORE_GRID)
         ttnn.deallocate(feat_tt)
-        x_tt = ttnn.add(x_tt, self.gaze_pos_embed)
 
-        # Head-map conditioning: head_map (B, H*W) * head_token (256) → (B, H*W, 256).
+        # Fused pos_embed + head_map*head_token on host — one upload, one add.
         head_maps = torch.stack([ref._bbox_to_head_map(bb) for bb in bboxes]).view(b, -1)
-        head_contrib = head_maps.unsqueeze(-1) * self.head_token.unsqueeze(0)
-        head_contrib_tt = _to_device(head_contrib.contiguous(), self.device)
-        x_tt = ttnn.add(x_tt, head_contrib_tt)
-        ttnn.deallocate(head_contrib_tt)
+        pos_plus_head = self.gaze_pos_embed_host + head_maps.unsqueeze(-1) * self.head_token.unsqueeze(0)
+        pos_plus_head_tt = _to_device(pos_plus_head.contiguous(), self.device)
+        x_tt = ttnn.add(x_tt, pos_plus_head_tt)
+        ttnn.deallocate(pos_plus_head_tt)
 
         # Prepend in/out token. self.inout_token already shaped (1,1,256); requires B==1.
         if self.inout:
