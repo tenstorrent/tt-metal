@@ -4,36 +4,137 @@
 
 #pragma once
 
-// Default: MEASURE_PERF_COUNTERS expands to nothing.
-// perf.h may provide its own definition (with forward declarations), so guard this.
 #ifndef MEASURE_PERF_COUNTERS
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
-#ifndef PERF_COUNTERS_COMPILED
+#include <cstdint>
 
-// Stub functions for non-counter build — called unconditionally from
-// trisc.cpp and brisc.cpp so both builds produce identical .text layout.
-// noinline + memory clobber so the compiler treats them identically to
-// the real counter functions (same call-site code in main()).
+#include "ckernel.h"
+
+// ============================================================================
+// L1 Address Constants — ALWAYS compiled (shared by NC and WC TRISC builds).
+// Both builds produce IDENTICAL TRISC ELFs. Only BRISC behavior differs.
+// ============================================================================
+
+#define PERF_COUNTERS_BASE_ADDR    0x169000
+#define PERF_COUNTERS_CONFIG_WORDS 137
+#define PERF_COUNTERS_DATA_WORDS   274
+#define PERF_COUNTERS_BUFFER_SIZE  ((PERF_COUNTERS_CONFIG_WORDS + PERF_COUNTERS_DATA_WORDS) * 4)
+
 namespace llk_perf
 {
-__attribute__((noinline)) inline void start_perf_counters(unsigned int)
+
+constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE = PERF_COUNTERS_BUFFER_SIZE + 40;
+constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 3;
+constexpr std::uint32_t SYNC_ZONE_COMPLETE      = 0xFFu;
+
+constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
+{
+    return PERF_COUNTERS_BASE_ADDR + zone * PERF_COUNTERS_ZONE_SIZE + PERF_COUNTERS_BUFFER_SIZE;
+}
+
+constexpr std::uint32_t perf_counters_stop_flags_addr(std::uint32_t zone)
+{
+    return perf_counters_sync_ctrl_addr(zone) + 4;
+}
+
+constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
+
+} // namespace llk_perf
+
+// ============================================================================
+// TRISC functions — ALWAYS compiled (identical binary in NC and WC).
+// Runtime L1 enabled flag controls behavior. BRISC sets flag=1 in WC builds.
+// ============================================================================
+
+namespace llk_perf
+{
+
+// Start: no-op. BRISC handles arm before TRISCs start.
+__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void start_perf_counters(std::uint32_t zone)
+{
+    asm volatile("" : : "r"(zone) : "memory");
+}
+
+// Stop: all threads write per-thread L1 flag to signal BRISC.
+__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void stop_perf_counters(std::uint32_t zone)
+{
+    if (*reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR) == 0)
+    {
+        asm volatile("" : : "r"(zone) : "memory");
+        return;
+    }
+    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
+    std::uint32_t tid                  = 0;
+#if defined(LLK_TRISC_MATH)
+    tid = 1;
+#elif defined(LLK_TRISC_PACK)
+    tid = 2;
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+    tid = 3;
+#endif
+    stop_flags[tid] = 1;
+}
+
+} // namespace llk_perf
+
+// ============================================================================
+// Profiler hooks — ALWAYS compiled (called from zone_scoped in profiler.h).
+// Both NC and WC compile IDENTICAL code. The enabled flag at runtime
+// determines whether counter operations execute.
+// ============================================================================
+
+namespace llk_perf
+{
+namespace detail
+{
+__attribute__((section(".bss.perf_counters"))) static std::uint32_t profiler_zone_counter;
+}
+} // namespace llk_perf
+
+namespace llk_profiler
+{
+__attribute__((noinline, section(".text.zzz_profiler_hooks"))) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out)
+{
+    std::uint32_t profiler_zone = llk_perf::detail::profiler_zone_counter++;
+    if (profiler_zone == 0)
+    {
+        // KERNEL zone — skip counter measurement
+        zone_out   = 0;
+        active_out = false;
+        return;
+    }
+    zone_out   = profiler_zone - 1;
+    active_out = true;
+    llk_perf::start_perf_counters(zone_out);
+}
+
+__attribute__((noinline, section(".text.zzz_profiler_hooks"))) void _profiler_counter_stop(std::uint32_t zone, bool active)
+{
+    if (active)
+    {
+        llk_perf::stop_perf_counters(zone);
+    }
+}
+} // namespace llk_profiler
+
+// ============================================================================
+// BRISC-only code — only compiled when PERF_COUNTERS_COMPILED is defined.
+// NC BRISC uses stubs (below). WC BRISC gets the full PerfCounterManager.
+// ============================================================================
+
+#ifndef PERF_COUNTERS_COMPILED
+
+// NC BRISC stubs
+namespace llk_perf
+{
+__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void configure_and_arm_from_brisc()
 {
     asm volatile("" ::: "memory");
 }
 
-__attribute__((noinline)) inline void stop_perf_counters(unsigned int)
-{
-    asm volatile("" ::: "memory");
-}
-
-__attribute__((noinline)) inline void configure_and_arm_from_brisc()
-{
-    asm volatile("" ::: "memory");
-}
-
-__attribute__((noinline)) inline void write_counter_config_from_brisc()
+__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void write_counter_config_from_brisc()
 {
     asm volatile("" ::: "memory");
 }
@@ -41,31 +142,25 @@ __attribute__((noinline)) inline void write_counter_config_from_brisc()
 inline void init_perf_counter_metadata()
 {
 }
+
+inline void read_counters_from_brisc()
+{
+}
+
+inline void handle_zone_boundary_from_brisc(std::uint32_t)
+{
+}
 } // namespace llk_perf
 
 #else
 
-#include <cstdint>
-
-#include "ckernel.h"
+// WC-only: PerfCounterManager, BRISC functions, and counter hardware access.
+// L1 address constants, hooks, and TRISC start/stop are defined above (always compiled).
 
 namespace llk_perf
 {
 
-// ============================================================================
-// L1 Memory Layout (Single Shared Buffer)
-// ============================================================================
-
-// SOURCE OF TRUTH: tests/python_tests/helpers/test_config.py (TestConfig class)
-// Memory budget: 0x169000 to 0x16AFF3
-#define PERF_COUNTERS_BASE_ADDR    0x169000
-#define PERF_COUNTERS_CONFIG_WORDS 137 // Counter configuration slots (all Wormhole hw counters)
-#define PERF_COUNTERS_DATA_WORDS   274 // Counter data (cycles + count per slot)
-#define PERF_COUNTERS_BUFFER_SIZE  ((PERF_COUNTERS_CONFIG_WORDS + PERF_COUNTERS_DATA_WORDS) * 4)
-
-constexpr std::uint32_t PERF_COUNTERS_ZONE_SIZE = PERF_COUNTERS_BUFFER_SIZE + 40; // +40 for sync words
-constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 3;
-
+// Additional address helpers (only needed by PerfCounterManager, not by the hooks above)
 constexpr std::uint32_t perf_counters_config_addr(std::uint32_t zone)
 {
     return PERF_COUNTERS_BASE_ADDR + zone * PERF_COUNTERS_ZONE_SIZE;
@@ -76,27 +171,12 @@ constexpr std::uint32_t perf_counters_data_addr(std::uint32_t zone)
     return perf_counters_config_addr(zone) + PERF_COUNTERS_CONFIG_WORDS * 4;
 }
 
-constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
-{
-    return perf_counters_config_addr(zone) + PERF_COUNTERS_BUFFER_SIZE;
-}
-
-// Thread count for perf counter synchronization
-// Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 #define PERF_COUNTERS_THREAD_COUNT 4
 #else
 #define PERF_COUNTERS_THREAD_COUNT 3
 #endif
 
-// Atomic counters for ATINCGET-based synchronization
-// Per-thread stop arrival flags (3 words at sync_ctrl + 4) — used by lightweight stop
-constexpr std::uint32_t perf_counters_stop_flags_addr(std::uint32_t zone)
-{
-    return perf_counters_sync_ctrl_addr(zone) + 4;
-}
-
-// Atomic counters for ATINCGET-based synchronization (overlaps stop_flags when using lightweight mode)
 constexpr std::uint32_t perf_counters_start_counter_addr(std::uint32_t zone)
 {
     return perf_counters_sync_ctrl_addr(zone) + 4;
@@ -112,9 +192,6 @@ constexpr std::uint32_t perf_counters_stop_elect_addr(std::uint32_t zone)
     return perf_counters_stop_counter_addr(zone) + (PERF_COUNTERS_THREAD_COUNT * 4);
 }
 
-// Barriers to synchronize all threads after start_hardware / stop_hardware.
-// Ensures all threads enter/exit profiler zones at the same time,
-// preventing inter-thread timing skew from leaking into profiler measurements.
 constexpr std::uint32_t perf_counters_start_barrier_addr(std::uint32_t zone)
 {
     return perf_counters_stop_elect_addr(zone) + 4;
@@ -125,13 +202,7 @@ constexpr std::uint32_t perf_counters_stop_barrier_addr(std::uint32_t zone)
     return perf_counters_start_barrier_addr(zone) + 4;
 }
 
-// Global enabled flag — set by BRISC, read by TRISCs. Located after all zone data.
-constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_BASE_ADDR + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
-
-// Pre-computed metadata written by BRISC, read by TRISCs.
-// This moves ~400 cycles of compute_metadata() from TRISC init to BRISC setup.
-constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
-// valid_count per zone: PERF_COUNTERS_MAX_ZONES words starting after bank_mask
+constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR   = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
 constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR = PERF_COUNTERS_BANK_MASK_ADDR + 4;
 
 // ============================================================================
@@ -142,8 +213,7 @@ constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR = PERF_COUNTERS_BANK_MASK
 // 3 TRISCs: Bits 0-2 start, 3-5 stop, 6 started, 7 stopped, 8-9 starter, 10-11 stopper
 // 4 TRISCs: Bits 0-3 start, 4-7 stop, 8 started, 9 stopped, 10-11 starter, 12-13 stopper
 
-// Lightweight sync: zone complete marker
-constexpr std::uint32_t SYNC_ZONE_COMPLETE  = 0xFFu;
+// SYNC_ZONE_COMPLETE defined above (shared section)
 constexpr std::uint32_t SYNC_START_MASK     = (1u << PERF_COUNTERS_THREAD_COUNT) - 1u;
 constexpr std::uint32_t SYNC_STOP_BIT_SHIFT = PERF_COUNTERS_THREAD_COUNT;
 constexpr std::uint32_t SYNC_STOP_MASK      = SYNC_START_MASK << SYNC_STOP_BIT_SHIFT;
@@ -198,13 +268,12 @@ namespace hw_access
 // Write a 32-bit value to a hardware register address
 inline void write_reg(std::uint32_t addr, std::uint32_t value)
 {
-    *reinterpret_cast<volatile std::uint32_t*>(addr) = value;
+    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr) = value;
 }
 
-// Read a 32-bit value from a hardware register address
 inline std::uint32_t read_reg(std::uint32_t addr)
 {
-    return *reinterpret_cast<volatile std::uint32_t*>(addr);
+    return *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr);
 }
 
 // Get the base configuration register address for a counter bank
@@ -481,8 +550,8 @@ private:
             }
 
             std::uint32_t counter_base = hw_access::get_counter_base_addr(bank);
-            hw_access::write_reg(counter_base, 0xFFFFFFFF); // Reference period
-            hw_access::write_reg(counter_base + 4, 0);      // Mode register
+            hw_access::write_reg(counter_base, 0xFFFFFFFF); // Reference period (used by mode 1 only)
+            hw_access::write_reg(counter_base + 4, 0);      // mode=0 continuous
 
             configured_mask |= bank_bit;
         }
@@ -491,6 +560,9 @@ private:
     // Arm only banks that have configured counters: clear + start.
     void arm_hardware()
     {
+        // Working tt-metal sequence: write 1 then write 0.
+        // Rising edge 0→1 on start bit clears counters and starts counting.
+        // Writing 0 after resets control to idle (so subsequent 0→2 stop is clean edge).
         for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
         {
             if (!(get_active_bank_mask() & (1u << b)))
@@ -498,8 +570,31 @@ private:
                 continue;
             }
             std::uint32_t counter_base = hw_access::get_counter_base_addr(static_cast<counter_bank>(b));
-            hw_access::write_reg(counter_base + 8, 0); // Clear
-            hw_access::write_reg(counter_base + 8, 1); // Start
+            hw_access::write_reg(counter_base + 8, 1); // Start (rising edge clears + starts)
+            hw_access::write_reg(counter_base + 8, 0); // Reset to idle
+        }
+        // PERF_CNT_ALL: broadcast start to INSTRN_THREAD and FPU banks.
+        // These banks may require global arm separate from per-bank control.
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 1);
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 0);
+    }
+
+    void freeze_hardware()
+    {
+        // Working tt-metal sequence: write 2 then write 0.
+        // Rising edge 0→2 on stop bit freezes counters.
+        // PERF_CNT_ALL: broadcast stop to INSTRN_THREAD and FPU banks.
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 2);
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 0);
+        for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
+        {
+            if (!(get_active_bank_mask() & (1u << b)))
+            {
+                continue;
+            }
+            std::uint32_t counter_base = hw_access::get_counter_base_addr(static_cast<counter_bank>(b));
+            hw_access::write_reg(counter_base + 8, 2); // Stop (rising edge freezes)
+            hw_access::write_reg(counter_base + 8, 0); // Reset to idle
         }
     }
 
@@ -529,20 +624,6 @@ private:
 
     // Freeze only banks that have configured counters.
     // After this, all counter values are frozen and can be read at leisure.
-    void freeze_hardware()
-    {
-        for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
-        {
-            if (!(get_active_bank_mask() & (1u << b)))
-            {
-                continue;
-            }
-            std::uint32_t counter_base = hw_access::get_counter_base_addr(static_cast<counter_bank>(b));
-            hw_access::write_reg(counter_base + 8, 0); // Clear start/stop bits
-            hw_access::write_reg(counter_base + 8, 2); // Stop (freeze)
-        }
-    }
-
     // Read frozen counter values to L1 for a zone.
     // Skips zones with no configured counters (e.g. zone 1/2 when only zone 0 has config).
     // Stops scanning config slots as soon as all valid counters are processed.
@@ -584,14 +665,12 @@ private:
             std::uint32_t counter_base = hw_access::get_counter_base_addr(bank);
             hw_access::write_reg(counter_base + 4, static_cast<std::uint32_t>(counter_id) << 8);
 
-            // Single dummy read for settling after mode register write.
-            // The actual reads follow 2+ instruction cycles later — sufficient
-            // for the hardware mux to propagate the selected counter value.
+            // Single dummy read for mux settling
             std::uint32_t output_low_addr  = hw_access::get_counter_output_low_addr(bank);
             std::uint32_t output_high_addr = hw_access::get_counter_output_high_addr(bank);
             (void)hw_access::read_reg(output_low_addr);
 
-            // Actual read and write directly to L1 buffer
+            // Write to L1
             data_mem[result_idx * 2]     = hw_access::read_reg(output_low_addr);
             data_mem[result_idx * 2 + 1] = hw_access::read_reg(output_high_addr);
 
@@ -686,15 +765,8 @@ public:
             valid_counts[zone] = count;
         }
 
-        if (found_valid)
-        {
-            for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
-            {
-                configure_hardware(zone);
-            }
-        }
-
-        // Write pre-computed metadata to shared L1 for TRISCs to read.
+        // Write metadata to L1 FIRST — configure_hardware + arm_hardware read
+        // bank_mask from L1 via get_active_bank_mask(). Must be set before they run.
         volatile std::uint32_t* enabled_flag = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR);
         *enabled_flag                        = found_valid ? 1u : 0u;
 
@@ -705,6 +777,13 @@ public:
         for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
         {
             valid_count_ptr[zone] = valid_counts[zone];
+        }
+
+        if (found_valid)
+        {
+            hw_access::write_reg(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+            configure_hardware(0);
+            arm_hardware();
         }
     }
 
@@ -721,131 +800,58 @@ public:
     PerfCounterManager(PerfCounterManager&&)                 = delete;
     PerfCounterManager& operator=(PerfCounterManager&&)      = delete;
 
-    // Per-zone start: first thread to arrive configures + arms hardware.
-    // On first call, reads pre-computed metadata from L1 (~5 cycles, written by BRISC).
+    // Per-zone start: BRISC handles all CSR operations.
+    // TRISCs only signal zone boundaries via L1 flags.
+    // For zone > 0, all TRISCs wait for BRISC to finish counter ops + re-arm.
     void start(std::uint32_t zone)
     {
-        compute_metadata();
-
-        // Skip if no valid counters configured for this zone.
-        if (get_active_bank_mask() == 0 || get_valid_count(zone) == 0)
-        {
-            return;
-        }
-
-        // Thread 0 configures (first zone only) and arms counters.
-        // configure_hardware writes ref_period/mode registers — only needed once
-        // since all zones use the same counter configuration. Subsequent zones
-        // just re-arm (clear+start) which resets counter values to 0 per RTL.
-        if (thread_info::get_thread_id() == 0)
-        {
-            if (zone == 0)
-            {
-                configure_hardware(zone);
-            }
-            arm_hardware();
-        }
-        else
-        {
-            // Match arm_hardware's bus latency with dummy reads.
-            // Zone 0: configure+arm = more latency (4 reads/bank).
-            // Zone > 0: arm only = less latency (1 read/bank).
-            const std::uint32_t reads_per_bank = (zone == 0) ? 4 : 1;
-            for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
-            {
-                if (get_active_bank_mask() & (1u << b))
-                {
-                    std::uint32_t base = hw_access::get_counter_base_addr(static_cast<counter_bank>(b));
-                    for (std::uint32_t r = 0; r < reads_per_bank; ++r)
-                    {
-                        (void)hw_access::read_reg(base + 8);
-                    }
-                }
-            }
-        }
-
-        // L1-flag barrier: all threads must arrive before entering profiler zone.
-        // Required for ALL zones — without it, threads enter zones at different
-        // times, causing inconsistent ZONE_START timestamps and biased measurements
-        // (L1_TO_L1 TILE_LOOP shows +17% without barrier vs +0.3% with it).
-        volatile std::uint32_t* start_flags       = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
-        start_flags[thread_info::get_thread_id()] = 1;
-        asm volatile("fence" ::: "memory");
-        for (std::uint32_t t = 0; t < PERF_COUNTER_THREADS; ++t)
-        {
-            while (!start_flags[t])
-            {
-                asm volatile("fence" ::: "memory");
-            }
-        }
+        // Delay + ready check moved to _profiler_counter_start hook
+        // for icache parity with NC (both delays in same section).
+        asm volatile("" : : "r"(zone) : "memory");
     }
 
-    // Per-zone stop: last thread to leave freezes + reads + deconfigures.
-    // Early threads wait for the last thread to finish all hardware ops.
     void stop(std::uint32_t zone)
     {
-        // Skip if no valid counters configured for this zone.
+        // Each thread signals its arrival via per-thread flag.
+        // BRISC waits until ALL threads have signaled before freezing counters.
+        // All threads write (no branch divergence) — different addresses per thread.
+        volatile std::uint32_t* stop_flags       = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
+        stop_flags[thread_info::get_thread_id()] = 1;
+    }
+
+    // Freeze + read + deconfigure for BRISC use (last zone, after TRISCs complete).
+    void freeze_and_read(std::uint32_t zone)
+    {
         if (get_active_bank_mask() == 0 || get_valid_count(zone) == 0)
         {
             return;
         }
-
-        volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
-        const std::uint32_t thread_id      = thread_info::get_thread_id();
-
-        // Signal arrival.
-        stop_flags[thread_id] = 1;
-        asm volatile("fence" ::: "memory");
-
-        // Check if we're the last thread (other flags already set).
-        bool is_last = true;
-        for (std::uint32_t t = 0; t < PERF_COUNTER_THREADS; ++t)
-        {
-            if (t != thread_id && !stop_flags[t])
-            {
-                is_last = false;
-                break;
-            }
-        }
-
-        if (!is_last)
-        {
-            // Early threads must wait until the last thread finishes
-            // freeze + read + deconfigure. Otherwise they enter the next zone
-            // while counter hardware is still active, causing bus contention.
-            volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
-            while (read_l1_word(sync_ctrl) == 0)
-            {
-                asm volatile("fence" ::: "memory");
-            }
-            return;
-        }
-
-        // Last thread out: freeze counters and read values.
-        // Skip deconfigure for zone 0 — zone 1 reuses the same hw config.
-        // Only deconfigure after the last zone to avoid register writes
-        // that cause bus contention with the next zone's FPU operations.
         freeze_hardware();
         read_hardware(zone);
-        if (zone > 0)
-        {
-            deconfigure_hardware();
-        }
+        deconfigure_hardware();
 
-        // Clear stop flags AND start flags for next zone.
-        stop_flags[0] = 0;
-        stop_flags[1] = 0;
-        stop_flags[2] = 0;
-
-        volatile std::uint32_t* start_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_counter_addr(zone));
-        start_flags[0]                      = 0;
-        start_flags[1]                      = 0;
-        start_flags[2]                      = 0;
-
-        // Signal early threads that ALL hardware ops are done.
         volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
-        *sync_ctrl                        = SYNC_ZONE_COMPLETE | (thread_id << SYNC_STOPPER_SHIFT);
-        ckernel::invalidate_data_cache();
+        *sync_ctrl                        = SYNC_ZONE_COMPLETE;
+    }
+
+    // Freeze + read + re-arm for BRISC use (between zones, counters restart for next zone).
+    void freeze_read_and_rearm(std::uint32_t zone)
+    {
+        if (get_active_bank_mask() == 0 || get_valid_count(zone) == 0)
+        {
+            return;
+        }
+        // Between zones: PERF_CNT_ALL broadcast freeze+arm (3 CSR writes).
+        // This re-arms FPU + INSTRN_THREAD for the next zone (per-zone separation).
+        // TDMA/L1 banks are not re-armed — their zone 1 counts are cumulative
+        // (INIT + TILE_LOOP) which is acceptable given zero-overhead goal.
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 2); // stop
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 1); // start (rising edge clears + starts)
+        hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 0); // reset to idle
+
+        // Mark zone complete so Python can find the data
+        volatile std::uint32_t* sync_ctrl = get_sync_ctrl_mem(zone);
+        *sync_ctrl                        = SYNC_ZONE_COMPLETE;
     }
 };
 
@@ -853,16 +859,9 @@ public:
 // Public API
 // ============================================================================
 
-// Start performance counters (call from all threads)
-// noinline + cold + aligned(64): keep counter code out of the hot instruction cache
-// and ensure it occupies whole cache lines so it doesn't shift TILE_LOOP code alignment.
-__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void start_perf_counters(std::uint32_t zone)
-{
-    PerfCounterManager::instance().start(zone);
-}
+// start_perf_counters and stop_perf_counters are defined above (always compiled).
+// They check PERF_COUNTERS_ENABLED_FLAG_ADDR at runtime.
 
-// Initialize counter metadata without arming. Called from trisc.cpp
-// before stop_perf_counters so stop knows which banks to read.
 inline void init_perf_counter_metadata()
 {
     auto& mgr = PerfCounterManager::instance();
@@ -870,12 +869,6 @@ inline void init_perf_counter_metadata()
     {
         mgr.init_metadata();
     }
-}
-
-// Stop performance counters (call from all threads)
-__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void stop_perf_counters(std::uint32_t zone)
-{
-    PerfCounterManager::instance().stop(zone);
 }
 
 // Pre-configure all counter banks (called by BRISC before TRISCs start)
@@ -916,30 +909,39 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = sizeof(BUILTIN_COUNTER_CONFIG) /
 
 inline void configure_and_arm_from_brisc()
 {
-    // Write built-in config to ALL zone L1 buffers (local write, no NOC).
-    // Each zone needs its own copy so configure_hardware(zone) can read it.
-    for (std::uint32_t zone = 0; zone < 2; ++zone)
+    // Write built-in config to zones 0 and 1 (per-zone measurement).
+    // Zone 2 MUST be cleared (not just skipped) — uninitialized L1 contains
+    // garbage with bit 31 set, which makes configure_all_zones() think
+    // there are valid counter entries and corrupts bank_mask/valid_count.
+    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
     {
         volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_config_addr(zone));
-        for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+        if (zone < 2)
         {
-            config_mem[i] = BUILTIN_COUNTER_CONFIG[i];
+            for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+            {
+                config_mem[i] = BUILTIN_COUNTER_CONFIG[i];
+            }
+            for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
+            {
+                config_mem[i] = 0;
+            }
         }
-        for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
+        else
         {
-            config_mem[i] = 0;
+            // Zone 2: clear ALL slots so configure_all_zones sees no valid entries
+            for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
+            {
+                config_mem[i] = 0;
+            }
         }
 
-        // Clear data buffer for this zone.
         volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_data_addr(zone));
         for (std::uint32_t i = 0; i < PERF_COUNTERS_DATA_WORDS; i++)
         {
             data_mem[i] = 0;
         }
 
-        // Clear sync control + stop flags + barriers for this zone.
-        // 10 words covers: sync_ctrl(1) + stop_flags(3) + start_counter(3) +
-        // stop_counter(3) + stop_elect(1) + start_barrier(1) + stop_barrier(1)
         volatile std::uint32_t* sync_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone));
         for (std::uint32_t i = 0; i < 10; i++)
         {
@@ -947,19 +949,75 @@ inline void configure_and_arm_from_brisc()
         }
     }
 
-    // Compute and write L1 metadata for all zones — no hardware register writes.
-    // Hardware configure+arm is done by TRISC start_perf_counters() inside
-    // the counter zone. Writing hw registers from BRISC causes ~5 cycle
-    // overhead on pack operations.
+    // Configure + arm hardware from BRISC — TRISCs do no hw work.
     auto& mgr = PerfCounterManager::instance();
-    mgr.configure_all_zones_metadata_only();
+    mgr.configure_all_zones(); // L1 metadata + hw configure + arm
 }
 
-// Read frozen counter values from hardware into L1 data buffer.
-// Called by BRISC after TRISCs finish (counters were frozen by TRISC asm).
+// Handle zone boundary from BRISC: wait for TRISCs to signal "zone done",
+// then freeze + read counter values + re-arm for next zone.
+// Called from BRISC main loop after releasing TRISCs.
+// Handle zone boundary from BRISC: wait for TRISCs to signal "zone done",
+// then freeze + read counter values + re-arm for next zone.
+inline void handle_zone_boundary_from_brisc(std::uint32_t zone)
+{
+    auto& mgr = PerfCounterManager::instance();
+
+    // Wait for ALL 3 TRISCs to signal zone done (per-thread flags).
+    // This ensures no thread is still pushing coprocessor instructions when we freeze.
+    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
+    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+    {
+        while (stop_flags[t] == 0)
+        {
+            ckernel::invalidate_data_cache();
+        }
+    }
+
+    // All threads done — freeze + read counter values, re-arm for next zone
+    mgr.freeze_read_and_rearm(zone);
+
+    // Clear per-thread flags for next zone
+    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+    {
+        stop_flags[t] = 0;
+    }
+
+    // Signal TRISCs: counters re-armed, proceed to next zone.
+    // TRISCs poll sync_ctrl[zone+1] in start(zone+1).
+    volatile std::uint32_t* ready_flag = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone + 1));
+    *ready_flag                        = SYNC_ZONE_COMPLETE;
+}
+
+// Handle LAST zone from BRISC: wait for all TRISCs, freeze + read + deconfigure.
+// No re-arm (no next zone). Called from BRISC START handler for the final zone.
+inline void handle_last_zone_from_brisc(std::uint32_t zone)
+{
+    auto& mgr = PerfCounterManager::instance();
+
+    volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
+    for (std::uint32_t t = 0; t < PERF_COUNTERS_THREAD_COUNT; ++t)
+    {
+        while (stop_flags[t] == 0)
+        {
+            ckernel::invalidate_data_cache();
+        }
+    }
+
+    mgr.freeze_and_read(zone); // freeze + read + deconfigure + set sync_ctrl
+}
+
+// Read all zone counters from BRISC after TRISCs complete.
+// Zone 0 was frozen+re-armed between zones (data still in hw? No — re-arm resets!).
+// Zone 1 counters ran during TILE_LOOP, need freeze+read now.
 inline void read_counters_from_brisc()
 {
-    PerfCounterManager::instance().read_counters(0);
+    auto& mgr = PerfCounterManager::instance();
+
+    // Zone 0 (INIT): counters were reset by re-arm. Data lost.
+    // TODO: separate pass for INIT data or accumulate approach.
+    // For now, just read zone 1 (TILE_LOOP).
+    mgr.freeze_and_read(1); // zone 1 = TILE_LOOP
 }
 
 // ============================================================================
@@ -1182,33 +1240,9 @@ __attribute__((noinline, cold)) inline std::uint32_t get_zone_id(std::uint32_t h
     return (hash_val < detail::ZONE_LOOKUP_SIZE) ? detail::zone_lookup[hash_val] : 0;
 }
 
-// Profiler-integrated counter hooks (called from zone_scoped ctor/dtor).
-// Auto-incrementing zone_id: first call = zone 0 (INIT), second = zone 1 (TILE_LOOP).
-// The static counter resets naturally because BRISC clears .bss between runs.
-namespace detail
-{
-__attribute__((section(".bss.perf_counters"))) static std::uint32_t profiler_zone_counter;
-} // namespace detail
+// Hooks and profiler_zone_counter are defined above (always compiled — shared by NC and WC).
 
 } // namespace llk_perf
-
-namespace llk_profiler
-{
-__attribute__((noinline)) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out)
-{
-    zone_out   = llk_perf::detail::profiler_zone_counter++;
-    active_out = true;
-    llk_perf::start_perf_counters(zone_out);
-}
-
-__attribute__((noinline)) void _profiler_counter_stop(std::uint32_t zone, bool active)
-{
-    if (active)
-    {
-        llk_perf::stop_perf_counters(zone);
-    }
-}
-} // namespace llk_profiler
 
 namespace llk_perf // reopen
 {

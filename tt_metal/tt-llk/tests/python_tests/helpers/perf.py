@@ -34,7 +34,7 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     (get_zone_id allocates sequential IDs on first encounter).
     """
     _ = elf_dir
-    return ["INIT", "TILE_LOOP"]
+    return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
 
 
 # Maps each run type to the kernel components whose text section sizes contribute to ELF_SIZE.
