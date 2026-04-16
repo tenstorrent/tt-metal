@@ -15,7 +15,48 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
+
+
+def scale_tiles_for_mixed_formats(b_torch, formats):
+    """Adjust tiles so the assigner picks different formats.
+
+    bfp8 tiles: high within-block dynamic range (elements span orders of magnitude)
+    bfp4 tiles: moderate range (randn, shared exponent works ok for bfp4)
+    bfp2 tiles: uniform values within each block (shared exponent covers all)
+    """
+    if len(formats) <= 1:
+        return
+
+    M, N = b_torch.shape
+    num_fmts = len(formats)
+    tiles_h, tiles_w = M // 32, N // 32
+
+    for idx in range(tiles_h * tiles_w):
+        tr, tc = idx // tiles_w, idx % tiles_w
+        fmt = formats[idx % num_fmts]
+        r0, r1 = tr * 32, (tr + 1) * 32
+        c0, c1 = tc * 32, (tc + 1) * 32
+        tile = b_torch[r0:r1, c0:c1]
+        if fmt == "bfp8":
+            # High within-block dynamic range: multiply each row by exponentially
+            # increasing factors. Elements in the same 16-element block will span
+            # several orders of magnitude, requiring bfp8's 7 mantissa bits.
+            for r in range(32):
+                tile[r, :] *= 2.0 ** (r % 16)
+        elif fmt == "bfp2":
+            # bfp2 = 1 mantissa bit + shared exponent per 16-element block.
+            # Make each row a random power of 2 (shared exp) with random signs.
+            # Values like ±4, ±0.25, ±16 etc — varied across rows but uniform within block.
+            for r in range(32):
+                exp = torch.randint(-3, 4, (1,)).float()
+                signs = torch.sign(torch.randn(32))
+                signs[signs == 0] = 1.0
+                b_torch[r0 + r, c0:c1] = signs * (2.0**exp)
+        elif fmt == "bfp0":
+            # bfp0 = zero tile. Use tiny random values that round to zero
+            # under the bfp0_mae_threshold (1e-3).
+            b_torch[r0:r1, c0:c1] = torch.randn(32, 32) * 1e-3
+        # bfp4: keep randn as-is
 
 
 def _run_matmul_custom_compressed(
