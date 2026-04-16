@@ -19,9 +19,9 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
 #ifdef TRISC_PACK
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #endif
@@ -71,6 +71,7 @@ struct MatmulExpertCompressedSRAM {
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
         uint32_t index_l1_addr_,
+        uint32_t sram_base_addrs_l1_addr_,
         uint32_t accum_experts_ = 0,
         uint32_t sram_k_per_core_ = 0,
         uint32_t sram_k_offset_ = 0,
@@ -85,6 +86,7 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
+        static constexpr uint32_t sram_base_addrs_l1_addr = sram_base_addrs_l1_addr_;
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
         static constexpr uint32_t sram_k_offset = sram_k_offset_;
@@ -147,9 +149,8 @@ struct MatmulExpertCompressedSRAM {
                 if (!(raw_idx & 0x8000)) {
                     continue;  // bit15=0 → DRAM expert, skip
                 }
-                uint32_t eid = raw_idx & 0x7FFF;
                 SramExpertInfo info;
-                info.eid = static_cast<uint16_t>(eid);
+                info.eid = static_cast<uint16_t>(raw_idx & 0x7FFF);
                 if constexpr (CTArgs::accum_experts) {
                     info.act_tile_offset = static_cast<uint16_t>(exp_i * num_tiles_k);
                 }
@@ -166,60 +167,50 @@ struct MatmulExpertCompressedSRAM {
                     cb_wait_front(cb_in0, num_tiles_k);
                 }
 
-                uint32_t addr_in0 = 0;
-                uint32_t addr_in0_base = 0;
-                uint32_t in0_face_r_dim = 0;
+                // New optimized LLK: packed 3-bit metadata, no semaphore sync.
+                // Two separate tables indexed by expert slot:
+                //   sram_base_addrs[slot]: THCON-shifted base address of weights in L1
+                //   fmt_table[slot * meta_words .. (slot+1) * meta_words - 1]: packed metadata
+                constexpr uint32_t meta_words_per_expert = (total_tiles + 9) / 10;
+
+                compressed_custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out);
+
                 uint32_t in0_tile_size = 0;
-
-                compressed::custom_mm_compressed_block_init_short<true, out_w, true, true>(cb_in0, cb_in1, cb_out);
-
+                uint32_t in0_base = 0;
+                uint32_t in1_operand_id = 0;
+                uint32_t in0_operand_id = 0;
                 UNPACK(({
-                    uint32_t in0_id = get_operand_id(cb_in0);
-                    addr_in0_base = get_local_cb_interface(in0_id).fifo_rd_ptr - 1;
-                    in0_face_r_dim = get_operand_face_r_dim(in0_id);
-                    in0_tile_size = get_local_cb_interface(in0_id).fifo_page_size;
-                    addr_in0 = addr_in0_base;
-                    // Advance activation pointer by k_offset tiles for K-sliced matmul.
-                    if constexpr (k_offset > 0) {
-                        addr_in0 += k_offset * in0_tile_size;
-                    }
+                    in0_operand_id = get_operand_id(cb_in0);
+                    in0_base = get_local_cb_interface(in0_operand_id).fifo_rd_ptr;
+                    in0_tile_size = get_local_cb_interface(in0_operand_id).fifo_page_size;
+                    in1_operand_id = get_operand_id(cb_in1);
                 }));
 
+                const volatile uint32_t* sram_base_addrs =
+                    reinterpret_cast<const volatile uint32_t*>(CTArgs::sram_base_addrs_l1_addr);
+                const volatile uint32_t* fmt_base = reinterpret_cast<const volatile uint32_t*>(fmt_l1_addr_base);
+
                 if constexpr (CTArgs::accum_experts) {
-                    // Accumulate all SRAM experts into the same dest registers.
-                    // Each expert uses a distinct activation at its index-tensor position.
+                    uint32_t in0_base_k = in0_base + k_offset * in0_tile_size;
+                    uint32_t act_stride = num_tiles_k * in0_tile_size;
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(sram_expert_info[i].eid);
-                        uint32_t fmt_l1_addr = 0;
-                        uint32_t addr_in1 = 0;
-                        uint32_t addr_in0_expert =
-                            addr_in0_base + (sram_expert_info[i].act_tile_offset + k_offset) * in0_tile_size;
+                        uint32_t slot = static_cast<uint32_t>(sram_expert_info[i].eid);
+                        uint32_t expert_base = sram_base_addrs[slot];
+                        uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
 
                         UNPACK(({
-                            auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
-                            fmt_l1_addr = reinterpret_cast<uint32_t>(fmt_table[table_idx]);
-
-                            union TileInfo {
-                                uint32_t packed;
-                                struct {
-                                    uint8_t fmt;
-                                    uint32_t addr : 24;
-                                };
-                            };
-                            const volatile TileInfo* first_tile =
-                                reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
-                            addr_in1 = first_tile->addr;
+                            unified_kernels::override_cb_rd_ptr(cb_in1, expert_base);
+                            get_local_cb_interface(in0_operand_id).fifo_rd_ptr =
+                                in0_base_k + sram_expert_info[i].act_tile_offset * in0_tile_size;
                         }));
 
                         if (i < num_sram_experts - 1) {
-                            compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, false>(
-                                fmt_l1_addr, addr_in0_expert, addr_in1, in0_face_r_dim, 0);
+                            compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                         } else {
-                            compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w, true>(
-                                fmt_l1_addr, addr_in0_expert, addr_in1, in0_face_r_dim, 0);
+                            compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                         }
                     }
 
@@ -231,32 +222,23 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_release();
                     cb_push_back(cb_out, out_w);
                 } else {
-                    for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(sram_expert_info[i].eid);
-                        uint32_t fmt_l1_addr = 0;
-                        uint32_t addr_in1 = 0;
-
+                    if constexpr (k_offset > 0) {
                         UNPACK(({
-                            auto* fmt_table = reinterpret_cast<volatile uint32_t(*)[total_tiles]>(fmt_l1_addr_base);
-                            fmt_l1_addr = reinterpret_cast<uint32_t>(fmt_table[table_idx]);
-
-                            union TileInfo {
-                                uint32_t packed;
-                                struct {
-                                    uint8_t fmt;
-                                    uint32_t addr : 24;
-                                };
-                            };
-                            const volatile TileInfo* first_tile =
-                                reinterpret_cast<const volatile TileInfo*>(fmt_l1_addr);
-                            addr_in1 = first_tile->addr;
+                            get_local_cb_interface(in0_operand_id).fifo_rd_ptr = in0_base + k_offset * in0_tile_size;
                         }));
+                    }
+
+                    for (uint32_t i = 0; i < num_sram_experts; i++) {
+                        uint32_t slot = static_cast<uint32_t>(sram_expert_info[i].eid);
+                        uint32_t expert_base = sram_base_addrs[slot];
+                        uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base + slot * meta_words_per_expert);
+
+                        UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in1, expert_base); }));
 
                         cb_reserve_back(cb_out, out_w);
                         tile_regs_acquire();
 
-                        compressed::custom_mm_compressed_block_runtime<k_for_mm, out_w>(
-                            fmt_l1_addr, addr_in0, addr_in1, in0_face_r_dim, 0);
+                        compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
 
                         tile_regs_commit();
                         tile_regs_wait();
@@ -268,7 +250,7 @@ struct MatmulExpertCompressedSRAM {
                     }
                 }
 
-                custom_mm_block_uninit<true>();
+                compressed_custom_mm_block_uninit<true>();
             }
 
             if constexpr (pop_in1) {

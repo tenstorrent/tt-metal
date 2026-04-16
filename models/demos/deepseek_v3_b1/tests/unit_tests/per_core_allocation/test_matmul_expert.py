@@ -778,8 +778,9 @@ def _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, sram_k_per_core,
     """Build SRAM format tensors and K-offset core values."""
     from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors
 
-    num_tiles = sram_k_per_core * sram_per_core_n
-    sram_fmt_tensors = create_expert_fmt_tensors(sram_cts, mesh_device, sram_core_grid, num_tiles)
+    sram_fmt_tensors, sram_base_addr_tensors = create_expert_fmt_tensors(
+        sram_cts, mesh_device, sram_core_grid, sram_k_per_core, sram_per_core_n
+    )
 
     sram_k_offsets = None
     if sram_k_per_core < Kt:
@@ -787,7 +788,7 @@ def _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, sram_k_per_core,
         n_parallel = len(sram_cores) * sram_k_per_core // Kt
         sram_k_offsets = [(sram_cores[i], (i // n_parallel) * sram_k_per_core) for i in range(len(sram_cores))]
 
-    return sram_fmt_tensors, sram_k_offsets
+    return sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets
 
 
 # ---------------------------------------------------------------------------
@@ -960,15 +961,17 @@ def _run_standard(
         mesh_device,
         M,
         dram_per_core_N,
-        num_dram_for_output,
+        max(num_dram_for_output, 1),
         num_dram_cores,
         num_devices,
         dram_core_grid,
         tile_w,
     )
 
-    sram_fmt_tensors, sram_k_offsets = (
-        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt) if has_sram else ({}, None)
+    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = (
+        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt)
+        if has_sram
+        else ({}, {}, None)
     )
     result = ExpertKernel.op(
         a_tensor,
@@ -985,6 +988,7 @@ def _run_standard(
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
         sram_fmt_tensors=sram_fmt_tensors,
+        sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
         cores_per_dram_bank=cores_per_dram_bank,
         sram_per_core_n=sram_per_core_N,
@@ -1161,8 +1165,10 @@ def _run_accum(
         tile_w,
     )
 
-    sram_fmt_tensors, sram_k_offsets = (
-        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt) if has_sram else ({}, None)
+    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = (
+        _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, Kt, sram_per_core_N, Kt)
+        if has_sram
+        else ({}, {}, None)
     )
     result = ExpertKernel.op(
         a_tensor,
@@ -1179,6 +1185,7 @@ def _run_accum(
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
         sram_fmt_tensors=sram_fmt_tensors,
+        sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
         cores_per_dram_bank=cores_per_dram_bank,
         accum_experts=True,
@@ -1344,7 +1351,7 @@ def _run_slice_k(
         tile_w,
     )
 
-    sram_fmt_tensors, sram_k_offsets = _build_sram_fmt_data(
+    sram_fmt_tensors, sram_base_addr_tensors, sram_k_offsets = _build_sram_fmt_data(
         sram_cts,
         mesh_device,
         sram_core_grid,
@@ -1367,6 +1374,7 @@ def _run_slice_k(
         has_sram=has_sram,
         sram_core_grid=sram_core_grid,
         sram_fmt_tensors=sram_fmt_tensors,
+        sram_base_addr_tensors=sram_base_addr_tensors,
         sram_k_offsets=sram_k_offsets,
         cores_per_dram_bank=cores_per_dram_bank,
         sram_per_core_n=sram_per_core_N,

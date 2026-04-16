@@ -94,6 +94,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sram_fmt_l1_addr"),
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("index_l1_addr"),
+        get_named_compile_time_arg_val("sram_base_addrs_l1_addr"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("sram_k_per_core"),
         get_named_compile_time_arg_val("sram_k_offset"),
