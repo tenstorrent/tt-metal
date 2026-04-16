@@ -209,6 +209,39 @@ def test_save_dequantized_hf_checkpoint_can_stack_experts(tmp_path: Path):
         state_dict.close()
 
 
+def test_save_dequantized_hf_checkpoint_rewrites_dequantized_shards_when_stacking_experts(tmp_path: Path):
+    source_dir = tmp_path / "deepseek-source"
+    output_dir = default_stacked_dequantized_model_path(source_dir)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "config.json").write_text(json.dumps({"quantization_config": {"weight_block_size": [2, 2]}}))
+
+    shard = source_dir / "model-00001-of-00001.safetensors"
+    expert_tensors = {
+        "model.layers.0.mlp.experts.0.gate_proj.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16),
+        "model.layers.0.mlp.experts.1.gate_proj.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]], dtype=torch.bfloat16),
+        "lm_head.weight": torch.tensor([[0.5, -0.5]], dtype=torch.bfloat16),
+    }
+    safetensors.torch.save_file(expert_tensors, str(shard))
+    _write_index(source_dir, {key: shard.name for key in expert_tensors})
+
+    save_dequantized_hf_checkpoint(source_dir, output_model_path=output_dir, stack_experts=True)
+
+    rewritten_shard = safetensors.torch.load_file(str(output_dir / shard.name))
+    assert set(rewritten_shard) == {"lm_head.weight"}
+
+    stacked_shard = safetensors.torch.load_file(str(output_dir / "stacked-experts-layer-00000.safetensors"))
+    assert set(stacked_shard) == {"model.layers.0.mlp.experts_stacked.gate_proj.weight"}
+    assert torch.equal(
+        stacked_shard["model.layers.0.mlp.experts_stacked.gate_proj.weight"],
+        torch.stack(
+            [
+                expert_tensors["model.layers.0.mlp.experts.0.gate_proj.weight"],
+                expert_tensors["model.layers.0.mlp.experts.1.gate_proj.weight"],
+            ]
+        ),
+    )
+
+
 def test_materialize_model_weights_respects_index_for_stacked_exports(tmp_path: Path):
     source_dir = tmp_path / "deepseek-source"
     output_dir = default_stacked_dequantized_model_path(source_dir)

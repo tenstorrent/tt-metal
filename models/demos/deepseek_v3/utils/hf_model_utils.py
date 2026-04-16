@@ -252,10 +252,6 @@ def _copy_non_weight_artifacts(source_model_path: Path, output_model_path: Path)
             shutil.copy2(source_path, destination)
 
 
-def _copy_file(source_path: Path, destination_path: Path) -> None:
-    shutil.copy2(source_path, destination_path)
-
-
 def _load_tensor_from_shards(
     model_path: Path,
     weight_map: Mapping[str, str],
@@ -377,45 +373,30 @@ def save_dequantized_hf_checkpoint(
         for source_keys in projections.values()
         for source_key in source_keys
     }
-    source_is_dequantized = not any(key.endswith("_scale_inv") for key in weight_map)
-    can_reuse_source_shards = stack_experts and source_is_dequantized and dtype == torch.bfloat16
 
-    output_weight_map: dict[str, str]
-    total_size: int
     shard_to_keys: dict[str, list[str]] = {}
-    if can_reuse_source_shards:
-        for shard_path in sorted(source_model_path.glob("*.safetensors")):
-            _copy_file(shard_path, output_model_path / shard_path.name)
-        output_weight_map = {
-            key: shard_name
-            for key, shard_name in weight_map.items()
-            if not key.endswith("_scale_inv") and key not in skipped_weight_keys
-        }
-        total_size = int(metadata.get("total_size", 0))
-    else:
-        output_weight_map = {}
-        total_size = 0
-        for key, shard_name in weight_map.items():
-            if key.endswith("_scale_inv") or key in skipped_weight_keys:
-                continue
-            shard_to_keys.setdefault(shard_name, []).append(key)
+    output_weight_map: dict[str, str] = {}
+    total_size = 0
+    for key, shard_name in weight_map.items():
+        if key.endswith("_scale_inv") or key in skipped_weight_keys:
+            continue
+        shard_to_keys.setdefault(shard_name, []).append(key)
 
     file_handles: dict[str, Any] = {}
     try:
-        if not can_reuse_source_shards:
-            for shard_name in sorted(shard_to_keys):
-                output_tensors: dict[str, torch.Tensor] = {}
-                for key in shard_to_keys[shard_name]:
-                    output_tensor = _load_converted_tensor_from_shards(
-                        source_model_path, weight_map, file_handles, key, block_shape, dtype=dtype
-                    )
-                    output_tensors[key] = output_tensor
-                    output_weight_map[key] = shard_name
-                    total_size += output_tensor.numel() * output_tensor.element_size()
+        for shard_name in sorted(shard_to_keys):
+            output_tensors: dict[str, torch.Tensor] = {}
+            for key in shard_to_keys[shard_name]:
+                output_tensor = _load_converted_tensor_from_shards(
+                    source_model_path, weight_map, file_handles, key, block_shape, dtype=dtype
+                )
+                output_tensors[key] = output_tensor
+                output_weight_map[key] = shard_name
+                total_size += output_tensor.numel() * output_tensor.element_size()
 
-                if output_tensors:
-                    logger.info(f"Saving dequantized shard {shard_name} with {len(output_tensors)} tensors")
-                    save_file(output_tensors, str(output_model_path / shard_name))
+            if output_tensors:
+                logger.info(f"Saving dequantized shard {shard_name} with {len(output_tensors)} tensors")
+                save_file(output_tensors, str(output_model_path / shard_name))
 
         if stack_experts:
             for layer_idx in sorted(stacked_expert_keys):
@@ -435,8 +416,6 @@ def save_dequantized_hf_checkpoint(
                         )
                         for source_key in source_keys
                     ]
-                    if can_reuse_source_shards:
-                        total_size -= sum(tensor.numel() * tensor.element_size() for tensor in source_tensors)
                     output_tensor = torch.stack(source_tensors).contiguous()
                     output_tensors[output_key] = output_tensor
                     output_weight_map[output_key] = shard_name

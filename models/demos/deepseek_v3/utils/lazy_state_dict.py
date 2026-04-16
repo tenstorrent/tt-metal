@@ -112,6 +112,8 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         if alias is None:
             return
         stacked_full_key, _ = alias
+        if stacked_full_key in self._cache:
+            return
         for cached_key in self._cache:
             cached_alias = self._resolve_stacked_expert_alias(cached_key)
             if cached_alias is not None and cached_alias[0] == stacked_full_key:
