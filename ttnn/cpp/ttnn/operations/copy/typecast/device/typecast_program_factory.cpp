@@ -160,19 +160,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    KernelDescriptor::Defines unary_defines = {
-        {"TYPECAST_LLK_INIT",
-         fmt::format(
-             "typecast_tile_init<{0}u, {1}u>",
-             static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-             static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))},
-        {"TYPECAST_LLK",
-         fmt::format(
-             "typecast_tile<{0}u, {1}u>",
-             static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-             static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))}};
-
-    const auto compute_path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+    const auto unary_defines = make_typecast_compute_defines_desc(input_dtype, output_dtype);
 
     // Group cores by items_per_core count for efficiency
     std::map<uint32_t, CoreRangeSet> count_to_cores;
@@ -187,7 +175,7 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
 
     for (const auto& [count, core_range] : count_to_cores) {
         KernelDescriptor kernel_desc;
-        kernel_desc.kernel_source = compute_path;
+        kernel_desc.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
         kernel_desc.core_ranges = core_range;
         kernel_desc.compile_time_args = {count, 1, src0_cb_index, output_cb_index};
         kernel_desc.defines = unary_defines;

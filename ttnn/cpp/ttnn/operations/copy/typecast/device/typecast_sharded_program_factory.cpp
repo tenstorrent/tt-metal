@@ -108,21 +108,10 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
 
     {
         KernelDescriptor kernel_desc;
-        kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
+        kernel_desc.kernel_source = TYPECAST_COMPUTE_KERNEL_PATH;
         kernel_desc.core_ranges = all_cores;
         kernel_desc.compile_time_args = {1, num_tile_per_core, in_cb_id, out_cb_id};
-        kernel_desc.defines = {
-            {"TYPECAST_LLK_INIT",
-             fmt::format(
-                 "typecast_tile_init<{0}u, {1}u>",
-                 static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-                 static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))},
-            {"TYPECAST_LLK",
-             fmt::format(
-                 "typecast_tile<{0}u, {1}u>",
-                 static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-                 static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))}};
+        kernel_desc.defines = make_typecast_compute_defines_desc(input_dtype, output_dtype);
         kernel_desc.config = ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
