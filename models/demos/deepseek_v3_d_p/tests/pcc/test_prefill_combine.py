@@ -301,6 +301,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
 def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
@@ -412,7 +417,7 @@ def test_ttnn_combine(
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
         mesh_mapper=mesh_mapper,
-        layout=ttnn.TILE_LAYOUT,
+        layout=dispatched_buffer_layout,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )

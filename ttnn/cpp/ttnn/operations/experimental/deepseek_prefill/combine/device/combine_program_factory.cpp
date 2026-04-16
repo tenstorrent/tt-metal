@@ -106,6 +106,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const auto& dispatched_metadata = tensor_args.dispatched_metadata;
     const auto& expert_token_counts = tensor_args.expert_token_counts;
     const auto& output_tensor = tensor_return_value;
+    const bool is_tile_layout = dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
 
     auto* mesh_device = dispatched_buffer.device();
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
@@ -261,14 +262,25 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, c2_config);
     }
 
-    // c_18: receive buffer for idle-core untilized data written back via NOC
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        output_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_18,
-        "untilized_output");
+    if (is_tile_layout) {
+        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            output_tensor,
+            /*buffering_factor=*/read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_18,
+            "untilized_output");
+    } else {
+        // c_0 on sender cores: dispatched_buffer rows for ROW_MAJOR DMA reads
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            dispatched_buffer,
+            /*buffering_factor=*/read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_0,
+            "dispatched_buffer_sender");
+    }
 
     // c_3: route_info (reader->writer, 4 x uint32_t per entry)
     {
@@ -419,7 +431,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
-    bool is_tile_layout = dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
     reader_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
 
     const bool init_zeros = operation_attributes.init_zeros;
@@ -432,7 +443,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     // idle_row_cores: all same-row idle cores, ordered by sender group then by x.
     std::vector<CoreCoord>& idle_row_cores = all_idle_cores;
 
-    // Per-sender multicast bounding boxes and idle NOC coordinates.
+    // Per-sender multicast bounding boxes and idle NOC coordinates (TILE_LAYOUT only).
     // Each sender multicasts only to its own dedicated idle group so both senders
     // can run their multicast in parallel without interfering.
     struct SenderMcastCfg {
@@ -440,19 +451,22 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         std::vector<std::pair<uint32_t, uint32_t>> idle_noc_coords;
     };
     std::vector<SenderMcastCfg> sender_mcast_cfgs(num_cores);
-    for (uint32_t s = 0; s < num_cores; s++) {
-        TT_FATAL(!sender_idle_groups[s].empty(), "Sender {} has no idle cores assigned", s);
-        auto& cfg = sender_mcast_cfgs[s];
-        auto first_noc = mesh_device->virtual_core_from_logical_core(sender_idle_groups[s][0], tt::CoreType::WORKER);
-        cfg.mcast_start_x = cfg.mcast_end_x = first_noc.x;
-        cfg.mcast_start_y = cfg.mcast_end_y = first_noc.y;
-        for (const auto& ic : sender_idle_groups[s]) {
-            auto noc = mesh_device->virtual_core_from_logical_core(ic, tt::CoreType::WORKER);
-            cfg.mcast_start_x = std::min(cfg.mcast_start_x, (uint32_t)noc.x);
-            cfg.mcast_end_x = std::max(cfg.mcast_end_x, (uint32_t)noc.x);
-            cfg.mcast_start_y = std::min(cfg.mcast_start_y, (uint32_t)noc.y);
-            cfg.mcast_end_y = std::max(cfg.mcast_end_y, (uint32_t)noc.y);
-            cfg.idle_noc_coords.emplace_back((uint32_t)noc.x, (uint32_t)noc.y);
+    if (is_tile_layout) {
+        for (uint32_t s = 0; s < num_cores; s++) {
+            TT_FATAL(!sender_idle_groups[s].empty(), "Sender {} has no idle cores assigned", s);
+            auto& cfg = sender_mcast_cfgs[s];
+            auto first_noc =
+                mesh_device->virtual_core_from_logical_core(sender_idle_groups[s][0], tt::CoreType::WORKER);
+            cfg.mcast_start_x = cfg.mcast_end_x = first_noc.x;
+            cfg.mcast_start_y = cfg.mcast_end_y = first_noc.y;
+            for (const auto& ic : sender_idle_groups[s]) {
+                auto noc = mesh_device->virtual_core_from_logical_core(ic, tt::CoreType::WORKER);
+                cfg.mcast_start_x = std::min(cfg.mcast_start_x, (uint32_t)noc.x);
+                cfg.mcast_end_x = std::max(cfg.mcast_end_x, (uint32_t)noc.x);
+                cfg.mcast_start_y = std::min(cfg.mcast_start_y, (uint32_t)noc.y);
+                cfg.mcast_end_y = std::max(cfg.mcast_end_y, (uint32_t)noc.y);
+                cfg.idle_noc_coords.emplace_back((uint32_t)noc.x, (uint32_t)noc.y);
+            }
         }
     }
 
@@ -463,39 +477,29 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
     CoreRangeSet idle_core_grid(idle_ranges_set);
 
-    // counter_ready semaphore: created only on sender + idle cores so get_semaphore() returns
-    // the same L1 offset on both sides (sender writes to idle's copy, idle waits on its own)
-    std::set<CoreRange> sender_and_idle_ranges;
-    for (const auto& cr : sender_core_grid.ranges()) {
-        sender_and_idle_ranges.insert(cr);
-    }
-    for (const auto& cr : idle_core_grid.ranges()) {
-        sender_and_idle_ranges.insert(cr);
-    }
-    CoreRangeSet sender_and_idle_grid(sender_and_idle_ranges);
-    auto counter_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0);
-    // One data_ready and one start semaphore per sender so each sender's handshake with idle
-    // cores is independent — idle core routes to the correct pair via sender_idx = expert / experts_per_sender.
+    // TILE_LAYOUT semaphores for sender <-> idle core handshake
+    uint32_t counter_ready_semaphore_id = 0;
     std::vector<uint32_t> data_ready_semaphore_ids, start_semaphore_ids;
-    for (uint32_t s = 0; s < num_cores; s++) {
-        data_ready_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0));
-        start_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0));
+    if (is_tile_layout) {
+        // counter_ready semaphore: created only on sender + idle cores so get_semaphore() returns
+        // the same L1 offset on both sides (sender writes to idle's copy, idle waits on its own)
+        std::set<CoreRange> sender_and_idle_ranges;
+        for (const auto& cr : sender_core_grid.ranges()) {
+            sender_and_idle_ranges.insert(cr);
+        }
+        for (const auto& cr : idle_core_grid.ranges()) {
+            sender_and_idle_ranges.insert(cr);
+        }
+        CoreRangeSet sender_and_idle_grid(sender_and_idle_ranges);
+        counter_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0);
+        // One data_ready and one start semaphore per sender so each sender's handshake with idle
+        // cores is independent — idle core routes to the correct pair via sender_idx = expert / experts_per_sender.
+        for (uint32_t s = 0; s < num_cores; s++) {
+            data_ready_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0));
+            start_semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, sender_and_idle_grid, 0));
+        }
     }
 
-    // c_1 on idle cores: receives the expert_token_counts multicast from the owning sender.
-    // MUST be allocated BEFORE c_0 so its L1 address matches the sender's c_1 address.
-    {
-        uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
-        uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
-        auto data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_token_counts.dtype());
-        uint32_t extra_pages = 1;
-        uint32_t cb_size = (counter_pages + extra_pages) * counter_page_size;
-        tt::tt_metal::CircularBufferConfig c1_idle_config =
-            tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_1, data_format}})
-                .set_page_size(tt::CBIndex::c_1, counter_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, c1_idle_config);
-    }
-    // c_0 on idle cores: dispatched_buffer tiles
     // cb_factor reduces CB size to fit L1: Blackhole has more L1, Wormhole needs 4x reduction
     uint32_t cb_factor;
     {
@@ -506,28 +510,45 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             cb_factor = 4;  // Wormhole_B0 and others
         }
     }
-    detail::create_tensor_cb(
-        program,
-        idle_core_grid,
-        dispatched_buffer,
-        /*buffering_factor=*/hidden_size / (32 * cb_factor),
-        /*cb_id=*/tt::CBIndex::c_0,
-        "dispatched_buffer_idle");
-    // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
-    detail::create_tensor_cb(
-        program,
-        idle_core_grid,
-        output_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "untilize_idle");
-    // c_3 on idle cores: 1-page signal CB (reader->compute, mirrors c_17 on sender cores)
-    {
-        uint32_t signal_page_size = l1_alignment;
-        tt::tt_metal::CircularBufferConfig signal_cb_config =
-            tt::tt_metal::CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
-                .set_page_size(tt::CBIndex::c_3, signal_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
+
+    if (is_tile_layout) {
+        // c_1 on idle cores: receives the expert_token_counts multicast from the owning sender.
+        // MUST be allocated BEFORE c_0 so its L1 address matches the sender's c_1 address.
+        {
+            uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
+            uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
+            auto data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_token_counts.dtype());
+            uint32_t extra_pages = 1;
+            uint32_t cb_size = (counter_pages + extra_pages) * counter_page_size;
+            tt::tt_metal::CircularBufferConfig c1_idle_config =
+                tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_1, data_format}})
+                    .set_page_size(tt::CBIndex::c_1, counter_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, c1_idle_config);
+        }
+        // c_0 on idle cores: dispatched_buffer tiles
+        detail::create_tensor_cb(
+            program,
+            idle_core_grid,
+            dispatched_buffer,
+            /*buffering_factor=*/hidden_size / (32 * cb_factor),
+            /*cb_id=*/tt::CBIndex::c_0,
+            "dispatched_buffer_idle");
+        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
+        detail::create_tensor_cb(
+            program,
+            idle_core_grid,
+            output_tensor,
+            /*buffering_factor=*/read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_2,
+            "untilize_idle");
+        // c_3 on idle cores: 1-page signal CB (reader->compute, mirrors c_17 on sender cores)
+        {
+            uint32_t signal_page_size = l1_alignment;
+            tt::tt_metal::CircularBufferConfig signal_cb_config =
+                tt::tt_metal::CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
+                    .set_page_size(tt::CBIndex::c_3, signal_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
+        }
     }
 
     // counter_offset mirrors the constexpr calculation in reader_combine.cpp
@@ -537,36 +558,37 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t counter_offset =
         mesh_col_coord * experts_per_dispatch_group + mesh_row_coord * operation_attributes.experts_per_chip;
 
-    // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
-    //   0-11: shared base (below, includes cb_factor at index 11)
-    //   12:   core_id   — local index within sender s's idle group (0..k_s-1)
-    //   13:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
-    //   14:   aligned_output_page_size
-    //   15:   aligned_experts_tok_counter_page_size
-    //   16+:  TensorAccessorArgs for dispatched_buffer (no num_senders — single-sender kernel)
-    const std::vector<uint32_t> reader_untilize_compile_time_args_base = {
-        static_cast<uint32_t>(tt::CBIndex::c_1),           // 0:  cb_experts_tok_counter_id
-        detail::get_num_pages(expert_token_counts),        // 1:  experts_tok_counter_pages
-        operation_attributes.experts_per_chip,             // 2:  experts_per_chip
-        counter_offset,                                    // 3:  counter_offset
-        static_cast<uint32_t>(tt::CBIndex::c_0),           // 4:  cb_dispatched_buffer_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),           // 5:  cb_untilize_id
-        (uint32_t)hidden_size,                             // 6:  hidden_size
-        read_batch_size,                                   // 7:  read_batch_size
-        static_cast<uint32_t>(tt::CBIndex::c_3),           // 8:  cb_signal_id
-        detail::get_aligned_page_size(dispatched_buffer),  // 9:  aligned_dispatched_buffer_page_size
-        (uint32_t)max_dispatched_tokens_per_expert,        // 10: max_dispatched_tokens_per_expert
-        cb_factor,                                         // 11: cb_factor
-    };
-
-    // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
-    // core_id is LOCAL within the sender's group (0..k_s-1) for round-robin batch assignment.
-    // num_idle_cores baked in as k_s so the kernel only considers its own group.
-    // No num_senders arg — each kernel is bound to a single sender.
+    // reader_untilize + compute kernels only needed for TILE_LAYOUT
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
-    reader_untilize_kernel_ids.reserve(num_idle_cores);
+    if (is_tile_layout) {
+        // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
+        //   0-11: shared base (below, includes cb_factor at index 11)
+        //   12:   core_id   — local index within sender s's idle group (0..k_s-1)
+        //   13:   num_idle_cores — per-sender count k_s (for round-robin batch assignment)
+        //   14:   aligned_output_page_size
+        //   15:   aligned_experts_tok_counter_page_size
+        //   16+:  TensorAccessorArgs for dispatched_buffer (no num_senders — single-sender kernel)
+        const std::vector<uint32_t> reader_untilize_compile_time_args_base = {
+            static_cast<uint32_t>(tt::CBIndex::c_1),           // 0:  cb_experts_tok_counter_id
+            detail::get_num_pages(expert_token_counts),        // 1:  experts_tok_counter_pages
+            operation_attributes.experts_per_chip,             // 2:  experts_per_chip
+            counter_offset,                                    // 3:  counter_offset
+            static_cast<uint32_t>(tt::CBIndex::c_0),           // 4:  cb_dispatched_buffer_id
+            static_cast<uint32_t>(tt::CBIndex::c_2),           // 5:  cb_untilize_id
+            (uint32_t)hidden_size,                             // 6:  hidden_size
+            read_batch_size,                                   // 7:  read_batch_size
+            static_cast<uint32_t>(tt::CBIndex::c_3),           // 8:  cb_signal_id
+            detail::get_aligned_page_size(dispatched_buffer),  // 9:  aligned_dispatched_buffer_page_size
+            (uint32_t)max_dispatched_tokens_per_expert,        // 10: max_dispatched_tokens_per_expert
+            cb_factor,                                         // 11: cb_factor
+        };
 
-    {
+        // Partitioned idle cores: each sender s owns a dedicated group of k_s idle cores.
+        // core_id is LOCAL within the sender's group (0..k_s-1) for round-robin batch assignment.
+        // num_idle_cores baked in as k_s so the kernel only considers its own group.
+        // No num_senders arg — each kernel is bound to a single sender.
+        reader_untilize_kernel_ids.reserve(num_idle_cores);
+
         uint32_t global_idle_idx = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
@@ -651,19 +673,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     }
     // num_idle_cores and cb_untilize_id are appended per-sender below.
 
-    // One reader_combine kernel per sender with k_s (per-sender idle count) baked in as
-    // num_idle_cores.  The VLA idle_start_noc_addrs[num_idle_cores] is sized exactly right
-    // and the sender only round-robins across its own k_s dedicated idle cores.
+    // One reader_combine kernel per sender.  For TILE_LAYOUT, k_s (per-sender idle count)
+    // is baked in as num_idle_cores so the sender only round-robins across its own dedicated
+    // idle cores.  For ROW_MAJOR, no idle-core args are needed.
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     reader_kernel_ids.reserve(num_cores);
     for (uint32_t s = 0; s < num_cores; s++) {
-        uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
         auto per_sender_compile_args = reader_compile_time_args_base;
-        per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender k_s)
-        per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
-        if (init_zeros) {
-            per_sender_compile_args.push_back(
-                num_idle_cores);  // num_total_idle_cores (all idle cores across all senders)
+        if (is_tile_layout) {
+            uint32_t k_s = static_cast<uint32_t>(sender_idle_groups[s].size());
+            per_sender_compile_args.push_back(k_s);                                       // num_idle_cores (per-sender)
+            per_sender_compile_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_untilize_id
+            if (init_zeros) {
+                per_sender_compile_args.push_back(
+                    num_idle_cores);  // num_total_idle_cores (all idle cores across all senders)
+            }
         }
         CoreRangeSet single_sender_core({CoreRange(sender_cores[s])});
         reader_kernel_ids.push_back(tt::tt_metal::CreateKernel(
@@ -687,29 +711,31 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             .compile_args = compile_time_args,
             .defines = writer_defines});
 
-    // Compute kernel on idle cores that untilizes dispatched_buffer data
-    const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
-    uint32_t block_ct_dim = 8;
-    while (full_ct_dim % block_ct_dim != 0) {
-        --block_ct_dim;
-    }
+    // Compute kernel on idle cores that untilizes dispatched_buffer data (TILE_LAYOUT only)
+    if (is_tile_layout) {
+        const uint32_t full_ct_dim = static_cast<uint32_t>(hidden_size) / 32u;
+        uint32_t block_ct_dim = 8;
+        while (full_ct_dim % block_ct_dim != 0) {
+            --block_ct_dim;
+        }
 
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
-        "untilize_combine.cpp",
-        idle_core_grid,
-        tt::tt_metal::ComputeConfig{
-            .compile_args = {
-                static_cast<uint32_t>(
-                    tt::CBIndex::c_3),  // 0: cb_signal_id (CB used for signaling on the same core that
-                                        //    data is loaded and ready to be untilized)
-                static_cast<uint32_t>(tt::CBIndex::c_2),  // 1: cb_untilize_id (untilized dispatched_buffer data)
-                static_cast<uint32_t>(tt::CBIndex::c_0),  // 2: cb_in_id (dispatched_buffer data)
-                read_batch_size,                          // 3: read_batch_size
-                full_ct_dim,                              // 4: full_ct_dim = hidden_size / 32
-                block_ct_dim,                             // 5: block_ct_dim = largest divisor of full_ct_dim <= 8
-            }});
+        tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"
+            "untilize_combine.cpp",
+            idle_core_grid,
+            tt::tt_metal::ComputeConfig{
+                .compile_args = {
+                    static_cast<uint32_t>(
+                        tt::CBIndex::c_3),  // 0: cb_signal_id (CB used for signaling on the same core that
+                                            //    data is loaded and ready to be untilized)
+                    static_cast<uint32_t>(tt::CBIndex::c_2),  // 1: cb_untilize_id (untilized dispatched_buffer data)
+                    static_cast<uint32_t>(tt::CBIndex::c_0),  // 2: cb_in_id (dispatched_buffer data)
+                    read_batch_size,                          // 3: read_batch_size
+                    full_ct_dim,                              // 4: full_ct_dim = hidden_size / 32
+                    block_ct_dim,                             // 5: block_ct_dim = largest divisor of full_ct_dim <= 8
+                }});
+    }
 
     // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
@@ -764,19 +790,21 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             reader_runtime_args.push_back(sender_page_end);
             reader_runtime_args.push_back(zi_done_semaphore_id);
         }
-        // Multicast targets only this sender's dedicated idle group
-        const auto& mcast_cfg = sender_mcast_cfgs[core_idx];
-        reader_runtime_args.push_back(counter_ready_semaphore_id);
-        reader_runtime_args.push_back(mcast_cfg.mcast_start_x);
-        reader_runtime_args.push_back(mcast_cfg.mcast_start_y);
-        reader_runtime_args.push_back(mcast_cfg.mcast_end_x);
-        reader_runtime_args.push_back(mcast_cfg.mcast_end_y);
-        reader_runtime_args.push_back(data_ready_semaphore_ids[core_idx]);
-        reader_runtime_args.push_back(start_semaphore_ids[core_idx]);
-        // Pass NOC coords of only this sender's k_s dedicated idle cores
-        for (const auto& [noc_x, noc_y] : mcast_cfg.idle_noc_coords) {
-            reader_runtime_args.push_back(noc_x);
-            reader_runtime_args.push_back(noc_y);
+        if (is_tile_layout) {
+            // Multicast targets only this sender's dedicated idle group
+            const auto& mcast_cfg = sender_mcast_cfgs[core_idx];
+            reader_runtime_args.push_back(counter_ready_semaphore_id);
+            reader_runtime_args.push_back(mcast_cfg.mcast_start_x);
+            reader_runtime_args.push_back(mcast_cfg.mcast_start_y);
+            reader_runtime_args.push_back(mcast_cfg.mcast_end_x);
+            reader_runtime_args.push_back(mcast_cfg.mcast_end_y);
+            reader_runtime_args.push_back(data_ready_semaphore_ids[core_idx]);
+            reader_runtime_args.push_back(start_semaphore_ids[core_idx]);
+            // Pass NOC coords of only this sender's k_s dedicated idle cores
+            for (const auto& [noc_x, noc_y] : mcast_cfg.idle_noc_coords) {
+                reader_runtime_args.push_back(noc_x);
+                reader_runtime_args.push_back(noc_y);
+            }
         }
 
         std::vector<uint32_t> writer_runtime_args = {
@@ -832,24 +860,27 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         core_idx++;
     }
 
-    // Set runtime args for idle cores.  Each idle core is bound to its owning sender s.
+    // Set runtime args for idle cores (TILE_LAYOUT only — reader_untilize kernel).
+    // Each idle core is bound to its owning sender s.
     // Layout: counter_ready_sem, data_ready_sem[s], noc_x[s], noc_y[s], start_sem[s],
     //         dispatched_buffer_addr, expert_start, expert_end
-    for (uint32_t j = 0; j < num_idle_cores; j++) {
-        uint32_t s = idle_sender_map[j];
-        uint32_t expert_start = s * experts_per_core_range;
-        uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
-        std::vector<uint32_t> idle_rt_args = {
-            counter_ready_semaphore_id,
-            data_ready_semaphore_ids[s],
-            sender_noc_coords[s].first,
-            sender_noc_coords[s].second,
-            start_semaphore_ids[s],
-            dispatched_buffer.buffer()->address(),
-            expert_start,
-            expert_end,
-        };
-        tt::tt_metal::SetRuntimeArgs(program, reader_untilize_kernel_ids[j], idle_row_cores[j], idle_rt_args);
+    if (is_tile_layout) {
+        for (uint32_t j = 0; j < num_idle_cores; j++) {
+            uint32_t s = idle_sender_map[j];
+            uint32_t expert_start = s * experts_per_core_range;
+            uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+            std::vector<uint32_t> idle_rt_args = {
+                counter_ready_semaphore_id,
+                data_ready_semaphore_ids[s],
+                sender_noc_coords[s].first,
+                sender_noc_coords[s].second,
+                start_semaphore_ids[s],
+                dispatched_buffer.buffer()->address(),
+                expert_start,
+                expert_end,
+            };
+            tt::tt_metal::SetRuntimeArgs(program, reader_untilize_kernel_ids[j], idle_row_cores[j], idle_rt_args);
+        }
     }
 
     return {
@@ -900,12 +931,15 @@ void CombineProgramFactory::override_runtime_arguments(
             zi_runtime_args.at(0) = tensor_return_value.buffer()->address();
         }
 
-        for (size_t i = 0; i < shared_variables.idle_cores.size(); i++) {
-            auto& idle_rt_args = tt::tt_metal::GetRuntimeArgs(
-                program, shared_variables.reader_untilize_kernel_ids[i], shared_variables.idle_cores[i]);
-            // RT layout: [0:counter_ready_sem, 1:data_ready_sem, 2:noc_x, 3:noc_y, 4:start_sem,
-            //             5:dispatched_buffer_addr, 6:expert_start, 7:expert_end]
-            idle_rt_args.at(5) = tensor_args.dispatched_buffer.buffer()->address();
+        // Update idle core runtime args only when reader_untilize kernels exist (TILE_LAYOUT)
+        if (!shared_variables.reader_untilize_kernel_ids.empty()) {
+            for (size_t i = 0; i < shared_variables.idle_cores.size(); i++) {
+                auto& idle_rt_args = tt::tt_metal::GetRuntimeArgs(
+                    program, shared_variables.reader_untilize_kernel_ids[i], shared_variables.idle_cores[i]);
+                // RT layout: [0:counter_ready_sem, 1:data_ready_sem, 2:noc_x, 3:noc_y, 4:start_sem,
+                //             5:dispatched_buffer_addr, 6:expert_start, 7:expert_end]
+                idle_rt_args.at(5) = tensor_args.dispatched_buffer.buffer()->address();
+            }
         }
     }
 }
