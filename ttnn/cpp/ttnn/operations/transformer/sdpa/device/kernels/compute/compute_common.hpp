@@ -1310,17 +1310,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
 }
 
 /**
- * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
- * tile positions in out_cb. Runtime version for ring joint SDPA where num_padded varies per chunk.
- *
- * @param neginf_cb  CB holding mask tiles (tile 0 = -inf), permanently fronted
- * @param neginf_tile_idx  Tile index of the -inf tile within the CB (typically 0)
- * @param out_cb     QK intermediate CB (Sq_chunk_t * Sk_chunk_t tiles, already wait-fronted)
- * @param num_padded Number of fully padded K tile columns per row
- * @param num_cols   Total K tiles per row (Sk_chunk_t)
- * @param num_rows   Q tiles per chunk (Sq_chunk_t)
- */
-/**
  * Batch-stamp a single tile onto a range of positions in out_cb using L1 accumulate.
  * Caller must have already called copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1).
  *

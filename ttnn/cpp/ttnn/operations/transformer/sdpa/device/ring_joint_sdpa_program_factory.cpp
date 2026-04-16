@@ -547,8 +547,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
 
-    // This is done only in the non-causal case:
-    // Lightweight mask: both streaming and non-streaming paths use Float16_b
+    // Lightweight mask: both causal and non-causal paths use Float16_b
     // to support L1-accumulation and avoid Bfp4_b precision loss.
     tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());

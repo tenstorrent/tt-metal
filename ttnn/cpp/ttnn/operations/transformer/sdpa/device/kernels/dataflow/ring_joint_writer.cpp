@@ -401,7 +401,7 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
-    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Needed when any K/joint dimension has padding, or when causal masking is active.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
