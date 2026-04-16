@@ -124,3 +124,108 @@ TEST_F(BlackholeSingleCardFixture, DramKernelOnMultipleCores) {
         }
     }
 }
+
+// Test Tensix reading from DRISC L1
+// Host writes to DRISC L1, Tensix kernel reads it, host verifies
+TEST_F(BlackholeSingleCardFixture, TensixReadFromDRISCL1) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    constexpr uint32_t kMagicValue = 0xCAFEBABE;
+    auto mesh_device = devices_[0];
+    auto device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    CoreCoord logical_core_dram{0, 0};
+    CoreCoord logical_core_tensix{0, 0};
+    CoreCoord dram_virtual = device->virtual_core_from_logical_core(logical_core_dram, CoreType::DRAM);
+
+    uint32_t dram_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t tensix_l1_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+
+    // Host writes magic value to DRISC L1
+    uint64_t write_addr = static_cast<uint64_t>(dram_l1_addr) + dram_l1_noc_offset;
+    std::vector<uint32_t> write_data = {kMagicValue};
+    MetalContext::instance().get_cluster().write_core(
+        write_data.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual), write_addr);
+
+    // Tensix kernel reads from DRISC L1
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_read_from_drisc.cpp",
+        logical_core_tensix,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_0,
+            .compile_args = {tensix_l1_addr, dram_l1_addr, dram_virtual.x, dram_virtual.y}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    // Verify Tensix read the value
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        device, logical_core_tensix, tensix_l1_addr, sizeof(kMagicValue), result, CoreType::WORKER);
+    log_info(LogTest, "Tensix L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
+    EXPECT_EQ(result[0], kMagicValue) << "Tensix should have read the value from DRISC L1";
+}
+
+// Test DRISC reading from Tensix L1
+// Host writes magic value to Tensix L1, then DRISC reads it into DRISC L1
+TEST_F(BlackholeSingleCardFixture, DRISCReadFromTensixL1) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    constexpr uint32_t kMagicValue = 0xDEADBEEF;
+    auto mesh_device = devices_[0];
+    auto device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    CoreCoord logical_core_dram{0, 0};
+    CoreCoord logical_core_tensix{0, 0};
+    CoreCoord tensix_virtual = device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
+    CoreCoord dram_virtual = device->virtual_core_from_logical_core(logical_core_dram, CoreType::DRAM);
+
+    uint32_t l1_unreserved_base_tensix = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base_dram = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+
+    // Host writes magic value to Tensix L1
+    std::vector<uint32_t> write_data = {kMagicValue};
+    tt::tt_metal::detail::WriteToDeviceL1(
+        device, logical_core_tensix, l1_unreserved_base_tensix, write_data, CoreType::WORKER);
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+
+    // DRISC kernel reads from Tensix L1 into DRISC L1
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_to_tensix.cpp",
+        logical_core_dram,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                l1_unreserved_base_tensix, l1_unreserved_base_dram, kMagicValue, tensix_virtual.x, tensix_virtual.y}});
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    // Verify by reading from DRISC L1
+    uint64_t read_addr = static_cast<uint64_t>(l1_unreserved_base_dram) + dram_l1_noc_offset;
+    std::vector<uint32_t> result(1, 0);
+    MetalContext::instance().get_cluster().read_core(
+        result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual), read_addr);
+    log_info(LogTest, "DRISC L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
+    EXPECT_EQ(result[0], kMagicValue) << "DRISC should have read the value from Tensix L1";
+}
