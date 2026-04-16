@@ -108,9 +108,41 @@ FORCE_INLINE RemoteReceiverCBInterface& get_remote_receiver_cb_interface(uint32_
     return cb_interface[cb_id].remote_receiver_cb_interface;
 }
 
-__attribute__((noinline)) bool cb_access_within_bounds(uint32_t cb_id, uint32_t start_tile_index, uint32_t num_tiles) {
+__attribute__((noinline)) inline bool cb_access_within_bounds(
+    uint32_t cb_id, uint32_t start_tile_index, uint32_t num_tiles) {
     const auto& cb = get_local_cb_interface(cb_id);
     return cb.fifo_rd_ptr + (start_tile_index + num_tiles) * cb.fifo_page_size <= cb.fifo_limit;
+}
+
+__attribute__((noinline)) inline bool cb_access_divides_size_evenly(uint32_t cb_id, uint32_t num_tiles) {
+    return num_tiles > 0 && get_local_cb_interface(cb_id).fifo_num_pages % num_tiles == 0;
+}
+
+__attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uint32_t num_tiles, bool reset = false) {
+    static uint16_t last_count[NUM_CIRCULAR_BUFFERS] = {};
+    static uint16_t step_size[NUM_CIRCULAR_BUFFERS] = {};
+
+    if (reset) {
+        last_count[cb_id] = 0;
+        return true;
+    }
+
+    uint16_t prev = last_count[cb_id];
+    uint16_t step = (uint16_t)num_tiles - prev;
+
+    if (prev > 0 && (uint16_t)num_tiles <= prev) {
+        return false;
+    }
+    if (step_size[cb_id] > 0 && step != step_size[cb_id]) {
+        return false;
+    }
+    if (!cb_access_divides_size_evenly(cb_id, (uint32_t)step)) {
+        return false;
+    }
+
+    last_count[cb_id] = (uint16_t)num_tiles;
+    step_size[cb_id] = step;
+    return true;
 }
 
 #if defined(COMPILE_FOR_TRISC)

@@ -21,6 +21,10 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
     std::uint32_t output = operand;
 
+    LLK_ASSERT(
+        cb_access_divides_size_evenly(output, (std::uint32_t)num_tiles),
+        "cb_reserve_back: tile count must evenly divide CB size");
+
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
     volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
 
@@ -72,6 +76,11 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     std::uint32_t output = operand;
+
+    LLK_ASSERT(
+        cb_access_divides_size_evenly(output, (std::uint32_t)num_tiles),
+        "cb_push_back: tile count must evenly divide CB size");
+
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
 
     get_local_cb_interface(output).fifo_wr_ptr += num_words;

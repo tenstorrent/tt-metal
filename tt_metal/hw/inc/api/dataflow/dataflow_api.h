@@ -197,6 +197,7 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 // clang-format on
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
+    ASSERT(cb_access_divides_size_evenly(operand, (uint32_t)num_pages));
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
 
     volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
@@ -239,6 +240,10 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
+    ASSERT(cb_access_divides_size_evenly(operand, (uint32_t)num_pages));
+#if ASSERT_ENABLED
+    cb_wait_front_validate(operand, 0, true);
+#endif
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -386,6 +391,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
+    ASSERT(cb_access_divides_size_evenly(operand, (uint32_t)num_pages));
     uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -465,6 +471,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
+    ASSERT(cb_wait_front_validate(operand, (uint32_t)num_pages));
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 

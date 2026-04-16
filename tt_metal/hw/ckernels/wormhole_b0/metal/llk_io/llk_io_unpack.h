@@ -67,6 +67,11 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
+
+    LLK_ASSERT(
+        cb_wait_front_validate(input, (std::uint32_t)num_tiles),
+        "cb_wait_front: cumulative count, step consistency, or divisibility constraint violated");
+
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
@@ -85,6 +90,12 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
+
+    LLK_ASSERT(
+        cb_access_divides_size_evenly(input, (std::uint32_t)num_tiles),
+        "cb_pop_front: tile count must evenly divide CB size");
+    LLK_ASSERT(cb_wait_front_validate(input, 0, true), "");
+
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
