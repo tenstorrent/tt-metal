@@ -216,6 +216,17 @@ void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
     }
 }
 
+void WorkerConfigBufferMgr::extend_last_alloc_sync_count(
+    uint32_t new_sync_count, uint32_t num_buffer_types_to_extend) {
+    for (uint32_t idx = 0; idx < num_buffer_types_to_extend; idx++) {
+        uint32_t prev =
+            alloc_index_[idx] == 0 ? kernel_config_entry_count - 1 : alloc_index_[idx] - 1;
+        if (entries_[prev][idx].size != 0) {
+            entries_[prev][idx].sync_count = new_sync_count;
+        }
+    }
+}
+
 void WorkerConfigBufferMgr::PrintStatus() {
     size_t num_buffer_types = this->reservation_.size();
     for (size_t i = 0; i < num_buffer_types; i++) {

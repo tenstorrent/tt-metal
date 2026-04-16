@@ -40,6 +40,7 @@ public:
     void free(uint32_t free_up_to_sync_count);
     void alloc(uint32_t when_freeable_sync_count);
     void mark_completely_full(uint32_t sync);
+    void extend_last_alloc_sync_count(uint32_t new_sync_count, uint32_t num_buffer_types_to_extend);
 
     // Test/Debug
     uint32_t get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const;
