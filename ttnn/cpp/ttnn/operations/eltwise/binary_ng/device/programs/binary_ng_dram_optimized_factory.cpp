@@ -225,8 +225,14 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     auto* device = args.input_tensor_a.device();
 
-    CoreRangeSet dram_optimal_cores =
-        CoreRangeSet(device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0));
+    auto all_worker_cores_ordered =
+        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(all_worker_cores_ordered.size());
+    for (const auto& c : all_worker_cores_ordered) {
+        core_ranges.emplace_back(CoreCoord(c.x, c.y), CoreCoord(c.x, c.y));
+    }
+    auto dram_optimal_cores = CoreRangeSet(core_ranges);
 
     Program program{};
     // const auto& all_device_cores = worker_grid;dram_optimal_cores
