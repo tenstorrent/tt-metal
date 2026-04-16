@@ -54,7 +54,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include "dispatch/legacy_trace_allocator.hpp"
+#include "dispatch/ringbuffer_trace_allocator.hpp"
 
 namespace tt::tt_metal {
 struct ProgramCommandSequence;
@@ -1191,7 +1191,7 @@ void FDMeshCommandQueue::record_end() {
                 }
             }
         }
-        std::vector<LegacyTraceAllocator::RingbufferConfig> ringbuffer_configs;
+        std::vector<RingbufferTraceAllocator::RingbufferConfig> ringbuffer_configs;
         ringbuffer_configs.reserve(hal.get_programmable_core_type_count());
         for (uint32_t idx = 0; idx < hal.get_programmable_core_type_count(); idx++) {
             auto core_type = hal.get_programmable_core_type(idx);
@@ -1204,7 +1204,7 @@ void FDMeshCommandQueue::record_end() {
             }
             ringbuffer_configs.push_back({start, size});
         }
-        LegacyTraceAllocator allocator{ringbuffer_configs};
+        RingbufferTraceAllocator allocator{ringbuffer_configs};
         allocator.allocate_trace_programs(hal, trace_nodes);
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher
@@ -1261,7 +1261,7 @@ void FDMeshCommandQueue::record_end() {
             }
         }
         DispatchArray<uint32_t> starting_workers_completed{};
-        // LegacyTraceAllocator assumes the sync starts at 0, so keep track of the number of allocations to add.
+        // RingbufferTraceAllocator assumes the sync starts at 0, so keep track of the number of allocations to add.
         for (auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
             starting_workers_completed[*sub_device_id] = trace_worker_descriptor.num_completion_worker_cores;
         }
