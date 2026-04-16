@@ -19,9 +19,7 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#if defined(PROFILE_PERF_COUNTERS)
 #include "tools/profiler/perf_counters.hpp"
-#endif
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
