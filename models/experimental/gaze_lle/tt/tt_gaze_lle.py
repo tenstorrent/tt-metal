@@ -26,27 +26,34 @@ _CORE_GRID = ttnn.CoreGrid(y=10, x=13)
 
 
 class _BlockParams:
-    """Holds on-device weights for one DINOv2 block."""
+    """Holds on-device weights for one DINOv2 block.
+
+    LayerScale is folded into the preceding projection (``ls1 -> attn.proj``,
+    ``ls2 -> mlp.fc2``) so each block drops two elementwise multiplies.
+    """
 
     def __init__(self, block, device):
         # Attention
         self.norm1_w = _to_device(block.norm1.weight.unsqueeze(0), device)
         self.norm1_b = _to_device(block.norm1.bias.unsqueeze(0), device)
-        qkv_w = block.attn.qkv.weight.T.contiguous()
-        self.qkv_w = _to_device(qkv_w, device)
+        self.qkv_w = _to_device(block.attn.qkv.weight.T.contiguous(), device)
         self.qkv_b = _to_device(block.attn.qkv.bias.unsqueeze(0), device)
-        self.proj_w = _to_device(block.attn.proj.weight.T.contiguous(), device)
-        self.proj_b = _to_device(block.attn.proj.bias.unsqueeze(0), device)
-        self.ls1 = _to_device(block.ls1.scale_factor.unsqueeze(0), device)
+        ls1 = block.ls1.scale_factor.detach()
+        proj_w = block.attn.proj.weight.detach() * ls1.unsqueeze(-1)
+        proj_b = block.attn.proj.bias.detach() * ls1
+        self.proj_w = _to_device(proj_w.T.contiguous(), device)
+        self.proj_b = _to_device(proj_b.unsqueeze(0), device)
 
         # MLP
         self.norm2_w = _to_device(block.norm2.weight.unsqueeze(0), device)
         self.norm2_b = _to_device(block.norm2.bias.unsqueeze(0), device)
         self.fc1_w = _to_device(block.mlp.fc1.weight.T.contiguous(), device)
         self.fc1_b = _to_device(block.mlp.fc1.bias.unsqueeze(0), device)
-        self.fc2_w = _to_device(block.mlp.fc2.weight.T.contiguous(), device)
-        self.fc2_b = _to_device(block.mlp.fc2.bias.unsqueeze(0), device)
-        self.ls2 = _to_device(block.ls2.scale_factor.unsqueeze(0), device)
+        ls2 = block.ls2.scale_factor.detach()
+        fc2_w = block.mlp.fc2.weight.detach() * ls2.unsqueeze(-1)
+        fc2_b = block.mlp.fc2.bias.detach() * ls2
+        self.fc2_w = _to_device(fc2_w.T.contiguous(), device)
+        self.fc2_b = _to_device(fc2_b.unsqueeze(0), device)
 
 
 def _dinov2_attention(x, p: _BlockParams, num_heads: int):
@@ -68,7 +75,6 @@ def _dinov2_attention(x, p: _BlockParams, num_heads: int):
 
     out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b, core_grid=_CORE_GRID)
     ttnn.deallocate(ctx)
-    out = ttnn.mul(out, p.ls1)
     return ttnn.add(x, out)
 
 
@@ -76,7 +82,6 @@ def _dinov2_mlp(x, p: _BlockParams):
     hidden_states = ttnn.layer_norm(x, weight=p.norm2_w, bias=p.norm2_b, epsilon=1e-6)
     h = ttnn.linear(hidden_states, p.fc1_w, bias=p.fc1_b, activation="gelu", core_grid=_CORE_GRID)
     h = ttnn.linear(h, p.fc2_w, bias=p.fc2_b, core_grid=_CORE_GRID)
-    h = ttnn.mul(h, p.ls2)
     return ttnn.add(x, h)
 
 
@@ -224,15 +229,15 @@ class TtGazeLLE:
         for gp in self.gaze_block_params:
             x_tt = _gaze_block(x_tt, gp, num_heads=8)
 
-        x_host = ttnn.to_torch(x_tt).to(torch.float32)
+        x_host = ttnn.to_torch(x_tt)
         ttnn.deallocate(x_tt)
 
         inout_preds = None
         if self.inout:
-            inout_preds = ref.inout_head(x_host[:, 0, :]).squeeze(-1)
+            inout_preds = ref.inout_head(x_host[:, 0, :].float()).squeeze(-1)
             x_host = x_host[:, 1:, :]
 
-        x_host = x_host.reshape(b, ref.featmap_h, ref.featmap_w, ref.dim).permute(0, 3, 1, 2)
+        x_host = x_host.reshape(b, ref.featmap_h, ref.featmap_w, ref.dim).permute(0, 3, 1, 2).float()
         x_host = ref.heatmap_head(x_host).squeeze(1)
         x_host = F.interpolate(x_host.unsqueeze(1), size=ref.out_size, mode="bilinear", align_corners=False).squeeze(1)
         return {"heatmap": x_host, "inout": inout_preds}
