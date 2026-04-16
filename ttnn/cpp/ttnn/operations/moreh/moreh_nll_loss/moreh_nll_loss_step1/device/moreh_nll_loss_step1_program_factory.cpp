@@ -14,13 +14,20 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step1 {
 
-MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1DeviceOperation::Factory::create(
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
+    "reader_moreh_nll_loss_step1.cpp";
+static constexpr const char* READER_LARGE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
+    "reader_moreh_nll_loss_step1_large.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
+    "writer_moreh_nll_loss_step1.cpp";
+
+ProgramDescriptor MorehNllLossStep1DeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     const Tensor& target = tensor_args.target_tensor;
     const std::optional<Tensor>& weight = tensor_args.weight_tensor;
     const Tensor& output = tensor_return_value;
@@ -38,7 +45,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     // copy TILE per core
     uint32_t units_to_divide = target.physical_volume() / H / W * (Ht * Wt);
 
-    tt::tt_metal::IDevice* device = target.device();
+    IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -48,11 +55,9 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    Program program = Program();
-
     // create circular buffers
-    const auto target_data_format = tt_metal::datatype_to_dataformat_converter(target.dtype());
-    const auto data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto target_data_format = datatype_to_dataformat_converter(target.dtype());
+    const auto data_format = datatype_to_dataformat_converter(output.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     const auto target_tile_size = tt::tile_size(target_data_format);
@@ -71,74 +76,108 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
 
     const bool use_large_algorithm = cb_usage >= available_L1;
 
-    if (use_large_algorithm) {
-        CreateCircularBuffer(
-            program,
-            all_cores,
-            data_format,
-            {
-                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
-                {CBIndex::c_1, 1},                         // weight
-                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
-                {CBIndex::c_16, 1},                        // output
-            });
-    } else {
-        CreateCircularBuffer(
-            program,
-            all_cores,
-            data_format,
-            {
-                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
-                {CBIndex::c_1, weight_num_tile},           // weight
-                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
-                {CBIndex::c_16, 1},                        // output
-            });
+    ProgramDescriptor desc;
+
+    // target CB (Int32)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * target_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0,
+            .data_format = tt::DataFormat::Int32,
+            .page_size = target_tile_size,
+        }}},
+    });  // target
+
+    // weight CB — only create if at least 1 tile (mirrors CreateCircularBuffer num_tiles > 0 guard)
+    const uint32_t weight_cb_tiles = use_large_algorithm ? 1u : weight_num_tile;
+    if (weight_cb_tiles > 0) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = weight_cb_tiles * data_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_1,
+                .data_format = data_format,
+                .page_size = data_tile_size,
+            }}},
+        });  // weight
     }
+
+    // tmp_weight CB (intermed format)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * intermed_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_24,
+            .data_format = intermed_data_format,
+            .page_size = intermed_tile_size,
+        }}},
+    });  // tmp_weight
+
+    // output CB
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 1 * data_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_16,
+            .data_format = data_format,
+            .page_size = data_tile_size,
+        }}},
+    });  // output
 
     if (weight_has_value) {
         // This CB will be used as scratch storage when reading data from DRAM into L1,
         // since the two have different alignment requirements on some architectures.
         // Need space for only a single tile in scratch CB, because content is read immediately after writing.
-        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 1 * data_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_7,
+                .data_format = data_format,
+                .page_size = data_tile_size,
+            }}},
+        });
     }
 
     // create read/write kernel
-    std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    KernelDescriptor::CompileTimeArgs reader_ct_args{static_cast<uint32_t>(weight_has_value)};
+    TensorAccessorArgs(target.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reader_defines;
-    std::map<std::string, std::string> writer_defines;
-
+    KernelDescriptor::Defines reader_defines;
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = "1";
+        reader_defines.emplace_back("WEIGHT", "1");
     }
-
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        reader_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
-    const auto* const reader_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                              "kernels/reader_moreh_nll_loss_step1_large.cpp"
-                            : "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                              "kernels/reader_moreh_nll_loss_step1.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
-        "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = use_large_algorithm ? READER_LARGE_KERNEL_PATH : READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.reserve(num_cores);
 
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
+    TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = std::move(all_cores);
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores);
+
+    // Set Runtime Args
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
     const auto output_addr = output.buffer()->address();
 
-    // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_units_per_core;
@@ -151,69 +190,30 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         }
 
         uint32_t element_size = weight_has_value ? weight.value().element_size() : 0;
-        std::vector<uint32_t> reader_args = {
-            target_addr,
-            weight_addr,
-            static_cast<uint32_t>(ignore_index),
-            num_units_per_core,
-            tile_offset,
-            channel_size,
-            weight_num_tile,
-            element_size,
-            target.element_size(),
-        };
 
-        std::vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
+        reader_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                target_addr,
+                weight_addr,
+                static_cast<uint32_t>(ignore_index),
+                num_units_per_core,
+                tile_offset,
+                channel_size,
+                weight_num_tile,
+                element_size,
+                target.element_size()});
 
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
-
-        // compute
-        const std::vector<uint32_t> compute_runtime_args{num_units_per_core};
+        writer_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{output_addr, num_units_per_core, tile_offset});
 
         tile_offset += num_units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void MorehNllLossStep1DeviceOperation::Factory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
-    const uint32_t weight_addr =
-        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
-    const uint32_t ignore_index = operation_attributes.ignore_index;
-
-    const uint32_t output_addr = tensor_return_value.buffer()->address();
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = target_addr;
-            runtime_args[1] = weight_addr;
-            runtime_args[2] = ignore_index;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = output_addr;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step1
