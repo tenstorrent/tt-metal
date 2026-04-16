@@ -17,6 +17,10 @@ struct TypecastRowMajorChunkedProgramFactory {
         uint32_t chunks_per_row{};
         uint32_t input_chunk_size_bytes{};
         uint32_t output_chunk_size_bytes{};
+        CoreRangeSet core_group_1{};
+        CoreRangeSet core_group_2{};
+        uint32_t num_rows_per_core_group_1{};
+        uint32_t num_rows_per_core_group_2{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
