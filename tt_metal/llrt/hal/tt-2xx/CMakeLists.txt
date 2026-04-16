@@ -12,6 +12,7 @@ set(HAL_INCLUDE_DIRS
 )
 
 add_library(qa_hal OBJECT ${QA_HAL_SRC})
+add_dependencies(qa_hal hal_generate_dev_msgs_header)
 target_sources(qa_hal PRIVATE ${QA_HAL_SOURCES})
 target_include_directories(qa_hal BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_include_directories(qa_hal SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar)
@@ -27,6 +28,7 @@ target_link_libraries(
 )
 
 add_library(hal_2xx STATIC)
+add_dependencies(hal_2xx hal_generate_dev_msgs_header)
 add_library(HAL::2xx ALIAS hal_2xx)
 target_sources(hal_2xx PRIVATE ${HAL_2XX_SOURCES})
 target_include_directories(hal_2xx BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
