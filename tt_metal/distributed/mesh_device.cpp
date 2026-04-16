@@ -1977,17 +1977,39 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         IDevice* device = this->get_device(coord);
         auto device_id = device->id();
 
-        // Find the closest available dispatch core to PCIe for real-time profiler
+        // Find the closest available dispatch core to PCIe for real-time profiler.
+        // On heavily-harvested setups the dispatch core descriptor may return a
+        // coordinate outside the device's TENSIX logical grid.  When that happens
+        // (or when no spare core exists at all) we skip this device entirely.
         std::optional<tt_cxy_pair> realtime_profiler_core_opt =
             dispatch_core_manager.get_closest_available_dispatch_core_to_pcie(device_id);
 
-        TT_FATAL(
-            realtime_profiler_core_opt.has_value(),
-            "No available dispatch core found for real-time profiler on device {}. "
-            "Ensure dispatch core descriptor allocates enough cores for dispatch kernels and real-time profiler.",
-            device_id);
+        if (!realtime_profiler_core_opt.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "No available dispatch core for real-time profiler on device {} — skipping RT profiler for this device",
+                device_id);
+            continue;
+        }
 
         CoreCoord realtime_profiler_core(realtime_profiler_core_opt->x, realtime_profiler_core_opt->y);
+
+        // Validate the candidate against the device's actual TENSIX grid.
+        const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
+        if (realtime_profiler_core.x >= tensix_grid.x || realtime_profiler_core.y >= tensix_grid.y) {
+            log_warning(
+                tt::LogMetal,
+                "Dispatch core ({}, {}) for real-time profiler on device {} is outside the TENSIX logical grid "
+                "({}, {}) — disabling RT profiler on this device",
+                realtime_profiler_core.x,
+                realtime_profiler_core.y,
+                device_id,
+                tensix_grid.x,
+                tensix_grid.y);
+            continue;
+        }
+
         log_info(
             tt::LogMetal,
             "Using closest available dispatch core ({}, {}) to PCIe for real-time profiler on device {}",
