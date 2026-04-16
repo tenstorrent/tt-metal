@@ -312,10 +312,13 @@ def full_encoder(
     state: dict,
     device,
     depth: int = 24,
-) -> torch.Tensor:
+    return_device: bool = False,
+):
     """Full encoder: patch_embed -> 24 encoder blocks -> enc_norm.
 
-    img: (B, 3, H, W) torch. Returns (B, N, 1024) torch on host.
+    img: (B, 3, H, W) torch. Returns (B, N, 1024) — host torch by default,
+    device tensor when ``return_device=True`` (used by dust3r_forward to feed
+    the decoder without a round-trip).
     """
     # Patch embed on device.
     x = patch_embed(img, state["patch_embed.proj.weight"], state["patch_embed.proj.bias"], device)
@@ -340,6 +343,8 @@ def full_encoder(
         tt_x = encoder_block_device_pre(tt_x, pos, full_encoder._cache[i], device)
 
     tt_x = ttnn.layer_norm(tt_x, weight=full_encoder._enc_norm_g, bias=full_encoder._enc_norm_b, epsilon=1e-6)
+    if return_device:
+        return tt_x
     return ttnn.to_torch(tt_x)
 
 
@@ -571,8 +576,12 @@ def full_decoder(
         full_decoder._dnorm_b = _t2d(state["dec_norm.bias"].reshape(1, 1, -1), device)
         full_decoder._cache_key = cache_key
 
-    tt_f1 = ttnn.linear(_t2d(feat1, device), full_decoder._emb_w, bias=full_decoder._emb_b)
-    tt_f2 = ttnn.linear(_t2d(feat2, device), full_decoder._emb_w, bias=full_decoder._emb_b)
+    # feat1/feat2 may already be device tensors (from full_encoder return_device=True)
+    # — accept either form so we can avoid the encoder→decoder round-trip.
+    tt_in1 = feat1 if isinstance(feat1, ttnn.Tensor) else _t2d(feat1, device)
+    tt_in2 = feat2 if isinstance(feat2, ttnn.Tensor) else _t2d(feat2, device)
+    tt_f1 = ttnn.linear(tt_in1, full_decoder._emb_w, bias=full_decoder._emb_b)
+    tt_f2 = ttnn.linear(tt_in2, full_decoder._emb_w, bias=full_decoder._emb_b)
 
     # Hold tap tensors on device through the loop, batch all downloads at the
     # end so we pay one sync wave instead of three mid-loop syncs per branch.
@@ -598,8 +607,9 @@ def full_decoder(
 
 def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     """Full end-to-end DUSt3R forward on TT (with host DPT fallback)."""
-    enc1 = full_encoder(img1, state, device)
-    enc2 = full_encoder(img2, state, device)
+    # Keep encoder outputs on device for direct decoder use; download once at end.
+    tt_enc1 = full_encoder(img1, state, device, return_device=True)
+    tt_enc2 = full_encoder(img2, state, device, return_device=True)
     B, C, H, W = img1.shape
     hp, wp = H // 16, W // 16
     ys = torch.arange(hp)
@@ -607,8 +617,10 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
     pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
 
-    _, _, taps1, taps2 = full_decoder(enc1, enc2, pos, state, device)
-    # feats already in bfloat16 (ttnn output); DPT head handles dtype internally.
+    _, _, taps1, taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device)
+    # Now download enc tensors for DPT head input.
+    enc1 = ttnn.to_torch(tt_enc1)
+    enc2 = ttnn.to_torch(tt_enc2)
     feats1 = [enc1, taps1[0], taps1[1], taps1[2]]
     feats2 = [enc2, taps2[0], taps2[1], taps2[2]]
 
