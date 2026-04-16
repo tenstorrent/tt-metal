@@ -198,6 +198,19 @@ enum class EnvVarID {
     TT_METAL_LLK_ASSERTS,  // Enable LLK assertions
 
     // ========================================
+    // LLK SANITIZER
+    // For detailed description look at tt-llk/sanitizer/settings.h
+    // ========================================
+    TT_METAL_LLK_SANITIZER,         // Enable LLK sanitizer (master switch)
+    TT_METAL_LLK_SANITIZER_METHOD,  // Report method: "assert" or "print"
+    TT_METAL_LLK_SANITIZER_PEDANTIC,
+    TT_METAL_LLK_SANITIZER_WARN,
+    TT_METAL_LLK_SANITIZER_ERROR,
+    TT_METAL_LLK_SANITIZER_INFO,
+    TT_METAL_LLK_SANITIZER_FAULT,
+    TT_METAL_LLK_SANITIZER_INTERNAL,
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
@@ -1369,6 +1382,70 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_LLK_ASSERTS: this->enable_llk_asserts = true; break;
 
         // ========================================
+        // LLK SANITIZER
+        // ========================================
+        // TT_METAL_LLK_SANITIZER
+        // Enables the LLK sanitizer (master switch).
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LLK_SANITIZER=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER: {
+            this->sanitizer_settings.enabled = is_env_enabled(value);
+            break;
+        }
+
+        // TT_METAL_LLK_SANITIZER_METHOD
+        // Sets the sanitizer report method: "assert" or "print".
+        // Usage: export TT_METAL_LLK_SANITIZER_METHOD=print
+        case EnvVarID::TT_METAL_LLK_SANITIZER_METHOD: {
+            std::string_view method(value);
+            if (method == "assert") {
+                this->sanitizer_settings.method = SanitizerReportMethod::Assert;
+            } else if (method == "print") {
+                this->sanitizer_settings.method = SanitizerReportMethod::Print;
+            } else {
+                TT_THROW("Invalid TT_METAL_LLK_SANITIZER_METHOD: '{}'. Valid values: assert, print", value);
+            }
+            break;
+        }
+
+        // TT_METAL_LLK_SANITIZER_PEDANTIC
+        // Usage: export TT_METAL_LLK_SANITIZER_PEDANTIC=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_PEDANTIC:
+            this->sanitizer_settings.pedantic = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_WARN
+        // Usage: export TT_METAL_LLK_SANITIZER_WARN=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN:
+            this->sanitizer_settings.warn = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_ERROR
+        // Usage: export TT_METAL_LLK_SANITIZER_ERROR=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR:
+            this->sanitizer_settings.error = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_INFO
+        // Usage: export TT_METAL_LLK_SANITIZER_INFO=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO:
+            this->sanitizer_settings.info = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_FAULT
+        // Usage: export TT_METAL_LLK_SANITIZER_FAULT=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT:
+            this->sanitizer_settings.fault = is_env_enabled(value);
+            break;
+
+        // TT_METAL_LLK_SANITIZER_INTERNAL
+        // Enables LLK developer internal mode.
+        // Usage: export TT_METAL_LLK_SANITIZER_INTERNAL=1
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INTERNAL:
+            this->sanitizer_settings.internal = is_env_enabled(value);
+            break;
+
+        // ========================================
         // DEVICE MANAGER
         // ========================================
         // TT_METAL_NUMA_BASED_AFFINITY
@@ -1940,6 +2017,22 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     hash_str += std::to_string(get_llk_asserts());
+    return hash_str;
+}
+
+std::string RunTimeOptions::get_sanitizer_hash() const {
+    auto optional_hash = [](const std::optional<bool>& optional) { return optional.has_value() ? std::to_string(*optional) : "nullopt"; };
+
+    const auto& san = get_sanitizer_settings();
+    std::string hash_str;
+    hash_str += std::to_string(san.enabled);
+    hash_str += std::to_string(static_cast<int>(san.method));
+    hash_str += optional_hash(san.pedantic);
+    hash_str += optional_hash(san.warn);
+    hash_str += optional_hash(san.error);
+    hash_str += optional_hash(san.info);
+    hash_str += optional_hash(san.fault);
+    hash_str += optional_hash(san.internal);
     return hash_str;
 }
 
