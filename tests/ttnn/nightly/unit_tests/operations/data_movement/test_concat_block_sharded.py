@@ -666,7 +666,6 @@ def test_manual_block_rm(device):
 
     result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
     assert_equal(expected, result)
-    print("manual_block_test RM PASSED")
 
 
 def test_manual_block_tiled(device):
@@ -696,4 +695,3 @@ def test_manual_block_tiled(device):
 
     result = ttnn.to_torch(ttnn.concat([tt_a, tt_b, tt_c], dim=dim, memory_config=out_mem))
     assert_equal(expected, result)
-    print("manual_block_test TILE PASSED")
