@@ -139,7 +139,7 @@ class GraphAgg(nn.Module):
         # scatter in that case so torch.compile doesn't graph-break on
         # scatter_add_.
         if ix.numel() == num and bool(torch.equal(ix, torch.arange(num, device=ix.device))):
-            net = net.view(batch, num, 128, ht, wd).view(-1, 128, ht, wd)
+            pass  # identity — net is already (batch*num, 128, ht, wd)
         else:
             net = net.view(batch, num, 128, ht, wd)
             net = _scatter_mean(net, ix, dim=1)
