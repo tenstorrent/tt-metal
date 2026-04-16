@@ -160,6 +160,8 @@ setup_dual_galaxy_env() {
     _resolve_deepseekv3_model
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
+    export USE_TORUS_MODE=0
+    echo "Dual Galaxy: USE_TORUS_MODE=0 (torus/ring mode disabled)."
 }
 
 setup_quad_galaxy_env() {
@@ -193,8 +195,10 @@ setup_quad_galaxy_env() {
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 
-    # DeepSeek V3 reads USE_TORUS_MODE: any set value enables ring/torus; unset => linear.
-    # Default is ON; set DS_QUAD_USE_TORUS_MODE=0 or pass --no-torus to disable for debugging.
+    # DeepSeek V3 currently interprets any set USE_TORUS_MODE as torus/ring.
+    # This script uses USE_TORUS_MODE=0 as an explicit OFF sentinel; _run_deepseekv3_tt
+    # unsets it for child test processes so OFF works while still overriding ambient env.
+    # Default is ON; set DS_QUAD_USE_TORUS_MODE=0 or pass --no-torus to disable.
     local _ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
     _ds_quad_torus="${_ds_quad_torus,,}"
     case "${_ds_quad_torus}" in
@@ -203,8 +207,8 @@ setup_quad_galaxy_env() {
             echo "Quad Galaxy: USE_TORUS_MODE=1 (DeepSeek V3 torus/ring mode enabled)."
             ;;
         0|false|no|off)
-            unset USE_TORUS_MODE
-            echo "Quad Galaxy: USE_TORUS_MODE unset (DeepSeek V3 torus/ring mode disabled)."
+            export USE_TORUS_MODE=0
+            echo "Quad Galaxy: USE_TORUS_MODE=0 (DeepSeek V3 torus/ring mode disabled)."
             ;;
         *)
             echo "Error: unsupported DS_QUAD_USE_TORUS_MODE='${DS_QUAD_USE_TORUS_MODE:-}' (use 1|0|true|false|yes|no|on|off)." >&2
@@ -267,6 +271,17 @@ _demo_case_selector() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
+    # DeepSeek uses presence-only checks on USE_TORUS_MODE today.
+    # Treat "0" as explicit OFF by unsetting for the launched process.
+    if [[ "${USE_TORUS_MODE:-}" == "0" ]]; then
+        if [[ -n "${MPI_ARGS:-}" ]]; then
+            ( unset USE_TORUS_MODE; _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@" )
+        else
+            ( unset USE_TORUS_MODE; _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@" )
+        fi
+        return
+    fi
+
     if [[ -n "${MPI_ARGS:-}" ]]; then
         _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@"
     else
@@ -488,8 +503,8 @@ run_quad_galaxy_tests() {
 #   MULTIHOST_SOURCE_VENV=/path      - source venv for setup_shared_venv.sh
 #   MULTIHOST_MATCH_CI_HOME=1        - export HOME=\$TT_METAL_HOME (CI parity)
 #   MULTIHOST_FORCE_PYTHONHOME=0     - disable PYTHONHOME override for ranks
-#   DS_QUAD_USE_TORUS_MODE=0         - quad DeepSeek runs: do not set USE_TORUS_MODE (debug /
-#                                    linear fabric). Default is 1 (same as unset). Also:
+#   DS_QUAD_USE_TORUS_MODE=0         - quad DeepSeek runs: set USE_TORUS_MODE=0 (debug /
+#                                    linear fabric). Default is 1. Also:
 #                                    pass --no-torus on the command line.
 ###############################################################################
 
@@ -579,7 +594,7 @@ main() {
     #   $1 test function (default: all)
     #   $2 UPR mode (all|32|8), optional when it is not an option flag
     # Optional local-testing flags:
-    #   --no-torus                       - quad DeepSeek: unset USE_TORUS_MODE (see DS_QUAD_USE_TORUS_MODE)
+    #   --no-torus                       - quad DeepSeek: set USE_TORUS_MODE=0 (see DS_QUAD_USE_TORUS_MODE)
     #   --model-path <path>
     #   --cache-path <path>
     local test_function="all"
