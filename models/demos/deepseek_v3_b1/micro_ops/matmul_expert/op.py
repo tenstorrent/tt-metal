@@ -144,6 +144,39 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
     return tensors
 
 
+def upload_per_core_uint16_tensor(device, all_cores, per_core_data, entries_per_core):
+    """Create one single-core HEIGHT_SHARDED L1 tensor per core from uint16 data."""
+    raw_size = entries_per_core * 2
+    dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
+    aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
+    tensors = {}
+    for core_idx, core in enumerate(all_cores):
+        data_np = np.array(per_core_data[core_idx], dtype=np.uint16).view(np.uint8)
+        pad = aligned_size - raw_size
+        if pad > 0:
+            data_np = np.concatenate([data_np, np.zeros(pad, dtype=np.uint8)])
+        core_torch = torch.from_numpy(data_np.copy()).reshape(1, aligned_size)
+        core_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+            [1, aligned_size],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        core_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            core_shard_spec,
+        )
+        core_mem_config.experimental_set_per_core_allocation(True)
+        tensors[core_idx] = ttnn.from_torch(
+            core_torch,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=core_mem_config,
+        )
+    return tensors
+
+
 def create_expert_fmt_tensors(cts: list, mesh_device, core_grid, num_tiles: int) -> dict:
     """Create per-device per-core format metadata tensors for ExpertKernel.
 
@@ -224,7 +257,8 @@ def _build_program_for_device(
     coord=None,
     # DRAM ingredients (optional).
     in1_backing_tensor=None,
-    dram_meta_addrs: list = None,
+    dram_expert_offsets_addrs: list = None,
+    dram_block_sizes_addrs: list = None,
     dram_fmt_layout: dict = None,
     dram_core_params: dict = None,
     subblock_k: int = 0,
@@ -370,8 +404,13 @@ def _build_program_for_device(
             other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
-            named_compile_time_arg="meta_l1_addr",
-            core_values=dram_meta_addrs or [],
+            named_compile_time_arg="expert_offsets_l1_addr",
+            core_values=dram_expert_offsets_addrs or [],
+            other_value=0,
+        ),
+        PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="block_sizes_l1_addr",
+            core_values=dram_block_sizes_addrs or [],
             other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
@@ -449,17 +488,18 @@ def create_dram_expert_metadata(
       Slot offset = (global_expert_id × num_iterations) % num_buffers.
 
     Returns:
-        (meta_tensors, fmt_tensors, meta_l1_addr_core_values,
-         fmt_l1_addr_core_values, per_core_compile_time_values)
+        ((offset_tensors, block_size_tensors), per_core_fmt,
+         (expert_offsets_l1_addrs, block_sizes_l1_addrs), per_core_values)
     """
     num_experts = num_total_experts
     num_banks = len(primary_worker_cores)
     num_total_cores = len(compute_cores_list)
     num_iterations = num_subblocks_k * (per_core_N // subblock_n)
-    meta_stride = 2 + num_iterations
     tiles_per_expert = subblock_k * num_subblocks_k * per_core_N
+    BLOCK_SIZE_UNIT = 64
 
-    per_core_meta = {i: [] for i in range(num_total_cores)}
+    per_core_expert_offsets = {i: [] for i in range(num_total_cores)}
+    per_core_block_sizes = {i: [] for i in range(num_total_cores)}
     per_core_fmt = {i: [] for i in range(num_total_cores)}
 
     bank_id_core_values = []
@@ -486,7 +526,8 @@ def create_dram_expert_metadata(
             is_last = offset == cores_per_dram_bank - 1
             col_start = offset * per_core_N
 
-            core_meta = []
+            core_offsets = []
+            core_block_sizes = []
             core_fmt = []
 
             num_tiles_k = subblock_k * num_subblocks_k
@@ -494,7 +535,8 @@ def create_dram_expert_metadata(
             for global_expert_idx in range(num_total_experts):
                 if not is_dram_flags[global_expert_idx]:
                     # SRAM expert — zero-filled placeholder so global indexing works.
-                    core_meta.extend([0] * meta_stride)
+                    core_offsets.append(0)
+                    core_block_sizes.extend([0] * num_iterations)
                     core_fmt.extend([0] * tiles_per_expert)
                     continue
 
@@ -521,12 +563,14 @@ def create_dram_expert_metadata(
                 dram_col_offset = _compute_dram_start_offset(shard_assignment, subblock_k, num_subblocks_k, col_start)
                 expert_in1_addr = data_tensor.buffer_address()
 
-                core_meta.append(expert_in1_addr)
-                core_meta.append(dram_col_offset)
-                core_meta.extend(block_sizes)
+                # Fuse tensor addr + col offset into one value.
+                core_offsets.append(expert_in1_addr + dram_col_offset)
+                # Block sizes in units of BLOCK_SIZE_UNIT.
+                core_block_sizes.extend([bs // BLOCK_SIZE_UNIT for bs in block_sizes])
                 core_fmt.extend(tile_infos)
 
-            per_core_meta[core_flat_idx] = core_meta
+            per_core_expert_offsets[core_flat_idx] = core_offsets
+            per_core_block_sizes[core_flat_idx] = core_block_sizes
             per_core_fmt[core_flat_idx] = core_fmt
 
             bank_id_core_values.append((core, bank_id))
@@ -541,12 +585,23 @@ def create_dram_expert_metadata(
             next_core_noc_x_core_values.append((core, next_noc.x))
             next_core_noc_y_core_values.append((core, next_noc.y))
 
-    meta_entries_per_core = num_experts * meta_stride
-    meta_tensors = upload_per_core_uint32_tensor(device, compute_cores_list, per_core_meta, meta_entries_per_core)
-    meta_l1_addr_core_values = [
+    # Upload expert offsets (uint32) and block sizes (uint16) as separate L1 tensors.
+    offset_tensors = upload_per_core_uint32_tensor(device, compute_cores_list, per_core_expert_offsets, num_experts)
+    block_size_tensors = upload_per_core_uint16_tensor(
+        device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations
+    )
+
+    expert_offsets_l1_addr_core_values = [
         (
             compute_cores_list[i],
-            meta_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
+            offset_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
+        )
+        for i in range(num_total_cores)
+    ]
+    block_sizes_l1_addr_core_values = [
+        (
+            compute_cores_list[i],
+            block_size_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
         )
         for i in range(num_total_cores)
     ]
@@ -559,7 +614,12 @@ def create_dram_expert_metadata(
         "next_core_noc_y": next_core_noc_y_core_values,
     }
 
-    return meta_tensors, per_core_fmt, meta_l1_addr_core_values, per_core_values
+    return (
+        (offset_tensors, block_size_tensors),
+        per_core_fmt,
+        (expert_offsets_l1_addr_core_values, block_sizes_l1_addr_core_values),
+        per_core_values,
+    )
 
 
 def _pack_fmt_bank_data(
@@ -632,12 +692,12 @@ def _assemble_dram_results(mesh_shape, per_device_results, in1_backing_tensor, f
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
-            meta_tensors, meta_l1_addr, per_core_values = per_device_results[coord]
+            meta_tensors, l1_addrs, per_core_values = per_device_results[coord]
             result[coord] = (
                 in1_backing_tensor,
                 meta_tensors,
                 fmt_dram_info,
-                meta_l1_addr,
+                l1_addrs,
                 per_core_values,
                 num_in1_buffers,
             )
@@ -664,7 +724,7 @@ def create_dram_expert_tensors_multi_device(
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
-                          meta_l1_addr, fmt_l1_addr, per_core_values, num_in1_buffers)}
+                          l1_addrs, per_core_values, num_in1_buffers)}
     """
     mesh_shape = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
@@ -720,7 +780,7 @@ def create_dram_expert_tensors_multi_device(
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
             logger.info(f"  Creating metadata for device ({row},{col})...")
-            meta_tensors, per_core_fmt, meta_l1_addr, per_core_values = create_dram_expert_metadata(
+            meta_tensors, per_core_fmt, l1_addrs, per_core_values = create_dram_expert_metadata(
                 mesh_device,
                 cts,
                 compute_cores_list,
@@ -738,7 +798,7 @@ def create_dram_expert_tensors_multi_device(
                 is_dram_flags=is_dram_flags,
                 device_coord=coord,
             )
-            per_device_results[coord] = (meta_tensors, meta_l1_addr, per_core_values)
+            per_device_results[coord] = (meta_tensors, l1_addrs, per_core_values)
 
             per_device_fmt_bank_data[coord] = _pack_fmt_bank_data(
                 per_core_fmt,
@@ -980,7 +1040,7 @@ class ExpertKernel:
                     in1_backing,
                     dram_meta_tensors_dev,
                     dram_fmt_layout,
-                    dram_meta_l1,
+                    (dram_expert_offsets_l1, dram_block_sizes_l1),
                     per_core_vals,
                     num_in1_buffers,
                 ) = dram_meta_tensors[coord]
@@ -1002,7 +1062,8 @@ class ExpertKernel:
                     dram_active_flags=dram_active_cv,
                     coord=coord,
                     in1_backing_tensor=in1_backing,
-                    dram_meta_addrs=dram_meta_l1,
+                    dram_expert_offsets_addrs=dram_expert_offsets_l1,
+                    dram_block_sizes_addrs=dram_block_sizes_l1,
                     dram_fmt_layout=dram_fmt_layout,
                     dram_core_params=per_core_vals,
                     subblock_k=subblock_k,
@@ -1025,8 +1086,8 @@ class ExpertKernel:
         all_ct_data = [t for ct in (sram_cts + dram_cts) for t in ct.get_data_tensors()]
         all_sram_fmt = [t for per_dev in sram_fmt_tensors.values() for t in per_dev.values()]
         per_device_dram = []
-        for in1_backing, meta_t, fmt_info, *_ in dram_meta_tensors.values():
-            per_device_dram.extend([in1_backing, *meta_t.values(), fmt_info["fmt_dram_tensor"]])
+        for in1_backing, (offset_t, bsize_t), fmt_info, *_ in dram_meta_tensors.values():
+            per_device_dram.extend([in1_backing, *offset_t.values(), *bsize_t.values(), fmt_info["fmt_dram_tensor"]])
         all_routing_tensors = [t for rt in expert_selection_meta.values() for t in list(rt[0].values())]
         io_tensors = [
             a_tensor,

@@ -2013,7 +2013,6 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
 
 
 @pytest.mark.skip_post_commit
-@pytest.mark.requires_grid_size((12, 10))
 def test_benchmark(device):
     _run_hybrid_expert_multi_device(
         device,

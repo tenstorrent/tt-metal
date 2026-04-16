@@ -58,7 +58,8 @@ struct MatmulExpertCompressedDRAM {
         uint32_t per_core_n_,
         uint32_t bank_id_,
         uint32_t vc_,
-        uint32_t meta_l1_addr_,
+        uint32_t expert_offsets_l1_addr_,
+        uint32_t block_sizes_l1_addr_,
         uint32_t cb_in1_size_bytes_,
         uint32_t noc_max_page_size_,
         uint32_t core_in_bank_idx_,
@@ -87,7 +88,8 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t bank_id = bank_id_;
         static constexpr uint32_t vc = vc_;
-        static constexpr uint32_t meta_l1_addr = meta_l1_addr_;
+        static constexpr uint32_t expert_offsets_l1_addr = expert_offsets_l1_addr_;
+        static constexpr uint32_t block_sizes_l1_addr = block_sizes_l1_addr_;
         static constexpr uint32_t cb_in1_size_bytes = cb_in1_size_bytes_;
         static constexpr uint32_t noc_max_page_size = noc_max_page_size_;
         static constexpr uint32_t core_in_bank_idx = core_in_bank_idx_;
@@ -160,17 +162,20 @@ struct MatmulExpertCompressedDRAM {
 #if defined(COMPILE_FOR_NCRISC)
             constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
             constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * (CTArgs::per_core_n / CTArgs::subblock_n);
-            constexpr uint32_t meta_stride = 2 + num_iterations;
             constexpr uint32_t max_page_size = CTArgs::noc_max_page_size;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
             constexpr uint32_t num_buffers = 3;
             constexpr uint32_t extra_blocks_in_flight = 1;
             constexpr uint32_t max_subblock_bytes = CTArgs::cb_in1_size_bytes / num_buffers;
+            constexpr uint32_t BLOCK_SIZE_UNIT = 64;
 
             // Read index array from L1 (direct address, no CB API needed).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
-            const volatile uint32_t* meta_base = reinterpret_cast<const volatile uint32_t*>(CTArgs::meta_l1_addr);
+            const volatile uint32_t* expert_offsets =
+                reinterpret_cast<const volatile uint32_t*>(CTArgs::expert_offsets_l1_addr);
+            const volatile uint16_t* block_sizes =
+                reinterpret_cast<const volatile uint16_t*>(CTArgs::block_sizes_l1_addr);
 
             // Pipeline semaphore for cores_per_bank > 1.
             volatile tt_l1_ptr uint32_t* sem_ptr =
@@ -190,11 +195,9 @@ struct MatmulExpertCompressedDRAM {
                     continue;  // bit15=1 → SRAM expert, skip
                 }
                 uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
-                // Index meta/fmt tables directly by global expert_idx (no table_idx indirection).
-                const volatile uint32_t* expert_meta = meta_base + expert_idx * meta_stride;
-                uint32_t expert_in1_addr = expert_meta[0];
-                uint32_t dram_read_offset = expert_meta[1];
-                const volatile uint32_t* block_size_ptr = expert_meta + 2;
+                uint32_t expert_in1_addr = expert_offsets[expert_idx];
+                uint32_t dram_read_offset = 0;
+                const volatile uint16_t* block_size_ptr = block_sizes + expert_idx * num_iterations;
 
                 if constexpr (CTArgs::cores_per_bank > 1 && CTArgs::core_in_bank_idx > 0) {
                     noc_semaphore_wait(sem_ptr, 1);
@@ -240,7 +243,7 @@ struct MatmulExpertCompressedDRAM {
                     uint32_t batch_size = std::min(num_buffers, num_iterations - iter);
 
                     for (uint32_t b = 0; b < batch_size; b++) {
-                        uint32_t block_size = block_size_ptr[iter];
+                        uint32_t block_size = static_cast<uint32_t>(block_size_ptr[iter]) * BLOCK_SIZE_UNIT;
                         uint32_t slot_start = l1_write_addr_in1;
 
                         noc_async_read_set_trid(curr_block_trid);
