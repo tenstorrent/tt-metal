@@ -19,6 +19,16 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+# Fabric packet payload limits (conservative round values below hardware maximums).
+MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
+MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+
+
+def get_max_payload_size() -> int:
+    """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
+    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
 
 
 @dataclass
@@ -370,6 +380,7 @@ def initialize_test_inputs(
     validate: bool = True,
     num_dispatch_groups: int = 1,
     skip_x_initialization: bool = False,
+    seed: int = None,
 ):
     """
     Initialize test inputs (x, weights, indices) with random data.
@@ -389,6 +400,9 @@ def initialize_test_inputs(
         weights: Router weights (num_dispatch_groups, dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
         indices: Expert indices (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     """
+
+    if seed is not None:
+        torch.manual_seed(seed)
 
     input_shape = (dispatch_group_size, seq_len_per_chip, emb_dim)
     x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None

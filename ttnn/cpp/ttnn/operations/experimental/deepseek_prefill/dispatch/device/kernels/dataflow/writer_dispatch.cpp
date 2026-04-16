@@ -88,8 +88,10 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(46);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 48) — read_batch_size not used by writer
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -204,8 +206,7 @@ void kernel_main() {
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
-
-        noc_async_write_barrier();
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
@@ -213,6 +214,8 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
+    noc_async_write_barrier();
+
     // Exit semaphore exchange
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
