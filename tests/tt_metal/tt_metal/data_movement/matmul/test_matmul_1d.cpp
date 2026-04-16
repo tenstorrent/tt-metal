@@ -133,7 +133,8 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     uint32_t in1_per_core_read_size_bytes = in1_pages_bytes / test_config.num_subblocks_c_dim;
     // in1_per_core_read_addr stores the memory address where each core should read from DRAM bank
     vector<uint32_t> in1_per_core_read_addr;
-    for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
+    in1_per_core_read_addr.reserve(test_config.num_subblocks_c_dim);
+for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
     // in0_mcast_output_addr is the memory address where each core will leave the in0 mcast output in L1
