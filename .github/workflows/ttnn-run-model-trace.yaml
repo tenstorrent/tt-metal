@@ -4,13 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       models:
-        description: |
-          YAML list of models to trace in one batch. Each entry:
-            - test_path: models/demos/foo/demo.py[::test_name]   (required)
-              HF_MODEL:   meta-llama/Llama-3.2-1B-Instruct       (optional)
-              extra_args: "-k test_pow --maxfail=1"              (optional)
-          All models share the runner-label below and get homogenized into
-          one trace_run_id on upload.
+        description: >-
+          JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
+          Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
+          Keys: test_path (required), HF_MODEL (optional), extra_args (optional).
+          All models share runner-label and are homogenized into one trace_run_id.
         required: true
         type: string
       runner-label:
