@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     experimental::CircularBuffer cb_out(cb_id_out0);
 

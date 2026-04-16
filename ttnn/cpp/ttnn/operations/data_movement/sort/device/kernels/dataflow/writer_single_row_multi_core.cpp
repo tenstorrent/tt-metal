@@ -32,14 +32,10 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_output_cb_index);
-    const auto input_tensor_addr_gen =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_addr_gen = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Index tensor config
-    const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
-    const auto index_tensor_addr_gen =
-        TensorAccessor(index_tensor_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto index_tensor_addr_gen = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
     // Semaphore setup (legacy NOC - uses x,y addressing)
     const uint64_t coordinator_core_addr = get_noc_addr(
