@@ -411,8 +411,30 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
             } catch (std::runtime_error&) {
                 log_warning(
                     tt::LogAlways,
-                    "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
-                    "from time to time following a reset, continuing to FW initialization...");
+                    "Detected dispatch kernels still running but failed to complete an early exit. "
+                    "Force-resetting stale ETH cores on device {} to prevent worker L1 corruption by stale ERISC NOC "
+                    "traffic.",
+                    id_and_cores.first);
+                // Force-halt any ETH cores that did not exit cleanly. For local (MMIO-capable) chips this
+                // succeeds via the PCIe register path. For remote chips the reset write must route through
+                // the UMD legacy ERISC firmware; if that ERISC is itself stale the write will time out, so
+                // we catch the resulting exception and continue — at minimum, local-chip stale ERISCs are
+                // halted, which prevents them from issuing NOC writes that would corrupt the fresh worker L1
+                // firmware written below.
+                for (const CoreCoord& virtual_core : id_and_cores.second) {
+                    try {
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(id_and_cores.first, virtual_core), tt::umd::RiscType::ALL);
+                    } catch (const std::exception& reset_err) {
+                        log_warning(
+                            tt::LogAlways,
+                            "Failed to force-reset stale ETH core {} on device {}: {}. "
+                            "Worker L1 may be corrupted by stale ERISC traffic.",
+                            virtual_core.str(),
+                            id_and_cores.first,
+                            reset_err.what());
+                    }
+                }
             }
         }
     }
