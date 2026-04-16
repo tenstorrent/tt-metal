@@ -18,35 +18,27 @@ from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 @dataclass
 class Operand:
     name: str
-    dimensions: Optional[Tuple[int, int]] = None
-    data_format: Optional[DataFormat] = None
-    tile_shape: Optional[TileShape] = None
+    dimensions: Tuple[int, int]
+    data_format: DataFormat
+    tile_shape: TileShape = construct_tile_shape(
+        (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+    )
     l1_address: Optional[int] = None
     is_output: bool = False
     sfpu: bool = True
     _data: Optional[torch.Tensor] = None
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
+    _const_value: Optional[float] = None
     l1_golden: Optional[torch.Tensor] = None
-    _tile_count: Optional[int] = None
+    tile_count: Optional[int] = None
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
 
     def __post_init__(self):
-        if not self.is_output and (self.dimensions is None or self.data_format is None):
-            raise ValueError(
-                f"Input operand '{self.name}' must have dimensions and data_format"
-            )
-
-        if self.tile_shape is None:
-            self.tile_shape = construct_tile_shape(
-                (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
-            )
-
-        if self.dimensions is not None:
-            self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
-            self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
-            self._tile_count = self.tile_count_x * self.tile_count_y
+        self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
+        self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
+        self.tile_count = self.tile_count_x * self.tile_count_y
 
     def is_input(self) -> bool:
         return not self.is_output
@@ -55,10 +47,7 @@ class Operand:
         if self._data is not None:
             return
 
-        if self.dimensions is None or self.data_format is None:
-            raise ValueError(
-                f"Cannot generate data for operand '{self.name}' without dimensions and format"
-            )
+        const_value = const_value if const_value is not None else self._const_value
 
         height, width = self.dimensions[0], self.dimensions[1]
         tile_rows = self.tile_shape.total_row_dim()
@@ -100,6 +89,7 @@ class Operand:
         self._tile_count = tile_count
 
     def set_data(self, raw_data: torch.Tensor):
+        self._const_value = None
         self._raw_data = raw_data
 
         if self.data_format != DataFormat.Bfp8_b:
@@ -132,19 +122,6 @@ class Operand:
         if self.is_input():
             return self.raw_data
         return self._master_golden
-
-    @property
-    def tile_count(self) -> Optional[int]:
-        if self._tile_count is None:
-            if self.dimensions is not None:
-                tile_rows = self.tile_shape.total_row_dim()
-                tile_cols = self.tile_shape.total_col_dim()
-                self._tile_count = (self.dimensions[0] // tile_rows) * (
-                    self.dimensions[1] // tile_cols
-                )
-            elif self.is_input():
-                self.generate_data()
-        return self._tile_count
 
     def __str__(self) -> str:
         return f"{self.name}, {self.dimensions}, {self.data_format}, L1 Addr: {hex(self.l1_address)}"
@@ -277,6 +254,7 @@ class OperandRegistry:
         data_format: DataFormat,
         address: int = None,
         sfpu: bool = True,
+        const_value: Optional[float] = None,
     ) -> Operand:
         if name in self.operands:
             raise ValueError(f"Operand '{name}' already exists")
@@ -289,6 +267,7 @@ class OperandRegistry:
             is_output=False,
             sfpu=sfpu,
         )
+        operand._const_value = const_value
         self.operands[name] = operand
         return operand
 
@@ -344,32 +323,42 @@ class OperandRegistry:
         src_b_const_value: Optional[float] = None,
     ) -> OperandMapping:
         if src_a not in self.operands:
-            self.add_input(src_a, dimensions=src_a_dims, data_format=input_format)
+            self.add_input(
+                src_a,
+                dimensions=src_a_dims,
+                data_format=input_format,
+                const_value=src_a_const_value,
+            )
         else:
             existing = self.operands[src_a]
             if list(existing.dimensions) != list(src_a_dims):
                 raise ValueError(
                     f"Operand '{src_a}' already exists with dimensions {existing.dimensions}, got {src_a_dims}"
                 )
+            if src_a_tensor is None:
+                self.operands[src_a]._const_value = src_a_const_value
 
         if src_b not in self.operands:
-            self.add_input(src_b, dimensions=src_b_dims, data_format=input_format)
+            self.add_input(
+                src_b,
+                dimensions=src_b_dims,
+                data_format=input_format,
+                const_value=src_b_const_value,
+            )
         else:
             existing = self.operands[src_b]
             if list(existing.dimensions) != list(src_b_dims):
                 raise ValueError(
                     f"Operand '{src_b}' already exists with dimensions {existing.dimensions}, got {src_b_dims}"
                 )
+            if src_b_tensor is None:
+                self.operands[src_b]._const_value = src_b_const_value
 
         if src_a_tensor is not None:
             self.operands[src_a].set_data(src_a_tensor)
-        else:
-            self.operands[src_a].generate_data(const_value=src_a_const_value)
 
         if src_b_tensor is not None:
             self.operands[src_b].set_data(src_b_tensor)
-        else:
-            self.operands[src_b].generate_data(const_value=src_b_const_value)
 
         mapping = OperandMapping(
             src_a=src_a,
@@ -386,7 +375,9 @@ class OperandRegistry:
     DEFAULT_L1_END_ADDRESS = 0x00169FFF
 
     def allocate_l1_addresses(
-        self, start_address: int = DEFAULT_L1_START_ADDRESS, end_address: int = DEFAULT_L1_END_ADDRESS
+        self,
+        start_address: int = DEFAULT_L1_START_ADDRESS,
+        end_address: int = DEFAULT_L1_END_ADDRESS,
     ) -> None:
         """
         Allocate L1 addresses for all operands.
@@ -408,8 +399,9 @@ class OperandRegistry:
                 operand.l1_address = current_address
                 current_address += operand.calculate_l1_size()
                 if current_address > end_address:
-                    raise ValueError("There is not enought space on device for all operands")
-
+                    raise ValueError(
+                        "There is not enough space on device for all operands"
+                    )
 
     def write_inputs_to_l1(self, location: str = "0,0") -> None:
         """Write all input operands to L1 memory."""
