@@ -296,8 +296,12 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_.tes
 // independent router firmware instances.  For each stale channel:
 //   1. Send TERMINATE to termination_signal_address on that ERISC core's L1.
 //   2. Poll edm_status_address for EDMStatus::TERMINATED (up to 50 ms).
-//   3. On timeout: assert RISC reset to halt the stale firmware.
-//   4. Deassert RISC reset (Fix D) so the newly-loaded firmware image can boot.
+//   3. On timeout: log a warning and continue — do NOT assert RISC reset.
+//      Rationale: a non-responsive channel is almost certainly running base firmware
+//      (RiscFirmwareInitializer already assert+deasserted all ERISCs during device open);
+//      the stale edm_status value is a harmless L1 artifact from the halted predecessor.
+//      Calling assert_risc_reset_at_core on a WH ERISC tears down the ETH PHY link,
+//      breaking non-MMIO L1 access for all subsequent chips in the mesh.
 void FabricFirmwareInitializer::terminate_stale_erisc_routers(
     Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const {
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
@@ -361,32 +365,18 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
         }
 
         if (!terminated_ok) {
+            // Do NOT assert_risc_reset_at_core here: on WH, resetting an ERISC takes the
+            // ETH PHY link down and breaks non-MMIO L1 access for the rest of the mesh.
+            // The ERISC is almost certainly running base firmware (stale L1 value from a
+            // halted predecessor); configure_fabric_cores() will safely overwrite L1 and
+            // the new fabric firmware will boot normally.
             log_warning(
                 tt::LogMetal,
-                "terminate_stale_erisc_routers: Stale ETH firmware on Device {} chan={} did not "
-                "terminate within {}ms — asserting then deasserting ERISC reset",
+                "terminate_stale_erisc_routers: Device {} chan={} did not respond to TERMINATE "
+                "within {}ms — likely base firmware with stale L1; continuing without reset",
                 dev->id(),
                 eth_chan_id,
                 stale_timeout_ms);
-            try {
-                const auto virtual_eth_coord =
-                    cluster_.get_virtual_coordinate_from_logical_coordinates(
-                        dev->id(), eth_logical_core, CoreType::ETH);
-                const tt_cxy_pair core_pair(dev->id(), virtual_eth_coord);
-                cluster_.assert_risc_reset_at_core(core_pair, tt::umd::RiscType::ALL);
-                // Fix D: deassert reset so the already-loaded firmware image can actually boot.
-                // configure_fabric_cores() will have written the new firmware to L1 before
-                // wait_for_fabric_router_sync() calls us; without deassert the ERISC stays
-                // halted and the handshake poll deadlocks.
-                cluster_.deassert_risc_reset_at_core(core_pair, tt::umd::RiscType::ALL);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogMetal,
-                    "terminate_stale_erisc_routers: reset failed on Device {} chan={}: {}",
-                    dev->id(),
-                    eth_chan_id,
-                    e.what());
-            }
         }
     }
 }
