@@ -259,8 +259,10 @@ class Molmo2ProcessorWrapper:
     """
 
     # Molmo2 native video sampling parameters (from video_processing_molmo2.py)
+    # _MAX_FRAMES=180 keeps total tokens under 16K ISL on T3K:
+    #   180 frames × 81 tokens/frame = 14,580 visual tokens + ~1,500 text ≈ 16,080 total
     _MAX_FPS = 2
-    _MAX_FRAMES = 384
+    _MAX_FRAMES = 180
 
     def __init__(self, processor):
         self.processor = processor
