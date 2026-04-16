@@ -194,7 +194,6 @@ struct KVCacheUpdate {
             // ============================================================
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
-                constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
                 constexpr uint32_t nope_num_pages = 16;
@@ -204,7 +203,7 @@ struct KVCacheUpdate {
                 uint32_t cur_pos = args.local_cur_pos;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
-                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
+                auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr);
 
                 uint32_t kv_cache_page_id_start = cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
                 if constexpr (IsRopeCore) {

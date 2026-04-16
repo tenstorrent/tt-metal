@@ -553,6 +553,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_num_workers"),
                 get_named_compile_time_arg_val("reduce_slot_size_bytes"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
