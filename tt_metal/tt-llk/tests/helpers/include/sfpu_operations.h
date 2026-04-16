@@ -104,7 +104,6 @@ void call_unary_sfpu_operation_init(SfpuType operation)
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
  *
- * @tparam DST_SYNC Destination sync mode
  * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
  * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
@@ -112,17 +111,10 @@ void call_unary_sfpu_operation_init(SfpuType operation)
  * @param dst_index Destination tile index in the destination register
  * @param math_format Optional math format for operations that need format-specific behavior
  */
-template <
-    DstSync DST_SYNC,
-    bool APPROX_MODE,
-    bool is_fp32_dest_acc_en,
-    int ITERATIONS,
-    bool FAST_MODE      = false,
-    bool STABLE_SORT    = false,
-    bool CLAMP_NEGATIVE = false>
+template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool FAST_MODE = false, bool STABLE_SORT = false, bool CLAMP_NEGATIVE = false>
 void call_unary_sfpu_operation(SfpuType operation, std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f)
 {
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_(dst_index);
     switch (operation)
     {
         case SfpuType::abs:
@@ -259,7 +251,7 @@ void call_unary_sfpu_operation(SfpuType operation, std::uint32_t dst_index, std:
     _llk_math_eltwise_unary_sfpu_done_();
 }
 
-template <DstSync DST_SYNC, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
 void call_binary_sfpu_operation_init()
 {
     switch (BINOP)
@@ -281,11 +273,11 @@ void call_binary_sfpu_operation_init()
     }
 }
 
-template <DstSync DST_SYNC, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
 void call_binary_sfpu_operation(
     std::uint32_t dst_index, const std::uint32_t dst_index_in0 = 0, const std::uint32_t dst_index_in1 = 1, const std::uint32_t dst_index_out = 0)
 {
-    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(dst_index);
+    _llk_math_eltwise_binary_sfpu_start_(dst_index);
     switch (BINOP)
     {
         case BinaryOp::ADD:

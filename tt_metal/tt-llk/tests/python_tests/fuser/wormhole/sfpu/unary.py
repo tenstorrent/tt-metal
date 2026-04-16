@@ -104,7 +104,7 @@ class UnarySfpu(Sfpu):
 
         return (
             f"test_utils::call_unary_sfpu_operation_init<{approx_mode}, {dest_acc}, {self.iterations}>({op});\n"
-            f"test_utils::call_unary_sfpu_operation<dest_sync{stage}, {approx_mode}, {dest_acc}, {self.iterations}>({op}, {self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
+            f"test_utils::call_unary_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, {self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

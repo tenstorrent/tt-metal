@@ -16,7 +16,7 @@ inline void llk_math_ema_sfpu_load_alpha_beta(uint32_t alpha, uint32_t beta) { s
 inline void llk_math_ema_sfpu_clear_previous_output() { sfpu::_clear_previous_output_(); }
 
 inline void llk_math_ema_sfpu_tile(uint32_t input_dst_index) {
-    _llk_math_eltwise_ternary_sfpu_start_<DST_SYNC_MODE>(input_dst_index);
+    _llk_math_eltwise_ternary_sfpu_start_(input_dst_index);
     sfpu::_calculate_ema_tile_();
     _llk_math_eltwise_ternary_sfpu_done_();
 }
