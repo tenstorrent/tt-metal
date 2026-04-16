@@ -24,6 +24,14 @@ def _to_device(t: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LA
 # p150a Blackhole has a 10x13 compute grid; openvla uses 10x12 and it is validated.
 _CORE_GRID = ttnn.CoreGrid(y=10, x=13)
 
+# LoFi matmul for bfp8_b weights: 2x throughput vs HiFi4, small PCC impact.
+_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=False,
+)
+
 
 class _BlockParams:
     """Holds on-device weights for one DINOv2 block.
@@ -58,7 +66,9 @@ class _BlockParams:
 
 def _dinov2_attention(x, p: _BlockParams, num_heads: int):
     hidden_states = ttnn.layer_norm(x, weight=p.norm1_w, bias=p.norm1_b, epsilon=1e-6)
-    qkv = ttnn.linear(hidden_states, p.qkv_w, bias=p.qkv_b, core_grid=_CORE_GRID)
+    qkv = ttnn.linear(
+        hidden_states, p.qkv_w, bias=p.qkv_b, core_grid=_CORE_GRID, compute_kernel_config=_LOFI
+    )
     q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv, num_heads=num_heads, transpose_key=False
     )
@@ -73,15 +83,18 @@ def _dinov2_attention(x, p: _BlockParams, num_heads: int):
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx)
 
-    out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b, core_grid=_CORE_GRID)
+    out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b, core_grid=_CORE_GRID, compute_kernel_config=_LOFI)
     ttnn.deallocate(ctx)
     return ttnn.add(x, out)
 
 
 def _dinov2_mlp(x, p: _BlockParams):
     hidden_states = ttnn.layer_norm(x, weight=p.norm2_w, bias=p.norm2_b, epsilon=1e-6)
-    h = ttnn.linear(hidden_states, p.fc1_w, bias=p.fc1_b, activation="gelu", core_grid=_CORE_GRID)
-    h = ttnn.linear(h, p.fc2_w, bias=p.fc2_b, core_grid=_CORE_GRID)
+    h = ttnn.linear(
+        hidden_states, p.fc1_w, bias=p.fc1_b, activation="gelu",
+        core_grid=_CORE_GRID, compute_kernel_config=_LOFI,
+    )
+    h = ttnn.linear(h, p.fc2_w, bias=p.fc2_b, core_grid=_CORE_GRID, compute_kernel_config=_LOFI)
     return ttnn.add(x, h)
 
 
