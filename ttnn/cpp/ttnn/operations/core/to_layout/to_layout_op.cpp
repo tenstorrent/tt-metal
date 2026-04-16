@@ -84,9 +84,9 @@ Tensor to_layout_impl(
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.padded_shape().size() < 2) {
-            SmallVector<uint32_t> new_padded_shape(2, 1);
-            new_padded_shape[1] = tensor.padded_shape()[-1];
-            new_padded_shape[0] = tensor.padded_shape()[-2];
+            const bool is_scalar = tensor.padded_shape().size() == 0;
+            SmallVector<uint32_t> new_padded_shape =
+                is_scalar ? SmallVector<uint32_t>{1, 1} : SmallVector<uint32_t>{1, tensor.padded_shape()[-1]};
             tensor = ttnn::experimental::view(tensor, tensor.logical_shape(), Shape(new_padded_shape));
         }
     }
