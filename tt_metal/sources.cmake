@@ -168,6 +168,7 @@ set(JITAPI_FILES
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/kernel_profiler.hpp
+    tools/profiler/perf_counters.hpp
     tools/profiler/fabric_event_profiler.hpp
     tools/profiler/noc_event_profiler.hpp
     tools/profiler/noc_debugging_profiler.hpp
