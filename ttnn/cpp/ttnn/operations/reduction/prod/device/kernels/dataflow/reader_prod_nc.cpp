@@ -34,7 +34,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_in0(tt::CBIndex::c_0);
 
     uint32_t input_tile_bytes = get_tile_size(cb_in0.get_cb_id());
-    const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr, input_tile_bytes);
+    const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr);
 
     uint32_t read_tile_id_temp = (dim == 0) ? (start_id) : (start_id / HtWt * CHtWt) + (start_id % HtWt);
     uint32_t start_tile_id = start_id / HtWt * CHtWt;

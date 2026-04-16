@@ -107,10 +107,10 @@ void kernel_main() {
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
-    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
-    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
 #ifdef USE_WORKER_MUX
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
