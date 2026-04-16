@@ -12,7 +12,7 @@ import torch
 import ttnn
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from types import EllipsisType
 
 
@@ -318,6 +318,15 @@ def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType)
     return raw.view(torch_dtype).reshape(padded_shape)
 
 
+def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
+    """On-device float-to-uint8: multiply by 255, clamp [0, 255], typecast."""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    t = ttnn.multiply(t, 255.0)
+    t = ttnn.clamp(t, min=0.0, max=255.0)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.typecast(t, ttnn.uint8)
+
+
 def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
     """Return the mesh axis that spans multiple hosts (0 or 1).
 
@@ -417,6 +426,7 @@ def fast_device_to_host(
     ccl_manager=None,
     root: int | None = None,
     *,
+    pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
 ) -> torch.Tensor | None:
@@ -442,6 +452,10 @@ def fast_device_to_host(
         root: If set, only the host with this MPI rank performs the D2H
             transfer and returns the assembled tensor; all other ranks return
             ``None``.  If ``None`` (default), all ranks perform D2H.
+        pre_transfer_fn: Optional on-device transformation applied just before
+            the DMA read.  For multi-host, runs after ``mesh_partition``; for
+            single-host, runs right before ``.cpu()``.  Typical use is
+            ``float_to_uint8`` to shrink data before the PCIe transfer.
         permute: If set, each shard is permuted before being written into the
             output.  Fuses the permutation into the scatter write so that no
             intermediate tensor in the original layout is ever materialised.
@@ -492,10 +506,12 @@ def fast_device_to_host(
                 repeat_dims[inter_dim] = n_hosts
                 gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
                 gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
-            tt_scaled = ttnn.multiply(gathered_tensor, 255.0)
-            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
-            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
-            gathered_tensor = ttnn.typecast(tt_clamped, ttnn.uint8)
+            if pre_transfer_fn is not None:
+                gathered_tensor = pre_transfer_fn(gathered_tensor)
+            else:
+                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        elif pre_transfer_fn is not None:
+            gathered_tensor = pre_transfer_fn(gathered_tensor)
 
         # Step 2: Only root rank (if specified) does D2H.
         if root is not None and rank != root:
@@ -549,6 +565,9 @@ def fast_device_to_host(
 
     # Grab mesh coordinates from the device tensor before DMA.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+
+    if pre_transfer_fn is not None:
+        tt_tensor = pre_transfer_fn(tt_tensor)
 
     # Single .cpu() on the mesh tensor batches all DMA reads into one C++
     # dispatch — host buffers are allocated in parallel and the reader thread

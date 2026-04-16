@@ -21,7 +21,7 @@ import torch
 import ttnn
 
 from ...parallel.manager import CCLManager
-from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
+from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor_2dshard
 from ...utils.test import line_params, ring_params
 
 # Wan 2.2 VAE output — BCTHW
@@ -85,46 +85,6 @@ class TestFastDeviceToHost:
         assert result.shape == ref.shape, f"Shape mismatch: {result.shape} vs {ref.shape}"
         torch.testing.assert_close(result, ref, rtol=0, atol=0)
 
-    def test_slow_perf(self, mesh_device, num_links, device_params, topology):
-        """Measure average D2H time over 10 iterations."""
-        n_iters = 10
-
-        ref = _make_reference_tensor()
-        tt_tensor = _shard_to_device(ref, mesh_device)
-        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-        concat_dims = _make_concat_dims()
-
-        # Warmup
-        ccl_manager.device_to_host(tt_tensor, concat_dims)
-
-        # Sync + barrier before measurement
-        ttnn.synchronize_device(mesh_device)
-        if ttnn.using_distributed_env():
-            ttnn.distributed_context_barrier()
-
-        start = time.perf_counter()
-        for _ in range(n_iters):
-            ccl_manager.device_to_host(tt_tensor, concat_dims)
-        # Sync + barrier before measurement
-        ttnn.synchronize_device(mesh_device)
-        if ttnn.using_distributed_env():
-            ttnn.distributed_context_barrier()
-        end = time.perf_counter()
-
-        avg_s = (end - start) / n_iters
-        tensor_bytes = B * C * T * H * W * 2  # bfloat16 = 2 bytes
-        throughput_gbs = (tensor_bytes / avg_s) / 1e9
-
-        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
-        if rank == 0:
-            print(f"\n--- ccl_manager.device_to_host performance (root=0) ---")
-            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
-            print(f"  Tensor shape:  ({B}, {C}, {T}, {H}, {W}) bfloat16")
-            print(f"  Tensor size:   {tensor_bytes / 1e6:.1f} MB")
-            print(f"  Iterations:    {n_iters}")
-            print(f"  Average time:  {avg_s * 1000:.1f} ms")
-            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
-
     def test_performance(self, mesh_device, num_links, device_params, topology):
         """Measure average D2H time over 10 iterations."""
         n_iters = 10
@@ -153,88 +113,12 @@ class TestFastDeviceToHost:
         end = time.perf_counter()
 
         avg_s = (end - start) / n_iters
-        tensor_bytes = B * C * T * H * W * 4  # float32 = 4 bytes (full pipeline output)
+        tensor_bytes = B * C * T * H * W * 2  # float32 = 4 bytes (full pipeline output)
         throughput_gbs = (tensor_bytes / avg_s) / 1e9
 
         rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
         if rank == 0:
             print(f"\n--- fast_device_to_host + permute + float performance (root=0) ---")
-            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
-            print(f"  Output shape:  (1, {T}, {H}, {W}, {C}) float32 (BTHWC)")
-            print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB")
-            print(f"  Iterations:    {n_iters}")
-            print(f"  Average time:  {avg_s * 1000:.1f} ms")
-            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
-
-    def test_fused_correctness(self, mesh_device, num_links, device_params, topology):
-        """Round-trip with fused permute + dtype conversion."""
-        import torch
-
-        ref = _make_reference_tensor()
-        tt_tensor = _shard_to_device(ref, mesh_device)
-        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-        concat_dims = _make_concat_dims()
-
-        result = fast_device_to_host(
-            tt_tensor,
-            mesh_device,
-            concat_dims,
-            ccl_manager=ccl_manager,
-            permute=(0, 2, 3, 4, 1),
-            dtype=torch.float32,
-        )
-
-        expected = ref.permute(0, 2, 3, 4, 1).float()
-        assert result.shape == expected.shape, f"Shape mismatch: {result.shape} vs {expected.shape}"
-        assert result.dtype == torch.float32
-        torch.testing.assert_close(result, expected, rtol=0, atol=0)
-
-    def test_fused_performance(self, mesh_device, num_links, device_params, topology):
-        """Measure fused permute+dtype D2H time over 10 iterations."""
-        import torch
-
-        n_iters = 10
-        ref = _make_reference_tensor()
-        tt_tensor = _shard_to_device(ref, mesh_device)
-        ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-        concat_dims = _make_concat_dims()
-
-        # Warmup
-        fast_device_to_host(
-            tt_tensor,
-            mesh_device,
-            concat_dims,
-            ccl_manager=ccl_manager,
-            permute=(0, 2, 3, 4, 1),
-            dtype=torch.float32,
-        )
-
-        ttnn.synchronize_device(mesh_device)
-        if ttnn.using_distributed_env():
-            ttnn.distributed_context_barrier()
-
-        start = time.perf_counter()
-        for _ in range(n_iters):
-            fast_device_to_host(
-                tt_tensor,
-                mesh_device,
-                concat_dims,
-                ccl_manager=ccl_manager,
-                permute=(0, 2, 3, 4, 1),
-                dtype=torch.float32,
-            )
-        ttnn.synchronize_device(mesh_device)
-        if ttnn.using_distributed_env():
-            ttnn.distributed_context_barrier()
-        end = time.perf_counter()
-
-        avg_s = (end - start) / n_iters
-        tensor_bytes = B * C * T * H * W * 4  # float32 = 4 bytes
-        throughput_gbs = (tensor_bytes / avg_s) / 1e9
-
-        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
-        if rank == 0:
-            print(f"\n--- fast_device_to_host FUSED performance (root=0) ---")
             print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
             print(f"  Output shape:  (1, {T}, {H}, {W}, {C}) float32 (BTHWC)")
             print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB")
@@ -259,16 +143,17 @@ class TestFastDeviceToHost:
             tt_tensor = _shard_to_device(ref, mesh_device)
 
             # --- Host reference path: bf16 → float32 → ×255 → uint8 ---
-            host_uint8 = (ref.float() * 255).clamp(0, 255).to(torch.uint8)
+            host_uint8 = (ref.float() * 255).clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 4, 1)
 
-            # --- Device path: bf16 → ×255 → clamp → typecast(uint8) → D2H ---
-            tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
-            tt_scaled = ttnn.multiply(tt_tile, 255.0)
-            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
-            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
-            tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
-
-            device_uint8 = fast_device_to_host(tt_uint8, mesh_device, concat_dims, ccl_manager=ccl_manager)
+            # --- Device path: pre_transfer_fn handles bf16 → uint8 on device ---
+            device_uint8 = fast_device_to_host(
+                tt_tensor,
+                mesh_device,
+                concat_dims,
+                ccl_manager=ccl_manager,
+                pre_transfer_fn=float_to_uint8,
+                permute=(0, 2, 3, 4, 1),
+            )
 
             diff = (device_uint8.int() - host_uint8.int()).abs()
             max_err = diff.max().item()
@@ -294,16 +179,12 @@ class TestFastDeviceToHost:
         ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
         def _convert_and_transfer():
-            # tt_tile = ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
-            # tt_scaled = ttnn.multiply(tt_tile, 255.0)
-            # tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
-            # tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
-            # tt_uint8 = ttnn.typecast(tt_clamped, ttnn.uint8)
             return fast_device_to_host(
                 tt_tensor,
                 mesh_device,
                 concat_dims,
                 ccl_manager=ccl_manager,
+                pre_transfer_fn=float_to_uint8,
                 permute=(0, 2, 3, 4, 1),
             )
 
