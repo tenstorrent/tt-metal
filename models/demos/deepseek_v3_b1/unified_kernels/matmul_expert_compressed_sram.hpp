@@ -43,7 +43,6 @@ struct MatmulExpertCompressedSRAM {
         uint32_t cb_in0_num_pages_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
-        uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t sram_k_per_core_ = 0,
         uint32_t sram_k_offset_ = 0>
@@ -57,7 +56,6 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t cb_in0_num_pages = cb_in0_num_pages_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
-        static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
         static constexpr uint32_t sram_k_offset = sram_k_offset_;
@@ -72,7 +70,6 @@ struct MatmulExpertCompressedSRAM {
         uint32_t out_w_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
-        uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t accum_experts_ = 0,
         uint32_t sram_k_per_core_ = 0,
@@ -87,7 +84,6 @@ struct MatmulExpertCompressedSRAM {
         static constexpr uint32_t out_w = out_w_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
-        static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr bool accum_experts = accum_experts_ != 0;
         static constexpr uint32_t sram_k_per_core = sram_k_per_core_;
@@ -132,11 +128,9 @@ struct MatmulExpertCompressedSRAM {
 
             // Count SRAM experts — all TRISCs agree on the loop bound.
             // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
-            // Lower 15 bits hold the global expert ID (for table_idx lookup).
+            // Lower 15 bits hold the compact SRAM slot index (direct fmt table index).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
-            const volatile uint8_t* table_idx_arr =
-                reinterpret_cast<const volatile uint8_t*>(CTArgs::table_idx_l1_addr);
 
             union SramExpertInfo {
                 uint32_t packed;
@@ -198,7 +192,7 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_acquire();
 
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_info[i].eid]);
+                        uint32_t table_idx = static_cast<uint32_t>(sram_expert_info[i].eid);
                         uint32_t fmt_l1_addr = 0;
                         uint32_t addr_in1 = 0;
                         uint32_t addr_in0_expert =
@@ -238,7 +232,7 @@ struct MatmulExpertCompressedSRAM {
                     cb_push_back(cb_out, out_w);
                 } else {
                     for (uint32_t i = 0; i < num_sram_experts; i++) {
-                        uint32_t table_idx = static_cast<uint32_t>(table_idx_arr[sram_expert_info[i].eid]);
+                        uint32_t table_idx = static_cast<uint32_t>(sram_expert_info[i].eid);
                         uint32_t fmt_l1_addr = 0;
                         uint32_t addr_in1 = 0;
 

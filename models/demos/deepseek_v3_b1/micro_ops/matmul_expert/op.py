@@ -250,8 +250,6 @@ def _build_program_for_device(
     subblock_n: int = 1,
     cores_per_dram_bank: int = 1,
     num_in1_buffers: int = 3,
-    # Routing (required).
-    table_idx_addrs: list = None,
     accum_experts: bool = False,
     sram_per_core_n: int = 0,
     dram_per_core_n: int = 0,
@@ -396,11 +394,6 @@ def _build_program_for_device(
         PerCoreCompileTimeDescriptor(
             named_compile_time_arg="block_sizes_l1_addr",
             core_values=dram_block_sizes_addrs or [],
-            other_value=0,
-        ),
-        PerCoreCompileTimeDescriptor(
-            named_compile_time_arg="table_idx_l1_addr",
-            core_values=table_idx_addrs or [],
             other_value=0,
         ),
         PerCoreCompileTimeDescriptor(
@@ -821,46 +814,11 @@ def create_dram_expert_tensors_multi_device(
     )
 
 
-def _upload_per_core_uint8_array(mesh_device, compute_cores_list, data_np, device_coord=None):
-    """Upload identical uint8 array to each core. Returns (tensors_dict, l1_addr_core_values)."""
-    if device_coord is None:
-        device_coord = ttnn.MeshCoordinate(0, 0)
-    dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-    raw_size = len(data_np)
-    aligned_size = _align(max(raw_size, dram_alignment), dram_alignment)
-
-    if aligned_size > raw_size:
-        data_np = np.concatenate([data_np, np.zeros(aligned_size - raw_size, dtype=np.uint8)])
-
-    tensors = {}
-    l1_addr_core_values = []
-    for i, core in enumerate(compute_cores_list):
-        core_torch = torch.from_numpy(data_np.copy()).reshape(1, aligned_size)
-        core_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
-            [1, aligned_size],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        core_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            core_shard_spec,
-        )
-        core_mem_config.experimental_set_per_core_allocation(True)
-        host_tensor = ttnn.from_torch(core_torch, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tensors[i] = ttnn._ttnn.tensor.experimental_to_single_device(
-            host_tensor, mesh_device, device_coord, core_mem_config
-        )
-        l1_addr_core_values.append((core, tensors[i].experimental_per_core_buffer_address(core)))
-
-    return tensors, l1_addr_core_values
-
-
 def encode_expert_indices(expert_ids, is_dram_flags):
     """Encode SRAM/DRAM routing into expert index values via bit 15.
 
-    SRAM experts (is_dram_flags[eid]==0) get bit 15 set: 0x8000 | global_expert_id.
-    DRAM experts (is_dram_flags[eid]==1) keep their global expert ID unchanged.
+    SRAM experts get bit 15 set + compact slot index in bits 0-14: 0x8000 | slot_idx.
+    DRAM experts keep their global expert ID unchanged (bit 15 = 0).
 
     Args:
         expert_ids: list/tensor of global expert IDs (the active experts to encode).
@@ -870,45 +828,20 @@ def encode_expert_indices(expert_ids, is_dram_flags):
         list of encoded uint16 index values.
     """
     encoded = []
+    sram_slot = 0
+    # Build global-to-slot mapping for SRAM experts.
+    sram_slot_map = {}
+    for i, flag in enumerate(is_dram_flags):
+        if not flag:
+            sram_slot_map[i] = sram_slot
+            sram_slot += 1
     for eid in expert_ids:
         eid = int(eid)
         if not is_dram_flags[eid]:
-            encoded.append(0x8000 | eid)
+            encoded.append(0x8000 | sram_slot_map[eid])
         else:
             encoded.append(eid)
     return encoded
-
-
-def create_expert_selection_meta(mesh_device, compute_cores_list, is_dram_flags, num_experts, device_coord=None):
-    """Create per-core table_idx L1 array for expert routing.
-
-    table_idx[eid]: packed index within that type's fmt/meta table (full byte, 0-255).
-    SRAM/DRAM routing is encoded in the index tensor via bit 15 (see encode_expert_indices).
-
-    Args:
-        is_dram_flags: list of 0/1, length num_experts. 0=SRAM, 1=DRAM.
-
-    Returns:
-        (table_idx_tensors, table_idx_l1_addr)
-    """
-    # Build packed table indices: sequential within each type.
-    sram_idx = 0
-    dram_idx = 0
-    table_idx_entries = []
-    for flag in is_dram_flags:
-        if flag:
-            table_idx_entries.append(dram_idx)
-            dram_idx += 1
-        else:
-            table_idx_entries.append(sram_idx)
-            sram_idx += 1
-    table_idx_arr = np.array(table_idx_entries, dtype=np.uint8)
-
-    table_idx_tensors, table_idx_l1_addr = _upload_per_core_uint8_array(
-        mesh_device, compute_cores_list, table_idx_arr, device_coord
-    )
-
-    return table_idx_tensors, table_idx_l1_addr
 
 
 class ExpertKernel:
@@ -937,7 +870,6 @@ class ExpertKernel:
         dram_core_grid,  # CoreRangeSet for DRAM expert cores (always required).
         dram_meta_tensors: dict,  # from create_dram_expert_tensors_multi_device() (always required).
         dram_per_core_n: int,
-        expert_selection_meta: dict,  # from create_expert_selection_meta(), keyed by MeshCoordinate.
         has_sram: bool = False,
         sram_per_core_n: int = 0,
         sram_k_per_core: int = 0,
@@ -964,8 +896,6 @@ class ExpertKernel:
             dram_core_grid: CoreRangeSet for DRAM expert cores (always required).
             dram_meta_tensors: {MeshCoordinate: tuple} from create_dram_expert_tensors_multi_device().
             dram_per_core_n: Number of N tiles per DRAM core.
-            expert_selection_meta: {MeshCoordinate: (table_idx_t, table_idx_l1)}
-                          from create_expert_selection_meta(), built per device on the caller side.
             has_sram: Whether SRAM expert path is active.
             sram_core_grid: CoreRangeSet for SRAM expert cores (required when has_sram).
             cores_per_dram_bank: Compute cores per DRAM bank.
@@ -1008,7 +938,6 @@ class ExpertKernel:
                 out_dev = out_per_device[dev_idx]
                 sram_out_dev = sram_out_per_device[dev_idx]
                 idx_dev = index_per_device[dev_idx]
-                _, table_idx_l1 = expert_selection_meta[coord]
 
                 # SRAM fmt for this device.
                 sram_fmt_l1 = []
@@ -1059,7 +988,6 @@ class ExpertKernel:
                     subblock_n=subblock_n,
                     cores_per_dram_bank=cores_per_dram_bank,
                     num_in1_buffers=num_in1_buffers,
-                    table_idx_addrs=table_idx_l1,
                     accum_experts=accum_experts,
                     sram_per_core_n=sram_per_core_n,
                     dram_per_core_n=dram_per_core_n,
@@ -1077,7 +1005,6 @@ class ExpertKernel:
         per_device_dram = []
         for in1_backing, (offset_t, bsize_t), fmt_info, *_ in dram_meta_tensors.values():
             per_device_dram.extend([in1_backing, *offset_t.values(), *bsize_t.values(), fmt_info["fmt_dram_tensor"]])
-        all_routing_tensors = [t for rt in expert_selection_meta.values() for t in list(rt[0].values())]
         io_tensors = [
             a_tensor,
             *all_ct_data,
@@ -1086,7 +1013,6 @@ class ExpertKernel:
             index_tensor,
             *all_sram_fmt,
             *per_device_dram,
-            *all_routing_tensors,
         ]
 
         logger.info("ExpertKernel: running kernel...")

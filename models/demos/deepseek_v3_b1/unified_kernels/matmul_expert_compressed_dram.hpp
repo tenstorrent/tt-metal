@@ -68,7 +68,6 @@ struct MatmulExpertCompressedDRAM {
         uint32_t next_core_noc_y_,
         uint32_t cores_per_bank_,
         uint32_t num_active_experts_,
-        uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
         uint32_t fmt_dram_addr_,
@@ -98,7 +97,6 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t next_core_noc_y = next_core_noc_y_;
         static constexpr uint32_t cores_per_bank = cores_per_bank_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
-        static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
         static constexpr uint32_t fmt_dram_addr = fmt_dram_addr_;
@@ -120,7 +118,6 @@ struct MatmulExpertCompressedDRAM {
         uint32_t per_core_n_,
         uint32_t fmt_l1_addr_,
         uint32_t num_active_experts_,
-        uint32_t table_idx_l1_addr_,
         uint32_t index_l1_addr_,
         uint32_t cb_fmt_,
         uint32_t accum_experts_ = 0,
@@ -138,7 +135,6 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;
         static constexpr uint32_t num_active_experts = num_active_experts_;
-        static constexpr uint32_t table_idx_l1_addr = table_idx_l1_addr_;
         static constexpr uint32_t index_l1_addr = index_l1_addr_;
         static constexpr uint32_t cb_fmt = cb_fmt_;
         static constexpr bool accum_experts = accum_experts_ != 0;
