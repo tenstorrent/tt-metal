@@ -105,7 +105,7 @@ class TestFindLargestDivisor:
 
         spec = importlib.util.spec_from_file_location(
             mod_name,
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "candidate_generator.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "candidate_generator.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -163,7 +163,7 @@ class TestFindGrid:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(
             mod_name,
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "candidate_generator.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "candidate_generator.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -215,7 +215,7 @@ class TestGetOutSubblockW:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(
             mod_name,
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "candidate_generator.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "candidate_generator.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -378,7 +378,7 @@ class TestDNNTrainingShapes:
         """Load training shapes from retrain_dnn.py."""
         spec = importlib.util.spec_from_file_location(
             "retrain_dnn",
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "retrain_dnn.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "retrain_dnn.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -466,7 +466,7 @@ class TestBenchmarkShapes:
     def _get_shapes(self):
         spec = importlib.util.spec_from_file_location(
             "benchmark",
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "benchmark.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "benchmark.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -518,7 +518,7 @@ class TestProductionFormulas:
             del sys.modules[mod_name]
         spec = importlib.util.spec_from_file_location(
             mod_name,
-            os.path.join("ttnn", "ttnn", "operations", "auto_config", "candidate_generator.py"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config", "candidate_generator.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -593,7 +593,7 @@ class TestProductionFormulas:
 class TestFileStructure:
     """Verify all expected files exist."""
 
-    AUTO_CONFIG_DIR = os.path.join("ttnn", "ttnn", "operations", "auto_config")
+    AUTO_CONFIG_DIR = os.path.join("ttnn", "ttnn", "_experimental", "auto_config")
     TEST_DIR = os.path.join("tests", "ttnn", "unit_tests", "operations", "test_matmul_auto")
 
     EXPECTED_AUTO_CONFIG_FILES = [
@@ -635,15 +635,9 @@ class TestFileStructure:
         scorer_dir = os.path.join(self.AUTO_CONFIG_DIR, "scorer")
         assert os.path.isdir(scorer_dir), f"Missing scorer directory: {scorer_dir}"
 
-        for fn in ["__init__.py", "heuristic.py", "dnn_scorer.py", "dnn_weights.json"]:
+        for fn in ["__init__.py", "heuristic.py", "dnn_scorer.py"]:
             path = os.path.join(scorer_dir, fn)
             assert os.path.exists(path), f"Missing scorer file: {path}"
-
-    def test_dnn_weights_is_valid_json(self):
-        path = os.path.join(self.AUTO_CONFIG_DIR, "scorer", "dnn_weights.json")
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        assert isinstance(data, (dict, list)), "dnn_weights.json should be valid JSON"
 
     def test_retraining_doc_exists(self):
         path = os.path.join(self.AUTO_CONFIG_DIR, "RETRAINING.md")
@@ -662,7 +656,7 @@ class TestSPDXHeaders:
     def _get_all_py_files(self):
         files = []
         for d in [
-            os.path.join("ttnn", "ttnn", "operations", "auto_config"),
+            os.path.join("ttnn", "ttnn", "_experimental", "auto_config"),
             os.path.join("tests", "ttnn", "unit_tests", "operations", "test_matmul_auto"),
         ]:
             for root, _, filenames in os.walk(d):

@@ -248,6 +248,7 @@ def validate_candidate(
     backend: str,
     features: Dict[str, Any],
     candidate_fidelity: Any = None,
+    math_fidelity: Any = None,
 ) -> Tuple[bool, str]:
     """
     Run all validation checks on a candidate configuration.
@@ -300,8 +301,10 @@ def validate_candidate(
 
     # 8. Math fidelity constraints — uses candidate's own fidelity
     # (not the default from features, which would always pass)
-    if candidate_fidelity is not None and isinstance(candidate_fidelity, MathFidelity):
-        is_valid, reason = validate_math_fidelity(candidate_fidelity, features)
+    # Accept either kwarg name for backward compatibility
+    fidelity = candidate_fidelity if candidate_fidelity is not None else math_fidelity
+    if fidelity is not None and isinstance(fidelity, MathFidelity):
+        is_valid, reason = validate_math_fidelity(fidelity, features)
         if not is_valid:
             return False, reason
 

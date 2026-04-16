@@ -152,8 +152,9 @@ class TestMatmulAutoPerformance:
         # Measure 5 random valid alternatives
         import random
 
-        random.seed(42)
-        alternatives = random.sample(
+        # Deterministic seed for reproducible test sampling — not security-sensitive
+        random.seed(42)  # nosec B311
+        alternatives = random.sample(  # nosec B311
             [c for c in valid_candidates if c is not selected], min(5, len(valid_candidates) - 1)
         )
 
@@ -271,8 +272,9 @@ class TestSelectedIsLocalOptimum:
         # Test a subset of alternatives (up to 5)
         import random
 
-        random.seed(42)
-        test_alts = random.sample(alternatives, min(5, len(alternatives)))
+        # Deterministic seed for reproducible test sampling — not security-sensitive
+        random.seed(42)  # nosec B311
+        test_alts = random.sample(alternatives, min(5, len(alternatives)))  # nosec B311
 
         worse_or_equal = 0
         total_tested = 0

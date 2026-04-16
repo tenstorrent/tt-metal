@@ -141,7 +141,7 @@ class AutoConfigSelector(ABC):
         # Step 2: Check cache
         if self._cache is not None:
             cache_key = self.get_cache_key(features)
-            cached = self._cache.get(cache_key)
+            cached = self._cache.get(cache_key, features=features)
             if cached is not None:
                 elapsed = (time.perf_counter() - start) * 1000
                 logger.debug(f"Cache hit for key: {cache_key[:60]}...")

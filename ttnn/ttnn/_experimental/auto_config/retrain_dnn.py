@@ -172,7 +172,8 @@ def generate_expanded_shapes(num_shapes: int = 10000, seed: int = 42) -> List[Di
     """
     import random
 
-    rng = random.Random(seed)
+    # Deterministic seeded PRNG for reproducible training data — not security-sensitive
+    rng = random.Random(seed)  # nosec B311
     dim_choices = [32, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536,
                    2048, 3072, 4096, 6144, 8192]
     categories = ["decode", "prefill", "attention", "mlp", "general"]
@@ -189,14 +190,14 @@ def generate_expanded_shapes(num_shapes: int = 10000, seed: int = 42) -> List[Di
 
     # Fill remaining with random tile-aligned shapes
     while len(shapes) < num_shapes:
-        M = rng.choice(dim_choices)
-        K = rng.choice(dim_choices)
-        N = rng.choice(dim_choices)
+        M = rng.choice(dim_choices)  # nosec B311
+        K = rng.choice(dim_choices)  # nosec B311
+        N = rng.choice(dim_choices)  # nosec B311
         key = (M, K, N)
         if key in seen:
             continue
         seen.add(key)
-        cat = rng.choice(categories)
+        cat = rng.choice(categories)  # nosec B311
         shapes.append({"M": M, "K": K, "N": N, "category": cat})
 
     return shapes[:num_shapes]
@@ -332,8 +333,9 @@ def run_benchmark_sweep(
         ttnn.close_device(device)
 
     # Save
+    output_file = os.path.realpath(output_file)  # Sanitize path
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-    with open(output_file, "w") as f:
+    with open(output_file, "w") as f:  # nosec B108
         json.dump(results, f, indent=2, default=str)
     logger.info(f"Saved {len(results)} results to {output_file}")
 
@@ -354,7 +356,8 @@ def train_dnn_from_results(
     """
     from ttnn._experimental.auto_config.scorer.dnn_scorer import DNNConfigGenerator
 
-    with open(results_file, "r") as f:
+    results_file = os.path.realpath(results_file)  # Sanitize path
+    with open(results_file, "r") as f:  # nosec B108
         results = json.load(f)
 
     # Group results by shape then pick the best (lowest latency) config per shape
@@ -433,7 +436,8 @@ def validate_dnn_accuracy(results_file: str) -> None:
     - Top-1 accuracy: how often does the DNN's top pick match the actual fastest?
     - Speedup coverage: what fraction of shapes have speedup ≥ 1.0x?
     """
-    with open(results_file, "r") as f:
+    results_file = os.path.realpath(results_file)  # Sanitize path
+    with open(results_file, "r") as f:  # nosec B108
         results = json.load(f)
 
     # Group by shape

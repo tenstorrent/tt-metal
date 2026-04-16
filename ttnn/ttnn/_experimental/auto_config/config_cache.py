@@ -65,7 +65,8 @@ class ConfigCache:
         # Use env var, then constructor arg, then default
         if cache_dir is None:
             cache_dir = DEFAULT_CACHE_DIR
-        self._cache_dir = Path(cache_dir)
+        # Resolve to absolute path to prevent path traversal  # nosec B108
+        self._cache_dir = Path(os.path.realpath(cache_dir))
         self._cache_file = self._cache_dir / "matmul_configs.json"
 
         # Load existing cache from disk

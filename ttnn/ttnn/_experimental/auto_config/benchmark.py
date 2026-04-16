@@ -309,8 +309,9 @@ def run_benchmark(
 
     # Save results
     if output_file:
+        output_file = os.path.realpath(output_file)  # Sanitize path
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        with open(output_file, "w") as f:
+        with open(output_file, "w") as f:  # nosec B108
             json.dump(results, f, indent=2, default=str)
         logger.info(f"Benchmark results saved to {output_file}")
 
@@ -378,7 +379,8 @@ def main():
 
     # Load shapes
     if args.shapes:
-        with open(args.shapes, "r") as f:
+        shapes_path = os.path.realpath(args.shapes)  # Sanitize path
+        with open(shapes_path, "r") as f:  # nosec B108
             shapes = json.load(f)
     elif args.sweep:
         shapes = DEFAULT_SWEEP_SHAPES

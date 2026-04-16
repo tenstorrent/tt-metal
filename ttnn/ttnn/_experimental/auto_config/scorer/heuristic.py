@@ -185,8 +185,10 @@ class HeuristicScorer:
     def _score_fidelity_cost(self, candidate: ConfigCandidate, features: Dict[str, Any]) -> float:
         """Score based on math fidelity efficiency.
 
+        Uses the **candidate's own** math_fidelity (not the dtype-pair default)
+        so that candidates with different fidelity levels get differentiated scores.
+
         Lower fidelity = fewer cycles per tile = higher score.
-        Prefer the minimum fidelity that is valid for the dtype pair.
 
         Cycle costs:
             LoFi:  16 cycles → score 1.0 (fastest)
@@ -194,7 +196,10 @@ class HeuristicScorer:
             HiFi3: 48 cycles → score 0.50
             HiFi4: 64 cycles → score 0.25 (full precision but slowest)
         """
-        fidelity = features.get("math_fidelity_default")
+        # Use candidate's own fidelity first, fall back to dtype-pair default
+        fidelity = getattr(candidate, "math_fidelity", None)
+        if fidelity is None or not isinstance(fidelity, MathFidelity):
+            fidelity = features.get("math_fidelity_default")
         if fidelity is None or not isinstance(fidelity, MathFidelity):
             return 0.5  # No fidelity info, neutral score
 
