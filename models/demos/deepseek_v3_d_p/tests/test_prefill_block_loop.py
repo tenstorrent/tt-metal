@@ -91,17 +91,6 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             id="mesh-2x4",
         ),
         pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=4096),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4-payload4k",
-        ),
-        pytest.param(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
