@@ -51,12 +51,12 @@ class TtDroidNet:
 
     @torch.no_grad()
     def extract_features(self, images: torch.Tensor):
+        # Stay in the compute dtype throughout the pipeline — only the
+        # PCC comparison upstream needs fp32.
         images_bf = images.to(self._COMPUTE_DTYPE)
-        fmaps, net, inp = self.reference.extract_features(images_bf)
-        return fmaps.float(), net.float(), inp.float()
+        return self.reference.extract_features(images_bf)
 
     @torch.no_grad()
     def update(self, net, inp, corr, flow, ii):
         args = [t.to(self._COMPUTE_DTYPE) for t in (net, inp, corr, flow)]
-        net_o, delta, weight, eta, upmask = self.reference.update(*args, ii)
-        return net_o.float(), delta.float(), weight.float(), eta.float(), upmask.float()
+        return self.reference.update(*args, ii)
