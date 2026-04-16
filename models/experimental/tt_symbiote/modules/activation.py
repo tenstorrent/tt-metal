@@ -290,6 +290,11 @@ class TTNNSnakeBeta(TTNNModule):
             else:
                 out_chunks.append(res_fp32)
 
+        try:
+            ttnn.deallocate(input_tensor)
+        except Exception:
+            pass
+
         torch_parts = []
         mesh_dev = self.device
         for ch in out_chunks:
@@ -305,6 +310,22 @@ class TTNNSnakeBeta(TTNNModule):
         except Exception:
             pass
         return _upload_bct_replicated(merged_torch, mesh_dev)
+
+
+def _try_dealloc_ttnn(x):
+    """Best-effort deallocate a TTNN tensor (or a TorchTTNNTensor wrapping one) to free device DRAM."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    tt = None
+    if isinstance(x, ttnn.Tensor):
+        tt = x
+    elif isinstance(x, TorchTTNNTensor):
+        tt = getattr(x, "ttnn_tensor", None)
+    if tt is not None:
+        try:
+            ttnn.deallocate(tt)
+        except Exception:
+            pass
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
@@ -441,6 +462,7 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
 
     def forward(self, hidden_state):
         x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        _try_dealloc_ttnn(hidden_state)
         extra_padding = self._get_extra_padding_for_conv1d(x_t)
         t_padded = int(x_t.shape[-1]) + self.padding + int(extra_padding)
         expected_t = (t_padded - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
@@ -485,9 +507,14 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
 
     def forward(self, hidden_state):
         x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        _try_dealloc_ttnn(hidden_state)
         out = self.conv(x_t)
         if isinstance(out, ttnn.Tensor):
             y_t = _materialize_code2wav_bct_from_ttnn(out, self.device)
+            try:
+                ttnn.deallocate(out)
+            except Exception:
+                pass
         else:
             y_t = out
         t_out = int(y_t.shape[-1])
@@ -544,8 +571,11 @@ class TTNNQwen3OmniMoeConvNeXtBlock(TTNNModule):
         dev = self.device
         residual = _materialize_code2wav_chain_output(hidden_states, dev)
 
+        prev = hidden_states
         hidden_states = self.dwconv(hidden_states)
+        _try_dealloc_ttnn(prev)
         x = _materialize_code2wav_chain_output(hidden_states, dev)
+        _try_dealloc_ttnn(hidden_states)
 
         hf = self._fallback_torch_layer
         x = x.permute(0, 2, 1)
@@ -607,11 +637,23 @@ class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
 
         residual = _materialize_code2wav_chain_output(hidden_state, dev)
 
+        prev = hidden_state
         hidden_state = self.act1(hidden_state)
+        _try_dealloc_ttnn(prev)
+
+        prev = hidden_state
         hidden_state = self.conv1(hidden_state)
+        _try_dealloc_ttnn(prev)
+
+        prev = hidden_state
         hidden_state = self.act2(hidden_state)
+        _try_dealloc_ttnn(prev)
+
+        prev = hidden_state
         hidden_state = self.conv2(hidden_state)
+        _try_dealloc_ttnn(prev)
 
         branch = _materialize_code2wav_chain_output(hidden_state, dev)
+        _try_dealloc_ttnn(hidden_state)
         result = branch + residual
         return _upload_bct_replicated(result, dev)

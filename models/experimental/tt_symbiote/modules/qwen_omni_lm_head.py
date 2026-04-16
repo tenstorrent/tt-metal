@@ -6,6 +6,10 @@
 
 from __future__ import annotations
 
+import math
+import os
+
+import torch
 from torch import nn
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -35,6 +39,9 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
     all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
     then runs ``ttnn.linear`` with replicated weights. Readback uses a replicated mesh config that
     slices dim 0 after compose so ``torch.argmax`` / generation see ``[batch, seq, vocab]``.
+
+    Long prefill uses **chunked** matmul when estimated logits/activations exceed
+    ``TT_SYMBIOTE_LM_HEAD_MAX_OUTPUT_BYTES`` / ``TT_SYMBIOTE_LM_HEAD_MAX_INPUT_BYTES`` (see ``forward``).
     """
 
     @classmethod
@@ -77,29 +84,38 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
     def _to_ttnn(self, tensor):
         return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
 
-    def _is_symbiote_replicated(self, tensor) -> bool:
-        if isinstance(tensor, TorchTTNNTensor):
-            cfg = tensor.ttnn_distributed_tensor_config
-            if cfg is not None and cfg.mesh_mapper is not None:
-                return "Replicate" in type(cfg.mesh_mapper).__name__
-        return False
-
     def _maybe_all_gather_hidden(self, tensor):
+        """All-gather last dim when activations are column-sharded (``last * num_devices == in_features``).
+
+        Do **not** skip based on ``TorchTTNNTensor`` "replicated" metadata alone: symbiote can tag
+        tensors replicated while the physical ttnn width is still a shard (e.g. 256 of 2048), which
+        broke chunked LM-head readback (ragged ``vocab`` dims across chunks).
+        """
         t = self._to_ttnn(tensor)
-        if not self._is_distributed:
+        last = int(t.shape[-1])
+        if last == self.in_features:
             return t
-        # Full-width activations (replicated or already gathered): skip CCL.
-        if int(t.shape[-1]) == self.in_features:
+        mesh = self.device
+        if mesh is None or not hasattr(mesh, "get_num_devices") or mesh.get_num_devices() <= 1:
             return t
-        if self._is_symbiote_replicated(tensor):
+        n = int(mesh.get_num_devices())
+        if last * n != self.in_features:
             return t
-        return ttnn.experimental.all_gather_async(
+        if self._is_distributed:
+            return ttnn.experimental.all_gather_async(
+                t,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+        return ttnn.all_gather(
             t,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            cluster_axis=1,
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Linear,
         )
 
     def set_output_tensors_config_impl(self, output_tensors):
@@ -114,29 +130,123 @@ class TTNNQwenOmniThinkerLmHead(TTNNModule):
 
         return tree_map(apply, output_tensors)
 
+    def _readback_logits_bf16(self, tt_out: ttnn.Tensor, expected_token_rows: int) -> torch.Tensor:
+        """Device logits → host ``(expected_token_rows, out_features)`` bf16 for chunk concat."""
+        n = 1 if self.device is None else int(self.device.get_num_devices())
+        wid = int(tt_out.shape[-1])
+        if n > 1 and wid * n == self.out_features:
+            pt = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1))
+        elif n > 1:
+            pt = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        else:
+            pt = ttnn.to_torch(tt_out)
+        pt = pt.to(torch.bfloat16)
+        while pt.dim() > 2:
+            pt = pt.reshape(-1, pt.shape[-1])
+        if pt.shape[0] > expected_token_rows:
+            pt = pt[:expected_token_rows]
+        if pt.shape[-1] > self.out_features:
+            pt = pt[..., : self.out_features]
+        return pt.contiguous()
+
+    def _forward_linear_4d(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        input_tensor_shape = list(x.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        x4 = ttnn.reshape(x, input_shape)
+        out = ttnn.linear(x4, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(out, input_tensor_shape[:-1] + [self.out_features])
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+
+    def _effective_chunk_rows(self, n_inner: int, chunk_cap: int, hidden_last: int) -> int:
+        max_chunk_out = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_OUTPUT_BYTES", 64 * 1024 * 1024)
+        max_chunk_in = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_INPUT_BYTES", 32 * 1024 * 1024)
+        r = min(max(1, chunk_cap), max(1, n_inner))
+        while r > 1:
+            if r * self.out_features * 2 <= max_chunk_out and r * hidden_last * 2 <= max_chunk_in:
+                return r
+            r = max(1, r // 2)
+        return 1
+
     def forward(self, hidden_states):
         x = self._maybe_all_gather_hidden(hidden_states)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(x.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(1, 1)
-        x = ttnn.reshape(x, input_shape)
-        tt_output = ttnn.linear(x, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
-        return tt_output
+        n_inner = int(math.prod(int(d) for d in input_tensor_shape[:-1]))
+        hidden = int(input_tensor_shape[-1])
+        if n_inner == 0:
+            return ttnn.reshape(x, input_tensor_shape[:-1] + [self.out_features])
+
+        max_out = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_OUTPUT_BYTES", 32 * 1024 * 1024)
+        max_in = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_INPUT_BYTES", 48 * 1024 * 1024)
+        chunk_cap = self._env_int("TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS", 16)
+        est_out = n_inner * self.out_features * 2
+        est_in = n_inner * hidden * 2
+        # ``chunk_cap <= 0`` disables chunking (single device-sized matmul; can OOM on long prefill).
+        if chunk_cap <= 0 or (est_out <= max_out and est_in <= max_in):
+            return self._forward_linear_4d(x)
+
+        row_step = self._effective_chunk_rows(n_inner, chunk_cap, hidden)
+        x2 = ttnn.reshape(x, (n_inner, hidden))
+        parts: list[torch.Tensor] = []
+        for r0 in range(0, n_inner, row_step):
+            r1 = min(r0 + row_step, n_inner)
+            sub = ttnn.slice(x2, (r0, 0), (r1, hidden))
+            sub4 = ttnn.reshape(sub, (1, 1, r1 - r0, hidden))
+            tt_chunk = self._forward_linear_4d(sub4)
+            parts.append(self._readback_logits_bf16(tt_chunk, r1 - r0))
+        logits_cpu = torch.cat(parts, dim=0).reshape(*input_tensor_shape[:-1], self.out_features)
+        return TorchTTNNTensor(logits_cpu)
 
 
 def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:
-    """Replace ``thinker.lm_head`` with :class:`TTNNQwenOmniThinkerLmHead` when it is ``nn.Linear``."""
+    """Replace ``thinker.lm_head`` with :class:`TTNNQwenOmniThinkerLmHead` when it is ``nn.Linear``.
+
+    If :data:`torch.nn.Linear` was already swapped to :class:`~models.experimental.tt_symbiote.modules.linear.TTNNLinear`
+    by a thinker-wide op map, recover weights from ``_fallback_torch_layer`` and install this head instead.
+    """
     if "lm_head" not in getattr(thinker, "_modules", {}):
         return
     old = thinker._modules.get("lm_head")
-    if old is None or not isinstance(old, nn.Linear):
+    if old is None or isinstance(old, TTNNQwenOmniThinkerLmHead):
         return
-    # ``TTNNModule`` is not an ``nn.Module``; assign via ``_modules`` like ``register_module_replacement_dict``.
-    thinker._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+    if isinstance(old, nn.Linear):
+        thinker._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            new_head = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                new_head._unique_name = old._unique_name
+            thinker._modules["lm_head"] = new_head
+
+
+def _lm_head_from_linear_or_ttnn_linear(m):
+    if isinstance(m, TTNNQwenOmniThinkerLmHead):
+        return m
+    if isinstance(m, nn.Linear):
+        return TTNNQwenOmniThinkerLmHead.from_torch(m)
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(m, TTNNLinear):
+        tl = getattr(m, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            nh = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(m, "_unique_name", None) is not None:
+                nh._unique_name = m._unique_name
+            return nh
+    return m
 
 
 def replace_code_predictor_lm_head_with_ttnn(talker: nn.Module) -> None:
@@ -153,13 +263,23 @@ def replace_code_predictor_lm_head_with_ttnn(talker: nn.Module) -> None:
     if old is None:
         return
     if isinstance(old, nn.ModuleList):
-        new_heads = [TTNNQwenOmniThinkerLmHead.from_torch(m) if isinstance(m, nn.Linear) else m for m in old]
+        new_heads = [_lm_head_from_linear_or_ttnn_linear(m) for m in old]
         if "lm_head" in cp._modules:
             del cp._modules["lm_head"]
         cp.lm_head = new_heads
         return
     if isinstance(old, nn.Linear):
         cp._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            nh = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                nh._unique_name = old._unique_name
+            cp._modules["lm_head"] = nh
 
 
 def replace_talker_codec_head_with_ttnn(talker: nn.Module) -> None:
@@ -167,6 +287,17 @@ def replace_talker_codec_head_with_ttnn(talker: nn.Module) -> None:
     if "codec_head" not in getattr(talker, "_modules", {}):
         return
     old = talker._modules.get("codec_head")
-    if old is None or not isinstance(old, nn.Linear):
+    if old is None or isinstance(old, TTNNQwenOmniThinkerLmHead):
         return
-    talker._modules["codec_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+    if isinstance(old, nn.Linear):
+        talker._modules["codec_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            new_head = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                new_head._unique_name = old._unique_name
+            talker._modules["codec_head"] = new_head

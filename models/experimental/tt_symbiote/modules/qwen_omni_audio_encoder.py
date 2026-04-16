@@ -19,7 +19,7 @@ from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.activation import _ttnn_mesh_to_torch_one_replica
 from models.experimental.tt_symbiote.modules.conv import TTNNQwenOmniConv2dNHWC
 from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNQwen3OmniMoeAudioEncoderConvOutLinear
 from models.experimental.tt_symbiote.modules.normalization import TTNNQwenLayerNorm
 from models.experimental.tt_symbiote.modules.qwen_omni_vision_patch import _ensure_ttnn, _replicate_mapper
 
@@ -84,7 +84,7 @@ class TTNNQwen3OmniMoeAudioEncoder(TTNNModule):
         m.conv2d1 = TTNNQwenOmniConv2dNHWC.from_torch(enc.conv2d1)
         m.conv2d2 = TTNNQwenOmniConv2dNHWC.from_torch(enc.conv2d2)
         m.conv2d3 = TTNNQwenOmniConv2dNHWC.from_torch(enc.conv2d3)
-        m.conv_out = TTNNLinear.from_torch(enc.conv_out)
+        m.conv_out = TTNNQwen3OmniMoeAudioEncoderConvOutLinear.from_torch(enc.conv_out)
         m.layers = tuple(TTNNQwen3OmniMoeAudioEncoderLayer.from_torch(layer) for layer in enc.layers)
         m.ln_post = TTNNQwenLayerNorm.from_torch(enc.ln_post)
         if isinstance(m.ln_post, TTNNQwenLayerNorm):

@@ -65,12 +65,16 @@ from models.experimental.tt_symbiote.modules.activation import (
 )
 
 from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
+    TTNNQwen3OmniMoeAudioEncoderConvOutLinear,
     TTNNQwen3OmniTalkerResizeMLP,
     TTNNQwen3OmniVisionMLP,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNQwenLayerNorm
 from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
     TTNNQwenOmniThinkerLmHead,
+    replace_code_predictor_lm_head_with_ttnn,
+    replace_talker_codec_head_with_ttnn,
     replace_thinker_lm_head_with_ttnn,
 )
 
@@ -86,8 +90,6 @@ from models.experimental.tt_symbiote.modules.conv import (
     TTNNQwenOmniConv2dNHWC,
     TTNNConvTranspose1d,
 )
-from models.experimental.tt_symbiote.modules.encoder_layer import TTNNQwen3OmniMoeAudioEncoderLayer
-from models.experimental.tt_symbiote.modules.qwen_omni_audio_encoder import TTNNQwen3OmniMoeAudioEncoder
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
@@ -121,6 +123,37 @@ _QWEN_OMNI_CONV_NN_TO_TTNN = {
     torch.nn.Conv1d: TTNNConv1d,
     torch.nn.ConvTranspose1d: TTNNConvTranspose1d,
 }
+
+# Thinker ``nn.Linear`` (vision patch merger MLP, audio tower FFN / projections, etc.) → :class:`TTNNLinear`.
+# Do **not** map whole HF containers (e.g. ``Qwen3OmniMoeVisionPatchMerger``): use LayerNorm / activation maps
+# plus this linear map so symbiote replaces primitives inside the HF module tree.
+# **Order:** call ``replace_thinker_lm_head_with_ttnn`` before registering this dict, or ``thinker.lm_head``
+# becomes plain ``TTNNLinear`` and prefill logits OOM on device.
+_QWEN_OMNI_LINEAR_NN_TO_TTNN = {
+    torch.nn.Linear: TTNNLinear,
+}
+
+
+def _upgrade_audio_encoder_conv_out_linear(thinker):
+    """Swap ``audio_tower.conv_out`` from :class:`TTNNLinear` to :class:`TTNNQwen3OmniMoeAudioEncoderConvOutLinear`.
+
+    Generic ``nn.Linear`` replacement uses :class:`TTNNLinear`; this hook re-tags ``conv_out`` for clarity and
+    keeps a dedicated type for the conv-flatten matmul path. Assign via ``tower._modules[...]`` because
+    :class:`TTNNModule` is not a :class:`torch.nn.Module` and ``tower.conv_out = ...`` would raise ``TypeError``.
+    """
+    tower = getattr(thinker, "audio_tower", None)
+    if tower is None:
+        return
+    co = getattr(tower, "conv_out", None)
+    if co is None or type(co) is TTNNQwen3OmniMoeAudioEncoderConvOutLinear:
+        return
+    if type(co) is not TTNNLinear:
+        return
+    tl = co.torch_layer
+    new_co = TTNNQwen3OmniMoeAudioEncoderConvOutLinear.from_torch(tl)
+    if getattr(co, "_unique_name", None) is not None:
+        new_co._unique_name = co._unique_name
+    tower._modules["conv_out"] = new_co
 
 
 def _qwen_omni_ttft_probe_s(model, inputs: dict, *, use_audio_in_video: bool, mesh_device) -> float:
@@ -219,14 +252,17 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeTextRMSNorm: TTNNDistributedRMSNorm,
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
     Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
-    Qwen3OmniMoeAudioEncoder: TTNNQwen3OmniMoeAudioEncoder,
-    Qwen3OmniMoeAudioEncoderLayer: TTNNQwen3OmniMoeAudioEncoderLayer,
+    # Audio tower: keep HF ``Qwen3OmniMoeAudioEncoder`` / ``Qwen3OmniMoeAudioEncoderLayer``; replace internals via
+    # ``_QWEN_OMNI_LINEAR_NN_TO_TTNN``, norms/activations/conv maps, and ``Qwen3OmniMoeAudioAttention`` below.
+    # After registration, :func:`_upgrade_audio_encoder_conv_out_linear` sets ``conv_out`` to
+    # :class:`~models.experimental.tt_symbiote.modules.linear.TTNNQwen3OmniMoeAudioEncoderConvOutLinear`.
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
     Qwen3OmniMoeThinkerTextRotaryEmbedding: TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     Qwen3OmniMoeVisionRotaryEmbedding: TTNNQwen3OmniMoeVisionRotaryEmbedding,
     **_QWEN_OMNI_ACTIVATION_NN_TO_TTNN,
     **_QWEN_OMNI_LAYERNORM_NN_TO_TTNN,
     **_QWEN_OMNI_CONV_NN_TO_TTNN,
+    **_QWEN_OMNI_LINEAR_NN_TO_TTNN,
 }
 NN_TO_TTNN_CODE2WAV = {
     Qwen3OmniMoeCode2WavAttention: TTNNQwen3OmniMoeCode2WavAttention,
@@ -838,12 +874,18 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
         i for i, layer in enumerate(model.talker.model.layers) if type(layer.mlp) == talker_moe_class
     ]
 
+    # LM heads are ``nn.Linear``: install :class:`TTNNQwenOmniThinkerLmHead` *before* thinker
+    # ``torch.nn.Linear`` → :class:`TTNNLinear` in ``NN_TO_TTNN_THINKER``, or the op map steals
+    # ``lm_head`` and a single ``ttnn.linear`` allocates full prefill logits (~GB) on device.
+    replace_thinker_lm_head_with_ttnn(model.thinker)
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
+    _upgrade_audio_encoder_conv_out_linear(model.thinker)
+    replace_code_predictor_lm_head_with_ttnn(model.talker)
+    replace_talker_codec_head_with_ttnn(model.talker)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
-    replace_thinker_lm_head_with_ttnn(model.thinker)
     set_device(model, mesh_device)
     _patch_thinker_talker_device_dtype(model)
 
@@ -888,11 +930,41 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
                 f"(TalkerCodePredictorAttention on device), got {type(layer.self_attn)}"
             )
 
-    n_audio = len(model.thinker.audio_tower.layers)
-    for i, layer in enumerate(model.thinker.audio_tower.layers):
+    if cp is not None and getattr(cp, "lm_head", None) is not None:
+        heads = cp.lm_head
+        if isinstance(heads, list):
+            for i, h in enumerate(heads):
+                assert isinstance(
+                    h, TTNNQwenOmniThinkerLmHead
+                ), f"talker.code_predictor.lm_head[{i}] expected TTNNQwenOmniThinkerLmHead, got {type(h)}"
+        else:
+            assert isinstance(
+                heads, TTNNQwenOmniThinkerLmHead
+            ), f"talker.code_predictor.lm_head expected TTNNQwenOmniThinkerLmHead, got {type(heads)}"
+
+    audio_tower = model.thinker.audio_tower
+    assert isinstance(
+        audio_tower, Qwen3OmniMoeAudioEncoder
+    ), f"thinker.audio_tower expected HF Qwen3OmniMoeAudioEncoder (primitive op maps), got {type(audio_tower)}"
+    assert isinstance(
+        audio_tower.conv_out, TTNNQwen3OmniMoeAudioEncoderConvOutLinear
+    ), f"audio_tower.conv_out expected TTNNQwen3OmniMoeAudioEncoderConvOutLinear, got {type(audio_tower.conv_out)}"
+    assert isinstance(audio_tower.proj1, TTNNLinear) and isinstance(
+        audio_tower.proj2, TTNNLinear
+    ), f"audio_tower proj1/proj2 expected TTNNLinear, got {type(audio_tower.proj1)} / {type(audio_tower.proj2)}"
+    _ly0 = audio_tower.layers[0]
+    assert isinstance(
+        _ly0, Qwen3OmniMoeAudioEncoderLayer
+    ), f"audio_tower.layers[0] expected HF Qwen3OmniMoeAudioEncoderLayer, got {type(_ly0)}"
+    assert isinstance(_ly0.fc1, TTNNLinear) and isinstance(
+        _ly0.fc2, TTNNLinear
+    ), f"audio encoder layer fc1/fc2 expected TTNNLinear, got {type(_ly0.fc1)} / {type(_ly0.fc2)}"
+
+    n_audio = len(audio_tower.layers)
+    for i, layer in enumerate(audio_tower.layers):
         assert isinstance(
             layer.self_attn, TTNNQwenAudioAttention
-        ), f"thinker.audio_tower.layers[{i}].self_attn expected TTNNQwenAudioAttentionOptimized, got {type(layer.self_attn)}"
+        ), f"thinker.audio_tower.layers[{i}].self_attn expected TTNNQwenAudioAttention, got {type(layer.self_attn)}"
 
     code2wav = getattr(model, "code2wav", None)
     n_code2wav = 0
@@ -935,7 +1007,7 @@ def test_qwen_omni(mesh_device):
                 {"type": "audio", "audio": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav"},
                 {
                     "type": "text",
-                    "text": "What can you see and hear? Answer in one short sentence.Give the car names as a list of strings.",
+                    "text": "What can you see and hear? Answer in one short sentence.Give the car names as a list of comma separated strings.",
                 },
             ],
         },
@@ -945,12 +1017,15 @@ def test_qwen_omni(mesh_device):
     USE_AUDIO_IN_VIDEO = True
 
     print("Registering TTNN module replacements...")
+    replace_thinker_lm_head_with_ttnn(model.thinker)
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
-    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
+    _upgrade_audio_encoder_conv_out_linear(model.thinker)
+    replace_code_predictor_lm_head_with_ttnn(model.talker)
+    replace_talker_codec_head_with_ttnn(model.talker)
     _register_code_predictor_nn_to_ttnn(model)
+    register_module_replacement_dict(model.talker, NN_TO_TTNN_TALKER, model_config=None)
     _register_code2wav_nn_to_ttnn(model)
     _restore_torch_rmsnorm_in_code_predictor(model)
-    replace_thinker_lm_head_with_ttnn(model.thinker)
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
