@@ -602,3 +602,164 @@ Compute fraction:   ~30%             ~75%             52.5%
 ```
 
 52.5% matches the causal triangle ratio: `sum(1..20) / 20² = 210/400`. The waste is inherent to causality — the problem is that discards still cost full DRAM + mcast + chain bandwidth instead of being free skips.
+
+---
+
+## Appendix B: Reverse-K Algorithm (Proposed Optimization)
+
+### The Real Problem: Mcast Barrier Synchronization
+
+The issue with discards is **not primarily DRAM bandwidth** — it's the **synchronization overhead** of K mcast.
+
+K mcast operates with a barrier:
+1. Injector waits for ALL cores to signal "ready"
+2. Injector broadcasts K to all cores
+3. ALL cores must participate, even those that will discard
+
+This means execution is **serialized to the slowest path**:
+- Each q_iter has 20 K mcast steps (K0 through K19)
+- 6 q_iters × 20 K steps = **120 synchronized barrier cycles**
+- Even though actual compute work is only 63 ops per core (3 pairs × 21 ops/pair)
+
+Cores processing light Q (e.g., Q0 needing only K0) must:
+- Wait at barrier for K1 mcast → discard
+- Wait at barrier for K2 mcast → discard
+- ...
+- Wait at barrier for K19 mcast → discard
+
+The discards aren't just wasted bandwidth — they're **forced idle time** at synchronization barriers.
+
+### The Solution: Reverse-K for Heavy Q
+
+Process K in **opposite directions** for light vs heavy Q:
+- **Light Q** (Q0, Q1, ...): K **forward** (K0 → K1 → K2 → ...)
+- **Heavy Q** (Q19, Q18, ...): K **reverse** (K19 → K18 → ... → K0)
+
+With zigzag pairing (light + heavy together), at any timestamp:
+- Some cores process light Q, moving forward through K
+- Other cores process heavy Q, moving backward through K
+- **All cores have useful work** — no one is waiting-and-discarding
+
+### Execution Pattern
+
+The pattern has three phases per 21-timestamp cycle:
+
+```
+Phase 1: Fwd only (t=0)
+t0:   K0 only        ← fwd cores start, rev cores not yet active
+
+Phase 2: Fwd + Rev overlap (t=1 to t=10)
+t1:   K1  (fwd) | K19 (rev)   ← 2 K reads needed
+t2:   K2  (fwd) | K18 (rev)
+...
+t10:  K10 (fwd) | K10 (rev)   ← convergence, same K for both
+
+Phase 3: Rev only (t=11 to t=20)
+t11:  K9  (rev only)   ← fwd cores finished (light Q causal boundary reached)
+t12:  K8  (rev only)
+...
+t20:  K0  (rev only)
+
+t21:  K0  (fwd) ...    ← next cycle starts
+```
+
+- **Phase 1 & 3**: 1 K read per timestamp
+- **Phase 2**: 2 K reads per timestamp (memory-intensive)
+- Light Q cores finish early (small causal boundary), heavy Q cores continue alone
+
+### Benefits
+
+| Metric | Current | Reverse-K |
+|--------|---------|-----------|
+| Barrier cycles per core | 120 | 63 |
+| Useful work per cycle | ~52.5% | 100% |
+| Cores idle at barrier | Many | None |
+
+The total compute work (63 ops/core) is unchanged, but it now happens in **63 synchronized steps** instead of 120. The mcast barrier still exists, but every barrier cycle has all cores doing real work.
+
+### Visualization Script
+
+`ring_iter0_trace.py` generates CSV files showing:
+- Per-core operation sequence with reverse-K ordering
+- `DISTINCT_KV` row: actual K-V pairs used per timestamp (max 2)
+- `IDEAL_KV` row: the repeating 21-cycle pattern
+
+Run: `python3 ring_iter0_trace.py`
+
+### Implementation Considerations
+
+**K Mcast Changes:**
+- Injector reads K chunks per timestamp: K_fwd and/or K_rev
+- Three phases per 21-cycle:
+  - **t=0**: K0 only (fwd starts, rev not yet active) — 1 read
+  - **t=1 to t=10**: K_fwd and K_rev both active — 2 reads
+  - **t=11 to t=20**: K_rev only (fwd cores finished, light Q has small causal boundary) — 1 read
+- Net: ~11 timestamps need 2 K reads, ~10 timestamps need 1 K read per cycle
+
+**Cost/Benefit Analysis (Double-Buffering Model):**
+
+Compute (Tc) and data transfer (Td) happen in parallel. Cycle time = max(Tc, Td).
+
+**Data transfer components:**
+```
+Td = Tk_mcast + Tk_sem + Tk_dram + Tv_dram + Tv_fwd
+```
+
+**Baseline (no causality, compute-bound):**
+```
+Tc > Tk_mcast + Tk_sem + Tk_dram + Tv_dram + Tv_fwd
+```
+When this holds, data transfer is hidden behind compute → cycle time = Tc.
+
+**Current algorithm problem:**
+- Discard cycles still pay full Td (barrier sync, mcast, chain forwarding)
+- But Tc = 0 for discards (no useful compute)
+- Cycle time = Td for discards → pure overhead
+
+**Reverse-K algorithm during Phase 2 (t=1 to t=10):**
+```
+Td_phase2 = 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
+```
+Semaphore (Tk_sem) stays 1x — one barrier sync, just more data through it.
+
+**Key question:** Does Tc still dominate during phase 2?
+```
+Tc > 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
+```
+- **If yes** → still compute-bound, 2x data hidden, cycle time = Tc
+- **If no** → becomes data-bound during phase 2, cycle time = Td_phase2
+
+**Phase comparison:**
+
+| Phase | Cycles | Td | Tc | Cycle Time |
+|-------|--------|----|----|------------|
+| Current (compute) | 63 | 1x | Tc | max(Tc, Td) |
+| Current (discard) | 57 | 1x | 0 | Td (pure overhead) |
+| Reverse-K (phase 1 & 3) | 11 per 21 | 1x | Tc | max(Tc, Td) |
+| Reverse-K (phase 2) | 10 per 21 | **2x** | Tc | max(Tc, 2×Td) |
+
+**SRAM Constraints:**
+- Need space for 2 K chunks simultaneously
+- Options:
+  - Reduce K chunk size to fit both (e.g., 160 → 80 tiles)
+  - Require double buffering for K (ping-pong between 2 K slots)
+  - Disable Q double buffering to free SRAM for second K slot
+- CB sizing for K needs adjustment
+
+**V Chain Changes:**
+- V also processed in reverse order for heavy Q
+- V chain may need to:
+  - Read 2 V chunks per timestamp (fwd + rev)
+  - Forward 2x data down the chain
+- Alternative: separate V chains for fwd/rev paths
+
+**Numerical Considerations:**
+- Online softmax accumulates scores incrementally
+- Reverse K order changes accumulation sequence
+- Should be mathematically equivalent (addition is commutative), but verify numerical stability
+
+**Open Questions:**
+1. **Injector selection**: Currently injector = core with max work. With 2 K reads, does selection criteria change?
+2. **Ring iterations > 0**: Reverse-K designed for ring_iter=0 (local causal). How does it interact with KV from other devices?
+3. **Q reuse**: Q loaded once per q_iter, unchanged. But if K chunk size shrinks, more K iterations per Q — does this affect Q CB?
+4. **Mask generation**: Causal mask indices must account for reverse K iteration order
