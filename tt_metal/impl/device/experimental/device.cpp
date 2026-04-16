@@ -47,7 +47,9 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_src,
     const CoreCoord& logical_dst,
     NOC noc) {
-    return get_worker_noc_hop_distance(mesh_device->get_device(mesh_coord), logical_src, logical_dst, noc);
+    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+    const auto linear_index = mesh_coord.to_linear_index(mesh_device->shape());
+    return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
 }
 
 }  // namespace tt::tt_metal::experimental::Device

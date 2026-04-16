@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -17,6 +16,7 @@ class IDevice;
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshCoordinate;
 }
 
 namespace tt::tt_metal::experimental::Device {
