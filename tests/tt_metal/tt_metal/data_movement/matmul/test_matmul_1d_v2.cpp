@@ -159,7 +159,7 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         }
 
         if (!core_in0_data.empty()) {
-            detail::WriteToDeviceL1(device, matmul_cores_list[core_idx], l1_base_address, core_in0_data);
+            detail::WriteToDeviceL1(device, core_idx, l1_base_address, core_in0_data);
         }
     }
 
