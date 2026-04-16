@@ -18,7 +18,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig, TestMode
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_TRANSPOSE_FACES,
     NUM_FACES,
@@ -100,7 +100,7 @@ def generate_transpose_dest_float_combinations(formats_list):
     ),
 )
 def test_transpose_dest_float(
-    fmt_dest_acc_math_transp_unpack_to_dest, workers_tensix_coordinates
+    fmt_dest_acc_math_transp_unpack_to_dest,
 ):
 
     fmt_dest_acc_math_transp_unpack_to_dest = fmt_dest_acc_math_transp_unpack_to_dest[0]
@@ -110,7 +110,6 @@ def test_transpose_dest_float(
         dest_acc=fmt_dest_acc_math_transp_unpack_to_dest[1],
         math_transpose_faces=fmt_dest_acc_math_transp_unpack_to_dest[2],
         unpack_to_dest=fmt_dest_acc_math_transp_unpack_to_dest[3],
-        workers_tensix_coordinates=workers_tensix_coordinates,
     )
 
 
@@ -125,24 +124,11 @@ def test_transpose_dest_int(
     dest_acc,
     math_transpose_faces,
     unpack_to_dest,
-    workers_tensix_coordinates,
 ):
-    transpose_dest(
-        formats,
-        dest_acc,
-        math_transpose_faces,
-        unpack_to_dest,
-        workers_tensix_coordinates,
-    )
+    transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
 
 
-def transpose_dest(
-    formats,
-    dest_acc,
-    math_transpose_faces,
-    unpack_to_dest,
-    workers_tensix_coordinates,
-):
+def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
     if dest_acc == DestAccumulation.Yes and formats.input_format != DataFormat.Int32:
         pytest.skip("32-bit dest tests fail for Float formats due to bit No.11 issue.")
@@ -166,7 +152,7 @@ def transpose_dest(
         src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
     )
 
-    if TestConfig.MODE != TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         t_matrix = get_golden_generator(TransposeGolden)
         golden_tensor = t_matrix.transpose_faces_multi_tile(
             datacopy_tensor,
@@ -217,7 +203,7 @@ def transpose_dest(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run(workers_tensix_coordinates).result
+    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

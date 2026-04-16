@@ -53,19 +53,33 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
 
+    const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
+    const CoreRangeSet shard_cores =
+        CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
+    const auto num_cores = shard_cores.num_cores();
+
     //-------------------------------------------------------------------------
     // Tilize outputs
     //-------------------------------------------------------------------------
     // Output 0: Per expert total tokens tensor
+    // This data will be replicated on all cores
     auto per_expert_total_tokens_row_bytes = tt::align(experts_per_device * sizeof(uint32_t), l1_alignment);
-    auto per_expert_total_tokens_row_elements = per_expert_total_tokens_row_bytes / sizeof(uint32_t);
-    auto tilize_per_expert_total_tokens_shape = ttnn::Shape({1, per_expert_total_tokens_row_elements});
+    auto per_expert_total_tokens_row_elements = tt::div_up(per_expert_total_tokens_row_bytes, sizeof(uint32_t));
+    auto tilize_per_expert_total_tokens_shape = ttnn::Shape({num_cores, per_expert_total_tokens_row_elements});
+
+    const ttnn::MemoryConfig tilize_per_expert_total_tokens_sharded_memory_config = ttnn::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec(
+            shard_cores, {1, per_expert_total_tokens_row_elements}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+    };
+
     auto tilize_per_expert_total_tokens_spec = TensorSpec(
-        Shape(tilize_per_expert_total_tokens_shape),
+        tilize_per_expert_total_tokens_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+            tilize_per_expert_total_tokens_sharded_memory_config));
 
     // Output 1: Expert activation tensor
     // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]
@@ -76,7 +90,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
     auto tilize_expert_activation_spec = TensorSpec(
-        Shape(tilize_expert_activation_shape),
+        tilize_expert_activation_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -104,8 +118,6 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
      * MM: Used as input CB (where tilized chunks arrive)
      * Combine: Stores output of MM, for input to combine
      */
-    CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
-    CoreRangeSet shard_cores = CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
     ttnn::MemoryConfig output_sharded_memory_config = ttnn::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
@@ -165,11 +177,11 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device());
 
     // re-percieve tilize output tensor as RM for output
-    const auto& output_storage = tilize_output_tensor.device_storage();
-    const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor matmul_output_tensor(output_storage, output_spec, output_topology);
-
+    const auto matmul_output_tensor =
+        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+    TT_FATAL(
+        matmul_output_tensor.tensor_spec() == output_specs[4],
+        "Reinterpreted tensor spec does not match expected output_specs[4]");
     const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
         create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
 
@@ -202,7 +214,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
+    const std::optional<::detail::MoEActivationFunction>& activation_type) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -239,7 +252,8 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
-            .combine_params = combine_params},
+            .combine_params = combine_params,
+            .activation_type = activation_type.value_or(::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

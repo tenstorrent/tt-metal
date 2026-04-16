@@ -23,6 +23,8 @@ void kernel_main() {
     uint32_t val_lo = get_arg_val<uint32_t>(7);
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<

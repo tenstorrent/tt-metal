@@ -37,7 +37,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
+namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace fs = std::filesystem;
 
@@ -154,7 +156,15 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) { return static_cast<std::underlying_type_t<DataFormat>>(f); };
+    // Remap host-only enum values to HW values for device compilation.
+    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
+    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
+    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
+        if (f == DataFormat::Int16) {
+            return 9;  // HW value from tensix_types.h
+        }
+        return static_cast<std::underlying_type_t<DataFormat>>(f);
+    };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 

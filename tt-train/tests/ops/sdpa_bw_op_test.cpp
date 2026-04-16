@@ -11,10 +11,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -510,37 +510,23 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     auto* device = &autograd::ctx().get_device();
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
     // Generate input tensors
-    xt::xarray<float> query_tensor = xt::empty<float>({B, qNH, S, qD});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    const std::array<std::size_t, 4> query_shape{B, qNH, S, qD};
+    const std::array<std::size_t, 4> kv_shape{B, kvNH, S, kvD};
 
-    xt::xarray<float> key_tensor = xt::empty<float>({B, kvNH, S, kvD});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, kvNH, S, kvD});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
 
-    xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, qD});
-    ttml::core::parallel_generate(
-        std::span{grad_output_tensor.data(), grad_output_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    xt::xarray<float> grad_output_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
     const xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
     const auto scaled_query = core::from_xtensor(scale_query_tensor, device);
@@ -677,7 +663,6 @@ TEST_F(SDPABackwardTest, SmallBatch) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
-    // Match nano_gpt training config
     // D=128 needs wider tolerance: 2x inner dim accumulation depth in BF16 matmul
     // causes larger forward-to-backward precision cascade for dQ/dK
     SDPABackwardTestConfig config{
@@ -783,7 +768,7 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
-    // D=128: wider tolerance (see NIGHTLY_NanoGPTConfig comment)
+    // D=128 + S=1024: wider tolerance for accumulated BF16 rounding
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,

@@ -117,7 +117,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     DeviceComputeKernelConfig compute_kernel = compute_kernel_config.value_or(init_device_compute_kernel_config(
-        output_grad.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+        output_grad.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false));
 
     std::vector<std::optional<Tensor>> result(3);
     const auto [input_required_grad, weight_required_grad, bias_required_grad] =

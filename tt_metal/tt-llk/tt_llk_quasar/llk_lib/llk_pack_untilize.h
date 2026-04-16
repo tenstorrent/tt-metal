@@ -61,7 +61,14 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const TileS
  */
 inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_t l1_tile_idx)
 {
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, dest_idx);
+    // If we use semaphore math <-> pack synchronization, for pack untilize we need to pass the dest idx offset accounting for the current dest bank
+    // dest_register_offset is updated at every dest bank switch when using semaphore math <-> pack synchronization and DstSync::Half, for DstSync::Full,
+    // dest_register_offset is always 0 If we use dest dvalid math <-> pack synchronization, for pack untilize we need to pass the dest idx relative to the
+    // current dest bank dest_register_offset is always 0 when using dest dvalid math <-> pack synchronization The number of tiles that fits in one dest bank is
+    const std::uint32_t dest_bank1_offset_idx =
+        (dest_register_offset == ckernel::trisc::DEST_REGISTER_HALF_SIZE) ? ckernel::DEST_NUM_TILES_FP16_HALF : ckernel::DEST_NUM_TILES_FP16_HALF >> 1;
+    const std::uint32_t dest_reg_offset_idx = (dest_register_offset == 0) ? 0 : dest_bank1_offset_idx;
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, dest_reg_offset_idx + dest_idx);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, l1_tile_idx);
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

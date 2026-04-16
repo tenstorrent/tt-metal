@@ -64,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (unpack_to_dest)
     {
-        _llk_unpack_dest_dvalid_section_done_();
+        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
 
@@ -100,10 +100,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, i);
+            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
         }
 
-        _llk_math_set_dvalid_<p_cleardvalid::FPU>();
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
         wait_fpu_idle();
         wait_mop_idle();
@@ -142,10 +142,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_square_, i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_square_, params.DST_INDEX + i, num_sfpu_iterations);
     }
 
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU>();
+    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
     wait_sfpu_idle();
 }

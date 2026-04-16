@@ -27,7 +27,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
     constexpr auto output_args = TensorAccessorArgs<3>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);

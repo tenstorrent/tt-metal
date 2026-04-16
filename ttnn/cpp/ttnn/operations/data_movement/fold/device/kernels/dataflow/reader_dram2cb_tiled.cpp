@@ -20,7 +20,7 @@ void kernel_main() {
 
     // Initialize interleaved address generator for DRAM access
     constexpr auto src_args = TensorAccessorArgs<3>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
