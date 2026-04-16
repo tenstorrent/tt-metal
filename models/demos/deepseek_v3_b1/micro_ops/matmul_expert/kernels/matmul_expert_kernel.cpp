@@ -74,6 +74,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("fmt_dram_addr"),
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
         get_named_compile_time_arg_val("fmt_per_core_bytes"),
+        get_named_compile_time_arg_val("fmt_cb_l1_addr"),
+        get_named_compile_time_arg_val("fmt_sem_addr_0"),
+        get_named_compile_time_arg_val("fmt_sem_addr_1"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("index_offset")>;
 
@@ -95,6 +98,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("sram_base_addrs_l1_addr"),
+        get_named_compile_time_arg_val("sram_meta_words_per_expert"),
+        get_named_compile_time_arg_val("in0_page_size"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("sram_k_per_core"),
         get_named_compile_time_arg_val("sram_k_offset"),
@@ -114,6 +119,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("num_active_experts"),
         get_named_compile_time_arg_val("index_l1_addr"),
         get_named_compile_time_arg_val("cb_fmt_dram"),
+        get_named_compile_time_arg_val("dram_meta_words_per_block"),
+        get_named_compile_time_arg_val("in0_page_size"),
+        get_named_compile_time_arg_val("fmt_cb_l1_addr"),
+        get_named_compile_time_arg_val("fmt_cb_page_size"),
+        get_named_compile_time_arg_val("fmt_sem_addr_0"),
+        get_named_compile_time_arg_val("fmt_sem_addr_1"),
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("dram_fuse_silu"),
         get_named_compile_time_arg_val("index_offset")>;
