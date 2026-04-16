@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,6 +19,42 @@ import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
+
+
+def _multihost_non_writer_should_skip_weight_file_existence_check() -> bool:
+    """See ``validate_weight_config_paths`` — multihost tensor dumps are flushed from global rank 0 only."""
+    if not ttnn.using_distributed_env():
+        return False
+    return int(ttnn.distributed_context_get_rank()) != 0
+
+
+def _write_weight_config_json_atomically(config_path: Path, weight_config: Any) -> None:
+    """Publish ``config.json`` via temp file + ``os.replace`` so readers never see a truncated file (POSIX/NFS)."""
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = config_path.with_name(f".{config_path.name}.write_lock")
+    tmp_path = config_path.with_name(f".{config_path.name}.{os.getpid()}.tmp")
+    payload = json.dumps(weight_config, cls=WeightConfigEncoder).encode("utf-8")
+    with locked_file(lock_path, "w", exclusive=True):
+        try:
+            with tmp_path.open("wb") as tf:
+                tf.write(payload)
+                tf.flush()
+                os.fsync(tf.fileno())
+            os.replace(tmp_path, config_path)
+            try:
+                dfd = os.open(str(config_path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError:
+                pass
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
 
 @contextmanager
@@ -183,13 +220,20 @@ def get_weight_config(
 
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
 
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)
 
-    # Save config with relative paths for portability
-    # Use exclusive lock to prevent concurrent writes and corruption
-    with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(weight_config, f, cls=WeightConfigEncoder)
+    # Publish config with relative paths. On multihost, only global rank 0 writes disk (same as tensor dumps);
+    # other ranks keep ``weight_config`` in memory and synchronize on a barrier before returning.
+    if not ttnn.using_distributed_env():
+        _write_weight_config_json_atomically(config_path, weight_config)
+    else:
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            _write_weight_config_json_atomically(config_path, weight_config)
+        ttnn.distributed_context_barrier()
 
     # Return normalized config with absolute paths for runtime use
     normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
@@ -239,8 +283,8 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
                     f"Expected '{TENSOR_CACHE_EXTENSION}'. Path: {entry.path}"
                 )
 
-            # Validate file exists
-            if not effective_path.exists():
+            # Validate file exists (multihost: only rank 0 performs dump_tensor disk I/O for mesh tensors)
+            if not effective_path.exists() and not _multihost_non_writer_should_skip_weight_file_existence_check():
                 raise ValueError(
                     f"SavedWeight at '{current_prefix}' references missing file. "
                     f"Resolved path: {effective_path} (original: {entry.path})"

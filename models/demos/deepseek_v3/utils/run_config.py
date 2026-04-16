@@ -89,6 +89,11 @@ def create_run_config(  # type: ignore
 
 
 def create_run_config(model_config, weight_config, *model_states, cached_ttnn_weights=None):
+    # Multihost: align ranks before any lazy ``load_weight`` / ``ttnn.load_tensor`` I/O so no rank reads
+    # weight files while another is still finishing cache publication in ``get_weight_config``.
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+
     # The states are merged to create a single unified model state.
     unified_model_state = functools.reduce(
         lambda cfg1, cfg2: _merge_config_containers(
@@ -389,6 +394,11 @@ def is_op_config(obj: Any) -> bool:
 def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
+
+    On multihost meshes, ``ttnn.load_tensor`` opens the path on every MPI rank; cache directories must
+    therefore live on storage visible to all ranks. Callers should finish writing the weight cache
+    (including ``config.json``) and synchronize ranks (see ``get_weight_config`` / ``create_run_config``)
+    before the first ``load_weight`` for that cache.
     """
     # Load tensor directly to device to properly handle sharded layouts
     tensor = ttnn.load_tensor(
