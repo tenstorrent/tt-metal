@@ -1254,12 +1254,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     // precondition: in1_cb has 1 produced (column identity)
     // precondition: out_cb has M produced (input rows)
     // postcondition: out_cb has M produced (reduced rows, in-place)
-    //
-    // In-place reduce: out_cb plays both the in0 and the out roles. This violates
-    // matmul_block's in0_cb != out_cb invariant, so we inline the loop directly here
-    // instead of routing through the shared helper.
-
-    constexpr uint32_t N = 1;
 #ifdef STATS_GRANULARITY
     constexpr uint32_t subblock_h = STATS_GRANULARITY;
     constexpr uint32_t in0_num_subblocks = M / STATS_GRANULARITY;
@@ -1267,25 +1261,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     constexpr uint32_t subblock_h = 1;
     constexpr uint32_t in0_num_subblocks = M;
 #endif
-    const uint32_t subblock_tiles = subblock_h * N;
-
-    mm_block_init_short(out_cb, in1_cb, /*transpose=*/false, /*ct=*/N, /*rt=*/subblock_h, /*kt=*/N);
-    reconfig_data_format(in1_cb, out_cb);
-    cb_wait_front(in1_cb, 1);
-    cb_wait_front(out_cb, M);
-
-    for (uint32_t sub = 0; sub < in0_num_subblocks; ++sub) {
-        tile_regs_acquire();
-        ckernel::matmul_block(out_cb, in1_cb, 0, 0, 0, /*transpose=*/false, N, subblock_h, N);
-        tile_regs_commit();
-        cb_pop_front(out_cb, subblock_tiles);
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_tiles; i++) {
-            pack_tile(i, out_cb);
-        }
-        tile_regs_release();
-        cb_push_back(out_cb, subblock_tiles);
-    }
+    compute_kernel_lib::matmul_reduce_inplace(out_cb, in1_cb, in0_num_subblocks, subblock_h);
 }
 
 /**
