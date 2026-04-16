@@ -173,7 +173,8 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     vector<uint32_t> in1_per_core_read_addr;
-    for (uint32_t i = 0; i < C; i++) {
+    in1_per_core_read_addr.reserve(C);
+for (uint32_t i = 0; i < C; i++) {
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
 
