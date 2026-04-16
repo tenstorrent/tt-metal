@@ -31,7 +31,7 @@ from typing import Union
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 4
+DATABASE_SCHEMA_VERSION = 3
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
