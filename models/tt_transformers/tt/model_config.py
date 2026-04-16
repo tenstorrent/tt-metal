@@ -1170,11 +1170,16 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    def _is_qwen3_embedding_0_6b_or_4b_for_short_seq_l1(self) -> bool:
+        """Only Qwen3-Embedding-0.6B and Qwen3-Embedding-4B use the short-seq L1 prefill path."""
+        tag = f"{self.model_name} {self.base_model_name} {getattr(self, 'CKPT_DIR', '')}".lower()
+        return "qwen3-embedding-0.6b" in tag or "qwen3-embedding-4b" in tag
+
     def use_short_seq_l1_prefill(self, seq_len: int = None):
         """L1-backed prefill activations on single-chip meshes when batch is 1 and sequence is short.
 
-        Reduces DRAM traffic for short prompts (e.g. Qwen3-Embedding). Threshold is
-        ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
+        Enabled only for **Qwen3-Embedding-0.6B** and **Qwen3-Embedding-4B** (not 8B or other models).
+        Threshold is ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
         """
         force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
         if force_dram:
@@ -1184,6 +1189,8 @@ class ModelArgs:
         if self.num_devices != 1:
             return False
         if self.max_batch_size != 1:
+            return False
+        if not self._is_qwen3_embedding_0_6b_or_4b_for_short_seq_l1():
             return False
         max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
         effective_seq_len = self.max_seq_len if seq_len is None else seq_len
