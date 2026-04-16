@@ -144,6 +144,7 @@ jobs:
         --device /dev/tenstorrent
         --device /dev/ipmi0
         --privileged
+        -e TT_GH_CI_INFRA=1
     defaults:
       run:
         shell: bash
@@ -191,6 +192,7 @@ jobs:
           echo "│ Runner:               $RUNNER_LABEL"
           echo "│ Architecture:         $ARCH"
           echo "│ HF_MODEL:             ${INPUT_HF_MODEL:-(not set)}"
+          echo "│ CIv2 (TT_GH_CI_INFRA): 1 (weights resolved via LFC)"
           echo "│ Store Raw Traces:     $STORE_RAW"
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
@@ -204,7 +206,6 @@ jobs:
         timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
         env:
           HF_MODEL: ${{ inputs.HF_MODEL }}
-          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
           TEST_PATH: ${{ inputs.test_path }}
           EXTRA_ARGS: ${{ inputs.extra_args }}
           STORE_RAW_TRACES: ${{ inputs.store-raw-traces }}
