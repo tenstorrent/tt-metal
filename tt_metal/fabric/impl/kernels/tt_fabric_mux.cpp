@@ -273,10 +273,25 @@ void kernel_main() {
 #endif
     }
 
-    fabric_connection.close();
+    // Signal TERMINATED *after* sending the close request to the fabric EDM but *before*
+    // waiting for the EDM's teardown ACK (close_finish).  This breaks the potential deadlock:
+    //
+    //   Old ordering:  close_start → close_finish (polls ETH ACK) → TERMINATED write
+    //     Problem: if the ETH ACK never arrives, TERMINATED is never written, and any
+    //     downstream kernel polling wait_for_fabric_endpoint_terminated() hangs forever.
+    //
+    //   New ordering:  close_start → TERMINATED write → close_finish (polls ETH ACK)
+    //     The writer kernel sees TERMINATED and exits as soon as the EDM has received the
+    //     teardown request.  The mux still completes the full close() handshake before
+    //     exiting and signalling its own dispatch completion, so the dispatch_wait(N) fence
+    //     on the host side continues to guarantee the ETH teardown is done before the next
+    //     EnqueueProgram.  See: https://github.com/tenstorrent/tt-metal/issues/42429
+    fabric_connection.close_start();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+
+    fabric_connection.close_finish();
     set_l1_data_cache<false>();
 }
