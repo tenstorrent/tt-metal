@@ -333,7 +333,9 @@ class TestPerfDemos:
 
         return core_range, mm_cfg, torch_input, torch_w, torch_b
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -445,8 +447,12 @@ class TestPerfDemos:
             ref = ttnn.to_torch(ttnn.rms_norm(u2, weight=tt_w, epsilon=1e-5))
 
             assert_numeric_metrics(ref, fused_result, pcc_threshold=0.97, rtol=0.08, atol=0.2, frobenius_threshold=0.08)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_linear_chain_rms_matmul_rms_unfused(self, device, H, perf_mode):
         core_range, mm_cfg, torch_input, torch_w, torch_b = self._linear_chain_setup(device, H)
@@ -476,6 +482,8 @@ class TestPerfDemos:
             cold = _time_cold(unfused, device)
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Sharded Chain — RMS -> LN (block-sharded, 4x4 grid)
@@ -528,7 +536,9 @@ class TestPerfDemos:
 
         return cores, sharded_mem, program_cfg, tt_input, tt_w, torch_input, torch_w
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_fused(self, device, H, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -644,8 +654,12 @@ class TestPerfDemos:
             assert_numeric_metrics(
                 ref, fused_result, pcc_threshold=0.98, rtol=0.06, atol=0.06, frobenius_threshold=0.06
             )
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     @pytest.mark.parametrize("H", [128, 1536], ids=["H128", "H1536"])
     def test_sharded_chain_rms_layernorm_unfused(self, device, H, perf_mode):
         cores, sharded_mem, program_cfg, tt_input, tt_w, torch_input, torch_w = self._sharded_chain_setup(device, H)
@@ -679,6 +693,8 @@ class TestPerfDemos:
             cold = _time_cold(unfused, device)
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Parallel Chains — LN->MM + RMS->MM on disjoint 1x8 columns
@@ -761,7 +777,9 @@ class TestPerfDemos:
             tB,
         )
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_fused(self, device, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
@@ -871,8 +889,12 @@ class TestPerfDemos:
             ref_b = ttnn.to_torch(ub2)
             assert_numeric_metrics(ref_a, result_a, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
             assert_numeric_metrics(ref_b, result_b, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_parallel_chains_ln_mm_rms_mm_unfused(self, device, perf_mode):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -973,6 +995,8 @@ class TestPerfDemos:
             cold = _time_cold(unfused, device)
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # =================================================================
     # Sharded Tree — LN -> Slice -> Matmul -> Slice -> LN
@@ -1222,7 +1246,9 @@ class TestPerfDemos:
             ),
         )
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_sharded_tree_ln_slice_matmul_slice_ln_fused(self, device, perf_mode):
         (
             ln_stem,
@@ -1492,8 +1518,12 @@ class TestPerfDemos:
             assert_numeric_metrics(
                 ref_rl, result_rl, pcc_threshold=0.97, rtol=0.08, atol=0.08, frobenius_threshold=0.08
             )
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_sharded_tree_ln_slice_matmul_slice_ln_unfused(self, device, perf_mode):
         """Unfused path using ttnn ops with sharded intermediates.
 
@@ -1617,7 +1647,6 @@ class TestPerfDemos:
 
             stem = _torch_layer_norm(torch_input)
             top = stem[:, :, :half, :]
-            bot = stem[:, :, half:, :]
             left = torch.matmul(top.float(), torch_B_left.float()).to(torch.bfloat16)
             ref_tl = _torch_layer_norm(left[:, :, :quarter, :])
             ref_bl = _torch_layer_norm(left[:, :, quarter:half, :])
@@ -1631,6 +1660,8 @@ class TestPerfDemos:
             cold = _time_cold(unfused, device)
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
     # -----------------------------------------------------------------
     # Asymmetric Branches — LN stem -> Parallel(Slice->RMS->RMS, Slice->LN)
@@ -1684,7 +1715,9 @@ class TestPerfDemos:
         )
 
     @pytest.mark.skip(reason="Fused kernel exceeds kernel config buffer size (75520 > 70656)")
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_fused(self, device, perf_mode):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
         from models.experimental.ops.descriptors.normalization import rms_norm, layer_norm
@@ -1832,8 +1865,12 @@ class TestPerfDemos:
         elif perf_mode == "e2e":
             e2e = _time_e2e(container.run, device)
             pcc_l, pcc_r = _pcc_check()
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
-    @pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+    @pytest.mark.parametrize(
+        "perf_mode", ["none"]
+    )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
     def test_asymmetric_branches_ln_slice_rms_ln_unfused(self, device, perf_mode):
         """Unfused path: all 6 ops serialize on (0,0)-based grids.
 
@@ -1935,6 +1972,8 @@ class TestPerfDemos:
             cold = _time_cold(unfused, device)
         elif perf_mode == "e2e":
             e2e = _time_e2e(unfused, device)
+        else:
+            pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
 
 # =============================================================================
@@ -2223,7 +2262,9 @@ def _non_contiguous_grid_setup(device, num_tiles=4):
     return stem, op_a, op_b, t_in, t_out_a, t_out_b
 
 
-@pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+@pytest.mark.parametrize(
+    "perf_mode", ["none"]
+)  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 def test_non_contiguous_core_grid_fused(device, perf_mode):
     from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
@@ -2265,6 +2306,8 @@ def test_non_contiguous_core_grid_fused(device, perf_mode):
         assert_numeric_metrics(
             ref, ttnn.to_torch(out_b), pcc_threshold=0.999, check_allclose=False, check_frobenius=False, check_ulp=False
         )
+    else:
+        pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
 
 
 # -----------------------------------------------------------------
@@ -2307,7 +2350,9 @@ def _barrier_bench_setup(device, num_phases, num_cores):
 @pytest.mark.skipif(
     is_watcher_enabled(), reason="pytest-timeout plugin interacts with watcher on device reopen (noop kernels)"
 )
-@pytest.mark.parametrize("perf_mode", ["none"])  # also: "cold_start", "e2e", "device_fw"
+@pytest.mark.parametrize(
+    "perf_mode", ["none"]
+)  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
 @pytest.mark.parametrize("num_cores", [1, 8, 16, 64])
 @pytest.mark.parametrize("num_phases", [2, 3, 4, 5, 6])
 def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
@@ -2321,40 +2366,32 @@ def test_barrier_overhead(device, num_phases, num_cores, perf_mode):
     if perf_mode == "none":
         seq.run()
         ttnn.synchronize_device(device)
-        return
-
-    if perf_mode == "device_fw":
+    elif perf_mode == "device_fw":
         seq.run()
         ttnn.synchronize_device(device)
-        return
-
-    if perf_mode == "cold_start":
+    elif perf_mode == "cold_start":
         cold = _time_cold_fused(lambda: Sequential(*ops), device)
-        return
+    elif perf_mode == "e2e":
+        fused_e2e = _time_e2e(seq.run, device)
 
-    # perf_mode == "e2e"
-    # -- Fused timing --
-    fused_e2e = _time_e2e(seq.run, device)
-
-    # -- Unfused timing: launch each phase as a separate 1-op fused kernel --
-    unfused_ops = [Sequential(op) for op in ops]
-    for uf in unfused_ops:
-        uf.run()
-    ttnn.synchronize_device(device)
-
-    def launch_unfused():
+        unfused_ops = [Sequential(op) for op in ops]
         for uf in unfused_ops:
             uf.run()
+        ttnn.synchronize_device(device)
 
-    unfused_e2e = _time_e2e(launch_unfused, device)
+        def launch_unfused():
+            for uf in unfused_ops:
+                uf.run()
 
-    # -- 1-phase baseline for per-barrier calculation --
-    ops_1 = _barrier_bench_setup(device, 1, num_cores)
-    seq_1 = Sequential(*ops_1)
-    baseline_e2e = _time_e2e(seq_1.run, device)
+        unfused_e2e = _time_e2e(launch_unfused, device)
 
-    # Convert to microseconds
-    fused_us = fused_e2e * 1000
-    unfused_us = unfused_e2e * 1000
-    baseline_us = baseline_e2e * 1000
-    per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
+        ops_1 = _barrier_bench_setup(device, 1, num_cores)
+        seq_1 = Sequential(*ops_1)
+        baseline_e2e = _time_e2e(seq_1.run, device)
+
+        fused_us = fused_e2e * 1000
+        unfused_us = unfused_e2e * 1000
+        baseline_us = baseline_e2e * 1000
+        per_barrier_us = (fused_us - baseline_us) / (num_phases - 1)
+    else:
+        pytest.fail(f"Unsupported perf_mode={perf_mode!r}")
