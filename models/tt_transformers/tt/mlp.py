@@ -122,7 +122,8 @@ class MLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        seq_len = x.shape[-2]
+        logical_seq_len = x.shape[-2]
+        seq_len = logical_seq_len
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(
@@ -132,9 +133,21 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
-        if mode == Mode.PREFILL and seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
+        # Batched prefill can make total seq_len = batch * per_user_seq (e.g. 25*512=12800) which may not
+        # divide prefill_len_cutoff (1024 on WH). Pad to a multiple before chunk reshape; slice at end.
+        mlp_prefill_pad = 0
+        cutoff = self.args.prefill_len_cutoff
+        if mode == Mode.PREFILL and seq_len >= cutoff:  # 512 if Blackhole, 1024 if Wormhole
+            if seq_len % cutoff != 0:
+                mlp_prefill_pad = cutoff - (seq_len % cutoff)
+                x = ttnn.pad(
+                    x,
+                    padding=((0, 0), (0, 0), (0, mlp_prefill_pad), (0, 0)),
+                    value=0.0,
+                )
+                seq_len = logical_seq_len + mlp_prefill_pad
             # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
+            x = ttnn.reshape(x, [1, seq_len // cutoff, cutoff, -1])
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
@@ -322,6 +335,8 @@ class MLP(LightweightModule):
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
+        if mode == Mode.PREFILL and mlp_prefill_pad:
+            w2_out_reduced = w2_out_reduced[:, :, :logical_seq_len, :]
 
         if mode == Mode.DECODE:
             w2_out_reduced = ttnn.to_memory_config(
