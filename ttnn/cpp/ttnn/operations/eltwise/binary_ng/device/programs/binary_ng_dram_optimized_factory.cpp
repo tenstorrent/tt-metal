@@ -141,6 +141,10 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     const BinaryNgParams& operation_attributes, const BinaryNgInputs& tensor_args) {
     const auto& a = tensor_args.input_tensor_a;
 
+    if (operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
+        return "Subtile broadcast type is not supported for DRAM optimized program";
+    }
+
     if (!operation_attributes.memory_config.is_dram()) {
         return "Memory config must be DRAM";
     }
@@ -407,11 +411,21 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     // }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (is_sfpu_op && op_type != BinaryOpType::POWER) {
-        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tt::CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tt::CBIndex::c_4] = UnpackToDestMode::UnpackToDestFp32;
+    if (is_sfpu_op) {
+        if (op_type != BinaryOpType::POWER) {
+            unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_3] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_4] = UnpackToDestMode::UnpackToDestFp32;
+        } else {
+            auto unpack_mode = [](DataType dt) {
+                return (dt == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            };
+            unpack_to_dest_mode[tt::CBIndex::c_0] = unpack_mode(a_dtype);
+            unpack_to_dest_mode[tt::CBIndex::c_1] = unpack_mode(b_dtype);
+            unpack_to_dest_mode[tt::CBIndex::c_3] = unpack_mode(a_dtype);
+            unpack_to_dest_mode[tt::CBIndex::c_4] = unpack_mode(b_dtype);
+        }
     }
 
     log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
