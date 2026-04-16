@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, get_worker_noc_hop_distance
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
@@ -286,6 +286,18 @@ class AttentionBlock:
                 per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
                 cbs_list, worker_core
         """
+
+        def get_gather_noc_idx_per_core(mesh_device, mesh_coord, sender_grid, target_core):
+            gather_noc_idx_per_core = []
+            for core in ttnn.corerange_to_cores(sender_grid, row_wise=True):
+                noc0_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_0, mesh_coord)
+                noc1_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_1, mesh_coord)
+                if noc0_hop <= noc1_hop:
+                    gather_noc_idx_per_core.append((core, 0))
+                else:
+                    gather_noc_idx_per_core.append((core, 1))
+            return gather_noc_idx_per_core
+
         sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
 
         # Get mesh/device info
@@ -699,8 +711,7 @@ class AttentionBlock:
         gather2_data_size_bytes = matmul4_out_w_per_core * tile_1x32_size
         gather2_src_num_pages = matmul4_out_w_per_core  # 4 pages per sender
         gather2_dst_num_pages = num_matmul4_cores * matmul4_out_w_per_core  # 64 * 4 = 256 pages
-        gather2_noc0_num_senders = num_matmul4_cores
-        gather2_noc1_num_senders = 0
+        # gather2 noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
 
         # ========================================================================
         # Mcast3 parameters: [1, 8192] to 130 cores (13x10 grid)
@@ -715,8 +726,7 @@ class AttentionBlock:
         gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
         gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
         gather3_dst_num_pages = num_tiles  # Same as input tensor
-        gather3_noc0_num_senders = num_matmul5_cores
-        gather3_noc1_num_senders = 0
+        # gather3 noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
 
         # ========================================================================
         # Semaphore IDs
@@ -1293,22 +1303,17 @@ class AttentionBlock:
         # Note: matmul_input_page_size == matmul_output_page_size (both are 1x32 tiles)
         gather_reduce_data_size_bytes = matmul_input_page_size
 
-        # Get number of sender cores (matmul grid)
-        gather_reduce_sender_cores_list = ttnn.corerange_to_cores(gather_reduce_sender_grid, row_wise=True)
-        gather_reduce_num_senders = len(gather_reduce_sender_cores_list)
-
-        # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
-        gather_reduce_noc0_num_senders = gather_reduce_num_senders
-        gather_reduce_noc1_num_senders = 0
-        # Gather sender compile-time args (named args for NCRISC on matmul cores)
-        # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
+        # Gather sender compile-time args (named args for NCRISC on matmul cores).
+        # Sender picks one of noc0/noc1 receiver_semaphore_addr at compile-time based on
+        # its per-core gather_reduce_noc_idx; noc0/noc1 sender counts are added per-device.
         # Grid-based destination and sender index are computed in kernel from my_logical_x_/y_.
         gather_reduce_src_num_pages = 1  # Matmul output tiles per core (single 1x32 tile)
         gather_reduce_sender_named_compile_time_args = [
             ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
             ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
             ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
-            ("gather_reduce_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("gather_reduce_grid_start_x", matmul_bbox.start.x),
@@ -1321,12 +1326,8 @@ class AttentionBlock:
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
-        # Plus destination CB info for reserve/push
-        # Writes directly to rmsnorm2_input_cb (3 tiles of 16x32 = 3072 bytes)
+        # noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
         gather_reduce_receiver_named_compile_time_args = [
-            ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
-            ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
             ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_dst_cb", gather_reduce_scratch_cb),
@@ -1389,14 +1390,6 @@ class AttentionBlock:
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
 
-        # Get number of sender cores (matmul grid)
-        dkv_gather_sender_cores_list = ttnn.corerange_to_cores(dkv_gather_sender_grid, row_wise=True)
-        dkv_gather_num_senders = len(dkv_gather_sender_cores_list)
-
-        # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
-        dkv_gather_noc0_num_senders = dkv_gather_num_senders
-        dkv_gather_noc1_num_senders = 0
-
         # Get sender grid dimensions for computing per-core offset in kernel
         # Use logical coordinates since kernel uses UnifiedCoreDescriptor with my_logical_x_/y_
         dkv_gather_sender_grid_ranges = list(dkv_gather_sender_grid.ranges())
@@ -1406,16 +1399,16 @@ class AttentionBlock:
         dkv_gather_sender_grid_end_x = dkv_gather_sender_grid_range.end.x
         dkv_gather_sender_grid_end_y = dkv_gather_sender_grid_range.end.y
 
-        # Gather sender compile-time args (named args for NCRISC on matmul cores)
-        # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
-        # Plus grid info for computing per-core offset
+        # Gather sender compile-time args (named args for NCRISC on matmul cores).
+        # Sender and receiver are both on NCRISC (ReceiverOnNCRISC) so both noc0/noc1
+        # receiver semaphore addrs come from dkv_gather_receiver_named_compile_time_args below;
+        # the sender selects at compile-time based on its per-core dkv_gather_noc_idx.
         dkv_gather_src_num_pages = dkv_matmul_out_w  # dkv matmul output tiles per core (must match matmul cb_push_back)
         dkv_gather_data_size_bytes = dkv_gather_src_num_pages * dkv_matmul_input_page_size
         dkv_gather_sender_named_compile_time_args = [
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
             ("dkv_gather_dest_noc_y", dkv_gather_dest_noc_core.y),
             ("dkv_gather_data_size_bytes", dkv_gather_data_size_bytes),
-            ("dkv_gather_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_src_cb", dkv_matmul_output_cb),  # Source CB for gather (dkv matmul output)
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", dkv_gather_sender_grid_start_x),
@@ -1425,13 +1418,9 @@ class AttentionBlock:
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
         ]
 
-        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr, noc1_receiver_semaphore_addr
-        # Plus destination CB info for reserve/push
-        # Writes directly to kv_rmsnorm_input_cb
+        # Gather receiver compile-time args (on NCRISC via ReceiverOnNCRISC mode).
+        # noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
         dkv_gather_receiver_named_compile_time_args = [
-            ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
-            ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
             ("dkv_gather_noc0_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_noc1_receiver_semaphore_addr", gather_noc1_receiver_semaphore_addr),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
@@ -1721,11 +1710,12 @@ class AttentionBlock:
             ("matmul4_out", matmul4_out_cb),
             ("matmul4_k_num_tiles", matmul4_k_num_tiles),
             ("matmul4_out_w_per_core", matmul4_out_w_per_core),
-            # Gather2 sender
+            # Gather2 sender (picks noc0/noc1 semaphore id at compile-time per gather2_noc_idx)
             ("gather2_dest_noc_x", gather_dest_noc_core.x),
             ("gather2_dest_noc_y", gather_dest_noc_core.y),
             ("gather2_data_size_bytes", gather2_data_size_bytes),
-            ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
+            ("gather2_noc0_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
+            ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
             ("gather2_src_cb", matmul4_out_cb),
             ("gather2_src_num_pages", gather2_src_num_pages),
             ("gather2_sender_grid_start_x", 0),
@@ -1743,11 +1733,12 @@ class AttentionBlock:
             ("matmul5_out", matmul5_out_cb),
             ("matmul5_k_num_tiles", matmul5_k_num_tiles),
             ("matmul5_out_w_per_core", matmul5_out_w_per_core),
-            # Gather3 sender (destination is now sender core 11,9)
+            # Gather3 sender (picks noc0/noc1 semaphore id at compile-time per gather3_noc_idx)
             ("gather3_dest_noc_x", ccl_sender_noc_core.x),
             ("gather3_dest_noc_y", ccl_sender_noc_core.y),
             ("gather3_data_size_bytes", gather3_data_size_bytes),
-            ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+            ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+            ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
             ("gather3_src_cb", matmul5_out_cb),
             ("gather3_src_num_pages", gather3_src_num_pages),
             ("gather3_sender_grid_start_x", 0),
@@ -1797,9 +1788,7 @@ class AttentionBlock:
             # Matmul4/2 (no-op)
             ("matmul4_out", matmul4_out_cb),
             ("matmul5_out", matmul5_out_cb),
-            # Gather2 receiver
-            ("gather2_noc0_num_senders", gather2_noc0_num_senders),
-            ("gather2_noc1_num_senders", gather2_noc1_num_senders),
+            # Gather2 receiver (noc0/noc1 sender counts added per-device)
             ("gather2_noc0_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
             ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
             ("gather2_dst_cb", gather2_dst_cb),
@@ -1810,9 +1799,7 @@ class AttentionBlock:
             ("mcast3_src_cb", gather2_dst_cb),
             ("mcast3_src_num_pages", mcast3_src_num_pages),
             ("mcast3_dst_cb", matmul5_in0_cb),
-            # Gather3 receiver (now on sender core 11,9)
-            ("gather3_noc0_num_senders", gather3_noc0_num_senders),
-            ("gather3_noc1_num_senders", gather3_noc1_num_senders),
+            # Gather3 receiver (now on sender core 11,9; noc0/noc1 sender counts added per-device)
             ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
             ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
             ("gather3_dst_cb", gather3_dst_cb),
@@ -3707,6 +3694,78 @@ class AttentionBlock:
                     "fwd_fabric_node_id": fwd_fabric_node_id,
                     "bwd_fabric_node_id": bwd_fabric_node_id,
                 }
+                # Sender grids must match the ACTUAL senders for each gather so that the
+                # per-core noc_idx descriptor and the noc0/noc1 sender counts agree with the
+                # set of cores that will actually issue writes/increments.
+                gather_reduce_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, gather_reduce_sender_grid, rmsnorm_core
+                )
+                gather2_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, matmul4_core_grid, rmsnorm_core
+                )
+                gather3_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, matmul5_active_core_grid, ccl_sender_core
+                )
+                dkv_gather_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, dkv_gather_sender_grid, dkv_gather_receiver_core
+                )
+                additional_per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather_reduce_noc_idx",
+                        core_values=gather_reduce_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather2_noc_idx",
+                        core_values=gather2_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather3_noc_idx",
+                        core_values=gather3_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="dkv_gather_noc_idx",
+                        core_values=dkv_gather_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                ]
+
+                # Derive per-device noc0/noc1 sender counts for each gather from the
+                # per-core noc_idx assignments. The receiver waits on both noc0 and noc1
+                # semaphores using these counts.
+                def _count_noc_senders(noc_idx_per_core):
+                    noc0 = sum(1 for _, idx in noc_idx_per_core if idx == 0)
+                    noc1 = sum(1 for _, idx in noc_idx_per_core if idx == 1)
+                    return noc0, noc1
+
+                gather_reduce_noc0_num_senders, gather_reduce_noc1_num_senders = _count_noc_senders(
+                    gather_reduce_noc_idx_per_core
+                )
+                gather2_noc0_num_senders, gather2_noc1_num_senders = _count_noc_senders(gather2_noc_idx_per_core)
+                gather3_noc0_num_senders, gather3_noc1_num_senders = _count_noc_senders(gather3_noc_idx_per_core)
+                dkv_gather_noc0_num_senders, dkv_gather_noc1_num_senders = _count_noc_senders(
+                    dkv_gather_noc_idx_per_core
+                )
+                gather_noc_sender_counts_named_compile_time_args = [
+                    ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
+                    ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
+                    ("gather2_noc0_num_senders", gather2_noc0_num_senders),
+                    ("gather2_noc1_num_senders", gather2_noc1_num_senders),
+                    ("gather3_noc0_num_senders", gather3_noc0_num_senders),
+                    ("gather3_noc1_num_senders", gather3_noc1_num_senders),
+                    ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
+                    ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
+                ]
+                # gather_reduce/gather2/gather3 receivers are on BRISC; dkv_gather receiver is on NCRISC.
+                brisc_named_compile_time_args = brisc_named_compile_time_args + list(
+                    gather_noc_sender_counts_named_compile_time_args
+                )
+                ncrisc_named_compile_time_args = ncrisc_named_compile_time_args + [
+                    ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
+                    ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
+                ]
 
                 per_device_contexts.append(
                     {
@@ -3721,7 +3780,8 @@ class AttentionBlock:
                         "ncrisc_common_runtime_args": ncrisc_common_runtime_args,
                         "trisc_common_runtime_args": trisc_common_runtime_args,
                         "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
-                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors
+                        + additional_per_core_compile_time_descriptors,
                         "per_core_ncrisc_args": per_core_ncrisc_args,
                         "per_core_brisc_args": per_core_brisc_args,
                         "per_core_trisc_args": per_core_trisc_args,

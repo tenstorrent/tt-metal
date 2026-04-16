@@ -259,6 +259,8 @@ if constexpr (!Core::skip_ccl) {
                 get_named_compile_time_arg_val("dkv_gather_row_major"),
                 get_write_ptr(get_named_compile_time_arg_val(
                     "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+                0,                            // sender_idx unused (grid-based dkv_gather)
+                noc_index,
             },
         .receiver =
             {

@@ -114,6 +114,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather2_row_major"),
                 get_named_compile_time_arg_val("gather2_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather2_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -152,6 +153,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather3_row_major"),
                 get_named_compile_time_arg_val("gather3_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather3_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
