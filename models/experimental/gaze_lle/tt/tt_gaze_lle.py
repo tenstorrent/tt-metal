@@ -21,6 +21,10 @@ def _to_device(t: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LA
     return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
 
 
+# p150a Blackhole has a 10x13 compute grid; openvla uses 10x12 and it is validated.
+_CORE_GRID = ttnn.CoreGrid(y=10, x=13)
+
+
 class _BlockParams:
     """Holds on-device weights for one DINOv2 block."""
 
@@ -47,22 +51,22 @@ class _BlockParams:
 
 def _dinov2_attention(x, p: _BlockParams, num_heads: int):
     hidden_states = ttnn.layer_norm(x, weight=p.norm1_w, bias=p.norm1_b, epsilon=1e-6)
-    qkv = ttnn.linear(hidden_states, p.qkv_w, bias=p.qkv_b)
+    qkv = ttnn.linear(hidden_states, p.qkv_w, bias=p.qkv_b, core_grid=_CORE_GRID)
     q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads)
     ttnn.deallocate(qkv)
 
     head_dim = hidden_states.shape[-1] // num_heads
     q = ttnn.mul_(q, 1.0 / (head_dim**0.5))
-    scores = ttnn.matmul(q, k)
+    scores = ttnn.matmul(q, k, core_grid=_CORE_GRID)
     ttnn.deallocate(q)
     ttnn.deallocate(k)
     probs = ttnn.softmax_in_place(scores, numeric_stable=True)
-    ctx = ttnn.matmul(probs, v)
+    ctx = ttnn.matmul(probs, v, core_grid=_CORE_GRID)
     ttnn.deallocate(probs)
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx)
 
-    out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b)
+    out = ttnn.linear(ctx, p.proj_w, bias=p.proj_b, core_grid=_CORE_GRID)
     ttnn.deallocate(ctx)
     out = ttnn.mul(out, p.ls1)
     return ttnn.add(x, out)
@@ -70,8 +74,8 @@ def _dinov2_attention(x, p: _BlockParams, num_heads: int):
 
 def _dinov2_mlp(x, p: _BlockParams):
     hidden_states = ttnn.layer_norm(x, weight=p.norm2_w, bias=p.norm2_b, epsilon=1e-6)
-    h = ttnn.linear(hidden_states, p.fc1_w, bias=p.fc1_b, activation="gelu")
-    h = ttnn.linear(h, p.fc2_w, bias=p.fc2_b)
+    h = ttnn.linear(hidden_states, p.fc1_w, bias=p.fc1_b, activation="gelu", core_grid=_CORE_GRID)
+    h = ttnn.linear(h, p.fc2_w, bias=p.fc2_b, core_grid=_CORE_GRID)
     h = ttnn.mul(h, p.ls2)
     return ttnn.add(x, h)
 
