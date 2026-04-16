@@ -53,6 +53,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 #endif
 }
 
+#ifndef ARCH_QUASAR
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 
 // clang-format off
@@ -97,7 +98,6 @@ ALWI void tilizeA_B_reduce_init(
 }
 #endif
 
-#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Re-initializes the tilize operation and reconfigures the unpacker with CB data type.
@@ -204,7 +204,6 @@ ALWI void unpack_tilizeA_B_block(
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
 }
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -221,16 +220,13 @@ ALWI void unpack_tilizeA_B_block(
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-#ifndef ARCH_QUASAR
+
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
 #endif
 }
-#endif  // !ARCH_QUASAR
-
-#ifndef ARCH_QUASAR
 
 // clang-format off
 /**
