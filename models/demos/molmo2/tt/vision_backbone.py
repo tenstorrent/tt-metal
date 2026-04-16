@@ -23,18 +23,18 @@ import torch
 
 import ttnn
 
-# Threshold for single-pass vs chunked pooling. 32 frames = 23328 patches fits in DRAM;
-# 53+ frames OOMs during cross-attention all_reduce in image_pooling.
+# Threshold for single-pass vs chunked pooling (pool path only; not vision trace buffer size).
 MAX_FRAMES_FOR_SINGLE_POOL = 32
 
-# Fixed upper bound for the pool trace feature buffer (image_features_2d rows).
-# Using 80 frames = 58320 patches × 2304 × 2 bytes ≈ 268 MB per device.
-# This must be a compile-time constant so the same pool trace can be reused across videos.
+# Fixed upper bound for pre-alloc vision trace + pool feature buffers (729 patches/frame).
+# 80 frames = 58320 tokens × 1152 × 2 bytes ≈ 134 MB for embedded trace slice per device.
+# Must cover max demo/video frame count used with --use-vision-trace (e.g. 70×729=51030).
 MAX_VIT_FRAMES_FOR_POOL = 80
 
 # Upper bounds for buffers created once in VisionBackbone.__init__ (pooling mask + vision trace I/O).
 DEFAULT_PATCHES_PER_FRAME = (378 // 14) ** 2  # 729
-DEFAULT_VISION_TRACE_MAX_FRAMES = MAX_FRAMES_FOR_SINGLE_POOL
+# Align with MAX_VIT_FRAMES_FOR_POOL: 32 frames (23328 tokens) is too small for multi-minute video traces.
+DEFAULT_VISION_TRACE_MAX_FRAMES = MAX_VIT_FRAMES_FOR_POOL
 DEFAULT_VISION_TRACE_MAX_N_OUT = 256  # covers 81 (video) and 169 (multi-crop) layouts
 DEFAULT_VISION_TRACE_MAX_K_POOL = 16
 
