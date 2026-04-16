@@ -88,7 +88,7 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    auto shape = input_tensor.padded_shape();
+    auto shape = input_tensor.logical_shape();
     if (!args.token_idx.has_value()) {
         shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
     }
