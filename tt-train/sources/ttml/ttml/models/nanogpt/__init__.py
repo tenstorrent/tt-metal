@@ -162,6 +162,8 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
     return NanoGPT(config)
 
 
+from .flops import calculate_flops_per_token
+
 __all__ = [
     "PositionalEmbedding",
     "TrainablePositionalEmbedding",
@@ -169,5 +171,6 @@ __all__ = [
     "NanoGPT",
     "NanoGPTExperimentalConfig",
     "NanoGPTConfig",
+    "calculate_flops_per_token",
     "create_nanogpt",
 ]
