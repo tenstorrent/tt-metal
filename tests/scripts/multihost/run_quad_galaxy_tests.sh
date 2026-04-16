@@ -192,7 +192,25 @@ setup_quad_galaxy_env() {
     _resolve_deepseekv3_model
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
-    export USE_TORUS_MODE=1
+
+    # DeepSeek V3 reads USE_TORUS_MODE: any set value enables ring/torus; unset => linear.
+    # Default is ON; set DS_QUAD_USE_TORUS_MODE=0 or pass --no-torus to disable for debugging.
+    local _ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    _ds_quad_torus="${_ds_quad_torus,,}"
+    case "${_ds_quad_torus}" in
+        ""|1|true|yes|on)
+            export USE_TORUS_MODE=1
+            echo "Quad Galaxy: USE_TORUS_MODE=1 (DeepSeek V3 torus/ring mode enabled)."
+            ;;
+        0|false|no|off)
+            unset USE_TORUS_MODE
+            echo "Quad Galaxy: USE_TORUS_MODE unset (DeepSeek V3 torus/ring mode disabled)."
+            ;;
+        *)
+            echo "Error: unsupported DS_QUAD_USE_TORUS_MODE='${DS_QUAD_USE_TORUS_MODE:-}' (use 1|0|true|false|yes|no|on|off)." >&2
+            exit 1
+            ;;
+    esac
 }
 
 # Compute pytest --timeout value.
@@ -470,6 +488,9 @@ run_quad_galaxy_tests() {
 #   MULTIHOST_SOURCE_VENV=/path      - source venv for setup_shared_venv.sh
 #   MULTIHOST_MATCH_CI_HOME=1        - export HOME=\$TT_METAL_HOME (CI parity)
 #   MULTIHOST_FORCE_PYTHONHOME=0     - disable PYTHONHOME override for ranks
+#   DS_QUAD_USE_TORUS_MODE=0         - quad DeepSeek runs: do not set USE_TORUS_MODE (debug /
+#                                    linear fabric). Default is 1 (same as unset). Also:
+#                                    pass --no-torus on the command line.
 ###############################################################################
 
 _set_multihost_pythonhome_if_needed() {
@@ -558,6 +579,7 @@ main() {
     #   $1 test function (default: all)
     #   $2 UPR mode (all|32|8), optional when it is not an option flag
     # Optional local-testing flags:
+    #   --no-torus                       - quad DeepSeek: unset USE_TORUS_MODE (see DS_QUAD_USE_TORUS_MODE)
     #   --model-path <path>
     #   --cache-path <path>
     local test_function="all"
@@ -579,6 +601,10 @@ main() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --no-torus)
+                export DS_QUAD_USE_TORUS_MODE=0
+                shift
+                ;;
             --model-path)
                 if [[ $# -lt 2 ]]; then
                     echo "Error: --model-path requires a value." >&2
@@ -597,7 +623,7 @@ main() {
                 ;;
             *)
                 echo "Unknown argument: $1" >&2
-                echo "Usage: $0 [test_function] [upr_mode] [--model-path <path>] [--cache-path <path>]" >&2
+                echo "Usage: $0 [test_function] [upr_mode] [--no-torus] [--model-path <path>] [--cache-path <path>]" >&2
                 exit 1
                 ;;
         esac
@@ -666,8 +692,8 @@ main() {
             echo "Unknown test function: $test_function" 1>&2
             echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
-            echo "Optional flags for local testing: --model-path <path> --cache-path <path>" 1>&2
-            echo "Example: $0 quad_demo 32 --model-path /data/deepseek/DeepSeek-R1-0528-dequantized --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
+            echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
+            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
             exit 1
             ;;
     esac
