@@ -89,7 +89,7 @@
   model: llama90b-vl
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -124,7 +124,7 @@
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

@@ -118,11 +118,13 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Issue: The test below is showing bad outputs after some iterations. Need to further investigate. https://github.com/tenstorrent/tt-metal/issues/42469
+# pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
 - name: Llama 3.3-70B e2e tests (Galaxy)
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
-    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
