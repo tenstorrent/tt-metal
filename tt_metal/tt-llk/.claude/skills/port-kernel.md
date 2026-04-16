@@ -16,7 +16,8 @@ user_invocable: true
 
 ## What to Do
 
-1. Parse: kernel name, source architecture, target architecture
+1. Parse: kernel name, source architecture, target architecture.
+   Derive `kernel_type` (sfpu/math/unpack/pack) by checking which subdirectory or header prefix the kernel lives under in the source architecture.
 2. Launch two tasks IN PARALLEL:
 
 **Task A — Source sage**: Launch the sage for the source architecture
@@ -45,7 +46,9 @@ Agent tool:
 
 3. While sages run, read the **test harness** for the target architecture:
    - Search `tests/sources/` for matching test files
-   - Extract `#ifdef ARCH_{TARGET}` sections for expected function signatures
+   - Extract `#ifdef ARCH_{TARGET}` sections for expected function signatures when present
+   - If no `ARCH_{TARGET}` sections exist, fall back to unguarded/common signatures in the matching test files
+   - Also consult `tests/helpers/include/*` for target-specific declarations/helpers (especially for Quasar), and if needed inspect target arch headers directly
    - Note template parameters and argument types
 
 4. Aggregate into structured porting guidance:

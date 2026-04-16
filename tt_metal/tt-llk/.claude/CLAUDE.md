@@ -65,7 +65,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 ### Key Concepts
 - `CHIP_ARCH` env var selects the target architecture (`blackhole`, `wormhole`, `quasar`)
 - Tests run from the `tests/` directory
-- Logs: `/tmp/llk_test/compile.log` (compilation), `/tmp/llk_test/run.log` (execution)
+- Logs: `/tmp/llk_test_$(whoami)/compile.log` (compilation), `/tmp/llk_test_$(whoami)/run.log` (execution)
 - Test isolation: tests can affect each other via HW state leaking between kernel reconfigurations (reconfig escapes)
 - Key files: `tests/python_tests/conftest.py`, `tests/python_tests/helpers/test_config.py`
 

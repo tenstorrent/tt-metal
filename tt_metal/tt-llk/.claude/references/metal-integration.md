@@ -13,13 +13,13 @@ Layer 2:  CKernels LLK API         tt_metal/hw/ckernels/{arch}/metal/llk_api/
 Layer 1:  LLK Library (tt-llk)     tt_metal/tt-llk/tt_llk_{arch}/llk_lib/
 ```
 
-Changes flow upward. Layer 2 is almost always impacted. Layers 3 and 4 depend on what changed.
+Changes may propagate upward; Layer 2 is almost always the first place to check. Layer 3 is commonly edited; Layer 4 rarely needs changes.
 
 ### Layer 2: CKernels LLK API Wrappers
 
 **Path:** `tt_metal/hw/ckernels/{arch}/metal/llk_api/`
 
-Per-architecture wrappers (~21 top-level files + ~169 SFPU wrappers in `llk_sfpu/` per arch). These `#include` LLK headers directly and expose the non-underscored API functions.
+Per-architecture wrappers (top-level files + SFPU wrappers in `llk_sfpu/` per arch). These `#include` LLK headers directly and expose the non-underscored API functions.
 
 Example: `llk_math_binary_api.h` includes `llk_math_eltwise_binary.h` from tt-llk, wraps `_llk_math_eltwise_binary_init_<>()` into `llk_math_eltwise_binary_init<>()`.
 
@@ -27,7 +27,7 @@ Example: `llk_math_binary_api.h` includes `llk_math_eltwise_binary.h` from tt-ll
 
 **Path:** `tt_metal/hw/inc/api/compute/`
 
-Architecture-agnostic `ckernel::` namespace (~46 headers + ~60 unary ops in `eltwise_unary/`). Uses `MATH()`, `UNPACK()`, `PACK()` macros. Has `#ifndef ARCH_QUASAR` guards for Quasar differences.
+Architecture-agnostic `ckernel::` namespace (headers + unary ops in `eltwise_unary/`). Uses `MATH()`, `UNPACK()`, `PACK()` macros. Has `#ifndef ARCH_*` guards for architecture differences.
 
 ### Layer 4: TTNN Direct Consumers
 
@@ -38,10 +38,7 @@ Most TTNN operations use the Compute API cleanly. Some bypass it and include LLK
 Grep for "#include.*llk_math_eltwise|#include.*llk_unpack|#include.*llk_pack|#include.*ckernel_sfpu" in ttnn/ (*.h *.cpp files)
 ```
 
-Known bypass locations:
-- `ttnn/cpp/ttnn/operations/experimental/deepseek/moe/` — `llk_math_eltwise_*_sfpu_*.h`
-- `ttnn/cpp/ttnn/operations/reduction/generic/` — `llk_math_eltwise_binary.h`
-- `ttnn/cpp/ttnn/operations/experimental/ccl/` — `ckernel_sfpu_*.h`
+**Always run the grep above to find current bypass locations**, as these change over time.
 
 ---
 
@@ -65,6 +62,9 @@ Grep for "#include.*{header_name}" in ttnn/ (*.h *.cpp files)
 
 # Metal integration tests
 Grep for "{operation_name}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)
+
+# Metal test kernel sources
+Grep for "{function_name}" in tests/tt_metal/tt_metal/test_kernels/compute/ (*.cpp files)
 ```
 
 **Update order:**
@@ -72,7 +72,7 @@ Grep for "{operation_name}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)
 2. CKernels wrapper (Layer 2) — match the new signature
 3. Compute API (Layer 3) — only if the API-visible interface changes
 4. TTNN bypass files (Layer 4) — only if they include the changed header directly
-5. Metal integration tests — if test expectations changed
+5. Metal integration tests and test kernels — if test expectations changed
 
 ### Scenario 2: Add a New SFPU Operation
 
@@ -132,6 +132,7 @@ Grep for "{operation}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)
 | Compute API | `tt_metal/hw/inc/api/compute/` |
 | Unary ops (Compute API) | `tt_metal/hw/inc/api/compute/eltwise_unary/` |
 | Metal LLK integration tests | `tests/tt_metal/tt_metal/llk/` |
+| Metal test kernel sources | `tests/tt_metal/tt_metal/test_kernels/compute/` |
 | Build system (CMake) | `tt_metal/CMakeLists.txt` (glob), `tt_metal/hw/CMakeLists.txt` (includes) |
 | HAL include paths | `tt_metal/llrt/hal/tt-1xx/wormhole/wh_hal.cpp`, `bh_hal.cpp`, `tt-2xx/quasar/qa_hal.cpp` |
 | JIT build includes | `tt_metal/jit_build/build.cpp` |

@@ -1,6 +1,6 @@
 #!/bin/bash
 # LLK Test Runner Script
-# Usage: ENV_SETUP=0 COMPILED=1 RUN_TEST=1 FILE_NAME="test_name.py" .claude/scripts/run_test.sh
+# Usage: ENV_SETUP=0 COMPILED=1 RUN_TEST=1 FILE_NAME="test_name.py" ../.claude/scripts/run_test.sh
 # Must be run from the tests/ directory.
 
 set -euo pipefail

@@ -10,7 +10,7 @@ You are a test-running specialist for the LLK repository.
 
 ## Core Rules
 
-- **NEVER run `pytest` directly** — always use `.claude/scripts/run_test.sh`
+- **NEVER run `pytest` directly** — always use `../.claude/scripts/run_test.sh`
 - **ALWAYS run from the `tests/` directory**
 - Only read logs when needed: compile errors → `$LOG_DIR/compile.log`, test failures → `$LOG_DIR/run.log`
 - This agent runs tests — it does not debug or modify code
