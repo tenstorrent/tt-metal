@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::prim {
@@ -22,7 +21,7 @@ static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwis
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-tt::tt_metal::ProgramDescriptor UnaryShardedProgramFactory::create_descriptor(
+UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -31,6 +30,7 @@ tt::tt_metal::ProgramDescriptor UnaryShardedProgramFactory::create_descriptor(
     const auto& ops_chain = args.op_chain;
     uint32_t packed_scalar1 = 0u;
     uint32_t packed_scalar2 = 0u;
+    tt::tt_metal::Program program = CreateProgram();
 
     TT_FATAL(args.sub_core_grids == std::nullopt, "Sub core grids are not supported for sharded input tensors");
     auto shard_spec = input.shard_spec().value();
@@ -80,90 +80,57 @@ tt::tt_metal::ProgramDescriptor UnaryShardedProgramFactory::create_descriptor(
     // For bitcast, use output format for input CB to avoid unpacker conversion
     // This ensures raw bit copying without conversion
     tt::DataFormat cb_data_format_for_input = (ops_chain[0].type() == UnaryOpType::BITCAST) ? out_df : act_df;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, cb_data_format_for_input}})
+            .set_page_size(in_cb_id, in_cb_pagesize)
+            .set_globally_allocated_address(*input.buffer());
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    // tmp sharded CB
+    uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
+        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
+            tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
+                .set_page_size(tmp_cb_id, in_cb_pagesize);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+    }
+
+    // output sharded CB
+    uint32_t out_cb_id = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig out_cb_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{out_cb_id, out_df}})
+            .set_page_size(out_cb_id, in_cb_pagesize)
+            .set_globally_allocated_address(*output.buffer());
+    auto out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+
+    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
+    log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
+    std::vector<uint32_t> reader_compile_time_args = {
+        in_cb_id,
+    };
+
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
-    ProgramDescriptor desc;
+    std::map<std::string, std::string> kernel_defines;
+    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    // ---- Circular buffers ----
-
-    // src0 CB - sharded (globally allocated)
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * in_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in_cb_id),
-            .data_format = cb_data_format_for_input,
-            .page_size = in_cb_pagesize,
-        }}},
-        .buffer = src_buffer,
-    });
-
-    // tmp CB for intermediate results (e.g., HARDSHRINK)
-    uint32_t tmp_cb_id = tt::CBIndex::c_1;
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = in_cb_pagesize * in_cb_npages,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tmp_cb_id),
-                .data_format = act_df,
-                .page_size = in_cb_pagesize,
-            }}},
-        });
-    }
-
-    // output CB - sharded (globally allocated)
-    uint32_t out_cb_id = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * in_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(out_cb_id),
-            .data_format = out_df,
-            .page_size = in_cb_pagesize,
-        }}},
-        .buffer = dst_buffer,
-    });
-
-    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
-
-    // ---- Reader kernel ----
-    std::vector<uint32_t> reader_compile_time_args = {in_cb_id};
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    // Set runtime args for all cores (broadcast to all cores in the shard grid)
-    for (const auto& range : all_cores.ranges()) {
-        for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
-            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
-                reader_desc.runtime_args.emplace_back(
-                    CoreCoord{x, y}, KernelDescriptor::CoreRuntimeArgs{num_tile_per_core});
-            }
-        }
-    }
-
-    // ---- Compute kernel ----
-    std::vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                 // per_core_block_cnt
         num_tile_per_core  // per_core_block_size
     };
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[tmp_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
@@ -206,34 +173,45 @@ tt::tt_metal::ProgramDescriptor UnaryShardedProgramFactory::create_descriptor(
         (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
                                                                                    : tt::tt_metal::MathFidelity::HiFi4;
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = compute_kernel_args;
-    compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = default_fp32_acc_math_fidelity,
-        .fp32_dest_acc_en = args.fp32_dest_acc_en,
-        .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
-        .bfp8_pack_precise = args.bfp8_pack_precise,
-        .math_approx_mode = math_approx_mode,
-    };
+    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+        program,
+        path,
+        all_cores,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = default_fp32_acc_math_fidelity,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .bfp8_pack_precise = args.bfp8_pack_precise,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args_group_1,
+            .defines = unary_defines});
 
-    // Set compute runtime args for all cores
-    for (const auto& range : all_cores.ranges()) {
-        for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
-            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
-                compute_desc.runtime_args.emplace_back(
-                    CoreCoord{x, y}, KernelDescriptor::CoreRuntimeArgs{packed_scalar1, packed_scalar2});
-            }
-        }
-    }
+    tt::tt_metal::SetRuntimeArgs(
+        program,
+        unary_reader_kernel_id,
+        all_cores,
+        {
+            (uint32_t)(num_tile_per_core),
+        });
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    tt::tt_metal::SetRuntimeArgs(program, eltwise_unary_kernel_group_1_id, all_cores, {packed_scalar1, packed_scalar2});
 
-    return desc;
+    return cached_program_t{std::move(program), {cb_src0, out_cb}};
+}
+
+void UnaryShardedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
+    auto& program = cached_program.program;
+    const auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    const auto& out_cb = cached_program.shared_variables.out_cb;
+
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
 }  // namespace ttnn::prim
