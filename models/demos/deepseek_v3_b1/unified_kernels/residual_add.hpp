@@ -8,6 +8,7 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -71,6 +72,7 @@ struct ResidualAdd {
                 // Pass-through: copy in0 to out, discard in1
                 reconfig_data_format<false, true>(args.in0_cb, args.in0_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
+                pack_block_contiguous_init(args.out_cb);
                 copy_tile_to_dst_init_short(args.in0_cb);
                 cb_reserve_back(args.out_cb, out_w);
                 tile_regs_acquire();
@@ -79,14 +81,13 @@ struct ResidualAdd {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t j = 0; j < out_w; j++) {
-                    pack_tile(j, args.out_cb, j);
-                }
+                pack_block_contiguous(0, args.out_cb, out_w);
                 tile_regs_release();
             } else {
                 // Normal: matmul_out + shard(residual)
                 reconfig_data_format<false, true>(args.in0_cb, args.in1_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
+                pack_block_contiguous_init(args.out_cb);
 
                 add_tiles_init(args.in0_cb, args.in1_cb);
 
@@ -97,9 +98,7 @@ struct ResidualAdd {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t j = 0; j < out_w; j++) {
-                    pack_tile(j, args.out_cb, j);
-                }
+                pack_block_contiguous(0, args.out_cb, out_w);
                 tile_regs_release();
             }
 
