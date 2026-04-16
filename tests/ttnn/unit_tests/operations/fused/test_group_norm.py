@@ -17,6 +17,8 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
+TEST_PADDING_VALUE = -42
+
 
 # for debug purpose
 def manual_group_norm(input_tensor, num_groups, eps=1e-2):
@@ -1170,6 +1172,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     tt_output = ttnn.group_norm(
         tt_input,

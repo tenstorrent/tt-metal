@@ -8,6 +8,8 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, assert_equal
 
+TEST_PADDING_VALUE = -42
+
 
 def assert_cumsum_quality(expected_output, torch_output):
     if torch_output.dtype == torch.int32:
@@ -65,6 +67,7 @@ def test_cumsum(size, dim, dtypes, device):
     for _ in range(2):
         torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
         input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
         expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
@@ -110,6 +113,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     torch_input_tensor = torch.randint(-2, 3, size, dtype=torch_dtype)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
@@ -165,7 +169,6 @@ def test_cumsum_backward(size, dim, dtypes, device):
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
 
