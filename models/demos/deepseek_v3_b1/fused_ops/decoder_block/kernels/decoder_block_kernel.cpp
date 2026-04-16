@@ -1633,6 +1633,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_num_workers"),
                 get_named_compile_time_arg_val("reduce_slot_size_bytes"),
                 get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_brisc_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
@@ -2097,16 +2098,6 @@ void kernel_main() {
         }
 #endif
 
-        // SP position handling.
-        // Read the global position from L1 and decide whether this device has
-        // work / owns the current KV-cache slot. The normalized (device-local)
-        // local_cur_pos is used for kv cache update and flash mla.
-        invalidate_l1_cache();
-        uint32_t cur_pos = pos_ptr[0];
-
-        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
         // The first mcast is also used to synchronize downstream ccls, so must always run.
         // Can revisit this later
@@ -2125,20 +2116,21 @@ void kernel_main() {
         }
 
         if constexpr (!Core::is_input_core) {
-#if defined(COMPILE_FOR_NCRISC)
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            // The wait below is for safety if this runs on the same core as another doing the same sync
-            // If that is the case we don't actually need to do another sync
-            noc_semaphore_wait(ccl_sync_sem, INVALID);
-            noc_semaphore_set(ccl_sync_sem, VALID);
-#elif defined(COMPILE_FOR_BRISC)
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            noc_semaphore_wait(ccl_sync_sem, VALID);
-            noc_semaphore_set(ccl_sync_sem, INVALID);
-#endif
+            unified_kernels::sync_riscs_enter(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit(ccl_sync_sem);
         }
+
+        // SP position handling.
+        // Read the global position from L1 and decide whether this device has
+        // work / owns the current KV-cache slot. The normalized (device-local)
+        // local_cur_pos is used for kv cache update and flash mla.
+        invalidate_l1_cache();
+        uint32_t cur_pos = pos_ptr[0];
+
+        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
         if (!skip_attention) {
             // ====================================================================
@@ -2465,19 +2457,13 @@ void kernel_main() {
             residual_mcast(moe.routed.residual_mcast_args);
         }
         if constexpr (!Core::is_input_core) {
-#if defined(COMPILE_FOR_NCRISC)
+            // TODO: This is probably a stricter sync than what we actually need
+            // MLA syncs all riscs since the ops depend on reading updated position id
+            // We can simplify the moe sync back to only DM riscs if we use a different semaphore for moe
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            // The wait below is for safety if this runs on the same core as another doing the same sync
-            // If that is the case we don't actually need to do another sync
-            noc_semaphore_wait(ccl_sync_sem, INVALID);
-            noc_semaphore_set(ccl_sync_sem, VALID);
-#elif defined(COMPILE_FOR_BRISC)
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            noc_semaphore_wait(ccl_sync_sem, VALID);
-            noc_semaphore_set(ccl_sync_sem, INVALID);
-#endif
+            unified_kernels::sync_riscs_enter(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit(ccl_sync_sem);
         }
 
         // 0b. RMSNorm: normalize input on sender core (residual_mcast_src → rmsnorm_output)
