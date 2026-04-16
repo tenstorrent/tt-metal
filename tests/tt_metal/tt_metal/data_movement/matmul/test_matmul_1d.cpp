@@ -221,7 +221,7 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
             .compile_args = risc1_compile_args});
 
     // Assign Runtime Args
-    for (int i = 0; i < matmul_cores_list.size(); i++) {
+    for (auto & i : matmul_cores_list) {
         vector<uint32_t> risc0_core_runtime_args = {
             l1_base_address,                       // 0  Sender: source addr of in0 data in L1
             pages_per_core_size_bytes,             // 1  Sender: number of bytes to multicast
