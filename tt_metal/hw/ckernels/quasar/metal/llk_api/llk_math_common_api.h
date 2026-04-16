@@ -21,12 +21,9 @@
  * @brief Configures math hardware.
  * Sets up ALU formats for math destination register and source registers.
  *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
- * @param srca_operand: The srcA input operand DFB, used to infer srcA data_format if not implied math
- * format
- * @param srcb_operand: The srcB input operand DFB, used to infer srcB data_format if not implied math
- * format
+ * @param srca_operand: The srcA input operand DFB
+ * @param srcb_operand: The srcB input operand DFB
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {

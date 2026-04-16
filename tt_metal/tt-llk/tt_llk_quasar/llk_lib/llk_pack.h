@@ -37,7 +37,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
  * @brief Initialization for pack of contiguous tiles
  * @details Sets up MOP for packing out tile by tile via Packer 0.
  * Optionally programs packer ReLU (MODE and THRESHOLD) for Packer 0 via cfg_rmw.
- * @tparam EN_32BIT_DEST: Set to true when pack reads from dst register in Float32;
+ * @tparam EN_32BIT_DEST: Set to true when pack reads from 32-bit dest register;
  * controls RELU_THRESHOLD register format (32-bit or 16-bit path).
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 16-31
