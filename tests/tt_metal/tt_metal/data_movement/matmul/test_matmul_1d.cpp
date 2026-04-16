@@ -264,7 +264,7 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
     Finish(cq);
 
     // Verify in0 read output in L1 for each core
-    for (int i = 0; i < matmul_cores_list.size(); i++) {
+    for (auto & i : matmul_cores_list) {
         vector<uint32_t> in0_read_output;
         detail::ReadFromDeviceL1(
             device, matmul_cores_list[i], in0_mcast_output_addr, pages_per_core_size_bytes, in0_read_output);
