@@ -677,7 +677,8 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
-    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, ct_dim, rt_dim, VectorMode::RC_custom)));
+    MATH((llk_math_eltwise_unary_sfpu_reduce<pool_type, reduce_dim, format>(
+        idst, ct_dim, rt_dim, VectorMode::RC_custom)));
 }
 
 /**
@@ -698,7 +699,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<pool_type, format>()));
 }
 
 // clang-format off
