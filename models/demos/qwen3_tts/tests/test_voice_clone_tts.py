@@ -27,7 +27,7 @@ import soundfile as sf
 import torch
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 REF_AUDIO_URL = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone.wav"
@@ -150,7 +150,10 @@ def hf_tokenizer():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestTTNNComponents:
     """Verify individual TTNN blocks meet PCC > 0.99."""
 
@@ -260,7 +263,10 @@ class TestTTNNComponents:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestReferencePipeline:
     """Verify reference codec roundtrip."""
 
@@ -292,7 +298,10 @@ class TestReferencePipeline:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestVoiceCloneTTS:
     """End-to-end voice cloning: ref audio → codec tokens → audio waveform."""
 
@@ -443,7 +452,10 @@ class TestVoiceCloneTTS:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.skipif(
+    not (is_wormhole_b0() or is_blackhole()),
+    reason="Requires Wormhole B0 or Blackhole",
+)
 class TestPreTransformerDebug:
     """Debug: TTNN pre-transformer value collapse (PCC 0.004 known issue)."""
 
