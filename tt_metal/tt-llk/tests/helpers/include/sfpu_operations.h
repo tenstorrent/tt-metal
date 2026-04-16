@@ -9,6 +9,8 @@
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_add_top_row.h"
 #include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
@@ -84,15 +86,25 @@ void call_unary_sfpu_operation_init(SfpuType operation)
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
  *
+ * @tparam DST_SYNC Destination sync mode
  * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
  * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
  * @param operation The SFPU operation type to execute
+ * @param dst_index Destination tile index in the destination register
  * @param math_format Optional math format for operations that need format-specific behavior
  */
-template <bool APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool FAST_MODE = false, bool STABLE_SORT = false, bool CLAMP_NEGATIVE = false>
-void call_unary_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, float fill_const_value = 5.0f)
+template <
+    DstSync DST_SYNC,
+    bool APPROX_MODE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS,
+    bool FAST_MODE      = false,
+    bool STABLE_SORT    = false,
+    bool CLAMP_NEGATIVE = false>
+void call_unary_sfpu_operation(SfpuType operation, std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f)
 {
+    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC>(dst_index);
     switch (operation)
     {
         case SfpuType::abs:
@@ -108,13 +120,13 @@ void call_unary_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0
             _calculate_atanh_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::celu:
-            _calculate_activation_<APPROX_MODE, ActivationType::Celu, ITERATIONS>(10, 1.0f / 10.0f);
+            _calculate_activation_<APPROX_MODE, ActivationType::Celu, ITERATIONS>(10 /* alpha */, 1.0f / 10.0f /* 1.0f / alpha */);
             break;
         case SfpuType::cosine:
             _calculate_cosine_<APPROX_MODE, ITERATIONS>(ITERATIONS);
             break;
         case SfpuType::elu:
-            _calculate_elu_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>(1);
+            _calculate_elu_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>(1 /* alpha */);
             break;
         case SfpuType::exp2:
             _calculate_exp2_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
@@ -168,7 +180,7 @@ void call_unary_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0
             _calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS>();
             break;
         case SfpuType::log:
-            _calculate_log_<APPROX_MODE, false, ITERATIONS>(ITERATIONS, 0);
+            _calculate_log_<APPROX_MODE, false, ITERATIONS>(ITERATIONS, 0 /* log_base */);
             break;
         case SfpuType::log1p:
             calculate_log1p<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en, ITERATIONS>();
@@ -205,41 +217,31 @@ void call_unary_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0
             calculate_tanh<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS>();
             break;
         case SfpuType::threshold:
-            _calculate_threshold_<APPROX_MODE, ITERATIONS>(5.0f, 10.0f);
+            _calculate_threshold_<APPROX_MODE, ITERATIONS>(5.0f /* threshold_value */, 10.0f /* replacement_value */);
             break;
         case SfpuType::topk_local_sort:
             _bitonic_topk_phases_steps<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
-                /* idir */ 0,
-                /* i_end_phase */ 5,
-                /* i_start_phase */ 0,
-                /* i_end_step */ 10,
-                /* i_start_step */ 0);
+                0 /* idir */, 5 /* i_end_phase */, 0 /* i_start_phase */, 10 /* i_end_step */, 0 /* i_start_step */);
             break;
         case SfpuType::topk_merge:
-            _bitonic_topk_merge<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
-                /* m_iter */ 5,
-                /* k */ 10);
+            _bitonic_topk_merge<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(5 /* m_iter */, 10 /* k */);
             break;
         case SfpuType::topk_rebuild:
-            _bitonic_topk_rebuild<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(
-                /* idir */ 0,
-                /* m_iter */ 5,
-                /* k */ 10,
-                /* logk */ 3,
-                /* skip_second */ 0);
+            _bitonic_topk_rebuild<APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT>(0 /* idir */, 5 /* m_iter */, 10 /* k */, 3 /* logk */, 0 /* skip_second */);
             break;
         case SfpuType::relu_max:
-            _relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            _relu_max_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f /* threshold */);
             break;
         case SfpuType::relu_min:
-            _relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f);
+            _relu_min_<sfpi::vFloat, APPROX_MODE, ITERATIONS>(5.0f /* threshold */);
             break;
         default:
-            return;
+            break;
     }
+    _llk_math_eltwise_unary_sfpu_done_();
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+template <DstSync DST_SYNC, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
 void call_binary_sfpu_operation_init()
 {
     switch (BINOP)
@@ -261,9 +263,11 @@ void call_binary_sfpu_operation_init()
     }
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
-void call_binary_sfpu_operation(const std::uint32_t dst_index_in0 = 0, const std::uint32_t dst_index_in1 = 1, const std::uint32_t dst_index_out = 0)
+template <DstSync DST_SYNC, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
+void call_binary_sfpu_operation(
+    std::uint32_t dst_index, const std::uint32_t dst_index_in0 = 0, const std::uint32_t dst_index_in1 = 1, const std::uint32_t dst_index_out = 0)
 {
+    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC>(dst_index);
     switch (BINOP)
     {
         case BinaryOp::ADD:
@@ -292,8 +296,9 @@ void call_binary_sfpu_operation(const std::uint32_t dst_index_in0 = 0, const std
             }
             break;
         default:
-            return;
+            break;
     }
+    _llk_math_eltwise_binary_sfpu_done_();
 }
 
 } // namespace test_utils
