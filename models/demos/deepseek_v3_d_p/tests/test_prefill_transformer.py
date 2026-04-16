@@ -299,6 +299,7 @@ def test_prefill_transformer(
         capacity_factor=capacity_factor,
         weight_cache_path=effective_cache_path,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
     # --- Free memory immediately after transformer creation ---
     del state_dict
@@ -334,7 +335,7 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation)
+    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")

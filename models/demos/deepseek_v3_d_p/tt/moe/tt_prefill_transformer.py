@@ -157,7 +157,13 @@ class TtPrefillTransformer(LightweightModule):
             host = host.squeeze(0)
         return host
 
-    def forward(self, token_ids: ttnn.Tensor, kvpe_cache: ttnn.Tensor, return_intermediates: bool = False):
+    def forward(
+        self,
+        token_ids: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        return_intermediates: bool = False,
+        read_profiler: bool = False,
+    ):
         """
         Forward pass: embed -> [block x N] -> norm.
 
@@ -166,6 +172,7 @@ class TtPrefillTransformer(LightweightModule):
             kvpe_cache: externally created KVPE cache [num_layers, 1, seq_len_local, head_dim];
                         each layer writes to its own slot via cache_layer_idx
             return_intermediates: if True, sync + snapshot to host after each stage
+            read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
 
         Returns:
             If return_intermediates=False:
@@ -190,6 +197,8 @@ class TtPrefillTransformer(LightweightModule):
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates.append((f"layer_{i}", self._to_host(h)))
+            if read_profiler:
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         h = self.norm(h)
 
