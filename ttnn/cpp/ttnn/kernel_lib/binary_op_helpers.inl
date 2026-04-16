@@ -178,6 +178,11 @@ ALWI void binary_op(
     static_assert(
         std::is_invocable_v<PostOp, uint32_t>,
         "PostOp must be callable with a uint32_t argument");
+    static_assert(
+        !(bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) ||
+            !(waits_per_tile(input_b_policy) || waits_per_chunk(input_b_policy)),
+        "ROW and SCALAR broadcast require all B tiles available upfront. "
+        "Use WaitUpfrontNoPop, WaitUpfrontPopAtEnd, NoWaitNoPop, or NoWaitPopAtEnd for input_b_policy.");
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
@@ -234,15 +239,9 @@ ALWI void binary_op(
         cb_wait_front(icb_a, total_tiles_a);
     }
 
-    // B policy: ROW and SCALAR always wait upfront
-    if constexpr (!is_square) {
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (!waits_caller_managed(input_b_policy)) {
-                cb_wait_front(icb_b, b_tile_count);
-            }
-        } else if constexpr (waits_upfront(input_b_policy)) {
-            cb_wait_front(icb_b, b_tile_count);
-        }
+    // B upfront waits (ROW/SCALAR require upfront — enforced by static_assert above)
+    if constexpr (!is_square && waits_upfront(input_b_policy)) {
+        cb_wait_front(icb_b, b_tile_count);
     }
 
     // Upfront output reserve
@@ -438,16 +437,6 @@ ALWI void binary_op(
     if constexpr (!is_square && pops_at_end(input_b_policy)) {
         cb_pop_front(icb_b, b_tile_count);
     }
-
-    // B pop for ROW/SCALAR (unless caller-managed, never, or already popped at end)
-    if constexpr (!is_square) {
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (
-                !pops_caller_managed(input_b_policy) && !pops_never(input_b_policy) && !pops_at_end(input_b_policy)) {
-                cb_pop_front(icb_b, b_tile_count);
-            }
-        }
-    }
 }
 
 // =============================================================================
@@ -583,6 +572,11 @@ ALWI void binary_op_in_place(
     static_assert(
         std::is_invocable_v<PostOp, uint32_t>,
         "PostOp must be callable with a uint32_t argument");
+    static_assert(
+        !(bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) ||
+            !(waits_per_tile(input_b_policy) || waits_per_chunk(input_b_policy)),
+        "ROW and SCALAR broadcast require all B tiles available upfront. "
+        "Use WaitUpfrontNoPop, WaitUpfrontPopAtEnd, NoWaitNoPop, or NoWaitPopAtEnd for input_b_policy.");
 
     constexpr uint32_t onetile = 1;
     constexpr bool is_square = (op_type == BinaryOpType::SQUARE);
@@ -628,14 +622,9 @@ ALWI void binary_op_in_place(
     }
 
     // --- B synchronization (skipped for SQUARE — both inputs come from cb_a) ---
-    if constexpr (!is_square) {
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (!waits_caller_managed(input_b_policy)) {
-                cb_wait_front(icb_b, b_tile_count);
-            }
-        } else if constexpr (waits_upfront(input_b_policy)) {
-            cb_wait_front(icb_b, b_tile_count);
-        }
+    // ROW/SCALAR require upfront — enforced by static_assert above
+    if constexpr (!is_square && waits_upfront(input_b_policy)) {
+        cb_wait_front(icb_b, b_tile_count);
     }
 
     // --- Main tile loop: pop-before-pack cycle ---
@@ -719,18 +708,8 @@ ALWI void binary_op_in_place(
     }
 
     // --- End-of-operation B cleanup (skipped for SQUARE) ---
-    if constexpr (!is_square) {
-        if constexpr (pops_at_end(input_b_policy)) {
-            cb_pop_front(icb_b, b_tile_count);
-        }
-
-        if constexpr (bcast_dim == BroadcastDim::ROW || bcast_dim == BroadcastDim::SCALAR) {
-            if constexpr (
-                !pops_caller_managed(input_b_policy) && !pops_never(input_b_policy) &&
-                !pops_at_end(input_b_policy)) {
-                cb_pop_front(icb_b, b_tile_count);
-            }
-        }
+    if constexpr (!is_square && pops_at_end(input_b_policy)) {
+        cb_pop_front(icb_b, b_tile_count);
     }
 }
 
