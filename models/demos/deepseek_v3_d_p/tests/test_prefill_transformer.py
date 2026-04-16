@@ -26,13 +26,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from conftest import is_galaxy
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import create_prefill_kv_cache_lookup_table, init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -56,7 +55,7 @@ PCC_THRESHOLD = 0.99
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 
 
-@pytest.skipif(not is_blackhole(), reason="Requires Blackhole.")
+# @pytest.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize(
@@ -68,8 +67,8 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
 @pytest.mark.parametrize(
     "num_layers",
     [
-        12,
-        pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
+        17,
+        # pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
 )
 @pytest.mark.parametrize(
@@ -318,6 +317,7 @@ def test_prefill_transformer(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
     )
+    lookup_table = create_prefill_kv_cache_lookup_table(mesh_device, mesh_shape, sp_axis, isl_total, tt_kvpe_cache)
 
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding

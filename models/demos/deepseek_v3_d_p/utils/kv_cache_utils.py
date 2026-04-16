@@ -194,3 +194,25 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     )
 
     return tt_kvpe_cache
+
+
+def create_prefill_kv_cache_lookup_table(mesh_device, mesh_shape, sp_axis, seq_len, tt_kvpe_cache):
+    num_layers = tt_kvpe_cache.shape[0]
+    print("Creating kv cache lookup table for ", num_layers, " layers.")
+
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+    lookup_table = create_kv_chunk_address_table(
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+    )
