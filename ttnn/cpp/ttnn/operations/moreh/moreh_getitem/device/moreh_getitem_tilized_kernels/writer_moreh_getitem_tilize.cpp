@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = tt::CBIndex::c_0;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, 1024 * element_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {

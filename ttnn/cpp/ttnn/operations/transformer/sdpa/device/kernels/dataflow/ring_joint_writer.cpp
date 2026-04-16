@@ -379,9 +379,9 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
-    const auto stats_writer = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
+    const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);

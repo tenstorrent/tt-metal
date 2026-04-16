@@ -13,7 +13,7 @@ void kernel_main() {
     const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
     const uint32_t sticks_for_core = get_arg_val<uint32_t>(2);
 
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address, ctas.output_stick_size_bytes);
+    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_buffer_address);
 
     using output_std_type = std_type_t<get_dataformat(ctas.output_cb)>;
 

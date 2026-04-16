@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
     constexpr uint32_t weight_block_size = get_compile_time_arg_val(5);
     constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(6);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(7);
@@ -26,8 +25,8 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<9>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    auto weights = TensorAccessor(weights_args, weight_buffer_src_addr + weight_offset, weight_stick_size);
+    auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    auto weights = TensorAccessor(weights_args, weight_buffer_src_addr + weight_offset);
 
     prepare_local_cache(cb_id_in2, weights, weight_block_size, /*pad_token_arg_idx=*/6);
 

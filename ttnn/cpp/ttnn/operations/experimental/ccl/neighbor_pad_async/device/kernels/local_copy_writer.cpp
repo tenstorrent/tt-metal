@@ -39,7 +39,7 @@ void kernel_main() {
     const uint32_t total_rows_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rows_count = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)
