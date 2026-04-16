@@ -2895,6 +2895,25 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
     }
 }
 
+// Assign logical port_ids to physical exit nodes for inter-mesh connections between
+// this host and a neighbor. Each physical ethernet channel between the two hosts gets
+// a logical port_id that encodes the routing direction (N/E/S/W/Z) and a channel index.
+//
+// Z-direction handling:
+//   - If the mesh graph descriptor marks this mesh pair as assign_z_direction, ports are
+//     assigned as Z first (no fallback to NESW).
+//   - Otherwise, NESW ports are tried first. If all NESW ports on a chip are exhausted,
+//     the function falls back to Z ports. This Z fallback is the primary mechanism for
+//     cross-pod connections in the superpod topology, where the descriptor does not set
+//     assign_z_direction.
+//
+// Direction constraint:
+//   All channels on the same physical link (identified by src_asic + dst_asic hash) must
+//   use the same routing direction. This prevents a single link from being split across
+//   multiple routing directions, which the router firmware cannot handle.
+//
+// The resulting PortDescriptor list is sent to the controller (rank 0) for global pairing
+// in pair_logical_intermesh_ports.
 std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
@@ -2914,7 +2933,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
 
     std::vector<PortDescriptor> ports_to_neighbor;
 
+    // Track which direction was chosen for each physical link (src_asic + dst_asic pair).
+    // All channels on the same link must use the same direction.
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
+    std::size_t z_fallback_count = 0;
+
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2932,6 +2955,9 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         const FabricNodeId peer_fabric_node_id =
             this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
 
+        // Try to assign a port_id of the requested Z-ness class. Iterates over all mesh
+        // edge ports for this chip, skipping those that don't match the requested direction
+        // class (Z vs NESW) or that would violate the same-direction-per-link constraint.
         auto try_assign_port = [&](bool use_z_direction) -> bool {
             for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
                 if (exit_node_chip != port_chip_id) {
@@ -2947,6 +2973,8 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
 
                 RoutingDirection final_direction = use_z_direction ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
+
+                // Enforce: all channels on the same physical link use the same direction
                 bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
                                        curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
@@ -2966,8 +2994,16 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
             return false;
         };
 
+        // Try the preferred direction class first, then fall back to Z if NESW is exhausted
         bool assigned = try_assign_port(should_assign_z);
         if (!assigned && !should_assign_z) {
+            if (z_fallback_count++ == 0) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ran out of NESW ports for mesh {} -> {}, falling back to Z direction",
+                    *my_mesh_id,
+                    *neighbor_mesh_id);
+            }
             assigned = try_assign_port(true);
         }
         if (!assigned) {
@@ -3247,6 +3283,24 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
     distributed_context.barrier();
 }
 
+// Pair port descriptors from all hosts into bidirectional intermesh connections.
+// Runs ONLY on the controller (rank 0) which has received port descriptors from every host.
+//
+// For each requested mesh-pair connection, matches source and destination ports by their
+// connection_hash (a hash of the physical cable identity). When both sides agree on direction
+// (both Z or both NESW), the connection is accepted as-is. When they disagree (Z/non-Z
+// mismatch), the controller resolves it:
+//
+//   1. Demotion (Z -> NESW): tried first if the mesh pair does NOT require Z. Finds a free
+//      NESW port on the same chip to replace the Z port, keeping both sides non-Z.
+//   2. Promotion (NESW -> Z): tried if demotion fails or the pair requires Z. Finds a free
+//      Z port on the same chip to replace the NESW port, making both sides Z.
+//   3. Drop: if neither resolution works, the connection is dropped with a warning.
+//
+// Safety invariant: a chip can only have Z connections to ONE neighbor mesh. This prevents
+// the "Golden link counts already set" / "Multiple neighbor meshes per direction" assertions
+// downstream. The can_chip_use_z_for_mesh check enforces this for ALL Z connections
+// (native and promoted).
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
     AnnotatedIntermeshConnections intermesh_connections;
 
@@ -3267,18 +3321,18 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     // Key: (src_mesh_id, chip_id) -> dest_mesh_id that this chip routes to via Z.
     std::map<std::pair<uint32_t, ChipId>, uint32_t> chip_z_dest_mesh;
 
-    // Collect all port_ids already assigned in port descriptors (per mesh) so demotion
-    // doesn't reuse them.
-    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>> descriptor_port_ids;
+    // Track all port_ids that are unavailable for reassignment on each mesh.
+    // Initialized from the port descriptors (every host's original assignments), then
+    // updated dynamically during promotion/demotion so that freed port_ids become
+    // available for later mesh pairs on the same chip.
+    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>> unavailable_port_ids;
     for (const auto& [src_mesh, port_identifiers] : port_descriptors) {
         for (const auto& [dest_mesh, src_ports] : port_identifiers) {
             for (const auto& src_port : src_ports) {
-                descriptor_port_ids[*src_mesh].insert(src_port.port_id);
+                unavailable_port_ids[*src_mesh].insert(src_port.port_id);
             }
         }
     }
-    // Track non-Z port_ids consumed by demotion during pairing.
-    std::unordered_map<uint32_t, std::unordered_set<port_id_t, hash_pair>> used_demoted_port_ids;
 
     // Helper: find an available Z port_id for a given chip on a given mesh.
     auto find_available_z_port = [&](uint32_t mesh_id_val, ChipId chip) -> std::optional<port_id_t> {
@@ -3303,6 +3357,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     };
 
     // Helper: find an available NESW port_id for a given chip on a given mesh.
+    // A port is available if it's NESW, on the correct chip, and not in unavailable_port_ids.
     auto find_available_non_z_port = [&](uint32_t mesh_id_val, ChipId chip) -> std::optional<port_id_t> {
         for (const auto& [port_id, port_chip] : mesh_edge_ports_to_chip_id.at(mesh_id_val)) {
             if (port_chip != chip) {
@@ -3311,10 +3366,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             if (!is_nesw(port_id.first)) {
                 continue;
             }
-            if (descriptor_port_ids[mesh_id_val].contains(port_id)) {
-                continue;
-            }
-            if (used_demoted_port_ids[mesh_id_val].contains(port_id)) {
+            if (unavailable_port_ids[mesh_id_val].contains(port_id)) {
                 continue;
             }
             return port_id;
@@ -3339,19 +3391,22 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     };
 
     // Helper: try to demote one side of a mismatched pair from Z to non-Z.
-    // Returns the demoted port_id, or nullopt if no non-Z port is available.
+    // On success, marks the new non-Z port as unavailable and frees the original Z port
+    // so it can be reused by a later mesh pair.
     auto try_demote_from_z = [&](uint32_t mesh_val, port_id_t original_port_id) -> std::optional<port_id_t> {
         ChipId chip = mesh_edge_ports_to_chip_id.at(mesh_val).at(original_port_id);
         auto non_z_port = find_available_non_z_port(mesh_val, chip);
         if (!non_z_port.has_value()) {
             return std::nullopt;
         }
-        used_demoted_port_ids[mesh_val].insert(*non_z_port);
+        unavailable_port_ids[mesh_val].insert(*non_z_port);
+        unavailable_port_ids[mesh_val].erase(original_port_id);
         return non_z_port;
     };
 
     // Helper: try to promote one side of a mismatched pair from non-Z to Z.
-    // Returns the promoted port_id, or nullopt if promotion is not possible.
+    // On success, marks the new Z port as unavailable and frees the original non-Z port
+    // so it can be reused by a later mesh pair that needs a non-Z port on the same chip.
     auto try_promote_to_z =
         [&](uint32_t mesh_val, port_id_t original_port_id, uint32_t dest_mesh_val) -> std::optional<port_id_t> {
         ChipId chip = mesh_edge_ports_to_chip_id.at(mesh_val).at(original_port_id);
@@ -3363,6 +3418,8 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             return std::nullopt;
         }
         used_z_port_ids[mesh_val].insert(*z_port);
+        unavailable_port_ids[mesh_val].insert(*z_port);
+        unavailable_port_ids[mesh_val].erase(original_port_id);
         record_chip_z_usage(mesh_val, chip, dest_mesh_val);
         return z_port;
     };
@@ -3543,6 +3600,18 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     return intermesh_connections;
 }
 
+// Multi-host intermesh connection establishment.
+//
+// Flow:
+//   1. All hosts send their port descriptors to the controller (rank 0).
+//   2. The controller pairs ports globally (pair_logical_intermesh_ports), resolving
+//      Z/non-Z mismatches and enforcing the one-Z-neighbor-per-chip invariant.
+//   3. The controller broadcasts the final paired connections to all hosts.
+//   4. Each host reconciles its local maps (logical_port_to_eth_chan_, exit_node_directions_)
+//      to match any port_id changes the controller made (promotions/demotions).
+//   5. Inactive ports are pruned from both maps to keep them consistent.
+//   6. intermesh_exit_fabric_node_ids_ and intermesh_exit_peer_fabric_node_id_pairs_ are
+//      rebuilt from the final connections only (removing stale entries from dropped pairs).
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
@@ -3567,11 +3636,45 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         }
     }
 
-    // Reconcile controller-changed port_ids (promotions: non-Z -> Z, or demotions: Z -> non-Z).
-    // The controller may have replaced a port_id for our mesh during mismatch resolution.
-    // The new port_id won't exist in logical_port_to_eth_chan_. We need to find the
-    // original assignment (by matching the chip), then update the maps so the pruning
-    // step and downstream routing use the correct direction.
+    // --- Reconcile controller-changed port_ids ---
+    //
+    // The controller (rank 0) may have promoted non-Z -> Z or demoted Z -> non-Z for
+    // some connections during Z/non-Z mismatch resolution in pair_logical_intermesh_ports.
+    // When this happens, the final port_id in intermesh_connections differs from the one
+    // this host originally assigned in assign_logical_ports_to_exit_nodes.
+    //
+    // For each connection involving our mesh, if the new port_id is missing from our local
+    // logical_port_to_eth_chan_ map, we need to:
+    //   1. Find the original port_id that was assigned to the same physical connection
+    //      (same chip, same connection_hash, inactive, opposite Z-ness)
+    //   2. Transfer the physical channel from the old port_id to the new one
+    //   3. Update exit_node_directions_ to reflect the new routing direction
+
+    // Build a reverse map: for each exit_node on our mesh, map (chip, connection_hash) to
+    // the port_id/channel. This lets us precisely match the controller's replacement to the
+    // correct original assignment instead of guessing by Z-ness alone.
+    // Key: (chip_id, connection_hash) -> (port_id, physical_chan)
+    std::unordered_map<FabricNodeId, std::unordered_map<std::size_t, std::pair<port_id_t, chan_id_t>>>
+        exit_node_hash_to_port;
+    for (const auto& [exit_node, port_map] : logical_port_to_eth_chan_) {
+        if (exit_node.mesh_id != my_mesh_id) {
+            continue;
+        }
+        for (const auto& [port_id, chan] : port_map) {
+            if (active_logical_ports.contains(port_id)) {
+                continue;
+            }
+            // Look up the connection_hash from the original port descriptors
+            for (const auto& [dest_mesh, src_ports] : port_descriptors.at(my_mesh_id)) {
+                for (const auto& src_port : src_ports) {
+                    if (src_port.port_id == port_id) {
+                        exit_node_hash_to_port[exit_node][src_port.connection_hash] = {port_id, chan};
+                    }
+                }
+            }
+        }
+    }
+
     for (const auto& connection : intermesh_connections) {
         const auto& my_side = std::get<0>(connection);
         if (my_side.first != *my_mesh_id) {
@@ -3582,33 +3685,63 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
         FabricNodeId exit_node(my_mesh_id, chip);
 
         auto lp_it = logical_port_to_eth_chan_.find(exit_node);
-        if (lp_it == logical_port_to_eth_chan_.end()) {
-            continue;
-        }
-        if (lp_it->second.contains(new_port_id)) {
+        if (lp_it == logical_port_to_eth_chan_.end() || lp_it->second.contains(new_port_id)) {
             continue;
         }
 
-        // new_port_id is not in our local map -- the controller changed our original port.
-        // Find the original port_id for this chip that is NOT in active_logical_ports.
-        bool new_is_z = (new_port_id.first == RoutingDirection::Z);
+        // new_port_id is not in our local map — the controller changed our original port.
+        // Use the connection_hash from the peer side to find the exact original assignment.
+        const auto& peer_side = std::get<1>(connection);
+        auto peer_port_id = peer_side.second;
+
+        // Compute the connection_hash for this connection by looking it up in the peer's
+        // port descriptors. The same hash exists on both sides by construction.
+        std::size_t conn_hash = 0;
+        bool hash_found = false;
+        MeshId peer_mesh_id{peer_side.first};
+        if (port_descriptors.contains(peer_mesh_id) && port_descriptors.at(peer_mesh_id).contains(my_mesh_id)) {
+            for (const auto& peer_port : port_descriptors.at(peer_mesh_id).at(my_mesh_id)) {
+                if (peer_port.port_id == peer_port_id) {
+                    conn_hash = peer_port.connection_hash;
+                    hash_found = true;
+                    break;
+                }
+            }
+        }
+
         port_id_t old_port_id = {RoutingDirection::NONE, 0};
         chan_id_t physical_chan = 0;
         bool found = false;
-        for (const auto& [pid, chan] : lp_it->second) {
-            if (active_logical_ports.contains(pid)) {
-                continue;
-            }
-            // For promotion (new is Z): find the original non-Z port
-            // For demotion (new is non-Z): find the original Z port
-            bool pid_is_z = (pid.first == RoutingDirection::Z);
-            if (new_is_z != pid_is_z) {
-                old_port_id = pid;
-                physical_chan = chan;
-                found = true;
-                break;
+
+        if (hash_found) {
+            // Best path: match by connection_hash for an exact physical channel match
+            auto hash_it = exit_node_hash_to_port.find(exit_node);
+            if (hash_it != exit_node_hash_to_port.end()) {
+                auto port_it = hash_it->second.find(conn_hash);
+                if (port_it != hash_it->second.end()) {
+                    old_port_id = port_it->second.first;
+                    physical_chan = port_it->second.second;
+                    found = true;
+                }
             }
         }
+
+        if (!found) {
+            // Fallback: match by opposite Z-ness (first inactive port with different Z class)
+            bool new_is_z = (new_port_id.first == RoutingDirection::Z);
+            for (const auto& [pid, chan] : lp_it->second) {
+                if (active_logical_ports.contains(pid)) {
+                    continue;
+                }
+                if (new_is_z != (pid.first == RoutingDirection::Z)) {
+                    old_port_id = pid;
+                    physical_chan = chan;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
         if (!found) {
             continue;
         }
@@ -3625,15 +3758,32 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             physical_chan);
     }
 
-    // Remove directions from all logical ports not being actively used
-    for (const auto& [exit_node, port] : logical_port_to_eth_chan_) {
-        for (const auto& [port_id, physical_chan] : port) {
-            if (!active_logical_ports.contains(port_id)) {
-                exit_node_directions_.at(exit_node).erase(physical_chan);
+    // --- Prune inactive ports from both exit_node_directions_ and logical_port_to_eth_chan_ ---
+    //
+    // After reconciliation, remove ports that are not part of any active intermesh connection.
+    // Both maps must stay in sync: a port_id in logical_port_to_eth_chan_ must have a
+    // corresponding direction entry in exit_node_directions_, and vice versa.
+    for (auto& [exit_node, port_map] : logical_port_to_eth_chan_) {
+        auto it = port_map.begin();
+        while (it != port_map.end()) {
+            if (!active_logical_ports.contains(it->first)) {
+                exit_node_directions_[exit_node].erase(it->second);
+                it = port_map.erase(it);
+            } else {
+                ++it;
             }
         }
     }
-    // Keep only exit nodes that appear in paired intermesh connections (drops unpaired port assignments)
+    // --- Rebuild exit node tracking maps from the final connections ---
+    //
+    // Both intermesh_exit_fabric_node_ids_ and intermesh_exit_peer_fabric_node_id_pairs_
+    // were initially populated during assign_logical_ports_to_exit_nodes for ALL port
+    // assignments, including those later dropped by pair_logical_intermesh_ports (Z safety,
+    // hash mismatch, etc.). Rebuild them from the actual paired connections so that
+    // downstream consumers (pipeline construction, routing tables) only see live connections.
+
+    // Rebuild intermesh_exit_fabric_node_ids_: tracks which FabricNodeIds are exit nodes
+    // toward each neighbor mesh (used for routing table generation).
     {
         auto& my_row = intermesh_exit_fabric_node_ids_[my_mesh_id];
         my_row.clear();
@@ -3648,8 +3798,10 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             my_row[dst_mesh_id].insert(FabricNodeId(my_mesh_id, src_chip));
         }
     }
-    // Rebuild intermesh_exit_peer_fabric_node_id_pairs_ for the local mesh to remove pairs
-    // whose connections were dropped during Z-mismatch resolution in pair_logical_intermesh_ports.
+
+    // Rebuild intermesh_exit_peer_fabric_node_id_pairs_: tracks (exit_node, peer_node)
+    // pairs for each mesh-pair direction (used by pipeline's build_stages to select hop
+    // endpoints). Clear all rows involving our mesh, then repopulate from final connections.
     {
         intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id].clear();
         for (auto& [src_mesh, inner] : intermesh_exit_peer_fabric_node_id_pairs_) {
