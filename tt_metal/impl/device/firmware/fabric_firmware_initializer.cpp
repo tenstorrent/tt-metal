@@ -117,6 +117,39 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             }
 
             cluster_.l1_barrier(dev->id());
+
+            // Poll each MUX core until TERMINATED before proceeding.
+            // Without this, configure_fabric() in the next test can write new launch messages
+            // to the same Tensix cores before the old MUX workers finish terminating, causing
+            // two kernels to compete for the same cores and hang dispatch on remote devices.
+            for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
+                auto config = tensix_config.get_config(core_id);
+                uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+                auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                std::vector<uint32_t> status_buf(1, 0);
+                auto start = std::chrono::steady_clock::now();
+                constexpr uint32_t timeout_ms = 5000;
+                while (true) {
+                    detail::ReadFromDeviceL1(dev, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                    if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                        break;
+                    }
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - start)
+                                       .count();
+                    if (elapsed > timeout_ms) {
+                        log_warning(
+                            tt::LogMetal,
+                            "FabricFirmwareInitializer::teardown: Timeout waiting for Tensix MUX TERMINATED on "
+                            "Device {} eth_chan {} — proceeding with teardown",
+                            dev->id(),
+                            eth_chan_id);
+                        break;
+                    }
+                }
+            }
         }
     }
 
