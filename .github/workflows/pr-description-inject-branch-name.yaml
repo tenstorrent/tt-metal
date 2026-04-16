@@ -50,14 +50,14 @@ jobs:
 
               // Badge is live (re-rendered on every page load) and includes the pipeline name.
               // Clicking it filters to runs for this branch.
-              badges.push(`[![](${badgeUrl})](${dispatchUrl})`);
+              badges.push(`- [![](${badgeUrl})](${dispatchUrl})`);
             }
 
             const statusSection = [
               "### CI Status",
               "_Auto-generated on every push. Badges update live. Click a badge to filter runs by this branch._",
               "",
-              badges.join(" "),
+              badges.join("\n"),
             ].join("\n");
 
             // Replace existing CI Status section if present, otherwise append
