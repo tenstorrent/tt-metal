@@ -199,30 +199,32 @@ new full-model tests.
 |---|---|---|---|---|
 | 0 | Architecture audit, reference model confirmed | 0 | — | — |
 | 1 | PyTorch wrapper + BN-fold primitives + BasicBlock PCC | 0 | 14/14 | `857671c0aa` |
-| 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +32 | 15/15 | `a72716b165` |
+| 2 | All 32 ResNet-34 BasicBlock conv layers on TTNN | +70 | 15/15 | `a72716b165` |
 | 3 | FPN 3 conv layers on TTNN (`TtnnFPN`) | +3 | 18/18 | `edd70f9e9f` |
 
-**Current total: 21 tests pass** (18 PCC + 3 sanity).  35 `ttnn.conv2d` ops run on
-device per forward pass.
+**Current total: 21 tests pass** (18 PCC + 3 sanity).  73 `ttnn.conv2d` ops run on
+device per forward pass (each BasicBlock runs 2 conv ops + optional 1×1 downsample).
 
 ### TTNN ops on-device at Stage 3
 
 ```
-image_encoder.layer1  — 6 BasicBlock conv2d ops  (64-ch, 64×256 spatial)
-image_encoder.layer2  — 8 BasicBlock conv2d ops  (128-ch, 32×128 spatial)
-image_encoder.layer3  — 12 BasicBlock conv2d ops (256-ch, 16×64 spatial)
-image_encoder.layer4  — 6 BasicBlock conv2d ops  (512-ch, 8×32 spatial)
+image_encoder.layer1  — 3 blocks × 2 convs           =  6 ops  (64-ch, 64×256)
+image_encoder.layer2  — 4 blocks × 2 convs + 1 downsample =  9 ops  (128-ch, 32×128)
+image_encoder.layer3  — 6 blocks × 2 convs + 1 downsample = 13 ops  (256-ch, 16×64)
+image_encoder.layer4  — 3 blocks × 2 convs + 1 downsample =  7 ops  (512-ch, 8×32)
+                                                 subtotal = 35 ops
 
-lidar_encoder.layer1  — 6 BasicBlock conv2d ops  (64-ch, 64×64 spatial)
-lidar_encoder.layer2  — 8 BasicBlock conv2d ops  (128-ch, 32×32 spatial)
-lidar_encoder.layer3  — 12 BasicBlock conv2d ops (256-ch, 16×16 spatial)
-lidar_encoder.layer4  — 6 BasicBlock conv2d ops  (512-ch, 8×8 spatial)
+lidar_encoder.layer1  — 3 blocks × 2 convs           =  6 ops  (64-ch, 64×64)
+lidar_encoder.layer2  — 4 blocks × 2 convs + 1 downsample =  9 ops  (128-ch, 32×32)
+lidar_encoder.layer3  — 6 blocks × 2 convs + 1 downsample = 13 ops  (256-ch, 16×16)
+lidar_encoder.layer4  — 3 blocks × 2 convs + 1 downsample =  7 ops  (512-ch, 8×8)
+                                                 subtotal = 35 ops
 
-FPN c5_conv           — 1×1 conv2d  (512→64, 8×8 spatial)
-FPN up_conv5          — 3×3 conv2d  (64→64, 16×16 spatial)
-FPN up_conv4          — 3×3 conv2d  (64→64, 64×64 spatial)
-                                                    ─────────
-                                                    35 ops total
+FPN c5_conv           — 1×1 conv2d  (512→64, 8×8)           =  1 op
+FPN up_conv5          — 3×3 conv2d  (64→64, 16×16)          =  1 op
+FPN up_conv4          — 3×3 conv2d  (64→64, 64×64)          =  1 op
+                                                               ──────
+                                                               73 ops total
 ```
 
 ---
@@ -238,8 +240,8 @@ Each figure is the minimum over 5 runs after 2 warm-up calls.
 | Stage | Min latency | vs Stage 1 | On-device ops |
 |---|---|---|---|
 | Stage 1 — pure PyTorch | 652 ms | baseline | 0 |
-| Stage 2 — TTNN backbone | 540 ms | **−17%** | 32 |
-| Stage 3 — TTNN backbone + FPN | 486 ms | **−25%** | 35 |
+| Stage 2 — TTNN backbone | 540 ms | **−17%** | 70 |
+| Stage 3 — TTNN backbone + FPN | 486 ms | **−25%** | 73 |
 
 The remaining ~486 ms is dominated by the GPT cross-modal fusion (4 × 2-layer
 transformer + pooling) and the TrajectoryHead DDIM denoiser, both still in PyTorch.
