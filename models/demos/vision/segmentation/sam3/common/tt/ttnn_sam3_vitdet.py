@@ -161,6 +161,12 @@ def _apply_rope_torch(q, k, freqs_cis):
 # ---------------------------------------------------------------------------
 
 
+def _apply_rope_ttnn(q, cos, sin):
+    """Apply half-half RoPE on device: q * cos + rotate_half(q) * sin."""
+    rh = ttnn.experimental.rotate_half(q)
+    return ttnn.add(ttnn.multiply(q, cos), ttnn.multiply(rh, sin))
+
+
 def tt_vit_attention(
     x,
     qkv_weight,
@@ -170,73 +176,41 @@ def tt_vit_attention(
     num_heads,
     rope_cos=None,
     rope_sin=None,
-    freqs_cis=None,
+    freqs_cis=None,  # unused (kept for API compatibility)
     device=None,
 ):
-    """Multi-head attention for SAM3 ViT.
+    """Multi-head attention for SAM3 ViT — fully on-device.
 
-    Args:
-        x: ttnn tensor (B, L, dim) in TILE_LAYOUT on device.
-        qkv_weight: ttnn tensor (dim, dim*3) - preprocessed fused QKV weight.
-        qkv_bias: ttnn tensor (1, 1, dim*3) - preprocessed fused QKV bias.
-        proj_weight: ttnn tensor (dim, dim) - preprocessed output projection weight.
-        proj_bias: ttnn tensor (1, 1, dim) - preprocessed output projection bias.
-        num_heads: int, number of attention heads.
-        rope_cos: unused, reserved for future native ttnn RoPE.
-        rope_sin: unused, reserved for future native ttnn RoPE.
-        freqs_cis: torch complex tensor (L, head_dim//2) for RoPE, or None.
-        device: ttnn device.
-
-    Returns:
-        ttnn tensor (B, L, dim) in TILE_LAYOUT on device.
+    Requires QKV weights pre-permuted to half-half layout for Q and K
+    (see _permute_qkv_for_rope in preprocessing). RoPE cos/sin are precomputed
+    per attention layer with shape (1, 1, L, head_dim).
     """
-    # --- QKV projection ---
     qkv = ttnn.linear(x, qkv_weight, bias=qkv_bias)  # (B, L, dim*3)
 
-    # --- Move to torch for reshape / RoPE / attention ---
-    # TODO: Implement reshape, permute, RoPE, and attention natively in ttnn.
-    qkv_torch = ttnn.to_torch(qkv).float()
-    B, L, _ = qkv_torch.shape
-    head_dim = qkv_torch.shape[-1] // (3 * num_heads)
+    tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=num_heads, transpose_key=False
+    )  # each (B, nH, L, head_dim)
 
-    # Reshape: (B, L, 3, num_heads, head_dim) -> permute to (3, B, num_heads, L, head_dim)
-    qkv_torch = qkv_torch.reshape(B, L, 3, num_heads, head_dim)
-    q, k, v = qkv_torch.permute(2, 0, 3, 1, 4).unbind(0)  # each (B, num_heads, L, head_dim)
+    if rope_cos is not None:
+        tt_q = _apply_rope_ttnn(tt_q, rope_cos, rope_sin)
+        tt_k = _apply_rope_ttnn(tt_k, rope_cos, rope_sin)
 
-    # Apply RoPE if provided
-    if freqs_cis is not None:
-        q, k = _apply_rope_torch(q, k, freqs_cis)
-
+    head_dim = tt_q.shape[-1]
+    L = tt_q.shape[-2]
     scale = head_dim ** -0.5
 
     if L >= 1024 and (L % 32) == 0:
-        # FlashAttention-2 for global blocks (L=5184, tile-aligned).
-        tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_k = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_v = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+        tt_attn_out = ttnn.transformer.scaled_dot_product_attention(
             tt_q, tt_k, tt_v, is_causal=False, scale=scale,
         )
-        attn_out = ttnn.to_torch(tt_sdpa_out).float()
     else:
-        # Manual matmul+softmax for windowed blocks (L=196, non-tile-aligned).
-        tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_k = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        tt_v = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         tt_kt = ttnn.transpose(tt_k, -2, -1)
         tt_attn = ttnn.matmul(tt_q, tt_kt)
         tt_attn = ttnn.multiply(tt_attn, scale)
         tt_attn = ttnn.softmax(tt_attn, dim=-1)
-        tt_out = ttnn.matmul(tt_attn, tt_v)
-        attn_out = ttnn.to_torch(tt_out).float()
+        tt_attn_out = ttnn.matmul(tt_attn, tt_v)
 
-    # Concatenate heads: (B, L, dim)
-    attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, L, -1)
-
-    # Convert back to ttnn for output projection
-    tt_attn_out = ttnn.from_torch(attn_out, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # --- Output projection ---
+    tt_attn_out = ttnn.transformer.concatenate_heads(tt_attn_out)  # (B, L, dim)
     output = ttnn.linear(tt_attn_out, proj_weight, bias=proj_bias)
     return output
 
@@ -335,7 +309,8 @@ def tt_vit_block(
         block_params["attn_proj_weight"],
         block_params["attn_proj_bias"],
         num_heads=num_heads,
-        freqs_cis=block_params.get("freqs_cis"),
+        rope_cos=block_params.get("rope_cos"),
+        rope_sin=block_params.get("rope_sin"),
         device=device,
     )
 
@@ -466,52 +441,72 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
 # ---------------------------------------------------------------------------
 
 
-def preprocess_vit_attention_weights(attn_module):
-    """Extract and preprocess QKV and projection weights from a PyTorch Attention module.
+def _permute_qkv_for_rope(qkv, num_heads, head_dim):
+    """Permute Q and K head_dim entries (along dim 0 — the QKV output dim) from
+    pair (r0,i0,r1,i1,...) to half-half (r0,r1,...,i0,i1,...). V is untouched.
 
-    The reference model has:
-        attn_module.qkv: nn.Linear(dim, dim*3, bias=True)
-        attn_module.proj: nn.Linear(dim, dim, bias=True)
-
-    Weights are transposed from PyTorch [out, in] to ttnn [in, out] format.
-    Biases are reshaped to [1, 1, out] for broadcasting.
-
-    Args:
-        attn_module: PyTorch Attention module with .qkv and .proj attributes.
-
-    Returns:
-        dict with keys:
-            'qkv_weight': ttnn tensor (dim, dim*3) in TILE_LAYOUT.
-            'qkv_bias': ttnn tensor (1, 1, dim*3) in TILE_LAYOUT.
-            'proj_weight': ttnn tensor (dim, dim) in TILE_LAYOUT.
-            'proj_bias': ttnn tensor (1, 1, dim) in TILE_LAYOUT.
-            'freqs_cis': torch complex tensor (L, head_dim//2) or None.
+    qkv: nn.Linear weight (3*dim, in_dim) or bias (3*dim,) — output dim is 0.
     """
-    # QKV: original shape [dim*3, dim] -> transpose to [dim, dim*3]
-    qkv_w = attn_module.qkv.weight.data.T.contiguous()
-    qkv_w = ttnn.from_torch(qkv_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    perm_within = list(range(0, head_dim, 2)) + list(range(1, head_dim, 2))
+    perm_within = torch.tensor(perm_within, dtype=torch.long)
+    out = qkv.clone()
+    dim = num_heads * head_dim
+    for offset in (0, dim):  # Q at 0, K at dim, skip V at 2*dim
+        for h in range(num_heads):
+            rows = slice(offset + h * head_dim, offset + (h + 1) * head_dim)
+            out[rows] = qkv[rows].index_select(0, perm_within)
+    return out
 
-    qkv_b = attn_module.qkv.bias.data.reshape(1, 1, -1)
-    qkv_b = ttnn.from_torch(qkv_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Proj: original shape [dim, dim] -> transpose to [dim, dim]
+def _build_rope_cos_sin_tt(freqs_cis):
+    """Build half-half cos/sin torch tensors of shape (1, 1, L, head_dim) from
+    freqs_cis (L, head_dim//2) complex.
+    """
+    cos = freqs_cis.real
+    sin = freqs_cis.imag
+    cos_full = torch.cat([cos, cos], dim=-1).unsqueeze(0).unsqueeze(0)  # (1,1,L,head_dim)
+    sin_full = torch.cat([sin, sin], dim=-1).unsqueeze(0).unsqueeze(0)
+    return cos_full, sin_full
+
+
+def preprocess_vit_attention_weights(attn_module, num_heads=16, head_dim=64):
+    """Preprocess attention weights for fully on-device attention.
+
+    Q and K columns of QKV are permuted to half-half layout so we can use
+    ttnn.experimental.rotate_half + multiply/add to apply RoPE. V is untouched.
+
+    cos/sin tensors are precomputed per layer and uploaded to device for RoPE.
+    """
+    qkv_w = attn_module.qkv.weight.data  # (dim*3, dim)
+    qkv_w = _permute_qkv_for_rope(qkv_w, num_heads, head_dim)
+    qkv_w = qkv_w.T.contiguous()  # (dim, dim*3) for ttnn linear
+    qkv_w_tt = ttnn.from_torch(qkv_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    qkv_b = attn_module.qkv.bias.data  # (dim*3,)
+    qkv_b = _permute_qkv_for_rope(qkv_b, num_heads, head_dim)
+    qkv_b = qkv_b.reshape(1, 1, -1)
+    qkv_b_tt = ttnn.from_torch(qkv_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
     proj_w = attn_module.proj.weight.data.T.contiguous()
-    proj_w = ttnn.from_torch(proj_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    proj_w_tt = ttnn.from_torch(proj_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     proj_b = attn_module.proj.bias.data.reshape(1, 1, -1)
-    proj_b = ttnn.from_torch(proj_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    proj_b_tt = ttnn.from_torch(proj_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Extract RoPE frequencies if present
-    freqs_cis = None
-    if hasattr(attn_module, 'freqs_cis') and attn_module.freqs_cis is not None:
-        freqs_cis = attn_module.freqs_cis
+    rope_cos_tt = None
+    rope_sin_tt = None
+    if hasattr(attn_module, "freqs_cis") and attn_module.freqs_cis is not None:
+        cos_full, sin_full = _build_rope_cos_sin_tt(attn_module.freqs_cis)
+        rope_cos_tt = ttnn.from_torch(cos_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        rope_sin_tt = ttnn.from_torch(sin_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     return {
-        "qkv_weight": qkv_w,
-        "qkv_bias": qkv_b,
-        "proj_weight": proj_w,
-        "proj_bias": proj_b,
-        "freqs_cis": freqs_cis,
+        "qkv_weight": qkv_w_tt,
+        "qkv_bias": qkv_b_tt,
+        "proj_weight": proj_w_tt,
+        "proj_bias": proj_b_tt,
+        "rope_cos": rope_cos_tt,
+        "rope_sin": rope_sin_tt,
     }
 
 
@@ -554,7 +549,8 @@ def preprocess_vit_block_weights(block):
         "attn_qkv_bias": attn_params["qkv_bias"],
         "attn_proj_weight": attn_params["proj_weight"],
         "attn_proj_bias": attn_params["proj_bias"],
-        "freqs_cis": attn_params["freqs_cis"],
+        "rope_cos": attn_params["rope_cos"],
+        "rope_sin": attn_params["rope_sin"],
         # LayerNorms (kept as torch tensors for CPU LN1)
         "norm1_weight": block.norm1.weight.data.clone(),
         "norm1_bias": block.norm1.bias.data.clone(),
@@ -588,11 +584,12 @@ def move_block_params_to_device(block_params, device):
     for key in [
         "attn_qkv_weight", "attn_qkv_bias",
         "attn_proj_weight", "attn_proj_bias",
+        "rope_cos", "rope_sin",
         "norm2_weight_tt", "norm2_bias_tt",
         "mlp_fc1_weight", "mlp_fc1_bias",
         "mlp_fc2_weight", "mlp_fc2_bias",
     ]:
-        if isinstance(tt_params[key], ttnn.Tensor):
+        if tt_params.get(key) is not None and isinstance(tt_params[key], ttnn.Tensor):
             tt_params[key] = ttnn.to_device(tt_params[key], device)
     return block_params
 
