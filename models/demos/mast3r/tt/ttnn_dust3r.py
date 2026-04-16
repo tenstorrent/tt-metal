@@ -482,14 +482,11 @@ def decoder_block_device_pre(
     # --- self-attention (SDPA, v stays on device) ---
     tt_n1 = ttnn.layer_norm(tt_x, weight=tt_w["g1"], bias=tt_w["b1v"], epsilon=1e-6)
     tt_qkv = ttnn.linear(tt_n1, tt_w["qkv_w"], bias=tt_w["qkv_b"])
-    tt_q_part = ttnn.slice(tt_qkv, [0, 0, 0], [B, N, D])
-    tt_k_part = ttnn.slice(tt_qkv, [0, 0, D], [B, N, 2 * D])
-    tt_v_part = ttnn.slice(tt_qkv, [0, 0, 2 * D], [B, N, 3 * D])
-    tt_v = ttnn.reshape(tt_v_part, (B, N, heads, dh))
-    tt_v = ttnn.permute(tt_v, (0, 2, 1, 3))
-    qk_host = ttnn.to_torch(ttnn.concat([tt_q_part, tt_k_part], dim=-1))
-    q = qk_host[..., :D].reshape(B, N, heads, dh).permute(0, 2, 1, 3)
-    k = qk_host[..., D:].reshape(B, N, heads, dh).permute(0, 2, 1, 3)
+    tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
+        tt_qkv, num_heads=heads, transpose_key=False
+    )
+    q = ttnn.to_torch(tt_q)
+    k = ttnn.to_torch(tt_k)
     q = _rope_apply(q, pos_x)
     k = _rope_apply(k, pos_x)
     tt_q = _t2d(q, device)
