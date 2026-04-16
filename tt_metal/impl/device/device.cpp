@@ -23,6 +23,7 @@
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -422,13 +423,38 @@ void Device::configure_fabric() {
 }
 
 void Device::quiesce_and_restart_fabric_workers() {
+    // Diagnostic: env toggle lets CI / repro runs skip this restart path entirely to isolate
+    // whether the Tensix MUX restart is the cause of a post-quiesce hang. When set, we return
+    // before any fabric MUX termination. See plan Experiment B.
+    if (const char* env = std::getenv("TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART");
+        env != nullptr && env[0] != '\0' && env[0] != '0') {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return: "
+            "TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART={} (restart path disabled)",
+            this->id(),
+            env);
+        return;
+    }
+
     auto fabric_config = MetalContext::instance().get_fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L426: "
+            "!is_tt_fabric_config(fabric_config={})",
+            this->id(),
+            static_cast<uint32_t>(fabric_config));
         return;
     }
 
     auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
     if (tensix_config_mode == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L431: "
+            "FabricTensixConfig::DISABLED (no Tensix MUX cores to restart)",
+            this->id());
         return;
     }
 
@@ -437,6 +463,11 @@ void Device::quiesce_and_restart_fabric_workers() {
     const auto& builder_ctx = fabric_context.get_builder_context();
 
     if (builder_ctx.get_num_fabric_initialized_routers(this->id()) == 0) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L439: "
+            "get_num_fabric_initialized_routers == 0",
+            this->id());
         return;
     }
 
@@ -562,6 +593,11 @@ void Device::quiesce_and_restart_fabric_workers() {
     // Reset termination signals, clear channel state, and re-send launch messages
     // for WORKER cores in the fabric program.
     if (fabric_program_ == nullptr) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L564: "
+            "fabric_program_ == nullptr (Phase 1/2 ran but Phase 3/4 skipped)",
+            this->id());
         return;
     }
 

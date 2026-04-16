@@ -33,6 +33,9 @@
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -49,7 +52,21 @@ using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshShape;
 
-// Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
+// Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice.
+//
+// NOTE: Despite the class name ("2x4"), this fixture uses MeshShape{1, 4} (a 4-device line).
+// The "2x4" in the name refers to the T3K hardware topology, not the mesh shape passed to
+// MeshDevice. Renaming is deferred because several CI scripts + a reproducer script filter on
+// this exact string (see tests/scripts/t3000/run_t3000_unit_tests.sh,
+// tests/scripts/t3000/repro_ccl_cq0_hang.sh). A separate, distinct class with the same name
+// (but actually 2x4) exists in tests/ttnn/unit_tests/gtests/ccl/test_multi_tensor_ccl.cpp.
+//
+// Also: because `config_.fabric_config` is left at its default (DISABLED), the base
+// MeshDeviceFixtureBase::SetUp does NOT call the 5-arg SetFabricConfig that would set
+// `fabric_tensix_config`. The ctor calls the 1-arg SetFabricConfig(FABRIC_1D) below, so
+// `FabricTensixConfig` stays at DISABLED for this fixture. Device::quiesce_and_restart_fabric_workers()
+// therefore early-returns on L431 for every device here. Any diagnostics assuming that
+// function actually ran will be misleading for this test.
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
@@ -78,6 +95,74 @@ protected:
     void TearDown() override {
         MeshDeviceFixtureBase::TearDown();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    }
+
+    // Diagnostic: for every device in the mesh, read and log fabric ETH router status on every
+    // active fabric ETH channel. Gated on env TT_METAL_FABRIC_HEALTH_PROBE=1 to avoid log noise
+    // in normal CI runs. Used to isolate whether ETH router state decays across
+    // quiesce_devices() iterations (OQ2) or AllGather operations (plan Experiment D).
+    void log_fabric_eth_health_for_all_devices(const std::string& label) const {
+        const char* env_flag = std::getenv("TT_METAL_FABRIC_HEALTH_PROBE");
+        if (env_flag == nullptr || env_flag[0] == '\0' || env_flag[0] == '0') {
+            return;
+        }
+        if (!mesh_device_) {
+            return;
+        }
+        const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+            log_info(tt::LogMetal, "[fabric_eth_health:{}] skipped: fabric_config not a tt_fabric config", label);
+            return;
+        }
+        auto& metal_context = tt::tt_metal::MetalContext::instance();
+        auto& control_plane = metal_context.get_control_plane();
+        const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+        const auto [edm_status_address, expected_status] = builder_ctx.get_fabric_router_sync_address_and_status();
+        auto& cluster = metal_context.get_cluster();
+        for (auto* idev : mesh_device_->get_devices()) {
+            const auto chip_id = idev->id();
+            if (builder_ctx.get_num_fabric_initialized_routers(chip_id) == 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[fabric_eth_health:{}] Device {} skipped: no initialized fabric routers",
+                    label,
+                    chip_id);
+                continue;
+            }
+            const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+            const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+            for (const auto& [chan_id, _direction] : active_eth_channels) {
+                const auto eth_logical_core =
+                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+                uint32_t status_word = 0;
+                try {
+                    const auto status =
+                        cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
+                    status_word = status.empty() ? 0u : status[0];
+                } catch (const std::exception& e) {
+                    log_info(
+                        tt::LogMetal,
+                        "[fabric_eth_health:{}] Device {} chan {} read FAILED: {}",
+                        label,
+                        chip_id,
+                        chan_id,
+                        e.what());
+                    continue;
+                }
+                const bool ready = (status_word == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC));
+                const bool terminated = (status_word == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED));
+                const char* state = ready ? "READY_FOR_TRAFFIC" : (terminated ? "TERMINATED" : "OTHER");
+                log_info(
+                    tt::LogMetal,
+                    "[fabric_eth_health:{}] Device {} chan {} state={} status=0x{:08x} expected=0x{:08x}",
+                    label,
+                    chip_id,
+                    chan_id,
+                    state,
+                    status_word,
+                    expected_status);
+            }
+        }
     }
 };
 
@@ -170,7 +255,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
         log_info(LogTest, "[AsyncExecutionWorksCQ0] pre-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("pre-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("pre-allgather-post-quiesce");
         log_info(LogTest, "[AsyncExecutionWorksCQ0] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
 
         auto all_gathered_tensor = ttnn::all_gather(
@@ -182,7 +269,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
             aggregated_output_tensor);
 
         log_info(LogTest, "[AsyncExecutionWorksCQ0] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("post-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("post-allgather-post-quiesce");
         log_info(LogTest, "[AsyncExecutionWorksCQ0] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
@@ -341,7 +430,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
         log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] pre-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("cq0cq1-pre-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("cq0cq1-pre-allgather-post-quiesce");
         log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
 
         auto all_gathered_tensor = ttnn::all_gather(
@@ -354,7 +445,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(
             LogTest, "[AsyncExecutionWorksCQ0CQ1] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("cq0cq1-post-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("cq0cq1-post-allgather-post-quiesce");
         log_info(LogTest, "[AsyncExecutionWorksCQ0CQ1] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
@@ -538,7 +631,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
         log_info(LogTest, "[AsyncExecutionWorksMultithreadCQ0] pre-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("mt-pre-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("mt-pre-allgather-post-quiesce");
         log_info(
             LogTest,
             "[AsyncExecutionWorksMultithreadCQ0] pre-AllGather quiesce_devices() done; calling ttnn::all_gather");
@@ -554,7 +649,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         log_info(
             LogTest,
             "[AsyncExecutionWorksMultithreadCQ0] ttnn::all_gather returned; post-AllGather quiesce_devices() begin");
+        log_fabric_eth_health_for_all_devices("mt-post-allgather-pre-quiesce");
         mesh_device_->quiesce_devices();
+        log_fabric_eth_health_for_all_devices("mt-post-allgather-post-quiesce");
         log_info(LogTest, "[AsyncExecutionWorksMultithreadCQ0] post-AllGather quiesce_devices() done");
 
         auto gathered_tensors = output_tensors;
