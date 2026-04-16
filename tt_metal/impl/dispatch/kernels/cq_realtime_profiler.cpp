@@ -33,12 +33,6 @@ volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfile
 
 // Read timestamps from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
-    if (buffer_a) {
-        DeviceZoneScopedN("A");
-    } else {
-        DeviceZoneScopedN("B");
-    }
-
     // Spin until ring buffer has space
     while (rt_ring_full(ring_buffer)) {
         invalidate_l1_cache();
