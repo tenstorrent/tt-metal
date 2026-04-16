@@ -293,12 +293,9 @@ def tt_vit_block(
         device: ttnn device.
 
     Returns:
-        ttnn tensor (B, H, W, C) in TILE_LAYOUT on device.
+        torch tensor (B, H, W, C) on CPU.
     """
-    # --- Pre-attention LayerNorm ---
-    # Convert to torch for LN + reshape operations
-    # TODO: Implement layer_norm natively in ttnn for 4D tensors
-    x_torch = ttnn.to_torch(x).float()
+    x_torch = x
     B, H, W, C = x_torch.shape
     shortcut = x_torch
 
@@ -389,12 +386,7 @@ def tt_vit_block(
 
     # --- Residual connection ---
     output = shortcut2 + mlp_out
-
-    # Convert final result back to ttnn
-    tt_output = ttnn.from_torch(
-        output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
-    return tt_output
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -454,18 +446,13 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
         block_params = backbone_params["blocks"][i]
         window_size = block_params["window_size"]
 
-        # Convert to ttnn
-        tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-        tt_x = tt_vit_block(
-            tt_x,
+        x = tt_vit_block(
+            x,
             block_params["tt_params"],
             num_heads=16,
             window_size=window_size,
             device=device,
         )
-
-        x = ttnn.to_torch(tt_x).float()
 
     # --- Output: convert to NCHW ---
     # x is (B, H, W, C) -> permute to (B, C, H, W)
