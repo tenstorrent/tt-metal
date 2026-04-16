@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import comp_allclose_and_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     torch.manual_seed(2023)
@@ -35,6 +37,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
+        [10, 3, 18, 20],
     ],
 )
 @pytest.mark.parametrize(
@@ -53,6 +56,7 @@ def test_cumprod_normal(dim, shape, dtypes, device):
             ttnn_input_tensor = ttnn.from_torch(
                 torch_input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
             )
+            ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
             ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, dtype=dtypes[1])
 
             # assert metadata
@@ -143,6 +147,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
+        [1, 1, 20, 16],
     ],
 )
 @pytest.mark.parametrize(
@@ -161,6 +166,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn_input_tensor = ttnn.from_torch(
                 torch_input_tensor, dtype=dtypes[1], layout=ttnn.Layout.TILE, device=device
             )
+            ttnn_input_tensor = ttnn.fill_implicit_tile_padding(ttnn_input_tensor, TEST_PADDING_VALUE)
             ttnn_preallocated_tensor = ttnn.zeros_like(ttnn_input_tensor)
             ttnn_result_tensor = ttnn.cumprod(ttnn_input_tensor, dim, out=ttnn_preallocated_tensor)
 
