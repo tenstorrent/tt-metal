@@ -8,7 +8,6 @@
 
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_add_top_row.h"
-#include "ckernel_sfpu_binary.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
