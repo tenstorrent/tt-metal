@@ -90,6 +90,26 @@ struct DeviceLocalShardedBufferTestConfig {
     }
 };
 
+std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
+    Buffer& shard_buffer,
+    uint32_t page_size_bytes,
+    uint32_t sentinel_value,
+    uint32_t new_value,
+    const CoreRangeSet& filter) {
+    const auto mapping = shard_buffer.get_buffer_page_mapping();
+    const uint32_t words_per_page = page_size_bytes / sizeof(uint32_t);
+    const uint32_t num_u32 = static_cast<uint32_t>(shard_buffer.size() / sizeof(uint32_t));
+    std::vector<uint32_t> expected(num_u32, sentinel_value);
+    for (auto it = mapping->begin(); it != mapping->end(); ++it) {
+        const auto mp = *it;
+        const CoreCoord& core = mapping->all_cores.at(mp.core_id);
+        const uint32_t v = (filter.empty() || !filter.contains(core)) ? sentinel_value : new_value;
+        const size_t base = static_cast<size_t>(mp.host_page) * words_per_page;
+        std::fill(expected.begin() + base, expected.begin() + base + words_per_page, v);
+    }
+    return expected;
+}
+
 // Helper function to print detailed mismatch information between two uint32_t vectors
 template <typename T>
 void print_vector_mismatch_details(const std::vector<T>& dst_aligned, const std::vector<T>& src) {
@@ -1216,6 +1236,88 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         ASSERT_EQ(dst_vec.size(), src_vector.size());
         EXPECT_EQ(dst_vec, src_vector);
     }
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) {
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 2},
+        .num_cores = {core_grid_size.x, core_grid_size.y},
+        .page_shape = {1, 1024},
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+
+    uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+
+    auto buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    distributed::MeshCoordinate coord(0, 0);
+
+    constexpr uint32_t k_sentinel = 0x33333333u;
+    constexpr uint32_t k_new = 0x44444444u;
+    const uint32_t num_u32 = buf_size / sizeof(uint32_t);
+    std::vector<uint32_t> sentinel_vec(num_u32, k_sentinel);
+    WriteShard(mesh_device_->mesh_command_queue(), buf, sentinel_vec, coord, /*blocking=*/true);
+
+    std::vector<uint32_t> newest(num_u32, k_new);
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    DistributedHostBuffer distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed_host_buffer.emplace_shard(coord, [newest]() { return HostBuffer(newest); });
+    mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true, &filter);
+
+    std::vector<uint32_t> dst_vec;
+    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+    Buffer& shard = *buf->get_device_buffer(coord);
+    auto expected =
+        expected_shard_host_layout_after_filtered_write(shard, test_config.page_size(), k_sentinel, k_new, filter);
+    ASSERT_EQ(dst_vec.size(), expected.size());
+    EXPECT_EQ(dst_vec, expected);
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
+    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {2, 2},
+        .num_cores = {core_grid_size.x, core_grid_size.y},
+        .page_shape = {1, 1024},
+        .mem_config = TensorMemoryLayout::HEIGHT_SHARDED};
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
+        .bottom_up = false};
+
+    uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+
+    auto buf_explicit = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    auto buf_default = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    distributed::MeshCoordinate coord(0, 0);
+
+    const uint32_t num_u32 = buf_size / sizeof(uint32_t);
+    std::vector<uint32_t> src_vec(num_u32);
+    std::iota(src_vec.begin(), src_vec.end(), 0u);
+
+    DistributedHostBuffer dhb_a = DistributedHostBuffer::create(mesh_device_->shape());
+    dhb_a.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
+    mesh_device_->mesh_command_queue().enqueue_write(buf_explicit, dhb_a, /*blocking=*/true, nullptr);
+
+    DistributedHostBuffer dhb_b = DistributedHostBuffer::create(mesh_device_->shape());
+    dhb_b.emplace_shard(coord, [src_vec]() { return HostBuffer(src_vec); });
+    mesh_device_->mesh_command_queue().enqueue_write(buf_default, dhb_b, /*blocking=*/true);
+
+    std::vector<uint32_t> out_a;
+    std::vector<uint32_t> out_b;
+    ReadShard(mesh_device_->mesh_command_queue(), out_a, buf_explicit, coord);
+    ReadShard(mesh_device_->mesh_command_queue(), out_b, buf_default, coord);
+    EXPECT_EQ(out_a, out_b);
+    EXPECT_EQ(out_a, src_vec);
 }
 
 // On a single host all coords are local, so this test exercises the SD sharded buffer
