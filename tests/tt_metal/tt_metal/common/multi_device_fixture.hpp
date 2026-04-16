@@ -6,6 +6,10 @@
 
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <thread>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -109,6 +113,10 @@ protected:
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
+        // If set, a watchdog thread is launched in SetUp(). If the test body has not
+        // completed within this many milliseconds, the process is killed with SIGKILL so
+        // that CI does not stall waiting for a hung test.
+        std::optional<uint32_t> test_budget_ms;
     };
 
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -163,9 +171,39 @@ protected:
             core_type,
             {},
             config_.worker_l1_size);
+
+        // Opt-in watchdog: kill the process if the test body exceeds its budget.
+        if (config_.test_budget_ms.has_value()) {
+            watchdog_stop_.store(false, std::memory_order_relaxed);
+            uint32_t budget_ms = *config_.test_budget_ms;
+            watchdog_thread_ = std::thread([this, budget_ms]() {
+                auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+                while (!watchdog_stop_.load(std::memory_order_relaxed)) {
+                    if (std::chrono::steady_clock::now() >= deadline) {
+                        // Log to stderr directly — logger may be torn down by this point.
+                        fprintf(
+                            stderr,
+                            "[MeshDeviceFixture watchdog] Test budget of %ums exceeded — "
+                            "sending SIGKILL to prevent CI stall\n",
+                            budget_ms);
+                        fflush(stderr);
+                        std::raise(SIGKILL);
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            });
+        }
     }
 
     void TearDown() override {
+        // Stop watchdog before any teardown so a slow-but-completing test isn't killed.
+        watchdog_stop_.store(true, std::memory_order_relaxed);
+        if (watchdog_thread_.joinable()) {
+            watchdog_thread_.join();
+        }
+
         if (!mesh_device_) {
             return;
         }
@@ -194,6 +232,8 @@ protected:
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     uint32_t max_cbs_{};
+    std::thread watchdog_thread_;
+    std::atomic<bool> watchdog_stop_{false};
 
     Config config_;
 };

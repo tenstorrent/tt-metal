@@ -229,6 +229,62 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
+
+        // Q1: Stale-firmware probe.
+        // configure_fabric_cores() clears edm_status_address to 0 before loading the new
+        // firmware image.  If we read a non-zero, non-TERMINATED value here the ETH core
+        // was NOT cleanly reset between sessions (previous firmware is still running).
+        // Send TERMINATE and wait up to 2 s; fall back to ERISC hard-reset if it won't stop.
+        {
+            constexpr uint32_t terminated_val =
+                static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+            detail::ReadFromDeviceL1(
+                dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+            if (master_router_status[0] != 0 && master_router_status[0] != terminated_val) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} ETH master chan={} edm_status=0x{:08x} "
+                    "before new firmware handshake (expected 0 or TERMINATED=0x{:08x}) — "
+                    "stale firmware detected; sending TERMINATE",
+                    dev->id(),
+                    master_router_chan,
+                    master_router_status[0],
+                    terminated_val);
+                auto [term_addr, term_signal] =
+                    builder_context.get_fabric_router_termination_address_and_signal();
+                std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
+                detail::WriteToDeviceL1(
+                    dev, master_router_logical_core, term_addr, term_buf, CoreType::ETH);
+                constexpr uint32_t stale_timeout_ms = 2000;
+                auto stale_start = std::chrono::steady_clock::now();
+                while (true) {
+                    detail::ReadFromDeviceL1(
+                        dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+                    if (master_router_status[0] == terminated_val) {
+                        break;
+                    }
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - stale_start)
+                                       .count();
+                    if (elapsed > stale_timeout_ms) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_router_sync: Stale ETH firmware on Device {} did not "
+                            "terminate within {}ms — asserting ERISC reset",
+                            dev->id(),
+                            stale_timeout_ms);
+                        const auto virtual_eth_coord =
+                            cluster_.get_virtual_coordinate_from_logical_coordinates(
+                                dev->id(), master_router_logical_core, CoreType::ETH);
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                        break;
+                    }
+                }
+                master_router_status[0] = 0;  // reset for the main handshake poll below
+            }
+        }
+
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
             detail::ReadFromDeviceL1(
