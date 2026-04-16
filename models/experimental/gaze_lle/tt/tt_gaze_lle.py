@@ -36,12 +36,12 @@ class _BlockParams:
         # Attention
         self.norm1_w = _to_device(block.norm1.weight.unsqueeze(0), device)
         self.norm1_b = _to_device(block.norm1.bias.unsqueeze(0), device)
-        self.qkv_w = _to_device(block.attn.qkv.weight.T.contiguous(), device)
+        self.qkv_w = _to_device(block.attn.qkv.weight.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.qkv_b = _to_device(block.attn.qkv.bias.unsqueeze(0), device)
         ls1 = block.ls1.scale_factor.detach()
         proj_w = block.attn.proj.weight.detach() * ls1.unsqueeze(-1)
         proj_b = block.attn.proj.bias.detach() * ls1
-        self.proj_w = _to_device(proj_w.T.contiguous(), device)
+        self.proj_w = _to_device(proj_w.T.contiguous(), device, dtype=ttnn.bfloat8_b)
         self.proj_b = _to_device(proj_b.unsqueeze(0), device)
 
         # MLP
