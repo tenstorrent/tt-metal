@@ -257,7 +257,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_packet_cb"),
                 get_named_compile_time_arg_val("reduce_payload_size_bytes"),
                 get_named_compile_time_arg_val("reduce_r2_buffer_offset"),
-                get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset")>;
+                get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
+                get_named_compile_time_arg_val("reduce_is_exit_column")>;
 
             deepseek_b1_ops::ReduceToAllB1::ReaderArgs reduce_rt_args{};
 #endif
@@ -559,7 +560,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_r3_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_socket_page_size"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable")>;
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("reduce_is_exit_column")>;
 
             deepseek_b1_ops::ReduceToAllB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -846,7 +848,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_received_cb"),
                 get_named_compile_time_arg_val("reduce_scratch_cb"),
                 get_named_compile_time_arg_val("reduce_reload_cb"),
-                get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+                get_named_compile_time_arg_val("is_reduce_fabric_core"),
+                get_named_compile_time_arg_val("reduce_is_exit_column")>;
 
             deepseek_b1_ops::ReduceToAllB1::ComputeArgs reduce_rt_args{};
 #endif
@@ -1042,7 +1045,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
             using FwdCTArgs = deepseek_b1_ops::Forward::ReaderCTArgs<
                 get_named_compile_time_arg_val("bcast_pkt_cb"),
-                get_named_compile_time_arg_val("forward_num_pages")>;
+                get_named_compile_time_arg_val("forward_num_pages"),
+                get_named_compile_time_arg_val("forward_is_entry_column")>;
             deepseek_b1_ops::Forward::ReaderArgs fwd_args{
                 get_common_arg_val<uint32_t>(0),  // socket_config_addr
                 get_common_arg_val<uint32_t>(1),  // socket_page_size
@@ -1054,12 +1058,22 @@ void kernel_main() {
             using FwdCTArgs = deepseek_b1_ops::Forward::WriterCTArgs<
                 get_named_compile_time_arg_val("bcast_pkt_cb"),
                 get_named_compile_time_arg_val("forward_num_pages"),
-                get_named_compile_time_arg_val("forward_page_size")>;
+                get_named_compile_time_arg_val("forward_page_size"),
+                get_named_compile_time_arg_val("forward_is_entry_column"),
+                get_named_compile_time_arg_val("forward_fabric_max_payload"),
+                get_named_compile_time_arg_val("forward_num_fabric_packets"),
+                get_named_compile_time_arg_val("forward_cross_column_payload")>;
             constexpr uint32_t fwd_ncrisc_base = get_named_compile_time_arg_val("forward_ncrisc_common_rt_arg_base");
             deepseek_b1_ops::Forward::WriterArgs fwd_args{
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 0),  // tensor_address
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 1),  // my_noc_x
                 get_common_arg_val<uint32_t>(fwd_ncrisc_base + 2),  // my_noc_y
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 3),  // cross_col_sem_addr
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 4),  // partner_tensor_addr
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 5),  // partner_noc_x
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 6),  // partner_noc_y
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 7),  // partner_chip_id
+                get_common_arg_val<uint32_t>(fwd_ncrisc_base + 8),  // partner_mesh_id
             };
             deepseek_b1_ops::Forward::Op<FwdCTArgs, Core::is_sender_core> fwd_op;
             fwd_op(fwd_args);

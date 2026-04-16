@@ -76,6 +76,8 @@ class PipelineBlock:
         pipeline_exit_core_coord=None,
         entry_downstream_core=None,
         exit_upstream_cores=None,
+        entry_device_coords=None,
+        exit_device_coords=None,
     ):
         import time as _pb_time
 
@@ -171,6 +173,8 @@ class PipelineBlock:
                     entry_downstream_core=entry_downstream_core,
                     exit_upstream_cores=exit_upstream_cores,
                     exit_upstream_page_size=exit_upstream_page_size,
+                    entry_device_coords=entry_device_coords,
+                    exit_device_coords=exit_device_coords,
                 )
             else:
                 self._init_forwarding_stage(
@@ -385,6 +389,8 @@ class PipelineBlock:
         entry_downstream_core=None,
         exit_upstream_cores=None,
         exit_upstream_page_size=None,
+        entry_device_coords=None,
+        exit_device_coords=None,
     ):
         """Per-device parallel forwarding stage.
 
@@ -410,6 +416,9 @@ class PipelineBlock:
         use_multi_upstream = isinstance(exit_upstream_cores, list)
         next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
 
+        actual_entry_coords = entry_device_coords if entry_device_coords is not None else pipeline_device_coords
+        actual_exit_coords = exit_device_coords if exit_device_coords is not None else pipeline_device_coords
+
         self.entry_socket_interface = []
         self.exit_socket_interface = []
 
@@ -417,6 +426,7 @@ class PipelineBlock:
             f"[PB] _init_parallel: mesh_id={self.my_mesh_id} "
             f"is_last={self.is_last_stage} next_mesh={next_mesh_id} "
             f"num_devices={len(pipeline_device_coords)} "
+            f"num_entry={len(actual_entry_coords)} num_exit={len(actual_exit_coords)} "
             f"core_entry={core_entry} core_exit={core_exit} "
             f"use_multi_upstream={use_multi_upstream} "
             f"entry_downstream_core={entry_downstream_core} "
@@ -426,8 +436,8 @@ class PipelineBlock:
 
         effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
 
-        print(f"[PB] --- PASS 1: creating {len(pipeline_device_coords)} entry SocketInterfaces ---")
-        for idx_dc, dc in enumerate(pipeline_device_coords):
+        print(f"[PB] --- PASS 1: creating {len(actual_entry_coords)} entry SocketInterfaces ---")
+        for idx_dc, dc in enumerate(actual_entry_coords):
             print(f"[PB] entry[{idx_dc}] dc={dc}", flush=True)
             # When exit uses multi-upstream (NCRISC/Reader), entry must use
             # BRISC (Writer) to avoid RISC conflict on the shared pipeline core.
@@ -446,8 +456,13 @@ class PipelineBlock:
             )
             self.entry_socket_interface.append(entry_si)
 
-        print(f"[PB] --- PASS 2: creating {len(pipeline_device_coords)} exit SocketInterfaces ---")
-        for i, dc in enumerate(pipeline_device_coords):
+        assert len(actual_exit_coords) == len(actual_entry_coords), (
+            f"entry ({len(actual_entry_coords)}) and exit ({len(actual_exit_coords)}) "
+            f"device coords must have the same length"
+        )
+
+        print(f"[PB] --- PASS 2: creating {len(actual_exit_coords)} exit SocketInterfaces ---")
+        for i, dc in enumerate(actual_exit_coords):
             entry_si = self.entry_socket_interface[i]
             print(f"[PB] exit[{i}] dc={dc}", flush=True)
 

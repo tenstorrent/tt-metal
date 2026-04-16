@@ -68,7 +68,8 @@ class MoeSem:
     REDUCE_FC_BWD_R1 = 21
     REDUCE_FC_BWD_R2 = 22
     REDUCE_FC_R3_FWD = 23
-    NUM_SEMAPHORES = 24
+    FORWARD_CROSS_COL_SYNC = 24
+    NUM_SEMAPHORES = 25
 
 
 @dataclass
@@ -1697,6 +1698,7 @@ class MoeRoutedExpertOp:
             ("reduce_payload_size_bytes", ctx.reduce_params["payload_size_bytes"] if ctx.reduce_params else 0),
             ("reduce_r2_buffer_offset", ctx.reduce_params["r2_buf_offset"] if ctx.reduce_params else 0),
             ("reduce_ncrisc_buffer_offset", ctx.reduce_params["ncrisc_buf_offset"] if ctx.reduce_params else 0),
+            ("reduce_is_exit_column", 0),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             ("bcast_ncrisc_common_rt_arg_base", 0),
@@ -1704,6 +1706,10 @@ class MoeRoutedExpertOp:
             ("forward_num_pages", ctx.forward_params["input_num_pages"] if ctx.enable_forward else 0),
             ("forward_page_size", ctx.forward_params["page_size_bytes"] if ctx.enable_forward else 0),
             ("forward_ncrisc_common_rt_arg_base", 0),
+            ("forward_is_entry_column", 1),
+            ("forward_fabric_max_payload", 0),
+            ("forward_num_fabric_packets", 0),
+            ("forward_cross_column_payload", 0),
         ]
 
         brisc_named_compile_time_args = [
@@ -1812,10 +1818,12 @@ class MoeRoutedExpertOp:
             ("reduce_socket_page_size", 0),
             ("reduce_total_num_workers", ctx.reduce_params["num_workers"] if ctx.reduce_params else 0),
             ("reduce_persistent_fabric_signal_enable", 0),
+            ("reduce_is_exit_column", 0),
             # Broadcast / Forward (base CT args, always present)
             ("bcast_pkt_cb", ctx.bcast_pkt_cb if (ctx.enable_bcast or ctx.enable_forward) else 0),
             # Forward BRISC CT args
             ("forward_num_pages", ctx.forward_params["input_num_pages"] if ctx.enable_forward else 0),
+            ("forward_is_entry_column", 1),
         ]
 
         trisc_named_compile_time_args = [
@@ -1908,6 +1916,7 @@ class MoeRoutedExpertOp:
             ("reduce_received_cb", ctx.reduce_received_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
             ("reduce_reload_cb", ctx.reduce_reload_cb),
+            ("reduce_is_exit_column", 0),
         ]
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
@@ -4179,8 +4188,10 @@ class MoeOp:
         self.ncrisc_args.extend([("reduce_num_tiles", rp["num_tiles"])])
         self.trisc_args.extend([("reduce_num_tiles", rp["num_tiles"])])
 
-        # Socket page size for downstream sending
-        socket_page_size = rp["payload_size_bytes"] if self.downstream_sockets else 0
+        is_exit_col = 1 if (self.exit_column is not None and col == self.exit_column) else 0
+
+        # Socket page size for downstream sending (only exit column sends downstream)
+        socket_page_size = rp["payload_size_bytes"] if (self.downstream_sockets and is_exit_col) else 0
 
         def _update_brisc_ct(name, value):
             for i, (n, _v) in enumerate(self.brisc_args):
@@ -4188,6 +4199,21 @@ class MoeOp:
                     self.brisc_args[i] = (name, value)
                     return
 
+        def _update_ncrisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.ncrisc_args):
+                if n == name:
+                    self.ncrisc_args[i] = (name, value)
+                    return
+
+        def _update_trisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.trisc_args):
+                if n == name:
+                    self.trisc_args[i] = (name, value)
+                    return
+
+        _update_brisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_ncrisc_ct("reduce_is_exit_column", is_exit_col)
+        _update_trisc_ct("reduce_is_exit_column", is_exit_col)
         _update_brisc_ct("reduce_socket_page_size", socket_page_size)
 
         # Persistent signal: designate chip_id==0 as the aggregator device
@@ -4347,7 +4373,7 @@ class MoeOp:
 
                 shard_idx = rp["core_to_shard_idx"][(core.x, core.y)]
                 socket_config_addr = 0
-                if self.downstream_sockets is not None:
+                if self.downstream_sockets is not None and is_exit_col:
                     device_sockets = self.downstream_sockets[chip_id]
                     if isinstance(device_sockets, list):
                         socket_config_addr = device_sockets[0].get_config_buffer_address()
@@ -4550,9 +4576,9 @@ class MoeOp:
 
         routed_ctx = ctx.routed_ctx
         fp = routed_ctx.forward_params
+        mesh_device = ctx.mesh_device
 
-        forward_socket = ctx.forward_sockets[chip_id]
-        socket_page_size = fp["payload_size_bytes"]
+        is_entry_col = (self.exit_column is None) or (col == self.exit_column)
 
         sender_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
 
@@ -4560,17 +4586,89 @@ class MoeOp:
         residual_device = residual_per_device[chip_id]
         tensor_address = int(residual_device.buffer_address())
 
-        self.brisc_common_rt_args = [
-            int(forward_socket.get_config_buffer_address()),
-            int(socket_page_size),
-            1,
-        ]
+        cross_col_sem_addr = self.sem_addrs[MoeSem.FORWARD_CROSS_COL_SYNC]
+        socket_page_size = fp["payload_size_bytes"]
 
-        forward_ncrisc_common_rt_args = [
-            tensor_address,
-            sender_core_physical.x,
-            sender_core_physical.y,
-        ]
+        def _update_ncrisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.ncrisc_args):
+                if n == name:
+                    self.ncrisc_args[i] = (name, value)
+                    return
+
+        def _update_brisc_ct(name, value):
+            for i, (n, _v) in enumerate(self.brisc_args):
+                if n == name:
+                    self.brisc_args[i] = (name, value)
+                    return
+
+        if is_entry_col:
+            forward_socket = ctx.forward_sockets[chip_id]
+            self.brisc_common_rt_args = [
+                int(forward_socket.get_config_buffer_address()),
+                int(socket_page_size),
+                1,
+            ]
+            _update_brisc_ct("forward_is_entry_column", 1)
+            _update_ncrisc_ct("forward_is_entry_column", 1)
+
+            partner_col = 1 - col
+            partner_chip_id = row * ctx.mesh_cols + partner_col
+            partner_residual = residual_per_device[partner_chip_id]
+            partner_tensor_addr = int(partner_residual.buffer_address())
+            partner_coord = ttnn.MeshCoordinate(row, partner_col)
+            partner_sender_core_phys = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
+
+            partner_fabric_node = mesh_device.get_fabric_node_id(partner_coord)
+
+            fabric_max_payload = 0
+            num_fabric_packets = 0
+            cross_col_payload = 0
+            if self.exit_column is not None:
+                fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+                cross_col_payload = int(socket_page_size)
+                num_fabric_packets = (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload
+
+            _update_ncrisc_ct("forward_fabric_max_payload", fabric_max_payload)
+            _update_ncrisc_ct("forward_num_fabric_packets", num_fabric_packets)
+            _update_ncrisc_ct("forward_cross_column_payload", cross_col_payload)
+
+            forward_ncrisc_common_rt_args = [
+                tensor_address,
+                sender_core_physical.x,
+                sender_core_physical.y,
+                cross_col_sem_addr,
+                partner_tensor_addr,
+                partner_sender_core_phys.x,
+                partner_sender_core_phys.y,
+                int(partner_fabric_node.chip_id),
+                int(partner_fabric_node.mesh_id),
+            ]
+        else:
+            self.brisc_common_rt_args = [0, 0, 0]
+            _update_brisc_ct("forward_is_entry_column", 0)
+            _update_ncrisc_ct("forward_is_entry_column", 0)
+
+            fabric_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes()) if self.exit_column is not None else 0
+            cross_col_payload = int(socket_page_size) if self.exit_column is not None else 0
+            num_fabric_packets = (
+                (cross_col_payload + fabric_max_payload - 1) // fabric_max_payload if fabric_max_payload > 0 else 0
+            )
+
+            _update_ncrisc_ct("forward_fabric_max_payload", fabric_max_payload)
+            _update_ncrisc_ct("forward_num_fabric_packets", num_fabric_packets)
+            _update_ncrisc_ct("forward_cross_column_payload", cross_col_payload)
+
+            forward_ncrisc_common_rt_args = [
+                tensor_address,
+                sender_core_physical.x,
+                sender_core_physical.y,
+                cross_col_sem_addr,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ]
 
         forward_ncrisc_base = len(self.ncrisc_common_rt_args)
         for i, (name, _val) in enumerate(self.ncrisc_args):
@@ -4633,12 +4731,16 @@ class MoeOp:
                 )
                 program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn)
 
-                r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
-                print(
-                    f"  r3_conn  (BRISC): eth_ch={list(r3_conn)[0] if r3_conn else '?'} args={list(r3_conn)} link={link_idx}",
-                    flush=True,
-                )
-                program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn)
+                is_exit_col = self.exit_column is not None and col == self.exit_column
+                if not is_exit_col:
+                    r3_conn = ttnn.setup_fabric_connection(fabric_node_id, r3_fabric_node_id, link_idx, program, fc)
+                    print(
+                        f"  r3_conn  (BRISC): eth_ch={list(r3_conn)[0] if r3_conn else '?'} args={list(r3_conn)} link={link_idx}",
+                        flush=True,
+                    )
+                    program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn)
+                else:
+                    print(f"  r3_conn  (BRISC): SKIPPED (exit column)", flush=True)
 
                 bwd_conn = ttnn.setup_fabric_connection(fabric_node_id, bwd_fabric_node_id, link_idx, program, fc)
                 print(
@@ -4692,6 +4794,33 @@ class MoeOp:
                     bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 
+        # Forward cross-column fabric connection (entry column → non-entry column)
+        if ctx.enable_forward and self.exit_column is not None and col == self.exit_column:
+            routed_ctx = ctx.routed_ctx
+            mesh_device = ctx.mesh_device
+            sender_core = routed_ctx.sender_core
+            my_fabric_node = mesh_device.get_fabric_node_id(coord)
+            partner_col = 1 - col
+            partner_coord = ttnn.MeshCoordinate(row, partner_col)
+            partner_fabric_node = mesh_device.get_fabric_node_id(partner_coord)
+
+            ncrisc_kernel_idx = None
+            for group in kernel_result.groups:
+                if group.core_range_set.contains(sender_core):
+                    ncrisc_kernel_idx = group.ncrisc_kernel_index
+                    break
+            assert ncrisc_kernel_idx is not None, f"No kernel group contains sender core {sender_core}"
+
+            fwd_cross_col_conn = ttnn.setup_fabric_connection(
+                my_fabric_node, partner_fabric_node, 0, program, sender_core
+            )
+            print(
+                f"[MoE forward fabric] row={row} col={col} sender=({sender_core.x},{sender_core.y}) "
+                f"partner=({partner_coord}) args={list(fwd_cross_col_conn)}",
+                flush=True,
+            )
+            program.kernels[ncrisc_kernel_idx].runtime_args[sender_core.x][sender_core.y].extend(fwd_cross_col_conn)
+
     # ==================================================================
     # Unified MoeOp helpers — hide routed/shared split from op()
     # ==================================================================
@@ -4738,12 +4867,14 @@ class MoeOp:
         downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        exit_column=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
         self.downstream_sockets = downstream_sockets
         self.forward_sockets = forward_sockets
+        self.exit_column = exit_column
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
@@ -5174,6 +5305,9 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # Exit column index: devices on this column hold the global sum and send downstream.
+        # Devices on the other column only send R3 cross-column, they don't write output.
+        exit_column=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -5249,6 +5383,7 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            exit_column=exit_column,
         )
 
         # ==================================================================
@@ -5275,6 +5410,19 @@ class MoeOp:
                     coord,
                     row,
                     col,
+                )
+
+                # Debug: verify per-device compile-time args
+                _dbg_exit = dict(moe.brisc_args).get("reduce_is_exit_column", "?")
+                _dbg_entry = dict(moe.brisc_args).get("forward_is_entry_column", "?")
+                _dbg_n_exit = dict(moe.ncrisc_args).get("reduce_is_exit_column", "?")
+                _dbg_n_entry = dict(moe.ncrisc_args).get("forward_is_entry_column", "?")
+                _dbg_fnode = ctx.mesh_device.get_fabric_node_id(coord)
+                print(
+                    f"[MoE CT] chip_id={chip_id} row={row} col={col} coord={coord} fabric_node={_dbg_fnode} "
+                    f"BRISC: exit={_dbg_exit} entry={_dbg_entry} | "
+                    f"NCRISC: exit={_dbg_n_exit} entry={_dbg_n_entry}",
+                    flush=True,
                 )
 
                 unified_kernel = UnifiedKernelDescriptor(

@@ -64,7 +64,8 @@ struct ReduceToAllB1 {
         uint32_t packetCb,
         uint32_t payloadSizeBytes,
         uint32_t r2BufferOffset,
-        uint32_t ncriscBufferOffset>
+        uint32_t ncriscBufferOffset,
+        uint32_t isExitColumn = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
@@ -76,6 +77,7 @@ struct ReduceToAllB1 {
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
         static constexpr uint32_t r2_buffer_offset = r2BufferOffset;
         static constexpr uint32_t ncrisc_buffer_offset = ncriscBufferOffset;
+        static constexpr uint32_t is_exit_column = isExitColumn;
 
         static constexpr uint32_t all_sent_mask =
             (slotsPerDirection == 32) ? 0xFFFF'FFFFu : ((1u << slotsPerDirection) - 1u);
@@ -103,7 +105,8 @@ struct ReduceToAllB1 {
         uint32_t r3BufferOffset,
         uint32_t socketPageSize = 0,
         uint32_t totalNumWorkers = 0,
-        uint32_t persistentFabricSignalEnable = 0>
+        uint32_t persistentFabricSignalEnable = 0,
+        uint32_t isExitColumn = 0>
     struct WriterCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
@@ -128,6 +131,7 @@ struct ReduceToAllB1 {
         static constexpr bool enable_downstream_socket = socketPageSize > 0;
         static constexpr uint32_t total_num_workers = totalNumWorkers;
         static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
+        static constexpr uint32_t is_exit_column = isExitColumn;
 
         static constexpr uint32_t all_sent_mask =
             (slotsPerDirection == 32) ? 0xFFFF'FFFFu : ((1u << slotsPerDirection) - 1u);
@@ -141,7 +145,8 @@ struct ReduceToAllB1 {
         uint32_t receivedCb,
         uint32_t scratchCb,
         uint32_t reloadCb,
-        uint32_t isFabricCore>
+        uint32_t isFabricCore,
+        uint32_t isExitColumn = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
@@ -149,6 +154,7 @@ struct ReduceToAllB1 {
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t reload_cb = reloadCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
+        static constexpr uint32_t is_exit_column = isExitColumn;
     };
 
     // ================================================================
@@ -356,10 +362,14 @@ struct ReduceToAllB1 {
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             DPRINT << "NR2\n";
 
-            cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
-            wait_round(args.recv_sem_round3);
-            cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "NR3\n";
+            if constexpr (CTArgs::is_exit_column) {
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
+                wait_round(args.recv_sem_round3);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "NR3\n";
+            } else {
+                DPRINT << "NR3skip\n";
+            }
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
@@ -440,30 +450,34 @@ struct ReduceToAllB1 {
                 noc_async_full_barrier();
                 DPRINT << "FD\n";
 
-                auto r3_sender =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                r3_sender.open();
-                DPRINT << "R3O edm=(" << (uint32_t)r3_sender.edm_noc_x << "," << (uint32_t)r3_sender.edm_noc_y
-                       << ") spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << " sem=0x" << HEX() << *r3_sem
-                       << DEC() << "\n";
-                {
-                    uint32_t r3_sent = 0;
-                    uint32_t r3_spin = 0;
-                    do {
-                        invalidate_l1_cache();
-                        r3_sent = process_ready_slots(r3_sem, r3_sent, r3_base, r3_sender);
-                        r3_spin++;
-                        if ((r3_spin & 0xFFFFFFF) == 0) {
+                if constexpr (!CTArgs::is_exit_column) {
+                    auto r3_sender =
+                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                    r3_sender.open();
+                    DPRINT << "R3O edm=(" << (uint32_t)r3_sender.edm_noc_x << "," << (uint32_t)r3_sender.edm_noc_y
+                           << ") spc=" << (r3_sender.edm_has_space_for_packet<1>() ? 1 : 0) << " sem=0x" << HEX()
+                           << *r3_sem << DEC() << "\n";
+                    {
+                        uint32_t r3_sent = 0;
+                        uint32_t r3_spin = 0;
+                        do {
                             invalidate_l1_cache();
-                            DPRINT << "R3 s=0x" << HEX() << r3_sent << " raw=0x" << *r3_sem << " mask=0x"
-                                   << CTArgs::r3_all_sent_mask << DEC() << "\n";
-                        }
-                    } while (r3_sent != CTArgs::r3_all_sent_mask);
-                    noc_semaphore_set(r3_sem, 0);
+                            r3_sent = process_ready_slots(r3_sem, r3_sent, r3_base, r3_sender);
+                            r3_spin++;
+                            if ((r3_spin & 0xFFFFFFF) == 0) {
+                                invalidate_l1_cache();
+                                DPRINT << "R3 s=0x" << HEX() << r3_sent << " raw=0x" << *r3_sem << " mask=0x"
+                                       << CTArgs::r3_all_sent_mask << DEC() << "\n";
+                            }
+                        } while (r3_sent != CTArgs::r3_all_sent_mask);
+                        noc_semaphore_set(r3_sem, 0);
+                    }
+                    r3_sender.close();
+                    noc_async_full_barrier();
+                    DPRINT << "RD\n";
+                } else {
+                    DPRINT << "RD(exit)\n";
                 }
-                r3_sender.close();
-                noc_async_full_barrier();
-                DPRINT << "RD\n";
                 return;
             }
 
@@ -544,83 +558,97 @@ struct ReduceToAllB1 {
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
             DPRINT << "WR2d\n";
-            // R3: send column sum to FC for cross-column forwarding
-            {
-                cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
-                send_to_forwarder(
-                    packet_header,
-                    static_cast<uint16_t>(CTArgs::r3_dst_chip_id),
-                    static_cast<uint16_t>(CTArgs::r3_dst_mesh_id),
-                    my_noc_x,
-                    my_noc_y,
-                    args.r3_dst_l1_addr,
-                    args.r3_dst_sem_addr,
-                    data_addr,
-                    args.fc_noc_x,
-                    args.fc_noc_y,
-                    args.r3_slot_offset,
-                    args.r3_sem_addr,
-                    args.r3_slot_bit);
 
-                cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
-                uint32_t reload_wr = get_write_ptr(CTArgs::reload_cb);
-                uint64_t reload_noc = get_noc_addr(my_noc_x, my_noc_y, reload_wr);
-                noc_async_write(data_addr, reload_noc, CTArgs::num_tiles * CTArgs::compute_tile_size);
-                noc_async_write_barrier();
-                cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
-                cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-            }
-            DPRINT << "WR3d\n";
-            // Output: write final result
-            {
-                cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                uint64_t output_noc = get_noc_addr(my_noc_x, my_noc_y, args.output_base_addr);
-                noc_async_write(src_addr, output_noc, CTArgs::payload_size_bytes);
-                noc_async_write_barrier();
-
-                if constexpr (CTArgs::enable_downstream_socket) {
-                    if (args.socket_config_addr != 0) {
-                        SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                        set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size);
-                        socket_reserve_pages(sender_socket, 1);
-                        sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
-
-                        uint64_t fifo_dst = get_noc_addr(
-                            downstream_enc.d2d.downstream_noc_x,
-                            downstream_enc.d2d.downstream_noc_y,
-                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-                        noc_async_write(src_addr, fifo_dst, CTArgs::socket_page_size);
-                        noc_async_writes_flushed();
-
-                        socket_push_pages(sender_socket, 1);
-                        socket_notify_receiver(sender_socket);
-                        noc_async_write_barrier();
-                        socket_barrier(sender_socket);
-                        update_socket_config(sender_socket);
-                    }
-                    if (args.persistent_enable != 0) {
-                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-
-                        uint64_t fc_sem = get_noc_addr(
-                            args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                        noc_semaphore_inc(fc_sem, 1);
-                        noc_async_write_barrier();
-                    } else if (args.agg_sem_l1_addr != 0) {
-                        uint64_t agg_sem_noc =
-                            get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                        noc_semaphore_inc(agg_sem_noc, 1);
-                        noc_async_atomic_barrier();
-                    }
+            if constexpr (!CTArgs::is_exit_column) {
+                // Non-exit column: send R3 to FC for cross-column forwarding, then done
+                {
+                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
+                    send_to_forwarder(
+                        packet_header,
+                        static_cast<uint16_t>(CTArgs::r3_dst_chip_id),
+                        static_cast<uint16_t>(CTArgs::r3_dst_mesh_id),
+                        my_noc_x,
+                        my_noc_y,
+                        args.r3_dst_l1_addr,
+                        args.r3_dst_sem_addr,
+                        data_addr,
+                        args.fc_noc_x,
+                        args.fc_noc_y,
+                        args.r3_slot_offset,
+                        args.r3_sem_addr,
+                        args.r3_slot_bit);
+                    cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
+                DPRINT << "WR3d(send)\n";
+            } else {
+                // Exit column: copy column sum to reload for TRISC R3 computation,
+                // then wait for global sum and write output
+                {
+                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
 
-                cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
+                    uint32_t reload_wr = get_write_ptr(CTArgs::reload_cb);
+                    uint64_t reload_noc = get_noc_addr(my_noc_x, my_noc_y, reload_wr);
+                    noc_async_write(data_addr, reload_noc, CTArgs::num_tiles * CTArgs::compute_tile_size);
+                    noc_async_write_barrier();
+                    cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
+                    cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                }
+                DPRINT << "WR3d(recv)\n";
+
+                // Wait for TRISC R3 output and write final result
+                {
+                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
+                    uint64_t output_noc = get_noc_addr(my_noc_x, my_noc_y, args.output_base_addr);
+                    noc_async_write(src_addr, output_noc, CTArgs::payload_size_bytes);
+                    noc_async_write_barrier();
+
+                    if constexpr (CTArgs::enable_downstream_socket) {
+                        if (args.socket_config_addr != 0) {
+                            SocketSenderInterface sender_socket =
+                                create_sender_socket_interface(args.socket_config_addr);
+                            set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size);
+                            socket_reserve_pages(sender_socket, 1);
+                            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+
+                            uint64_t fifo_dst = get_noc_addr(
+                                downstream_enc.d2d.downstream_noc_x,
+                                downstream_enc.d2d.downstream_noc_y,
+                                sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
+                            noc_async_write(src_addr, fifo_dst, CTArgs::socket_page_size);
+                            noc_async_writes_flushed();
+
+                            socket_push_pages(sender_socket, 1);
+                            socket_notify_receiver(sender_socket);
+                            noc_async_write_barrier();
+                            socket_barrier(sender_socket);
+                            update_socket_config(sender_socket);
+                        }
+                        if (args.persistent_enable != 0) {
+                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                            noc_semaphore_set(agg_sem_ptr, 0);
+
+                            uint64_t fc_sem = get_noc_addr(
+                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                            noc_semaphore_inc(fc_sem, 1);
+                            noc_async_write_barrier();
+                        } else if (args.agg_sem_l1_addr != 0) {
+                            uint64_t agg_sem_noc =
+                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
+                    }
+
+                    cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                }
+                DPRINT << "WDN\n";
             }
-            DPRINT << "WDN\n";
             // Note: do NOT cb_pop_front(local_cb) here — TRISC is the
             // sole consumer and already pops it after computing R1_sum.
 
@@ -677,26 +705,28 @@ struct ReduceToAllB1 {
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
 
-            // R3: reload(column sum) + received_R3
-            add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
-            cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
-            cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
+            if constexpr (CTArgs::is_exit_column) {
+                // R3: reload(column sum) + received_R3
+                add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
+                cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
+                cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
 
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                add_tiles(CTArgs::reload_cb, CTArgs::received_cb, i, i, i);
-            }
-            cb_pop_front(CTArgs::reload_cb, CTArgs::num_tiles);
-            cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                    add_tiles(CTArgs::reload_cb, CTArgs::received_cb, i, i, i);
+                }
+                cb_pop_front(CTArgs::reload_cb, CTArgs::num_tiles);
+                cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
 
-            cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                pack_tile(i, CTArgs::scratch_cb, i);
+                cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                    pack_tile(i, CTArgs::scratch_cb, i);
+                }
+                tile_regs_release();
+                cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
-            tile_regs_release();
-            cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
 #endif
         }
     };
