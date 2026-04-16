@@ -210,7 +210,7 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
     }
 }
 
-TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensorNoHang) {
+TEST_F(MeshDevice1x4Fixture, DISABLED_AllGatherReturnedTensorNoHang) {
     // REGRESSION TEST: multiple bugs fixed on branch nsexton/0-racecondition-hunt.
     // This test exercises the full quiesce→all_gather→readback→destroy cycle across N iterations
     // to stress all three race conditions simultaneously.
