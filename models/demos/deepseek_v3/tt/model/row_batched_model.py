@@ -373,9 +373,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         every transformer chunk that does not contain token ``prompt_len - 1``, and
         slices the hidden state to a single row for the chunk that does.  The returned
         logits tensor therefore has shape ``[1, 1, 1, vocab_size]`` instead of
-        ``[1, 1, seq_len, vocab_size]``.  This is valid only when the sequence is NOT
-        sharded across ring devices (i.e. ``mesh_device.shape[0] == 1``); callers are
-        responsible for enforcing this precondition.
+        ``[1, 1, seq_len, vocab_size]``.  Works for any ring size: in multi-row meshes
+        ``_forward_prefill`` performs a post-LMHead row all-gather so every device
+        converges on the target token's logits.
         """
         CHUNK_SIZE = 1024
         # CHUNK_SIZE = 2048
@@ -409,6 +409,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     lm_head_local_idx = (prompt_len - 1) - start
                 else:
                     skip_lm_head = True
+            logger.info(
+                f"{x.shape} of ({start}, {end}) get {prompt_len} -> {lm_head_local_idx} with skip_lm_head={skip_lm_head}"
+            )
 
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
                 x_chunk,
@@ -451,9 +454,13 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         """Forward pass for prefill mode.
 
         Args:
-            lm_head_local_idx: When set, the hidden state is sliced to this
-                single chunk-local row index before the all_gather and LMHead
-                linear, producing a ``[1, 1, 1, vocab_size]`` logits tensor.
+            lm_head_local_idx: When set, only the logit for this single
+                chunk-relative token index is computed.  In multi-row meshes
+                the embedding reduce_scatter has already divided the chunk
+                across rows, so the index is translated to a row-local offset
+                and a target row; after the LMHead an all-gather across rows
+                puts the correct logit on every device, producing a
+                ``[1, 1, 1, vocab_size]`` result regardless of ring size.
             skip_lm_head: When True, the all_gather and LMHead are skipped
                 entirely (decoder blocks still run for KV-cache population).
                 Returns ``(None,)`` / ``(None, hidden)`` so the caller can use
@@ -490,8 +497,16 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 return None, hidden_for_mtp
             return (None,)
 
+        # After Embedding2D's reduce_scatter the sequence is divided across ring
+        # rows, so x.shape[2] == CHUNK_SIZE // num_rows (e.g. 64 in QUAD).
+        # lm_head_local_idx is chunk-relative (0..CHUNK_SIZE-1); translate it to
+        # a row-local offset and remember which row holds the target token.
+        target_row: int | None = None
         if lm_head_local_idx is not None:
-            x_sliced = ttnn.slice(x, [0, 0, lm_head_local_idx, 0], [1, 1, lm_head_local_idx + 1, x.shape[-1]])
+            local_seq_len = x.shape[2]
+            row_local_idx = lm_head_local_idx % local_seq_len
+            target_row = lm_head_local_idx // local_seq_len
+            x_sliced = ttnn.slice(x, [0, 0, row_local_idx, 0], [1, 1, row_local_idx + 1, x.shape[-1]])
             ttnn.deallocate(x)
             x = x_sliced
 
@@ -503,9 +518,32 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             logits = LMHead1D.forward_prefill(lm_head_in, cfg["lm_head"])
             return logits, hidden_for_mtp
 
+        logger.debug(f"LMHead1D.forward_prefill x: {x.shape}")
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
+        logger.debug(f"LMHead1D.forward_prefill logits: {logits.shape}")
         logger.debug(f"LMHead1D finished")
-        return logits
+
+        # In a multi-row mesh every row computed logits for its own local token
+        # (at row_local_idx within its 64-token slice).  All-gather across rows
+        # so every device gets all rows' single-token logits, then slice to the
+        # row that actually holds the target token.
+        if target_row is not None and ccl.mesh_device.shape[0] > 1:
+            row_gather_cfg = ccl.populate_all_gather_runtime_args(
+                {
+                    "cluster_axis": 0,
+                    "dim": 2,
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                    "topology": ttnn.Topology.Linear,
+                }
+            )
+            logits_gathered = ttnn.experimental.all_gather_async(logits, **row_gather_cfg)
+            ttnn.deallocate(logits)
+            logits = ttnn.slice(
+                logits_gathered, [0, 0, target_row, 0], [1, 1, target_row + 1, logits_gathered.shape[-1]]
+            )
+            ttnn.deallocate(logits_gathered)
+
+        return (logits,)
 
     @classmethod
     def forward_mtp_decode(

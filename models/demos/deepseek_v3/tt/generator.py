@@ -1860,6 +1860,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             prompt_len=prompt_len,
                         )
                         assert prefill_logits is not None
+                        logger.info("prefill_logits shape: {prefill_logits.shape}")
                         if self.sample_on_device:
                             # prefill_logits is already sliced to [1,1,1,vocab] (single-ring)
                             # or [1,1,batch,vocab] (multi-ring via _slice_last_token_logits),
@@ -1877,7 +1878,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             assert isinstance(
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
-                            last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
+                            last_token_logits = prefill_logits[
+                                0, 0, min(max(prompt_len - 1, 0), prefill_logits.shape[2] - 1), :
+                            ]
                             pred_token = int(
                                 self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
                             )
@@ -2274,14 +2277,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
         else:
             _print_memory_stats(self.mesh_device, "RowBatchedModel.forward_prefill")
-            # For single-ring + sample_on_device, pass prompt_len so that only
-            # the logit at position prompt_len-1 is computed (skipping LMHead for
-            # all other transformer chunks).  Multi-ring shards the sequence across
-            # ring devices, so the host-computed local index would be wrong; in that
-            # case we fall back to full logits and slice afterwards.
-            _prefill_prompt_len = (
-                prompt_len if (sample_on_device and prompt_len is not None and self.mesh_device.shape[0] == 1) else None
-            )
+            # Pass prompt_len so only the logit at prompt_len-1 is computed,
+            # skipping LMHead for every other transformer chunk.
+            # _forward_prefill now handles multi-row meshes via a post-LMHead
+            # row all-gather, so the shape[0]==1 guard is no longer needed.
+            _prefill_prompt_len = prompt_len if (sample_on_device and prompt_len is not None) else None
             logits_tt = RowBatchedModel.forward_prefill(
                 x=tt_tokens,
                 user_id=user_id,
@@ -2292,21 +2292,20 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             hidden_tt = None
 
+        logger.info(f"RowBatchedModel.forward_prefill finished. Logits shape: {logits_tt.shape}")
         if sample_on_device and return_last_hidden:
             raise ValueError("sample_on_device=True and return_last_hidden=True is not supported.")
 
         if sample_on_device:
-            if prompt_len is not None and self.mesh_device.shape[0] == 1:
-                # forward_prefill already returned only the [1,1,1,vocab] logit.
+            if prompt_len is not None:
+                # forward_prefill already returned only the [1,1,1,vocab] logit
+                # (for all ring sizes, via the intra-chunk row all-gather in
+                # _forward_prefill).
                 logits = logits_tt
                 if self.batch_size_per_row > 1:
                     expanded = ttnn.repeat(logits_tt, (1, 1, self.batch_size_per_row, 1))
                     ttnn.deallocate(logits_tt)
                     logits = expanded
-            elif prompt_len is not None:
-                # Multi-ring: forward_prefill returned full logits; slice now.
-                logits = self._slice_last_token_logits(logits_tt, prompt_len, expand_to_batch=True)
-                ttnn.deallocate(logits_tt)
             else:
                 logits = logits_tt
         else:
