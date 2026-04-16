@@ -45,29 +45,28 @@ void kernel_main() {
     constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(args_base + 2);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 3);
-    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 4);
-    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 5);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 6);
-    // args_base + 7: out_stick_size (passed from factory, unused in kernel)
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 8);
-    constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 9);
-    constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 10);
-    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(args_base + 11);
-    constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 12);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 14);
+    constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
+    constexpr uint32_t scaler_sum_cb_id = get_compile_time_arg_val(args_base + 3);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 4);
+    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
+    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
+    // args_base + 8: out_stick_size (passed from factory, unused in kernel)
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
+    constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
+    constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
+    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(args_base + 12);
+    constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 13);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 14);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 15);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        scale_cb_index,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_max_cb_id, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_sum_cb_id, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr);
