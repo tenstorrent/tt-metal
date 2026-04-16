@@ -345,25 +345,6 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
-    // Defensive ERISC reset: force-halt all ETH cores before initializing the fabric.
-    // The global assert_risc_reset() in Cluster construction only resets Tensix cores (via
-    // broadcast_tensix_risc_reset_to_cluster), deliberately excluding ETH rows/columns.
-    // If a previous process was killed (e.g., SIGKILL from CI timeout, exit code 124),
-    // its C++ destructors never run, so teardown_fabric_config() is never called.
-    // The stale ERISC firmware continues generating NOC traffic, which corrupts worker
-    // core mailboxes (core_magic_number=0x0) and causes "unsafe ARC NOC access" errors
-    // on remote devices when the next process tries to use them.
-    // See: https://github.com/tenstorrent/tt-metal/issues/42429
-    {
-        auto& cluster = this->get_cluster();
-        for (const ChipId chip_id : cluster.all_chip_ids()) {
-            for (const auto& virtual_eth_core : cluster.get_virtual_eth_cores(chip_id)) {
-                cluster.assert_risc_reset_at_core(
-                    tt_cxy_pair(chip_id, virtual_eth_core), tt::umd::RiscType::ALL);
-            }
-        }
-    }
-
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
