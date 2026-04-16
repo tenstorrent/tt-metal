@@ -41,6 +41,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
+    environment: mainline
     strategy:
       fail-fast: false
       matrix:
@@ -150,6 +151,7 @@ jobs:
   define-ttsim-ttnn-tests:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
+    environment: mainline
     env:
       TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
     outputs:
@@ -194,6 +196,7 @@ jobs:
     needs: define-ttsim-ttnn-tests
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: tt-ubuntu-2204-large-stable
+    environment: mainline
     env:
       TTSIM_SKIP_LIST_YAML: tests/pipeline_reorg/ttsim-skip-list.yaml
     timeout-minutes: ${{ matrix.test-group.timeout || inputs.job-timeout }}
@@ -321,7 +324,7 @@ jobs:
               echo "::group::$(basename $log)"
               cat "$log" || true
               echo "::endgroup::"
-            done
+            done || true
             echo ""
             # Search for remote storage errors
             echo "=== Searching for Remote Storage Errors ==="
@@ -329,7 +332,7 @@ jobs:
               echo "::group::Errors in $(basename $log)"
               grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
               echo "::endgroup::"
-            done
+            done || true
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
@@ -450,7 +453,7 @@ jobs:
               echo "::group::$(basename $log)"
               cat "$log" || true
               echo "::endgroup::"
-            done
+            done || true
             echo ""
             # Search for remote storage errors
             echo "=== Searching for Remote Storage Errors ==="
@@ -458,7 +461,7 @@ jobs:
               echo "::group::Errors in $(basename $log)"
               grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
               echo "::endgroup::"
-            done
+            done || true
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
@@ -469,6 +472,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
+    environment: mainline
     strategy:
       fail-fast: false
       matrix:
@@ -563,7 +567,7 @@ jobs:
               echo "::group::$(basename $log)"
               cat "$log" || true
               echo "::endgroup::"
-            done
+            done || true
             echo ""
             # Search for remote storage errors
             echo "=== Searching for Remote Storage Errors ==="
@@ -571,7 +575,7 @@ jobs:
               echo "::group::Errors in $(basename $log)"
               grep -A 5 -B 5 "remote storage\|error\|failed" "$log" || true
               echo "::endgroup::"
-            done
+            done || true
           else
             echo "No debug logs directory found at /tmp/ccache-debug"
           fi
