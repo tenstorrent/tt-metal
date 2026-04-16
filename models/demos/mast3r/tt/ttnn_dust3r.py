@@ -450,6 +450,12 @@ def _preload_dec_block_weights(state: dict, idx: int, branch: int, device) -> di
         return _t2d(t.reshape(1, 1, -1), device)
     def mat(t):
         return ttnn.from_torch(t.t().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Fuse cross-attn K and V projections into one linear so we can use
+    # split_query_key_value_and_split_heads(qc, kv_input_tensor=kvc, ...).
+    ck_w_t = w("cross_attn.projk.weight")
+    cv_w_t = w("cross_attn.projv.weight")
+    ckv_w_torch = torch.cat([ck_w_t, cv_w_t], dim=0)            # (2*D, D) (out, in)
+    ckv_b_torch = torch.cat([w("cross_attn.projk.bias"), w("cross_attn.projv.bias")], dim=0)
     return {
         "g1": vec(w("norm1.weight")), "b1v": vec(w("norm1.bias")),
         "g2": vec(w("norm2.weight")), "b2v": vec(w("norm2.bias")),
@@ -458,8 +464,7 @@ def _preload_dec_block_weights(state: dict, idx: int, branch: int, device) -> di
         "qkv_w": mat(w("attn.qkv.weight")), "qkv_b": vec(w("attn.qkv.bias")),
         "proj_w": mat(w("attn.proj.weight")), "proj_b": vec(w("attn.proj.bias")),
         "cq_w": mat(w("cross_attn.projq.weight")), "cq_b": vec(w("cross_attn.projq.bias")),
-        "ck_w": mat(w("cross_attn.projk.weight")), "ck_b": vec(w("cross_attn.projk.bias")),
-        "cv_w": mat(w("cross_attn.projv.weight")), "cv_b": vec(w("cross_attn.projv.bias")),
+        "ckv_w": mat(ckv_w_torch), "ckv_b": vec(ckv_b_torch),
         "cp_w": mat(w("cross_attn.proj.weight")), "cp_b": vec(w("cross_attn.proj.bias")),
         "fc1_w": mat(w("mlp.fc1.weight")), "fc1_b": vec(w("mlp.fc1.bias")),
         "fc2_w": mat(w("mlp.fc2.weight")), "fc2_b": vec(w("mlp.fc2.bias")),
@@ -498,18 +503,17 @@ def decoder_block_device_pre(
     tt_x = ttnn.add(tt_x, tt_proj)
 
     # --- cross-attention (SDPA) ---
+    # Fused K+V linear + split_qkv reduces from 3 linears + 5 reshape/permute ops
+    # to 2 linears + 1 split.
     tt_n2 = ttnn.layer_norm(tt_x, weight=tt_w["g2"], bias=tt_w["b2v"], epsilon=1e-6)
     tt_yn = ttnn.layer_norm(tt_y, weight=tt_w["gy"], bias=tt_w["byv"], epsilon=1e-6)
     tt_qc = ttnn.linear(tt_n2, tt_w["cq_w"], bias=tt_w["cq_b"])
-    tt_kc = ttnn.linear(tt_yn, tt_w["ck_w"], bias=tt_w["ck_b"])
-    tt_vc = ttnn.linear(tt_yn, tt_w["cv_w"], bias=tt_w["cv_b"])
-    M = int(tt_y.shape[1])
-    # Keep v on device; only download q + k for RoPE.
-    tt_v = ttnn.reshape(tt_vc, (B, M, heads, dh))
-    tt_v = ttnn.permute(tt_v, (0, 2, 1, 3))
-    qk_host = ttnn.to_torch(ttnn.concat([tt_qc, tt_kc], dim=-1))
-    q = qk_host[..., :D].reshape(B, N, heads, dh).permute(0, 2, 1, 3)
-    k = qk_host[..., D:].reshape(B, M, heads, dh).permute(0, 2, 1, 3)
+    tt_kvc = ttnn.linear(tt_yn, tt_w["ckv_w"], bias=tt_w["ckv_b"])  # (B, M, 2*D)
+    tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
+        tt_qc, kv_input_tensor=tt_kvc, num_heads=heads, transpose_key=False
+    )
+    q = ttnn.to_torch(tt_q)
+    k = ttnn.to_torch(tt_k)
     q = _rope_apply(q, pos_x)
     k = _rope_apply(k, pos_y)
     tt_q = _t2d(q, device)
