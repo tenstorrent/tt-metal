@@ -178,7 +178,16 @@ jobs:
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           run_args: |
             PYTEST_CMD="${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}"
-            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+            if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+              # Split into separate pytest invocations to avoid host OOM from accumulated memory
+              # across 311 tests in a single process (LoRA tests load ~15GB per test case).
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+            else
+              $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+            fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: ./.github/actions/prepare-tracy-reports
@@ -309,7 +318,15 @@ jobs:
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
         run: |
-          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+            # Split into separate pytest invocations to avoid host OOM from accumulated memory
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+          else
+            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: ./docker-job/.github/actions/prepare-tracy-reports
