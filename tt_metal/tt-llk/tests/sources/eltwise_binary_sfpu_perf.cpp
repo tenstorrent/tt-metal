@@ -211,9 +211,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(/* dst_index */ block_tile);
-                        test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>((block_tile + 1) % MAX_TILES_DEST, formats.math);
-                        _llk_math_eltwise_binary_sfpu_done_();
+                        test_utils::call_binary_sfpu_operation<DST_SYNC_MODE, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>(
+                            block_tile, (block_tile + 1) % MAX_TILES_DEST, formats.math);
                     }
                 }
             }
@@ -238,9 +237,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             block_tile, formats.math, formats.math);
 
                         // Start SFPU binary operation
-                        _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(/* dst_index */ block_tile);
-                        test_utils::call_binary_sfpu_operation<APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>((block_tile + 1) % MAX_TILES_DEST, formats.math);
-                        _llk_math_eltwise_binary_sfpu_done_();
+                        test_utils::call_binary_sfpu_operation<DST_SYNC_MODE, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>(
+                            block_tile, (block_tile + 1) % MAX_TILES_DEST, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

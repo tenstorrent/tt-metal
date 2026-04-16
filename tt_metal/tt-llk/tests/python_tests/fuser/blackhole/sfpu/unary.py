@@ -103,10 +103,8 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
             f"    test_utils::call_unary_sfpu_operation_init<{approx_mode}, {dest_acc}, {self.iterations}>({op});\n"
-            f"    test_utils::call_unary_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
-            f"    _llk_math_eltwise_unary_sfpu_done_();\n"
+            f"    test_utils::call_unary_sfpu_operation<dest_sync{stage}, {approx_mode}, {dest_acc}, {self.iterations}>({op}, {self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:
