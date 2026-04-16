@@ -164,6 +164,7 @@ void kernel_main() {
             lw_mask.is_causal = true;
             lw_mask.neginf_tile_idx = 0;
             lw_mask.causal_diag_tile_idx = 1;
+            cb_wait_front(cb_mask_in, 2);
         }
 
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
