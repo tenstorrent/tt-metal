@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Dockerfile for Face Matching Solution on Tenstorrent QuietBox
+#
+# This container expects tt-metal to be mounted from the host.
+# Build: docker build -t face-matching-api -f Dockerfile.quickbox .
+# Run:   docker run -v /path/to/tt-metal:/tt-metal --device /dev/tenstorrent -p 8000:8000 face-matching-api
+
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install Python dependencies for FastAPI server
+RUN pip3 install --no-cache-dir \
+    fastapi>=0.100.0 \
+    uvicorn>=0.20.0 \
+    python-multipart>=0.0.6 \
+    pillow>=9.0.0 \
+    numpy>=1.21.0,<2 \
+    requests>=2.28.0 \
+    pydantic>=2.0.0 \
+    onnx>=1.12.0 \
+    torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu
+
+# Create data directories
+RUN mkdir -p /app/registered_faces /app/mock_database
+
+# Environment variables (tt-metal paths set at runtime via mount)
+ENV PYTHONUNBUFFERED=1
+
+# Expose API port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/ || exit 1
+
+# Entry point script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["serve"]

@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Docker Compose for Face Matching Solution on Tenstorrent QuietBox
+#
+# Usage:
+#   docker-compose up -d        # Start services
+#   docker-compose down         # Stop services
+#   docker-compose logs -f      # View logs
+#
+# Prerequisites:
+#   - tt-metal installed at /path/to/tt-metal
+#   - Tenstorrent device accessible at /dev/tenstorrent
+
+version: '3.8'
+
+services:
+  face-matching-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.quickbox
+    container_name: face-matching-api
+
+    # Mount tt-metal from host (required for TTNN)
+    volumes:
+      - ${TT_METAL_HOME:-/home/ttuser/tt-metal}:/tt-metal:ro
+      - ./server/registered_faces:/app/registered_faces
+      - ./server/mock_database:/app/mock_database
+      - ${HOME}/.cache/ttnn:/root/.cache/ttnn
+
+    # Device access for Tenstorrent hardware
+    devices:
+      - /dev/tenstorrent:/dev/tenstorrent
+
+    # Environment variables
+    environment:
+      - PYTHONPATH=/tt-metal:/app
+      - TT_METAL_HOME=/tt-metal
+      - LD_LIBRARY_PATH=/tt-metal/build/lib
+
+    # Network
+    ports:
+      - "8000:8000"
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (adjust based on your QuietBox)
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # Allow time for model loading
+
+  # Optional: Streamlit client for demo
+  face-matching-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: face-matching-client
+
+    volumes:
+      - ./client:/app/client
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      - API_URL=http://face-matching-api:8000
+
+    depends_on:
+      - face-matching-api
+
+    restart: unless-stopped
+
+    profiles:
+      - demo  # Only start with: docker-compose --profile demo up
+
+networks:
+  default:
+    name: face-matching-network

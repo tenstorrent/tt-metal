@@ -1,0 +1,7 @@
+streamlit>=1.28.0
+streamlit-webrtc>=0.45.0
+opencv-python>=4.8.0
+Pillow>=9.0.0
+requests>=2.28.0
+av>=10.0.0
+numpy>=1.21.0,<2  # ttnn requires numpy<2
