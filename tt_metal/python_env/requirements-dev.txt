@@ -31,6 +31,9 @@ mypy==1.9.0
 # For Mistral-7B-v0.3 demo tests
 protobuf==3.20.2
 
+# SFace and other PCC tests (models/experimental/sface/reference/sface_model.py load_sface_from_onnx)
+onnx==1.16.1
+
 # For TT-Transformers Qwen3 support
 transformers == 4.53.0
 huggingface-hub >= 0.30.0
