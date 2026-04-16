@@ -40,6 +40,7 @@ sys.modules[f"{__name__}.distributed"] = distributed
 from .linear_regression import LinearRegression, create_linear_regression_model
 from .nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 from .llama import Llama, LlamaConfig
+from .qwen3 import Qwen3Config, Qwen3Model, Qwen3ForCausalLM, create_qwen3_config_from_hf
 
 __all__ = [
     # C++ enums / classes
@@ -59,6 +60,10 @@ __all__ = [
     "LinearRegression",
     "NanoGPT",
     "NanoGPTConfig",
+    "Qwen3Config",
+    "Qwen3Model",
+    "Qwen3ForCausalLM",
     "create_linear_regression_model",
     "create_nanogpt",
+    "create_qwen3_config_from_hf",
 ]
