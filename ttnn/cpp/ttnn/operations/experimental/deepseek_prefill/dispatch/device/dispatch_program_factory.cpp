@@ -149,7 +149,8 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    uint32_t effective_num_links = std::min(num_links, 4u);
+    constexpr uint32_t MAX_WORKER_CORES = 4;
+    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -178,7 +179,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         mesh_coordinate[1],
         sender_cores);
 
-    constexpr uint32_t read_batch_size = 8;
+    constexpr uint32_t read_batch_size = 8;  // matches BH DRAM bank count for full bandwidth utilization
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // c_0: input scratch (reader-only, batched DRAM reads)
@@ -214,33 +215,35 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         /*cb_id=*/tt::CBIndex::c_3,
         "offsets_tensor");
 
-    // c_4: route_info (reader->writer, 4 x uint32_t per entry)
+    // c_4, c_5, c_6: reader→writer CBs for (route_info, payload, metadata) per remote entry.
+    // The reader pushes all three per entry in lockstep, so small buffering (2) suffices
+    // for the writer to drain concurrently. No large buffering needed.
     {
+        constexpr uint32_t rw_buffering = 2;
+
         uint32_t route_info_page_size = l1_alignment;
-        constexpr uint32_t route_info_buffering = 16;
         tt::tt_metal::CircularBufferConfig route_info_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                route_info_buffering * route_info_page_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
+                rw_buffering * route_info_page_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
                 .set_page_size(tt::CBIndex::c_4, route_info_page_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
-    }
 
-    // c_5: payload_for_writer (reader->writer, input pages for fabric sends)
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        input_tensor,
-        /*buffering_factor=*/16,
-        /*cb_id=*/tt::CBIndex::c_5,
-        "payload_for_writer");
-    // c_6: metadata_for_writer (reader->writer, metadata pages for fabric sends)
-    detail::create_tensor_cb(
-        program,
-        sender_core_grid,
-        metadata_tensor,
-        /*buffering_factor=*/16,
-        /*cb_id=*/tt::CBIndex::c_6,
-        "metadata_for_writer");
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            input_tensor,
+            /*buffering_factor=*/rw_buffering,
+            /*cb_id=*/tt::CBIndex::c_5,
+            "payload_for_writer");
+
+        detail::create_tensor_cb(
+            program,
+            sender_core_grid,
+            metadata_tensor,
+            /*buffering_factor=*/rw_buffering,
+            /*cb_id=*/tt::CBIndex::c_6,
+            "metadata_for_writer");
+    }
 
     // c_7: metadata_temp (reader-only, for constructing metadata locally)
     detail::create_tensor_cb(
@@ -352,6 +355,9 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         l1_alignment,
         static_cast<uint32_t>(operation_attributes.num_links),
         static_cast<uint32_t>(topology),
+
+        // Batch configuration (1)
+        read_batch_size,
     };
 
     // Append TensorAccessorArgs for all 7 tensors
