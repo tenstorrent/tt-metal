@@ -238,8 +238,8 @@ for (uint32_t i = 0; i < C; i++) {
             .compile_args = risc1_compile_args});
 
     // ---- Assign Runtime Args ----
-    for (uint32_t i = 0; i < matmul_cores_list.size(); i++) {
-        uint32_t col_idx = matmul_cores_list[i].x - test_config.start_logical_core.x;
+    for (auto & i : matmul_cores_list) {
+        uint32_t col_idx = i.x - test_config.start_logical_core.x;
 
         // Count K subblocks this column sends
         uint32_t num_k_this_core = 0;
