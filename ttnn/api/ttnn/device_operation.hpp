@@ -206,6 +206,39 @@ inline void track_completion_event_on_tensors(
         [&](const Tensor& tensor) { track_completion_event_on_tensor(tensor, completion_event); }, object);
 }
 
+// Returns true if any tensor reachable from `object` owns a MeshBuffer that would actually
+// register the pending event (i.e. leak-owned device storage). If nothing needs tracking, the
+// caller can skip the host-side enqueue_record_event_to_host round-trip entirely — that call
+// is the per-op hot-path cost introduced to close the buffer-reuse race.
+inline bool tensor_needs_completion_tracking(const Tensor& tensor) {
+    if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+        return false;
+    }
+    auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
+    for (const auto& device_tensor : device_tensors) {
+        if (device_tensor.storage_type() != StorageType::DEVICE) {
+            continue;
+        }
+        if (device_tensor.device_storage().get_mesh_buffer_leak_ownership()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename T>
+inline bool any_tensor_needs_completion_tracking(const T& object) {
+    bool needs = false;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            if (!needs && tensor_needs_completion_tracking(tensor)) {
+                needs = true;
+            }
+        },
+        object);
+    return needs;
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -255,7 +288,13 @@ void enqueue_mesh_workload(
     // during trace execution is managed by the trace infrastructure, which keeps all captured
     // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
     // occur during capture.
-    if (!mesh_cq.trace_id().has_value()) {
+    //
+    // Gate on whether any tensor actually owns a MeshBuffer that would register the event.
+    // If none do (e.g. host-only tensor_args, fully-consumed/dealt-with outputs), skip the
+    // host round-trip entirely — the cost of enqueue_record_event_to_host dominates on tight
+    // inference / prefill loops. See PR review H-5 for perf rationale.
+    if (!mesh_cq.trace_id().has_value() && (detail::any_tensor_needs_completion_tracking(tensor_args) ||
+                                            detail::any_tensor_needs_completion_tracking(tensor_return_value))) {
         // Restrict the event to only the sub-devices used by this workload.  Including unrelated
         // sub-devices (e.g. fabric MUX cores on a different sub-device) in the wait count causes
         // DISPATCH_D to spin on a done-signal count that those cores never contribute to.

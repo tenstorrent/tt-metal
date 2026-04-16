@@ -351,6 +351,10 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = false;
+    // Reset starts a fresh CQ session: clear the quiesced flag so the next
+    // EventSynchronize / wait_for_pending_events actually waits on new events
+    // instead of short-circuiting on a stale quiesce publication.
+    this->cq_to_quiesced[cq_id].store(false, std::memory_order_release);
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {

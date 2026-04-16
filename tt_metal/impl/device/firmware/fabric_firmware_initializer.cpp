@@ -6,8 +6,10 @@
 #include "fabric_firmware_initializer.hpp"
 
 #include <chrono>
+#include <thread>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
@@ -122,6 +124,11 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             // Without this, configure_fabric() in the next test can write new launch messages
             // to the same Tensix cores before the old MUX workers finish terminating, causing
             // two kernels to compete for the same cores and hang dispatch on remote devices.
+            //
+            // On timeout we force-halt the Tensix MUX core (assert RISC reset) — mirroring the
+            // ETH router path in MetalEnvImpl::teardown_fabric_config — so a stuck mux cannot
+            // continue emitting NOC traffic into worker L1 that the next bring-up reprograms.
+            // The core is re-initialized on the next fabric bring-up.
             for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
                 auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                 auto config = tensix_config.get_config(core_id);
@@ -129,24 +136,59 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 
                 std::vector<uint32_t> status_buf(1, 0);
-                auto start = std::chrono::steady_clock::now();
+                const auto start = std::chrono::steady_clock::now();
                 constexpr uint32_t timeout_ms = 5000;
+                constexpr uint32_t kSpinsBetweenSleeps = 64;
+                uint32_t spin_counter = 0;
+                bool terminated = false;
                 while (true) {
                     detail::ReadFromDeviceL1(dev, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
                     if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                        terminated = true;
                         break;
                     }
-                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - start)
-                                       .count();
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                            .count();
                     if (elapsed > timeout_ms) {
+                        break;
+                    }
+                    // Back off: ReadFromDeviceL1 already round-trips to MMIO, so a tight loop
+                    // hammers the device. Pause every iteration; yield once per spin window.
+                    if (++spin_counter >= kSpinsBetweenSleeps) {
+                        spin_counter = 0;
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    } else {
+                        ttsl::pause();
+                    }
+                }
+
+                if (!terminated) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::teardown: Timeout waiting for Tensix MUX TERMINATED on "
+                        "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX to prevent "
+                        "stale NOC traffic into worker L1",
+                        dev->id(),
+                        eth_chan_id,
+                        status_buf[0]);
+                    // Translate the logical worker core to a virtual coordinate and assert reset
+                    // on the Tensix RISCs. The MUX kernel will be fully re-initialized on the
+                    // next fabric bring-up. Catch so one stuck core cannot prevent reset on the
+                    // remaining cores on this device.
+                    try {
+                        const auto virtual_mux_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            dev->id(), mux_core, CoreType::WORKER);
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(dev->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+                    } catch (const std::exception& e) {
                         log_warning(
                             tt::LogMetal,
-                            "FabricFirmwareInitializer::teardown: Timeout waiting for Tensix MUX TERMINATED on "
-                            "Device {} eth_chan {} — proceeding with teardown",
+                            "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on Device {} "
+                            "eth_chan {}: {}",
                             dev->id(),
-                            eth_chan_id);
-                        break;
+                            eth_chan_id,
+                            e.what());
                     }
                 }
             }

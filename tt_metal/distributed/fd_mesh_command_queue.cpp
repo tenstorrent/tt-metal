@@ -21,6 +21,7 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/cleanup.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -1545,17 +1546,20 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
             device->sysmem_manager().set_current_and_last_completed_event(
                 id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
         }
+
+        // Exception-safety: even if finish_nolock() throws (e.g. a fabric/dispatch
+        // timeout propagated as TT_THROW), we MUST publish quiesced=true and clear
+        // in_use_ before unwinding.  Otherwise subsequent mark_in_use() is a no-op
+        // and EventSynchronize() never short-circuits, leaving the CQ permanently
+        // "busy".  A scope-exit guard flips state on every path.
+        auto mark_quiesced_guard = ttsl::make_cleanup([this]() noexcept {
+            for (auto* device : mesh_device_->get_devices()) {
+                device->sysmem_manager().set_quiesced(id_, true);
+            }
+            in_use_ = false;
+        });
+
         finish_nolock({});
-
-        // Mark every device's CQ as quiesced so that EventSynchronize() calls from
-        // tensor destructors (which may fire after quiesce resets the event counters)
-        // return immediately instead of spinning forever.  The flag is cleared the
-        // first time new work is enqueued (see enqueue_mesh_workload et al.).
-        for (auto* device : mesh_device_->get_devices()) {
-            device->sysmem_manager().set_quiesced(id_, true);
-        }
-
-        in_use_ = false;
     }
 }
 

@@ -18,6 +18,7 @@
 
 import gc
 import signal
+import sys
 import torch
 import ttnn
 
@@ -33,8 +34,21 @@ def _timeout_handler(signum, frame):
 
 
 # Arm a watchdog so the test fails loudly instead of blocking the CI job for 40 min.
-signal.signal(signal.SIGALRM, _timeout_handler)
-signal.alarm(_TIMEOUT_SECONDS)
+# signal.SIGALRM / signal.alarm are POSIX-only (Linux, macOS, BSD). Windows Python lacks
+# both, and only the main thread on POSIX may install these handlers. This example is
+# primarily targeted at Linux CI; on other platforms we skip the watchdog and rely on
+# the outer CI job timeout to catch a hang.
+_watchdog_active = False
+if hasattr(signal, "SIGALRM") and hasattr(signal, "alarm"):
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(_TIMEOUT_SECONDS)
+    _watchdog_active = True
+else:
+    print(
+        f"[warn] tensor_dealloc_after_device_close: SIGALRM unavailable on {sys.platform}; "
+        "running without watchdog (hang will rely on CI job timeout).",
+        file=sys.stderr,
+    )
 
 try:
     device = ttnn.open_device(device_id=0)
@@ -66,6 +80,7 @@ try:
     # `device` goes out of scope here — fine, device is already closed.
 
 finally:
-    signal.alarm(0)  # Disarm watchdog.
+    if _watchdog_active:
+        signal.alarm(0)  # Disarm watchdog.
 
 print("[pass] tensor_dealloc_after_device_close: no hang after ttnn.close_device()")

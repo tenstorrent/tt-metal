@@ -418,6 +418,11 @@ void MeshBuffer::deallocate() {
         }
 
         state_ = DeallocatedState{};
+        // Clear the flag now that the buffer is fully torn down. Leaving it true forces any
+        // late add_pending_event() on this (already-dead) buffer down the slow self-sync
+        // path, which is safe but surprising and shows up as extra-sync pressure if a
+        // stale MeshBuffer pointer outlives its state_.
+        deallocation_in_progress_.store(false, std::memory_order_release);
         return;
     }
 
@@ -427,6 +432,7 @@ void MeshBuffer::deallocate() {
         owned_state.backing_buffer->mark_as_deallocated();
     }
     state_ = DeallocatedState{};
+    deallocation_in_progress_.store(false, std::memory_order_release);
 }
 
 MeshDevice* MeshBuffer::device() const {

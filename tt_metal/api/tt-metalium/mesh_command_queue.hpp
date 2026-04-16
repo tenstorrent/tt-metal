@@ -76,7 +76,13 @@ public:
     uint32_t id() const { return id_; }
     // Returns true if this CQ has had work submitted since the last quiesce (finish_and_reset_in_use).
     // Used by MeshBuffer::wait_for_pending_events to determine if an old event is still relevant.
-    virtual bool in_use() const { return false; }
+    //
+    // CONTRACT: every concrete MeshCommandQueue MUST override this.  Returning false when the CQ
+    // actually has pending work causes wait_for_pending_events to skip EventSynchronize and can
+    // produce use-after-free on buffers destroyed while dispatch is still referencing them.
+    // Implementations that never enqueue asynchronous work (SD, Dummy) should explicitly return
+    // false to document the intent, not inherit a default.
+    virtual bool in_use() const = 0;
     virtual std::optional<MeshTraceId> trace_id() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;

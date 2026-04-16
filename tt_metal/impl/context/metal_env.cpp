@@ -5,9 +5,12 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <enchantum/enchantum.hpp>
+#include <thread>
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <limits>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
@@ -299,16 +302,17 @@ void MetalEnvImpl::teardown_fabric_config() {
                 const auto eth_logical_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
 
-                auto start = std::chrono::steady_clock::now();
+                const auto start = std::chrono::steady_clock::now();
+                constexpr uint32_t kSpinsBetweenSleeps = 64;
+                uint32_t spin_counter = 0;
                 while (true) {
                     auto status =
                         cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
                     if (!status.empty() && status[0] == terminated_val) {
                         break;
                     }
-                    auto elapsed =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - start)
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
                             .count();
                     if (elapsed > timeout_ms) {
                         log_warning(
@@ -328,6 +332,14 @@ void MetalEnvImpl::teardown_fabric_config() {
                         cluster.assert_risc_reset_at_core(
                             tt_cxy_pair(chip_id, virtual_eth_coord), tt::umd::RiscType::ALL);
                         break;
+                    }
+                    // Back off: read_core already round-trips to MMIO. Pause per iteration,
+                    // yield every kSpinsBetweenSleeps iterations to keep CPU + MMIO sane.
+                    if (++spin_counter >= kSpinsBetweenSleeps) {
+                        spin_counter = 0;
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    } else {
+                        ttsl::pause();
                     }
                 }
             }

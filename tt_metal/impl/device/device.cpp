@@ -11,6 +11,8 @@
 #include <host_api.hpp>
 #include <chrono>
 #include <initializer_list>
+#include <thread>
+#include <tt_stl/tt_pause.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -455,7 +457,14 @@ void Device::quiesce_and_restart_fabric_workers() {
 
     env_impl.get_cluster().l1_barrier(this->id());
 
-    // Phase 2: Poll each MUX core until its status is TERMINATED
+    // Phase 2: Poll each MUX core until its status is TERMINATED.
+    //
+    // On timeout we DO NOT throw: this function is called from MeshDevice::quiesce_internal
+    // between iterations; throwing mid-quiesce leaves the device half-torn-down and surfaces
+    // as a confusing exception from user-facing `quiesce_devices()`.  Instead, mirror the ETH
+    // router path in MetalEnvImpl::teardown_fabric_config and force-reset the stuck Tensix
+    // MUX core so the next bring-up starts from a clean state. The caller continues to
+    // re-configure and re-launch the fabric workers in Phase 3.
     for (const auto& [eth_chan_id, direction] : active_channels) {
         auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
         auto config = tensix_config.get_config(core_id);
@@ -463,23 +472,52 @@ void Device::quiesce_and_restart_fabric_workers() {
         auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
 
         std::vector<uint32_t> status_buf(1, 0);
-        auto start = std::chrono::steady_clock::now();
+        const auto start = std::chrono::steady_clock::now();
         constexpr uint32_t timeout_ms = 5000;
+        constexpr uint32_t kSpinsBetweenSleeps = 64;
+        uint32_t spin_counter = 0;
+        bool terminated = false;
         while (true) {
             detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
             if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                terminated = true;
                 break;
             }
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - start)
-                               .count();
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             if (elapsed > timeout_ms) {
-                TT_THROW(
-                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
-                    "Device {} eth_chan {} — status 0x{:08x}",
+                break;
+            }
+            if (++spin_counter >= kSpinsBetweenSleeps) {
+                spin_counter = 0;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            } else {
+                ttsl::pause();
+            }
+        }
+
+        if (!terminated) {
+            log_warning(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
+                "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX to prevent "
+                "stale NOC traffic into worker L1",
+                this->id(),
+                eth_chan_id,
+                status_buf[0]);
+            try {
+                const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    this->id(), mux_core, CoreType::WORKER);
+                env_impl.get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                    "eth_chan {}: {}",
                     this->id(),
                     eth_chan_id,
-                    status_buf[0]);
+                    e.what());
             }
         }
     }
