@@ -129,11 +129,13 @@ __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uin
     }
 
     uint16_t prev = last_count[cb_id];
-    uint16_t step = (uint16_t)num_tiles - prev;
 
     if (prev > 0 && (uint16_t)num_tiles <= prev) {
-        return false;
+        prev = 0;
+        step_size[cb_id] = 0;
     }
+
+    uint16_t step = (uint16_t)num_tiles - prev;
     if (step_size[cb_id] > 0 && step != step_size[cb_id]) {
         return false;
     }
