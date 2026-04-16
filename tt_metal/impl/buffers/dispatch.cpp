@@ -1308,6 +1308,12 @@ bool write_to_device_buffer(
             }
         }
     } else {
+        if (logical_core_filter != nullptr && !logical_core_filter->empty()) {
+            TT_FATAL(
+                false,
+                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+                "per-core filtering)");
+        }
         auto root_buffer = buffer.root_buffer();
         auto region = buffer.root_buffer_region();
         InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
