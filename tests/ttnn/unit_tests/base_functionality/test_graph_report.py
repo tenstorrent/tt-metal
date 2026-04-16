@@ -250,7 +250,14 @@ class TestImportGraphUnit:
             {
                 "counter": 2,
                 "node_type": "buffer_allocate",
-                "params": {"device_id": "0", "address": "12345", "size": "4096", "type": "L1", "layout": "INTERLEAVED"},
+                "params": {
+                    "device_id": "0",
+                    "address": "12345",
+                    "size": "4096",
+                    "type": "L1",
+                    "buffer_type": "1",
+                    "layout": "INTERLEAVED",
+                },
                 "connections": [],
             },
             {
@@ -310,6 +317,7 @@ class TestImportGraphUnit:
                         "size": "4096",
                         "page_size": "1024",
                         "type": type_name,
+                        "buffer_type": str(type_map[type_name]),
                         "layout": "INTERLEAVED",
                     },
                     "connections": [],
@@ -363,6 +371,7 @@ class TestImportGraphUnit:
                     "size": "2048",
                     "page_size": "512",
                     "type": "L1_SMALL",
+                    "buffer_type": "3",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -407,6 +416,7 @@ class TestImportGraphUnit:
                     "size": "8192",
                     "page_size": "1024",
                     "type": "DRAM",
+                    "buffer_type": "0",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -420,6 +430,7 @@ class TestImportGraphUnit:
                     "size": "512",
                     "page_size": "256",
                     "type": "L1_SMALL",
+                    "buffer_type": "3",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -448,6 +459,7 @@ class TestImportGraphUnit:
                     "size": "4096",
                     "page_size": "512",
                     "type": "L1",
+                    "buffer_type": "1",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -494,6 +506,7 @@ class TestImportGraphUnit:
                     "address": "1000",
                     "size": "4096",
                     "type": "DRAM",
+                    "buffer_type": "0",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -520,6 +533,7 @@ class TestImportGraphUnit:
                     "address": "2000",
                     "size": "8192",
                     "type": "DRAM",
+                    "buffer_type": "0",
                     "layout": "INTERLEAVED",
                 },
                 "connections": [],
@@ -541,7 +555,14 @@ class TestImportGraphUnit:
             {
                 "counter": 8,
                 "node_type": "buffer_allocate",
-                "params": {"device_id": "0", "address": "3000", "size": "2048", "type": "L1", "layout": "INTERLEAVED"},
+                "params": {
+                    "device_id": "0",
+                    "address": "3000",
+                    "size": "2048",
+                    "type": "L1",
+                    "buffer_type": "1",
+                    "layout": "INTERLEAVED",
+                },
                 "connections": [],
             },
             {
@@ -592,7 +613,7 @@ class TestImportGraphUnit:
                     "layout": "TILE",
                     "device_id": "0",
                     "address": "12345678",
-                    "buffer_type": "L1",
+                    "buffer_type": "1",
                     "device_tensors": '[{"device_id": 0, "address": 12345678}, {"device_id": 1, "address": 22345678}, {"device_id": 2, "address": 32345678}, {"device_id": 3, "address": 42345678}]',
                 },
                 "connections": [],
@@ -635,7 +656,7 @@ class TestImportGraphUnit:
                     "layout": "TILE",
                     "device_id": "1",
                     "address": "1920032",
-                    "buffer_type": "DRAM",
+                    "buffer_type": "0",
                     "device_tensors": '[{"device_id": 0, "mesh_device_id": 1, "address": 1920032}]',
                 },
                 "connections": [],
@@ -675,8 +696,7 @@ class TestImportGraphUnit:
                     "memory_config": "MemoryConfig(DRAM, INTERLEAVED)",
                     "device_id": "0",
                     "address": "12345678",
-                    "buffer_type": "BufferType::DRAM",
-                    "buffer_type_value": "0",
+                    "buffer_type": 0,
                     "size": "2048",
                 },
                 "connections": [],
@@ -1074,6 +1094,7 @@ class TestBufferMaxSizePerBank:
                     "page_size": str(page_size),
                     "num_cores": str(num_cores),
                     "type": buf_type,
+                    "buffer_type": str({"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}[buf_type]),
                     "layout": layout,
                 },
                 "connections": [],
@@ -1227,6 +1248,7 @@ class TestLinearModelImport:
                 "page_size": "2048",
                 "num_cores": "0",
                 "type": "DRAM",
+                "buffer_type": "0",
                 "layout": "INTERLEAVED",
             },
             "connections": [3],
@@ -1249,7 +1271,7 @@ class TestLinearModelImport:
                 "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
                 "device_id": "1",
                 "address": "1920032",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "device_tensors": '[{"device_id": 0, "mesh_device_id": 1, "address": 1920032}]',
             },
             "connections": [19],
@@ -1284,6 +1306,7 @@ class TestLinearModelImport:
                 "page_size": "2048",
                 "num_cores": "0",
                 "type": "DRAM",
+                "buffer_type": "0",
                 "layout": "INTERLEAVED",
             },
             "connections": [9],
@@ -1306,7 +1329,7 @@ class TestLinearModelImport:
                 "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
                 "device_id": "1",
                 "address": "2096160",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "device_tensors": '[{"device_id": 0, "mesh_device_id": 1, "address": 2096160}]',
             },
             "connections": [19],
@@ -1341,6 +1364,7 @@ class TestLinearModelImport:
                 "page_size": "2048",
                 "num_cores": "0",
                 "type": "DRAM",
+                "buffer_type": "0",
                 "layout": "INTERLEAVED",
             },
             "connections": [15],
@@ -1363,7 +1387,7 @@ class TestLinearModelImport:
                 "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
                 "device_id": "1",
                 "address": "2272288",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "device_tensors": '[{"device_id": 0, "mesh_device_id": 1, "address": 2272288}]',
             },
             "connections": [19],
@@ -1394,6 +1418,7 @@ class TestLinearModelImport:
                 "page_size": "2048",
                 "num_cores": "0",
                 "type": "DRAM",
+                "buffer_type": "0",
                 "layout": "INTERLEAVED",
             },
             "connections": [21],
@@ -1416,7 +1441,7 @@ class TestLinearModelImport:
                 "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
                 "device_id": "1",
                 "address": "2278432",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "device_tensors": '[{"device_id": 0, "mesh_device_id": 1, "address": 2278432}]',
             },
             "connections": [],
@@ -1437,6 +1462,7 @@ class TestLinearModelImport:
                 "page_size": "2048",
                 "num_cores": "0",
                 "type": "DRAM",
+                "buffer_type": "0",
                 "layout": "INTERLEAVED",
             },
             "connections": [30],
@@ -1840,7 +1866,14 @@ class TestResNet50Patterns:
         {
             "counter": 3,
             "node_type": "buffer_allocate",
-            "params": {"size": "65536", "type": "DRAM", "layout": "INTERLEAVED", "device_id": "0", "address": "1000"},
+            "params": {
+                "size": "65536",
+                "type": "DRAM",
+                "buffer_type": "0",
+                "layout": "INTERLEAVED",
+                "device_id": "0",
+                "address": "1000",
+            },
             "connections": [],
         },
         {
@@ -1853,7 +1886,7 @@ class TestResNet50Patterns:
                 "layout": "Layout::TILE",
                 "device_id": "0",
                 "address": "1000",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "memory_config": "MemoryConfig(DRAM)",
             },
             "connections": [],
@@ -1888,7 +1921,14 @@ class TestResNet50Patterns:
         {
             "counter": 8,
             "node_type": "buffer_allocate",
-            "params": {"size": "176128", "type": "DRAM", "layout": "INTERLEAVED", "device_id": "0", "address": "2000"},
+            "params": {
+                "size": "176128",
+                "type": "DRAM",
+                "buffer_type": "0",
+                "layout": "INTERLEAVED",
+                "device_id": "0",
+                "address": "2000",
+            },
             "connections": [],
         },
         {
@@ -1897,6 +1937,7 @@ class TestResNet50Patterns:
             "params": {
                 "size": "4096",
                 "type": "L1",
+                "buffer_type": "1",
                 "layout": "HEIGHT_SHARDED",
                 "device_id": "0",
                 "address": "5000",
@@ -1914,7 +1955,7 @@ class TestResNet50Patterns:
                 "layout": "Layout::TILE",
                 "device_id": "0",
                 "address": "2000",
-                "buffer_type": "DRAM",
+                "buffer_type": "0",
                 "memory_config": "MemoryConfig(DRAM)",
             },
             "connections": [],
@@ -1937,7 +1978,7 @@ class TestResNet50Patterns:
                 "layout": "Layout::TILE",
                 "device_id": "0",
                 "address": "3000",
-                "buffer_type": "L1",
+                "buffer_type": "1",
                 "memory_config": "MemoryConfig(L1)",
             },
             "connections": [],
@@ -1952,7 +1993,14 @@ class TestResNet50Patterns:
         {
             "counter": 14,
             "node_type": "buffer_allocate",
-            "params": {"size": "8192", "type": "L1", "layout": "INTERLEAVED", "device_id": "0", "address": "4000"},
+            "params": {
+                "size": "8192",
+                "type": "L1",
+                "buffer_type": "1",
+                "layout": "INTERLEAVED",
+                "device_id": "0",
+                "address": "4000",
+            },
             "connections": [],
         },
         {
@@ -1965,7 +2013,7 @@ class TestResNet50Patterns:
                 "layout": "Layout::TILE",
                 "device_id": "0",
                 "address": "4000",
-                "buffer_type": "L1",
+                "buffer_type": "1",
                 "memory_config": "MemoryConfig(L1)",
             },
             "connections": [],
@@ -1983,7 +2031,7 @@ class TestResNet50Patterns:
         {
             "counter": 17,
             "node_type": "buffer_deallocate",
-            "params": {"address": "2000", "size": "176128", "type": "DRAM", "device_id": "0"},
+            "params": {"address": "2000", "size": "176128", "type": "DRAM", "buffer_type": "0", "device_id": "0"},
             "connections": [8],
         },
         # capture_end
@@ -2665,7 +2713,7 @@ class TestPerOpCapturedGraphImport:
     """Tests that per-op captured_graph from python_io is used directly."""
 
     def test_per_op_captured_graph_used_when_available(self, tmp_path):
-        """captured_graph from python_io should be stored as-is."""
+        """captured_graph from python_io should be stored with id fields injected."""
         per_op_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
             {
@@ -2681,6 +2729,24 @@ class TestPerOpCapturedGraphImport:
                 "connections": [3],
             },
             {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        expected_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1], "id": 0},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "InnerOp"},
+                "connections": [2],
+                "id": 1,
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "InnerOp"},
+                "connections": [3],
+                "id": 2,
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": [], "id": 3},
         ]
         mock_graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
@@ -2716,7 +2782,7 @@ class TestPerOpCapturedGraphImport:
         rows = cursor.fetchall()
         assert len(rows) == 1
         stored = json.loads(rows[0][0])
-        assert stored == per_op_graph, "Per-op graph should be stored exactly as provided"
+        assert stored == expected_graph, "Per-op graph should have id fields injected from counter"
         conn.close()
 
     def test_fallback_extraction_when_no_per_op_graph(self, tmp_path):

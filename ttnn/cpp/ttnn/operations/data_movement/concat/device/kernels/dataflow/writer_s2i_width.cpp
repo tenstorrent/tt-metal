@@ -21,7 +21,7 @@ void kernel_main() {
 
     uint32_t arg_index = 5;
 
-    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
     experimental::Noc noc;
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {

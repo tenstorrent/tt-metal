@@ -1,0 +1,470 @@
+name: "(T) [ttnn] Run model trace"
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: "Path to model test or demo (e.g., models/demos/deepseek_v3/demo/demo.py or models/tt_transformers/demo/simple_text_demo.py::test_demo_text)"
+        required: true
+        type: string
+      runner-label:
+        description: "CI runner / hardware target"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+      HF_MODEL:
+        description: "HuggingFace model identifier (optional, for tt_transformers)"
+        required: false
+        type: string
+        default: ""
+      store-raw-traces:
+        description: "Keep individual per-op trace files and upload as artifact"
+        required: false
+        type: boolean
+        default: false
+      load-to-db:
+        description: "Load master JSON into database and open manifest PR"
+        required: false
+        type: boolean
+        default: false
+      extra_args:
+        description: "Additional CLI flags for generic_ops_tracer.py (e.g., -k test_pow)"
+        required: false
+        type: string
+        default: ""
+      timeout-minutes:
+        description: "Timeout for tracing step (minutes)"
+        required: false
+        type: number
+        default: 60
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-inputs:
+    name: Validate inputs & derive arch
+    runs-on: ubuntu-latest
+    outputs:
+      arch: ${{ steps.derive.outputs.arch }}
+      platform: ${{ steps.derive.outputs.platform }}
+    steps:
+      - name: Verify tenstorrent org membership
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if ! gh api "orgs/tenstorrent/members/${ACTOR}" --silent 2>/dev/null; then
+            echo "::error::Only tenstorrent organization members can run this workflow"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Validate test_path exists
+        id: validate
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
+        run: |
+          # Extract file path (strip ::test_name if present)
+          TEST_FILE="${TEST_PATH%%::*}"
+
+          if [[ ! -f "$TEST_FILE" ]]; then
+            echo "::error::test_path file not found: $TEST_FILE"
+            exit 1
+          fi
+          echo "Validated: $TEST_FILE exists"
+
+      - name: Derive arch from runner label
+        id: derive
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+        run: |
+          RUNNER="$RUNNER_LABEL"
+          case "$RUNNER" in
+            P100a|P150b|BH-LLMBox|BH-DeskBox|BH-LoudBox)
+              ARCH="blackhole"
+              ;;
+            *)
+              ARCH="wormhole_b0"
+              ;;
+          esac
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
+          echo "Derived arch=$ARCH for runner=$RUNNER"
+
+  build-artifact:
+    name: Build
+    needs: [validate-inputs]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: ${{ needs.validate-inputs.outputs.platform }}
+
+  trace-model:
+    name: "Trace model (${{ inputs.runner-label }})"
+    needs: [validate-inputs, build-artifact]
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ needs.validate-inputs.outputs.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    outputs:
+      master-json-path: ${{ steps.trace.outputs.master_json_path }}
+      trace-uid: ${{ steps.trace.outputs.trace_uid }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Display trace configuration
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          INPUT_HF_MODEL: ${{ inputs.HF_MODEL }}
+          STORE_RAW: ${{ inputs.store-raw-traces }}
+          LOAD_DB: ${{ inputs.load-to-db }}
+          EXTRA_ARGS: ${{ inputs.extra_args }}
+          TIMEOUT: ${{ inputs.timeout-minutes }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          echo "::group::Trace Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    Model Trace Configuration                │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Test Path:            $TEST_PATH"
+          echo "│ Runner:               $RUNNER_LABEL"
+          echo "│ Architecture:         $ARCH"
+          echo "│ HF_MODEL:             ${INPUT_HF_MODEL:-(not set)}"
+          echo "│ Store Raw Traces:     $STORE_RAW"
+          echo "│ Load to DB:           $LOAD_DB"
+          echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
+          echo "│ Timeout:              $TIMEOUT minutes"
+          echo "│ tt-metal SHA:         $TT_METAL_SHA"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+      - name: Run model trace
+        id: trace
+        timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+        env:
+          HF_MODEL: ${{ inputs.HF_MODEL }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TEST_PATH: ${{ inputs.test_path }}
+          EXTRA_ARGS: ${{ inputs.extra_args }}
+          STORE_RAW_TRACES: ${{ inputs.store-raw-traces }}
+        run: |
+          TRACER_OUTPUT_DIR="model_tracer/traced_operations"
+
+          # Reject extra_args that override output directory
+          if [[ "$EXTRA_ARGS" =~ (^|[[:space:]])(--output-dir|-o)(=|[[:space:]]|$) ]]; then
+            echo "::error::extra_args must not override tracer output directory"
+            exit 1
+          fi
+
+          cmd=(python3 model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
+
+          if [[ "$STORE_RAW_TRACES" == "true" ]]; then
+            cmd+=("--store")
+          fi
+
+          if [[ -n "$EXTRA_ARGS" ]]; then
+            mapfile -d '' -t extra < <(
+              python3 -c 'import os, shlex, sys; [sys.stdout.write(a + "\0") for a in shlex.split(os.environ["EXTRA_ARGS"])]'
+            )
+            cmd+=("${extra[@]}")
+          fi
+
+          "${cmd[@]}"
+
+          MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
+          echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
+
+          # Extract trace_uid from the persisted master JSON rather than the
+          # per-trace metadata file, which generic_ops_tracer.py deletes unless
+          # --store is set.
+          if [[ -f "$MASTER_JSON" ]]; then
+            TRACE_UID=$(MASTER_JSON="$MASTER_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for execution in cfg.get("executions", []):
+                      trace_uid = execution.get("trace_uid")
+                      if trace_uid:
+                          print(trace_uid)
+                          raise SystemExit(0)
+          PY
+            )
+          fi
+
+          if [[ -n "$TRACE_UID" ]]; then
+            echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Write job summary
+        if: always() && steps.trace.outcome == 'success'
+        env:
+          MASTER_JSON: ${{ steps.trace.outputs.master_json_path }}
+          TEST_PATH: ${{ inputs.test_path }}
+          TRACE_UID: ${{ steps.trace.outputs.trace_uid }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          if [[ ! -f "$MASTER_JSON" ]]; then
+            echo "::warning::Master JSON not found at $MASTER_JSON"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import textwrap
+
+          master_json = os.environ["MASTER_JSON"]
+          test_path = os.environ["TEST_PATH"]
+          trace_uid = os.environ.get("TRACE_UID", "unknown")
+          tt_metal_sha = os.environ["TT_METAL_SHA"]
+
+          with open(master_json) as f:
+              data = json.load(f)
+
+          ops = data.get("operations", {})
+          unique_ops = len(ops)
+          total_configs = sum(len(op.get("configurations", [])) for op in ops.values())
+
+          # Get machine info from first execution entry
+          machine_info = {}
+          for op_data in ops.values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      if exc.get("machine_info"):
+                          mi = exc["machine_info"]
+                          if isinstance(mi, list):
+                              mi = mi[0]
+                          machine_info = mi
+                          break
+                  if machine_info:
+                      break
+              if machine_info:
+                  break
+
+          board = machine_info.get("board_type", "unknown")
+          series = machine_info.get("device_series", "unknown")
+          cards = machine_info.get("card_count", "?")
+          mesh = machine_info.get("mesh_device_shape", [])
+
+          summary = textwrap.dedent(f"""
+          ## Model Trace Results
+
+          | Field | Value |
+          |---|---|
+          | Test Path | `{test_path}` |
+          | Hardware | {board} / {series} (x{cards}) |
+          | Mesh Shape | {mesh} |
+          | Unique Operations | {unique_ops} |
+          | Total Configurations | {total_configs} |
+          | Trace UID | `{trace_uid}` |
+          | tt-metal SHA | `{tt_metal_sha}` |
+          """).lstrip()
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          PY
+
+      - name: Upload master JSON
+        if: always() && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-master-json
+          path: /work/model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+      - name: Upload raw trace files
+        if: inputs.store-raw-traces && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-raw-files
+          path: /work/generated/ttnn/reports/operation_parameters/
+          retention-days: 1
+
+  db-load-and-manifest-pr:
+    name: DB load & manifest PR
+    needs: [validate-inputs, trace-model]
+    if: inputs.load-to-db && needs.trace-model.result == 'success'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary pyyaml
+
+      - name: Download master JSON
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: model-trace-master-json
+          path: model_tracer/traced_operations/
+
+      - name: Load into database
+        id: db-load
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            "$TT_METAL_SHA"
+
+      - name: Create manifest PR
+        if: steps.db-load.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_PATH: ${{ inputs.test_path }}
+          TRACE_UID: ${{ needs.trace-model.outputs.trace-uid }}
+          RUN_ID: ${{ github.run_id }}
+          BASE_REF: ${{ github.ref_name }}
+          TT_METAL_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MASTER_JSON: model_tracer/traced_operations/ttnn_operations_master.json
+        run: |
+          # Check if manifest was actually modified
+          if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
+            BRANCH_NAME="trace/auto-manifest-${RUN_ID}"
+            git checkout -b "$BRANCH_NAME"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add model_tracer/trace_selection_registry.yaml
+            git commit -m "Add draft trace entry for ${TEST_PATH}"
+            git push origin "$BRANCH_NAME"
+
+            # Parse trace stats for PR body
+            CONFIG_COUNT=$(python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          ops = data.get("operations", {})
+          print(sum(len(op.get("configurations", [])) for op in ops.values()))
+          PY
+            )
+
+            MACHINE_INFO=$(python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      mi = exc.get("machine_info", {})
+                      if isinstance(mi, list):
+                          mi = mi[0]
+                      if mi:
+                          print(
+                              f"{mi.get('board_type', '?')} / {mi.get('device_series', '?')} "
+                              f"(x{mi.get('card_count', '?')})"
+                          )
+                          raise SystemExit(0)
+
+          print("unknown")
+          PY
+            )
+
+            gh pr create \
+              --base "$BASE_REF" \
+              --head "$BRANCH_NAME" \
+              --title "Add trace: ${TEST_PATH} on ${MACHINE_INFO}" \
+              --body "$(cat <<EOF
+          ## New Trace Entry
+
+          | Field | Value |
+          |---|---|
+          | Trace UID | \`${TRACE_UID}\` |
+          | Model source | \`${TEST_PATH}\` |
+          | Hardware | ${MACHINE_INFO} |
+          | Config count | ${CONFIG_COUNT} |
+          | tt-metal SHA | \`${TT_METAL_SHA}\` |
+          | Workflow run | ${RUN_URL} |
+
+          ## Promotion checklist
+          - [ ] Review trace stats in workflow job summary
+          - [ ] Change registry status from \`draft\` to \`active\`
+          - [ ] Add to appropriate \`targets\` group if needed
+          EOF
+          )"
+
+            echo "::notice::Manifest PR created on branch $BRANCH_NAME"
+          else
+            echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
+          fi

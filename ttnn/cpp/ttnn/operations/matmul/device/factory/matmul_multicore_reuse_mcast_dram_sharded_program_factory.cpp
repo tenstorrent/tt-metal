@@ -34,7 +34,7 @@ create_program_dram_sharded(
     tt::tt_metal::IDevice* device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -220,8 +220,10 @@ create_program_dram_sharded(
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
 
-    uint32_t in3_block_tiles = per_core_N_in1_sender;
-    uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
+    // Bias CB must be sized to per_core_N_compute (the padded value) because
+    // the compute kernel iterates in1_num_subblocks * out_subblock_w tiles when
+    // adding bias, which equals per_core_N_compute after subblock-width padding.
+    uint32_t in3_CB_tiles = per_core_N_compute;
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
     // get the max page size based on num tiles
@@ -229,9 +231,10 @@ create_program_dram_sharded(
     get_max_page_size_and_num_pages(
         device, in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
 
+    // DRAM read uses per_core_N_in1_sender (actual data tiles), not the padded CB size
     uint32_t bias_buffer_page_size, bias_buffer_num_pages;
     get_max_page_size_and_num_pages(
-        device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
+        device, per_core_N_in1_sender, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     uint32_t num_worker_cores = num_dram_banks;
 
@@ -334,7 +337,7 @@ create_program_dram_sharded(
         (std::uint32_t)in1_buffer_page_size,
         (std::uint32_t)in1_buffer_num_pages,
         // in1 block args
-        (std::uint32_t)per_core_N_in1_sender,                // in1_block_w
+        (std::uint32_t)per_core_N_compute,                   // in1_block_w (padded, used only for bias CB)
         (std::uint32_t)per_core_N_in1_sender * in0_block_w,  // in1_block_num_tiles
         // in0/in1 common args
         (std::uint32_t)num_blocks,                                    // num_blocks
@@ -474,6 +477,7 @@ create_program_dram_sharded(
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
+                {"bias_ntiles", per_core_N_compute},
             }});
 
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);

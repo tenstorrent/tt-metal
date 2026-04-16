@@ -21,6 +21,8 @@ void kernel_main() {
     const uint32_t input_start_1 = get_compile_time_arg_val(10);
 
     const uint32_t groups = get_compile_time_arg_val(11);
+    constexpr uint32_t input_cb_0_id = get_compile_time_arg_val(12);
+    constexpr uint32_t input_cb_1_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t group_stick_size_0 = input_stick_size_0 / groups;
     constexpr uint32_t group_stick_size_1 = input_stick_size_1 / groups;
@@ -28,8 +30,8 @@ void kernel_main() {
     constexpr uint32_t group_stride_1 = input_stride_1 / groups;
 
     experimental::CircularBuffer output_cb(output_cb_id);
-    experimental::CircularBuffer input_cb_0(0);
-    experimental::CircularBuffer input_cb_1(1);
+    experimental::CircularBuffer input_cb_0(input_cb_0_id);
+    experimental::CircularBuffer input_cb_1(input_cb_1_id);
 
     const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
 

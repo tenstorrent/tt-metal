@@ -26,6 +26,8 @@ void kernel_main() {
     uint32_t val_lo = get_arg_val<uint32_t>(7);
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
@@ -44,7 +46,7 @@ void kernel_main() {
     uint64_t replicate_dest_addr;
     uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    cb_in0.reserve_back(16);  // in this kernel we are not pushing anything into CBs, just using the space
+    cb_in0.reserve_back(16);
     cb_in1.reserve_back(16);
     uint32_t l1_w_addr = cb_in0.get_write_ptr();
     uint32_t l1_zeros_addr = cb_in1.get_write_ptr();
@@ -58,6 +60,8 @@ void kernel_main() {
     for (w = 0; w < W; w++) {
         reinterpret_cast<uint16_t*>(l1_zeros_addr)[w] = val_lo;
     }
+    cb_in0.push_back(16);
+    cb_in1.push_back(16);
 
     experimental::Noc noc;
     uint32_t nch_dst = 0;

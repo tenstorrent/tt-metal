@@ -885,7 +885,6 @@ class AttentionBlock:
         qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Rotated input intermediate CB for RoPE
-        qrope_cos_sin_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos/Sin intermediate CB for RoPE
         # KV cache branch
         dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
@@ -1173,13 +1172,12 @@ class AttentionBlock:
         ]
         # BRISC: no-op (empty args)
         qrope_brisc_named_compile_time_args = []
-        # TRISC: in_cb, cos_sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_sin_interm_cb, out_cb, Wt, Ht
+        # TRISC: in_cb, cos_sin_cb, trans_mat_cb, rotated_in_interm_cb, out_cb, Wt, Ht
         qrope_trisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
             ("qkv_rope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("qrope_trans_mat_cb", qrope_trans_mat_cb),
             ("qrope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("qrope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("qrope_output_cb", qrope_output_cb),
             ("qrope_Wt", qrope_head_dim_per_core_t),
             ("qrope_Ht", qrope_num_heads_per_core),
@@ -1461,7 +1459,6 @@ class AttentionBlock:
             ("krope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
             ("krope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("krope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("krope_output_cb", krope_output_cb),
             ("krope_Wt", krope_Wt),
             ("krope_Ht", krope_Ht),
@@ -1880,6 +1877,8 @@ class AttentionBlock:
             ("matmul5_out", matmul5_out_cb),
             ("matmul5_k_num_tiles", matmul5_k_num_tiles),
             ("matmul5_out_w_per_core", matmul5_out_w_per_core),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig TRISC CT args (compute on receiver core)
@@ -2261,25 +2260,6 @@ class AttentionBlock:
             )
         ]
         sdpa_out_interm_running_offset_qrope += qrope_rotated_input_interm_cb_descriptor.total_size  # +128 B
-
-        # CB 21: Cos/Sin intermediate CB — overlap with sdpa_out_interm L1 buffer
-        # at offset 14016 B. This CB is consumed before SDPA runs.
-        qrope_cos_sin_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            qrope_cos_sin_interm_cb,
-            ref_sdpa_out_interm_buffer,
-            address_offset=sdpa_out_interm_running_offset_qrope,  # 28352 B
-            total_size=qrope_interm_tile_size * 2,
-            core_ranges=full_device_grid,
-        )
-        qrope_cos_sin_interm_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=qrope_cos_sin_interm_cb,
-                data_format=data_format,
-                page_size=TILE_1x32.get_tile_size(data_format),
-                tile=ttnn.TileDescriptor(TILE_1x32),
-            )
-        ]
-        sdpa_out_interm_running_offset_qrope += qrope_cos_sin_interm_cb_descriptor.total_size
 
         sdpa_out_interm_running_offset = max(sdpa_out_interm_running_offset, sdpa_out_interm_running_offset_qrope)
 
@@ -3324,7 +3304,6 @@ class AttentionBlock:
             create_q_heads_out_cb_descriptor,
             qkv_rope_cos_sin_cb_descriptor,
             qrope_rotated_input_interm_cb_descriptor,
-            qrope_cos_sin_interm_cb_descriptor,
             dkv_matmul_output_cb_descriptor,
             kv_rmsnorm_input_cb_descriptor,
             kv_rmsnorm_output_cb_descriptor,

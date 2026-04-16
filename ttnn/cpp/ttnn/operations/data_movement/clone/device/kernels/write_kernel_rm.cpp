@@ -14,12 +14,11 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(1);
     constexpr auto output_args = TensorAccessorArgs<2>();
 
     experimental::CircularBuffer dst_cb(dst_cb_id);
     experimental::Noc noc;
-    const auto s = TensorAccessor(output_args, output_buffer_address, output_page_size);
+    const auto s = TensorAccessor(output_args, output_buffer_address);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {

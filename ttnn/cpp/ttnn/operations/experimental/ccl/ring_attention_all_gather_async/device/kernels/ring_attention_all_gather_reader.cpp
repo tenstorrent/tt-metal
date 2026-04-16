@@ -109,10 +109,10 @@ void kernel_main() {
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx, page_size_base_idx);
+    auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
     arg_idx += num_inputs;
     auto input_tensor_addrgens = make_abstract_tensor_accessor_wrappers(inputs_tuple);
-    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
@@ -235,6 +235,5 @@ void kernel_main() {
             }
         }
     }
-    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
-    noc_inline_dw_write(dest_noc_addr, 0);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

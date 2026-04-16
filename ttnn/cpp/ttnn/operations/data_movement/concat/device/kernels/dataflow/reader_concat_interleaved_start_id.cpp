@@ -30,8 +30,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles_per_block_base_offset = num_tensors;
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
 
-    auto tensor_accessors_tuple =
-        make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx, page_size_base_idx);
+    auto tensor_accessors_tuple = make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx);
     auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);

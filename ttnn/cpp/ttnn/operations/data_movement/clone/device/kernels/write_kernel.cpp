@@ -17,7 +17,7 @@ void kernel_main() {
 
     experimental::CircularBuffer dst_cb(dst_cb_id);
     experimental::Noc noc;
-    const auto s = TensorAccessor(dst_args, output_buffer_address, get_tile_size(dst_cb_id));
+    const auto s = TensorAccessor(dst_args, output_buffer_address);
     const uint32_t tile_bytes = get_tile_size(dst_cb_id);
 
     uint32_t end_id = start_id + num_tiles;
