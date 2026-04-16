@@ -36,3 +36,8 @@ tests/python_tests/helpers/_plot_output/
 
 # Stimuli v2 test files
 tests/python_tests/helpers/test_stimuli_v2_*.py
+
+# v2 migration and parity test files
+tests/python_tests/test_eltwise_unary_datacopy_custom_v2_migration.py
+tests/python_tests/test_zzz_eltwise_unary_sfpu_v2_migration.py
+tests/python_tests/test_zzz_eltwise_unary_sfpu_v2_parity.py

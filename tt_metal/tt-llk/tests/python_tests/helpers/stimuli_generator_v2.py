@@ -8,8 +8,8 @@ This module replaces the scattered boolean-flag API of stimuli_generator.py
 with a declarative :class:`StimuliSpec` that supports:
 
 * Multiple distributions per operand — ``"uniform"``, ``"gaussian"``,
-   ``"ramp"``, ``"log_uniform"``, ``"constant"``, ``"sequential"``,
-   ``"uniform_linspace"``, ``"gaussian_linspace"``,
+   ``"saw"``, ``"log_uniform"``, ``"constant"``, ``"sequential"``,
+   ``"ramp"``, ``"gaussian_linspace"``,
    ``"log_uniform_linspace"``, ``"identity"``, ``"face_identity"``,
    ``"custom"``, or any custom callable.
 * Arbitrary value bounds (``low`` / ``high``) per operand with no
@@ -102,9 +102,10 @@ class StimuliSpec:
             Normal distribution with *mean* and *std*.  For integer formats
             the result is rounded and clamped to the representable range.
 
-        ``"ramp"``
-            Linearly spaced values from *low* to *high* (``torch.linspace``).
-            For integer formats a float32 linspace is rounded and clamped.
+        ``"saw"``
+            Per-face sawtooth: linearly spaced values from *low* to *high*
+            (``torch.linspace``), restarting every face.  For integer
+            formats a float32 linspace is rounded and clamped.
 
         ``"log_uniform"``
             ``exp(Uniform(log(low), log(high)))``.  Both *low* and *high* must
@@ -117,12 +118,12 @@ class StimuliSpec:
             Values ``1, 2, 3, …, size`` (mirrors the legacy
             ``sequential=True`` flag).  Ignores *low*, *high*, *seed*.
 
-        ``"uniform_linspace"``
-            Deterministic, evenly spaced values from *low* to *high*
-            (``torch.linspace``).  Equivalent to ``"ramp"`` but operates as
-            a **global sweep** across the full tensor (short-circuits the
-            face loop), producing one smooth curve instead of a per-face
-            sawtooth.  Useful for plotting function shapes.
+        ``"ramp"``
+            Continuous linear sweep: deterministic, evenly spaced values
+            from *low* to *high* (``torch.linspace``) across the **full
+            tensor** (short-circuits the face loop), producing one smooth
+            ramp instead of a per-face sawtooth.  Useful for plotting
+            function shapes.
 
         ``"gaussian_linspace"``
             Deterministic sweep through the Gaussian domain via the
@@ -168,12 +169,12 @@ class StimuliSpec:
             requested *dtype*.
 
     low : float
-        Lower bound for ``"uniform"``, ``"ramp"``, ``"log_uniform"``,
-        ``"uniform_linspace"``, and ``"log_uniform_linspace"``.
+        Lower bound for ``"uniform"``, ``"saw"``, ``"ramp"``,
+        ``"log_uniform"``, and ``"log_uniform_linspace"``.
         Defaults to ``0.0``.
     high : float
-        Upper bound for ``"uniform"``, ``"ramp"``, ``"log_uniform"``,
-        ``"uniform_linspace"``, and ``"log_uniform_linspace"``.
+        Upper bound for ``"uniform"``, ``"saw"``, ``"ramp"``,
+        ``"log_uniform"``, and ``"log_uniform_linspace"``.
         Defaults to ``1.0``.
     value : float
         Fill value used by ``"constant"`` (all elements), ``"identity"``
@@ -317,9 +318,9 @@ class StimuliSpec:
         return cls(distribution="gaussian", mean=mean, std=std, **kwargs)
 
     @classmethod
-    def ramp(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
-        """Linearly spaced from *low* to *high* (``torch.linspace``)."""
-        return cls(distribution="ramp", low=low, high=high, **kwargs)
+    def saw(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
+        """Per-face sawtooth linspace from *low* to *high*, restarting every face."""
+        return cls(distribution="saw", low=low, high=high, **kwargs)
 
     @classmethod
     def log_uniform(
@@ -336,11 +337,9 @@ class StimuliSpec:
         return cls(distribution="log_uniform", low=low, high=high, **kwargs)
 
     @classmethod
-    def uniform_linspace(
-        cls, low: float = 0.0, high: float = 1.0, **kwargs
-    ) -> "StimuliSpec":
-        """Deterministic evenly spaced sweep from *low* to *high*."""
-        return cls(distribution="uniform_linspace", low=low, high=high, **kwargs)
+    def ramp(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
+        """Continuous linear sweep from *low* to *high* across the full tensor."""
+        return cls(distribution="ramp", low=low, high=high, **kwargs)
 
     @classmethod
     def gaussian_linspace(
@@ -737,7 +736,7 @@ _OP_DOMAIN_REGISTRY: Dict[
 # should short-circuit the face loop in _generate_source_tensor_v2.
 _LINSPACE_DISTRIBUTIONS = frozenset(
     {
-        "uniform_linspace",
+        "ramp",
         "gaussian_linspace",
         "log_uniform_linspace",
     }
@@ -754,13 +753,13 @@ def _generate_linspace_tensor(
     """
     Generate a deterministic linspace-style tensor for float formats.
 
-    Works for ``"uniform_linspace"``, ``"gaussian_linspace"``, and
+    Works for ``"ramp"``, ``"gaussian_linspace"``, and
     ``"log_uniform_linspace"``.  Always computes in float32 and casts to
     *dtype* at the end to avoid precision issues in reduced formats.
     """
     dist = spec.distribution
 
-    if dist == "uniform_linspace":
+    if dist == "ramp":
         return torch.linspace(spec.low, spec.high, size, dtype=torch.float32).to(
             dtype=dtype
         )
@@ -837,7 +836,7 @@ def _generate_integer_face(
     This ensures every generated value is an integer that satisfies
     ``spec.low <= value <= spec.high`` **and** is representable in the target
     format.  Distributions that produce floats (``"gaussian"``,
-    ``"log_uniform"``, ``"ramp"``) are rounded and clamped to
+    ``"log_uniform"``, ``"saw"``) are rounded and clamped to
     ``[low_int, high_int]`` before casting.
 
     Degenerate ranges
@@ -888,7 +887,7 @@ def _generate_integer_face(
             low=low, high=high + 1, size=(size,), dtype=dtype, generator=generator
         )
 
-    if distribution == "ramp":
+    if distribution == "saw":
         return (
             torch.linspace(spec.low, spec.high, size, dtype=torch.float32)
             .round()
@@ -923,8 +922,8 @@ def _generate_integer_face(
 
     raise ValueError(
         f"Unknown distribution {distribution!r} for integer format. "
-        f"Expected one of 'uniform', 'gaussian', 'ramp', 'log_uniform', "
-        f"'uniform_linspace', 'gaussian_linspace', 'log_uniform_linspace', "
+        f"Expected one of 'uniform', 'gaussian', 'saw', 'log_uniform', "
+        f"'ramp', 'gaussian_linspace', 'log_uniform_linspace', "
         f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
     )
 
@@ -1062,7 +1061,7 @@ def generate_face_v2(
         raw = torch.randn(size, dtype=dtype, generator=generator)
         return raw * spec.std + spec.mean
 
-    if distribution == "ramp":
+    if distribution == "saw":
         return torch.linspace(spec.low, spec.high, size, dtype=dtype)
 
     if distribution == "log_uniform":
@@ -1081,8 +1080,8 @@ def generate_face_v2(
 
     raise ValueError(
         f"Unknown distribution {distribution!r}. "
-        f"Expected one of 'uniform', 'gaussian', 'ramp', 'log_uniform', "
-        f"'uniform_linspace', 'gaussian_linspace', 'log_uniform_linspace', "
+        f"Expected one of 'uniform', 'gaussian', 'saw', 'log_uniform', "
+        f"'ramp', 'gaussian_linspace', 'log_uniform_linspace', "
         f"'constant', 'sequential', 'face_identity', 'custom', or a callable."
     )
 
@@ -1119,7 +1118,7 @@ def _generate_source_tensor_v2(
     Notes
     -----
     The ``"identity"``, ``"sequential"`` and linspace distributions
-    (``"uniform_linspace"``, ``"gaussian_linspace"``,
+    (``"ramp"``, ``"gaussian_linspace"``,
     ``"log_uniform_linspace"``) short-circuit the face loop and produce a
     single structured / swept tensor across *num_elements*.
 
@@ -1136,7 +1135,7 @@ def _generate_source_tensor_v2(
         raise ValueError(
             f"masked_faces cannot be used with distribution={spec.distribution!r} "
             f"because it bypasses the face loop.  Use a per-face distribution "
-            f"(uniform, gaussian, ramp, …) instead."
+            f"(uniform, gaussian, saw, …) instead."
         )
 
     # ── identity: tensor-level structured pattern (no face loop) ───────
