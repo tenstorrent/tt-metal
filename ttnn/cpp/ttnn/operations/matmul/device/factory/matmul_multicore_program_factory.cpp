@@ -39,13 +39,15 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
-    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -135,7 +137,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
-            .dst_full_sync_en = true,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
             .compile_args = compute_args_group_1,
             .named_compile_args = {
                 {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
@@ -155,7 +159,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
-                .dst_full_sync_en = true,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
                 .compile_args = compute_args_group_2,
                 .named_compile_args = {
                     {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
