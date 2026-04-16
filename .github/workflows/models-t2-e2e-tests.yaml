@@ -14,7 +14,9 @@ on:
         options:
           - all
           - llama3.1-8b
+          - llama3.1-8b-dp
           - llama3.3-70b
+          - llama3.3-70b-dp
           - llama90b-vl
           - qwen3-32b
           - qwen2.5-32b
