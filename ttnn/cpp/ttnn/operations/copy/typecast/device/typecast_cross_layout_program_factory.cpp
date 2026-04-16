@@ -119,7 +119,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_tile_to_rm(
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const auto compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
+        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     // Core group 1 (full cores)
     if (!core_range.ranges().empty()) {
@@ -314,7 +314,7 @@ static TypecastCrossLayoutProgramFactory::cached_program_t create_rm_to_tile(
         static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     const auto compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
+        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     if (!core_range.ranges().empty()) {
         std::vector<uint32_t> compute_args = {
@@ -592,8 +592,7 @@ static ProgramDescriptor create_tile_to_rm_descriptor(
              static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
              static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)))}};
 
-    const auto compute_path =
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
+    const auto compute_path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     if (!core_range.ranges().empty()) {
         KernelDescriptor k;
@@ -788,8 +787,7 @@ static ProgramDescriptor create_rm_to_tile_descriptor(
         compute_defines.emplace_back("TYPECAST_OUTPUT_32BIT", "1");
     }
 
-    const auto compute_path =
-        "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast_cross_layout.cpp";
+    const auto compute_path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
     if (!core_range.ranges().empty()) {
         KernelDescriptor k;
