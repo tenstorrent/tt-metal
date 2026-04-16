@@ -175,7 +175,16 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             }
         }
         if (!kernel.common_runtime_args.empty()) {
-            SetCommonRuntimeArgs(program, k, kernel.common_runtime_args);
+            // Cannot use SetCommonRuntimeArgs here — it calls
+            // Kernel::set_common_runtime_args which has a TT_FATAL requiring
+            // common_runtime_args_ to be empty.  On cache hits the program is
+            // reused, so the args are already populated from the initial
+            // create().  Update in-place instead (same pattern used for
+            // per-core runtime_args above).
+            auto& common_args = GetCommonRuntimeArgs(program, k);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(kernel.common_runtime_args.size()); ++i) {
+                common_args[i] = kernel.common_runtime_args[i];
+            }
         }
     }
 
