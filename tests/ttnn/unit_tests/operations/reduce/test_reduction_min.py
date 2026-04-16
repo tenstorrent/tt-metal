@@ -12,7 +12,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
-TEST_PADDING_VALUE = 42
+TEST_PADDING_VALUE = -142
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

@@ -720,7 +720,6 @@ def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
     input_tensor = torch.reshape(input_tensor, (1, 1, -1, in_c))
     input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     output_tensor = ttnn.max_pool2d(
         input_tensor,
         batch_size,
