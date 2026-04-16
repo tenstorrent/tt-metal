@@ -18,6 +18,9 @@ from safetensors import safe_open
 _STACKED_EXPERT_ALIAS_RE = re.compile(
     r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
 )
+_STACKED_EXPERT_FULL_RE = re.compile(
+    r"^model\.layers\.(?P<layer>\d+)\.mlp\.experts_stacked\.(?P<projection>gate_proj|down_proj|up_proj)\.weight$"
+)
 
 
 class LazyStateDict(Mapping[str, torch.Tensor]):
@@ -43,6 +46,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         _cache: Optional[dict[str, torch.Tensor]] = None,
         _num_layers: Optional[int] = None,
         _file_handles: Optional[dict[str, object]] = None,
+        _stacked_num_experts: Optional[dict[str, int]] = None,
     ):
         self._model_path = Path(model_path)
         self._base_prefix = base_prefix
@@ -78,6 +82,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         # Cache of open safetensors handles keyed by filename to avoid repeated mmaps
         self._file_handles: dict[str, object] = {} if _file_handles is None else _file_handles
         self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
+        # Cache stacked expert counts so iteration can expose logical expert aliases
+        # without materializing the full stacked tensors.
+        self._stacked_num_experts: dict[str, int] = {} if _stacked_num_experts is None else _stacked_num_experts
 
     def _get_handle(self, filename: str):
         """
@@ -176,6 +183,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             _cache=self._cache,
             _num_layers=child_num_layers,
             _file_handles=self._file_handles,
+            _stacked_num_experts=self._stacked_num_experts,
         )
 
     def _full_key(self, key: str) -> str:
@@ -214,6 +222,23 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             return True
         layer_part = full_key[len(prefix) :].split(".", 1)[0]
         return (not layer_part.isdigit()) or (int(layer_part) < self._num_layers)
+
+    def _iter_stacked_expert_aliases(self, stacked_full_key: str) -> Iterator[str]:
+        match = _STACKED_EXPERT_FULL_RE.match(stacked_full_key)
+        if match is None:
+            return
+
+        num_experts = self._stacked_num_experts.get(stacked_full_key)
+        if num_experts is None:
+            filename = self._full_to_file[stacked_full_key]
+            handle = self._get_handle(filename)
+            num_experts = handle.get_slice(stacked_full_key).get_shape()[0]
+            self._stacked_num_experts[stacked_full_key] = num_experts
+
+        layer = match.group("layer")
+        projection = match.group("projection")
+        for expert_idx in range(num_experts):
+            yield f"model.layers.{layer}.mlp.experts.{expert_idx}.{projection}.weight"
 
     def __getitem__(self, key: str) -> torch.Tensor:
         """
@@ -258,11 +283,22 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         base = self._base_prefix
         for full_key in self._full_to_file.keys():
-            if not full_key.startswith(base):
-                continue
             if not self._passes_layer_filter(full_key):
                 continue
-            yield full_key[len(base) :]
+            if _STACKED_EXPERT_FULL_RE.match(full_key):
+                for alias_full_key in self._iter_stacked_expert_aliases(full_key):
+                    # Prefer the logical HF-compatible expert names when iterating.
+                    # This keeps strict reference-model load_state_dict() working
+                    # while direct stacked-key lookups remain available through
+                    # __getitem__ and __contains__.
+                    if alias_full_key in self._full_to_file:
+                        continue
+                    if alias_full_key.startswith(base):
+                        yield alias_full_key[len(base) :]
+                continue
+
+            if full_key.startswith(base):
+                yield full_key[len(base) :]
 
     def __len__(self) -> int:
         """
