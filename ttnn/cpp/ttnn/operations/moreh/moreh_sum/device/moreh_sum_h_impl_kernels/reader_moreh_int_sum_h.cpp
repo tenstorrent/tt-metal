@@ -20,14 +20,13 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
 #ifdef DO_MASK_H
     constexpr uint32_t cb_id_mask_h = 1;
     generate_mask_h<int32_t>(cb_id_mask_h, mask_h);
 #endif
 
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     uint32_t w = curr_col_in_batch;
 

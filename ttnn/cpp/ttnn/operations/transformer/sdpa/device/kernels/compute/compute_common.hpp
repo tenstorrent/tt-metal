@@ -311,7 +311,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
+    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
@@ -335,13 +335,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
                 constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                exp_tile<
-                    true /* approx */,
-                    true /* fast+approx */,
-                    false /* scale_en */,
-                    false /* skip +ve check */,
-                    InputClamping::None,
-                    iterations>(j, vector_mode_exp);
+                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
 
@@ -834,7 +828,7 @@ void calculate_exponential_first_column() {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
             sfpi::vFloat result =
-                ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+                ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                     val, scale_bf16);
             sfpi::dst_reg[0] = result;
 
@@ -870,7 +864,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
+    exp_tile_init<EXP_APPROX_MODE>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -927,10 +921,10 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
 
         // Exponentials of differences
         sfpi::vFloat exp_prev =
-            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_prev, scale_bf16);
         sfpi::vFloat exp_worker =
-            ckernel::sfpu::ckernel_sfpu_exp_accurate<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
+            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
                 diff_worker, scale_bf16);
 
         // Store exponentials for optional debug/pack-out
@@ -988,7 +982,7 @@ void correction_block(
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         acquire_dst();
         copy_tile_to_dst_init_short(cb_worker_max);
-        exp_tile_init<EXP_APPROX_MODE, false>();
+        exp_tile_init<EXP_APPROX_MODE>();
         copy_tile(cb_prev_max, i, dst_reg_0);
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
@@ -1083,13 +1077,13 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<false, false>();
+    exp_tile_init<false>();
     // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        // exp_tile<false, false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
+        // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
         MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
@@ -1112,7 +1106,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
     float threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        ckernel::sfpu::calculate_softplus_body<APPROX>(beta, beta_reciprocal, threshold);
+        ckernel::sfpu::calculate_softplus_body<APPROX, DST_ACCUM_MODE>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg += 2;
     }
 }

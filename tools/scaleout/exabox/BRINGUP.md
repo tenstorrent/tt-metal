@@ -125,6 +125,21 @@ Before starting, ensure you have:
 - **NFS access** to shared config directories (e.g., `/data/scaleout_configs/`)
 - **tt-metal repository** cloned and built (see [README.md](./README.md#prerequisites))
 
+### RevC BIOS Configuration: PCIe Gen4 SSD Speed
+
+All **Rev C** Galaxy units must have their SSD PCIe link speed set to **Gen4** in BIOS before provisioning. Gen5 SSDs in Rev C chassis are unstable at auto-negotiated speeds and can cause I/O errors, failed OS deployments, and unresponsive drives.
+
+Configure the following BIOS settings on each Rev C host:
+
+1. Enter BIOS Setup
+2. Navigate to **Advanced -> Enable Hidden Options**
+3. Go to **AMD CBS -> NBIO Common Options**
+4. Set **PCIe Link Speed Capability** to **Gen4**
+5. Set **PCIe Speed PMM Control** to **Gen4**
+6. Save and exit
+
+> **Note:** This must be done as part of the initial DC bringup by technicians. Slots 1 and 2 of the E1.S drives are particularly affected. Instruct developers to avoid using SSDs in those slots until the Gen4 setting is confirmed.
+
 ## Quick Reference
 
 | Item | Location |

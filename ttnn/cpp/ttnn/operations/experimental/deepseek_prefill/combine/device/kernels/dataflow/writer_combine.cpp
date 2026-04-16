@@ -165,7 +165,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
     // Sentinel-terminated fabric send loop
     while (true) {
