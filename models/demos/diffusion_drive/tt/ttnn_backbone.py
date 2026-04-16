@@ -17,7 +17,9 @@ What stays in PyTorch (TorchModuleFallback):
     • 1×1 channel-projection Conv2d (lidar↔image)
     • GPT self-attention fusion blocks
     • F.interpolate (bilinear)
-    • 3-level top-down FPN (Conv2d + bilinear Upsample)
+    • 3-level top-down FPN (Conv2d + bilinear Upsample) — unless TtnnFPN
+      is installed via build_stage3, in which case the 3 FPN conv layers
+      run in TTNN and only the bilinear upsamples stay in PyTorch
 
 Public API::
     ttnn_bb = TtnnTransfuserBackbone(ref_backbone, device)

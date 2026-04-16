@@ -153,13 +153,13 @@ class TtnnDiffusionDriveModel:
         return cls(reference_model, config, device)
 
     # ------------------------------------------------------------------
-    # Stub: compile / execute_compiled (filled in Stage 3)
+    # Stub: compile / execute_compiled (Stage 7+)
     # ------------------------------------------------------------------
 
     def compile(self, batch_size: int = 1) -> None:
-        """Stage 3+: capture TTNN trace for fast repeated inference."""
-        raise NotImplementedError("Trace capture is a Stage 3 deliverable")
+        """Stage 7+: capture TTNN trace for fast repeated inference."""
+        raise NotImplementedError("Trace capture requires all forward ops on-device (Stage 7)")
 
     def execute_compiled(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Stage 3+: replay the captured trace."""
-        raise NotImplementedError("Trace replay is a Stage 3 deliverable")
+        """Stage 7+: replay the captured trace."""
+        raise NotImplementedError("Trace replay requires all forward ops on-device (Stage 7)")
