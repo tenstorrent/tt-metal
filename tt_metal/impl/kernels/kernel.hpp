@@ -148,6 +148,10 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
+    // Metal 2.0: set DFB local accessor handles after construction.
+    // Must be called before JIT compilation.
+    void set_dataflow_buffer_local_accessor_handles(const DataflowBufferLocalAccessorHandleMap& handles);
+
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
     void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
@@ -208,8 +212,9 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
-    // Populated only from Kernel ctor; must not be modified afterward (JIT may read concurrently).
-    const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    // Populated at construction time, or via set_dataflow_buffer_local_accessor_handles() (Metal 2.0 path).
+    // Must not be modified after JIT compilation begins (JIT may read concurrently).
+    DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

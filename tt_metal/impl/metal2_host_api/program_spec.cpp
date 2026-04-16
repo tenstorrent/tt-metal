@@ -1411,6 +1411,10 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config);
             }
+            // Set DFB local accessor handles after construction (gen1 constructors don't take them)
+            if (!dfb_handles.empty()) {
+                kernel->set_dataflow_buffer_local_accessor_handles(dfb_handles);
+            }
         }
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
