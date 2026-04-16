@@ -32,29 +32,22 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 
 ## Skills & Agents
 
-<context-specifics>
-    <rule description="Use for architecture, instruction, or LLK implementation questions. Orchestrates sage agents.">
-        @arch-lookup
-        <trigger-examples>
-            - "How does SFPMAD work?"
-            - "What is BroadcastType?"
-            - "How does unpack handle Float16?"
-            - "How do T0/T1/T2 synchronize?"
-            - "What is the L1 size/latency?"
-            - "What does [instruction] do?"
-            - "Explain [LLK function] parameters"
-        </trigger-examples>
-    </rule>
-    <rule description="Use when running tests. Delegate to llk-test-runner.">
-        @run-test
-    </rule>
-    <rule description="Use when debugging kernel compilation or runtime errors.">
-        @debug-kernel
-    </rule>
-    <rule description="Use when porting a kernel between architectures.">
-        @port-kernel
-    </rule>
-</context-specifics>
+**MANDATORY**: Before dispatching agents or taking action for the triggers below, you MUST first read the corresponding skill file with the `Read` tool and follow the instructions inside it. Never manually dispatch sage agents without first loading the relevant skill — the skill defines the correct orchestration pattern, prompt structure, and quality checklist.
+
+**Note:** Skills live in `.claude/skills/` relative to this file. Because tt-llk is a subdirectory of the tt-metal git repo, the `Skill` tool cannot discover them. Use `Read(".claude/skills/<name>.md")` instead.
+
+| Trigger | Skill file to read | What it does |
+|---------|-------------------|--------------|
+| Architecture, instruction, or LLK questions | `.claude/skills/arch-lookup.md` | Orchestrates sage agents in parallel, aggregates results |
+| Running tests | `.claude/skills/run-test.md` | Dispatches llk-test-runner with correct scenario flags |
+| Debugging kernel errors | `.claude/skills/debug-kernel.md` | Dispatches llk-debugger with inferred arch/kernel type |
+| Porting kernels between architectures | `.claude/skills/port-kernel.md` | Launches source + target sages, reads test harness |
+
+Trigger examples for `arch-lookup`:
+- "How does SFPMAD work?", "What is BroadcastType?", "How does unpack handle Float16?"
+- "How do T0/T1/T2 synchronize?", "What does [instruction] do?"
+- "Explain [LLK function] parameters", "What are the differences between WH and QSR?"
+- Any question about Tensix hardware, ISA instructions, or LLK implementation details
 
 ## Test Infrastructure
 
