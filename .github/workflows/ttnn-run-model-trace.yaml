@@ -778,6 +778,17 @@ jobs:
             echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
           fi
 
+  trigger-validation:
+    name: Trigger validation
+    needs: [homogenize-and-load]
+    if: ${{ inputs.load-to-db && needs.homogenize-and-load.outputs.trace-run-id != '' }}
+    uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
+    secrets: inherit
+    with:
+      pinned-trace-id: ${{ needs.homogenize-and-load.outputs.trace-run-id }}
+      allow-partial-hash-changes: true
+      caller-id: ${{ format('ttnn-run-model-trace/run-{0}/attempt-{1}', github.run_id, github.run_attempt) }}
+
   summarize-batch:
     name: Summarize batch
     needs: [validate-inputs, trace-model, homogenize-and-load]
