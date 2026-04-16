@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,27 +57,27 @@ ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 ALWI void eq_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_eq_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_eq_float<APPROX>(idst0, idst1, odst)));
 }
 
 ALWI void ne_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_ne_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_ne_float<APPROX>(idst0, idst1, odst)));
 }
 
 ALWI void lt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_lt_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_lt_float<APPROX>(idst0, idst1, odst)));
 }
 
 ALWI void gt_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_gt_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_gt_float<APPROX>(idst0, idst1, odst)));
 }
 
 ALWI void le_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_le_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_le_float<APPROX>(idst0, idst1, odst)));
 }
 
 ALWI void ge_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_ge_fp32<APPROX>(idst0, idst1, odst)));
+    MATH((llk_math_eltwise_binary_sfpu_ge_float<APPROX>(idst0, idst1, odst)));
 }
 
 /**
@@ -97,16 +97,16 @@ ALWI void rsub_binary_tile_init() {
 
 ALWI void power_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_pow_init<APPROX>())); }
 
-ALWI void eq_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_eq_fp32_init<APPROX>())); }
+ALWI void eq_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_eq_float_init<APPROX>())); }
 
-ALWI void ne_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ne_fp32_init<APPROX>())); }
+ALWI void ne_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ne_float_init<APPROX>())); }
 
-ALWI void lt_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_fp32_init<APPROX>())); }
+ALWI void lt_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_float_init<APPROX>())); }
 
-ALWI void gt_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_fp32_init<APPROX>())); }
+ALWI void gt_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_float_init<APPROX>())); }
 
-ALWI void le_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_fp32_init<APPROX>())); }
+ALWI void le_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_float_init<APPROX>())); }
 
-ALWI void ge_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_fp32_init<APPROX>())); }
+ALWI void ge_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_float_init<APPROX>())); }
 
 }  // namespace ckernel
