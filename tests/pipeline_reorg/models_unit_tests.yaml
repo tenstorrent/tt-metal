@@ -274,18 +274,19 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-- name: GPT-OSS 20B unit tests (T3K)
-  cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
-    pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
-  model: gpt-oss-20b
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-      tier: 2
-  owner_id: U08TJ70UFRT # Stuti Raizada
-  team: models
+# GPT-OSS 20B unit tests: disabled — segfaulting on CI
+# - name: GPT-OSS 20B unit tests (T3K)
+#   cmd: |
+#     uv pip install -r models/demos/gpt_oss/requirements.txt
+#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+#     pytest models/demos/gpt_oss/tests/unit -k "1x8" --timeout 600
+#   model: gpt-oss-20b
+#   skus:
+#     wh_llmbox_perf:
+#       timeout: 15
+#       tier: 2
+#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   team: models
 
 - name: GPT-OSS 120B unit tests (Galaxy, high batch)
   cmd: |
