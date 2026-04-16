@@ -83,6 +83,9 @@ void kernel_main() {
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
     constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
+    constexpr bool needs_partial_face_reinit =
+        !is_output_tiled && last_tile_is_partial && num_faces_in_last_output_tile < num_faces_in_output_tile;
+
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
@@ -214,12 +217,35 @@ void kernel_main() {
             } else {
                 // ROW_MAJOR output: pack directly to output CB
                 if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    if constexpr (needs_partial_face_reinit) {
+                        constexpr uint32_t full_tile_faces = (partial_iter_output_tiles - 1) * num_faces_in_output_tile;
+                        if constexpr (partial_iter_output_tiles > 1) {
+                            pack_untilize_dest<partial_iter_output_tiles - 1>(
+                                out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                            cb_push_back(out_cb_id, full_tile_faces);
+                        }
+                        PACK((pack_untilize_uninit(out_cb_id)));
+                        pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_last_output_tile);
+                        pack_untilize_dest<1>(
+                            out_cb_id,
+                            1,
+                            0,
+                            num_out_sticks,
+                            num_faces_in_last_output_tile,
+                            partial_iter_output_tiles - 1);
+                        cb_push_back(out_cb_id, num_faces_in_last_output_tile);
+                        PACK((pack_untilize_uninit(out_cb_id)));
+                        pack_untilize_dest_init<max_tiles_per_iter>(
+                            out_cb_id, num_out_sticks, num_faces_in_output_tile);
+                    } else {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(out_cb_id, output_faces);
+                    }
                 } else {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    cb_push_back(out_cb_id, output_faces);
                 }
-                cb_push_back(out_cb_id, output_faces);
                 tile_regs_release();
             }
         }
