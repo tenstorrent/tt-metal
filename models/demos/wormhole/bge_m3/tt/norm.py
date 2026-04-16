@@ -178,15 +178,17 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
     if dim % SHARD_HEIGHT != 0:
         raise ValueError(f"LayerNorm hidden dim must be divisible by {SHARD_HEIGHT}, got {dim}")
 
+    max_b = config.max_batch_size if config.max_batch_size is not None else 1
+
     # --- Phase 3: compute kernel config default ---
     if config.compute_kernel_config is None:
         to_set["compute_kernel_config"] = bge_m3_layernorm_compute_kernel_config(
             mesh_device,
             max_seq_len=config.max_seq_len,
+            max_batch_size=max_b,
         )
 
     if config.output_memcfg is None:
-        max_b = config.max_batch_size if config.max_batch_size is not None else 1
         to_set["output_memcfg"] = bge_m3_linear_activation_memory_config(config.max_seq_len, max_b)
 
     weight_dram = bge_m3_weight_dram_memory_config()

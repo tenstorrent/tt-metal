@@ -108,8 +108,8 @@ class BgeM3MLP(LightweightModule):
         """
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
-        _, _, seq_len, _ = hidden_states.shape
-        core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len))
+        batch_size, _, seq_len, _ = hidden_states.shape
+        core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, int(seq_len), int(batch_size))
 
         # Fused Wi + GELU in the matmul kernel (bias + activation) removes a standalone Unary GELU pass
         # and the extra intermediate buffer vs wi -> gelu -> wo.
@@ -191,9 +191,13 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
         to_set["wo_memcfg"] = act_mem
 
     if config.wi_compute_kernel_cfg is None:
-        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
+        to_set["wi_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
+        )
     if config.wo_compute_kernel_cfg is None:
-        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(mesh_device, max_seq_len=max_seq)
+        to_set["wo_compute_kernel_cfg"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=max_seq, max_batch_size=max_batch
+        )
 
     wi_dtype = to_set.get("wi_dtype", config.wi_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)

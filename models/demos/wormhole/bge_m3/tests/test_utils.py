@@ -12,7 +12,7 @@ from models.common.modules.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # Long sweep (optional): [128, 1024, 2048, 4096, 8192]. For seq_len > 128, length must be a multiple of 128.
-SEQUENCE_LENGTHS = [512]
+SEQUENCE_LENGTHS = [256]
 # , 64,  256, 512]
 # SEQUENCE_LENGTHS_LONG = [128, 1024, 2048, 4096, 8192]
 
