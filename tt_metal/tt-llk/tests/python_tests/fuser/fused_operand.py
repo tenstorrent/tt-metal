@@ -230,8 +230,8 @@ class OperandRegistry:
             l1_address=address,
             is_output=False,
             sfpu=sfpu,
+            const_value=const_value,
         )
-        operand.const_value = const_value
         self.operands[name] = operand
         return operand
 
