@@ -66,7 +66,7 @@ targets:
         - vit
         - vit_2
         - whisper
-      trace: [3,4,5]
+      trace: [3,4,5,7]
 
 registry:
   - trace_id: 1
@@ -142,7 +142,7 @@ registry:
     notes: ''
 
   - trace_id: 7
-    status: draft
+    status: active
     models: [efficientnetb0]
     hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
     trace_uid: cada780c-568c-409a-9837-ba2c6f2fba0c
