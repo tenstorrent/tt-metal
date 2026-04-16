@@ -136,11 +136,15 @@ void kernel_main() {
     deepseek_b1_ops::KNSlicedMatmul::ReaderArgs matmul_args{};
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
+    // Sender picks noc0/noc1 receiver semaphore at compile-time based on gather_reduce_noc_idx
+    // (receiver waits on both noc0 and noc1 semaphores separately).
     deepseek_b1_ops::GatherReduce::SenderArgs gather_reduce_args{
         get_named_compile_time_arg_val("gather_reduce_dest_noc_x"),
         get_named_compile_time_arg_val("gather_reduce_dest_noc_y"),
         get_named_compile_time_arg_val("gather_reduce_data_size_bytes"),
-        get_named_compile_time_arg_val("gather_reduce_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("gather_reduce_noc_idx") == 0
+            ? get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr")
+            : get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather_reduce_src_cb"),
         get_named_compile_time_arg_val("gather_reduce_src_num_pages"),
         get_named_compile_time_arg_val("gather_reduce_grid_start_x"),
@@ -150,6 +154,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
         get_named_compile_time_arg_val("gather_reduce_dst_cb"),
         get_named_compile_time_arg_val("gather_reduce_half_size_bytes"),
+        get_named_compile_time_arg_val("gather_reduce_noc_idx"),
     };
 
     // RMSNorm2 reader args
@@ -238,13 +243,17 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
 
     // Gather args: both sender and receiver on NCRISC (ReceiverOnNCRISC mode)
+    // Sender picks noc0/noc1 receiver semaphore at compile-time based on dkv_gather_noc_idx
+    // (receiver waits on both noc0 and noc1 semaphores separately).
     deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
         .sender =
             {
                 get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
                 get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
                 get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-                get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_noc_idx") == 0
+                    ? get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr")
+                    : get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
                 get_named_compile_time_arg_val("dkv_gather_src_cb"),
                 get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
                 get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
@@ -254,6 +263,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("dkv_gather_row_major"),
                 get_write_ptr(get_named_compile_time_arg_val(
                     "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+                0,                            // sender_idx unused (grid-based dkv_gather)
+                get_named_compile_time_arg_val("dkv_gather_noc_idx"),
             },
         .receiver =
             {
@@ -398,14 +409,18 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul4_args{};
 
     // Gather2 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid)
+    // via gather2_sender_idx, avoiding gaps from the non-rectangular kv_b2 grid).
+    // Sender picks noc0/noc1 receiver semaphore at compile-time based on gather2_noc_idx.
     deepseek_b1_ops::Gather::DMArgs gather2_args{
         .sender =
             {
                 get_named_compile_time_arg_val("gather2_dest_noc_x"),
                 get_named_compile_time_arg_val("gather2_dest_noc_y"),
                 get_named_compile_time_arg_val("gather2_data_size_bytes"),
-                get_semaphore(get_named_compile_time_arg_val("gather2_receiver_semaphore_id")),
+                get_semaphore(
+                    get_named_compile_time_arg_val("gather2_noc_idx") == 0
+                        ? get_named_compile_time_arg_val("gather2_noc0_receiver_semaphore_id")
+                        : get_named_compile_time_arg_val("gather2_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("gather2_src_cb"),
                 get_named_compile_time_arg_val("gather2_src_num_pages"),
                 get_named_compile_time_arg_val("gather2_sender_grid_start_x"),
@@ -415,6 +430,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather2_row_major"),
                 get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 2),  // gather2_receiver_data_addr
                 get_named_compile_time_arg_val("gather2_sender_idx"),
+                get_named_compile_time_arg_val("gather2_noc_idx"),
             },
         .receiver = {},
     };
@@ -435,14 +451,18 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul5_args{};
 
     // Gather3 sender args (UsePerCoreSenderIdx: each core gets a contiguous index
-    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid)
+    // via gather3_sender_idx, avoiding gaps from the non-rectangular o_proj grid).
+    // Sender picks noc0/noc1 receiver semaphore at compile-time based on gather3_noc_idx.
     deepseek_b1_ops::Gather::DMArgs gather3_args{
         .sender =
             {
                 get_named_compile_time_arg_val("gather3_dest_noc_x"),
                 get_named_compile_time_arg_val("gather3_dest_noc_y"),
                 get_named_compile_time_arg_val("gather3_data_size_bytes"),
-                get_semaphore(get_named_compile_time_arg_val("gather3_receiver_semaphore_id")),
+                get_semaphore(
+                    get_named_compile_time_arg_val("gather3_noc_idx") == 0
+                        ? get_named_compile_time_arg_val("gather3_noc0_receiver_semaphore_id")
+                        : get_named_compile_time_arg_val("gather3_noc1_receiver_semaphore_id")),
                 get_named_compile_time_arg_val("gather3_src_cb"),
                 get_named_compile_time_arg_val("gather3_src_num_pages"),
                 get_named_compile_time_arg_val("gather3_sender_grid_start_x"),
@@ -452,6 +472,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather3_row_major"),
                 get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 3),  // gather3_receiver_data_addr
                 get_named_compile_time_arg_val("gather3_sender_idx"),
+                get_named_compile_time_arg_val("gather3_noc_idx"),
             },
         .receiver = {},
     };

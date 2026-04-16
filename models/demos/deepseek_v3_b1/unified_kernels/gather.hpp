@@ -67,6 +67,7 @@ struct Gather {
         uint32_t row_major;
         uint32_t receiver_data_addr;
         uint32_t sender_idx;  // Per-core sender index (only used if UsePerCoreSenderIdx=true)
+        uint32_t noc;
     };
 
     // Unified dataflow args: both BRISC and NCRISC get the full set so the
@@ -105,6 +106,7 @@ struct Gather {
     private:
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
         static void sender_impl(const SenderArgs& s) {
+            ASSERT(noc_mode == DM_DYNAMIC_NOC || s.noc == noc_index);
             ASSERT(s.data_size_bytes > 0);
             uint32_t core_index;
             if constexpr (UsePerCoreSenderIdx) {
@@ -115,22 +117,22 @@ struct Gather {
             }
             uint32_t offset = core_index * s.data_size_bytes;
 
-            const uint64_t dst_noc_coord = get_noc_addr(s.dest_noc_x, s.dest_noc_y, 0);
+            const uint64_t dst_noc_coord = get_noc_addr(s.dest_noc_x, s.dest_noc_y, 0, s.noc);
             uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(s.receiver_data_addr + offset);
             uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)s.receiver_semaphore_addr;
 
             cb_wait_front(s.src_cb, s.src_num_pages);
 
             uint32_t input_data_addr = get_read_ptr(s.src_cb);
-            noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, s.data_size_bytes);
+            noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, s.data_size_bytes, s.noc);
             // BH does not support posted atomics due to a bug
-            noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+            noc_semaphore_inc(dst_semaphore_noc_addr, 1, s.noc);
 
             if constexpr (pop_src) {
-                noc_async_posted_writes_flushed();
+                noc_async_posted_writes_flushed(s.noc);
                 cb_pop_front(s.src_cb, s.src_num_pages);
             }
-            noc_async_atomic_barrier();
+            noc_async_atomic_barrier(s.noc);
         }
 
         static void receiver_impl(const ReceiverArgs& r) {
