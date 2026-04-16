@@ -73,16 +73,9 @@ def _make_q_ab_kv_a_overlap_entries(
     q_b_proj_weights: torch.Tensor,
     kv_a_proj_weights: torch.Tensor,
     q_ab_dtype: ttnn.DataType,
-    kv_a_dtype: ttnn.DataType | None = None,
+    kv_a_dtype: ttnn.DataType,
 ) -> list[OverlapEntry]:
-    """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O).
-
-    When ``kv_a_dtype`` is ``None`` (used by :func:`fuse_q_ab_kv_a`) it
-    defaults to ``q_ab_dtype``.
-    """
-    if kv_a_dtype is None:
-        kv_a_dtype = q_ab_dtype
-
+    """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O)."""
     q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
     assert (
@@ -136,7 +129,7 @@ def fuse_q_ab_kv_a(
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     entries = _make_q_ab_kv_a_overlap_entries(
-        cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, dtype
+        cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, dtype, dtype
     )
     return overlap_tensors(entries, device=device, move_to_device=move_to_device)
 
