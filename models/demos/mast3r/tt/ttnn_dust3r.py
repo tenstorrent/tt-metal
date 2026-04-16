@@ -529,8 +529,7 @@ def decoder_block_device_pre(
     tt_q = _t2d(q, device)
     tt_k = _t2d(k, device)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
-    tt_ctx = ttnn.permute(tt_ctx, (0, 2, 1, 3))
-    tt_ctx = ttnn.reshape(tt_ctx, (B, N, D))
+    tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)  # 1 op vs permute+reshape
     tt_proj = ttnn.linear(tt_ctx, tt_w["proj_w"], bias=tt_w["proj_b"])
     tt_x = ttnn.add(tt_x, tt_proj)
 
