@@ -298,6 +298,26 @@ def _to_torch_zero_copy(t: ttnn.Tensor) -> torch.Tensor:
         return ttnn.to_torch(t)
 
 
+_TTNN_TO_TORCH_DTYPE = {
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.float32: torch.float32,
+    ttnn.uint8: torch.uint8,
+    ttnn.uint16: torch.int16,
+    ttnn.int32: torch.int32,
+}
+
+
+def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType) -> torch.Tensor:
+    """Zero-copy conversion of a HostBuffer to a torch tensor.
+
+    Uses the DLPack protocol to get a uint8 view of the raw buffer memory,
+    then reinterprets it as the correct dtype and reshapes.
+    """
+    torch_dtype = _TTNN_TO_TORCH_DTYPE[tt_dtype]
+    raw = torch.from_dlpack(buf)
+    return raw.view(torch_dtype).reshape(padded_shape)
+
+
 def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
     """Return the mesh axis that spans multiple hosts (0 or 1).
 
@@ -451,53 +471,79 @@ def fast_device_to_host(
         inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape)
         intra_host_axis = 1 - inter_host_axis
 
-        # Step 1: On-device all_gather for inter-host axis only.
+        # Step 1: On-device all_gather + repeat + mesh_partition.
+        # All_gather replicates the inter-host axis.  Repeat + mesh_partition
+        # then re-shard it so every local device holds *unique* data,
+        # maximising PCIe bandwidth during the DMA read.
         gathered_tensor = tt_tensor
-        if concat_dims[inter_host_axis] is not None and mesh_shape[inter_host_axis] > 1:
+        inter_dim = concat_dims[inter_host_axis]
+        if inter_dim is not None and mesh_shape[inter_host_axis] > 1:
             gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.TILE_LAYOUT)
             gathered_tensor = ccl_manager.all_gather(
                 gathered_tensor,
-                dim=concat_dims[inter_host_axis],
+                dim=inter_dim,
                 mesh_axis=inter_host_axis,
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
-            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            n_hosts = int(ttnn.distributed_context_get_size())
+            if n_hosts > 1:
+                repeat_dims = [1] * len(gathered_tensor.shape)
+                repeat_dims[inter_dim] = n_hosts
+                gathered_tensor = ttnn.repeat(gathered_tensor, repeat_dims)
+                gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
+            tt_scaled = ttnn.multiply(gathered_tensor, 255.0)
+            tt_clamped = ttnn.clamp(tt_scaled, min=0.0, max=255.0)
+            tt_clamped = ttnn.to_layout(tt_clamped, ttnn.ROW_MAJOR_LAYOUT)
+            gathered_tensor = ttnn.typecast(tt_clamped, ttnn.uint8)
 
         # Step 2: Only root rank (if specified) does D2H.
         if root is not None and rank != root:
             return None
 
-        # Step 3: Fast DMA on local shards + host-side concat for intra-host axis.
-        # After the inter-host all_gather, the gathered axis is replicated so
-        # many local devices hold identical data.  Only read one device per
-        # unique intra-host-axis position to avoid redundant DMA.
-        mesh_coords = list(gathered_tensor.tensor_topology().mesh_coords())
-        device_tensors = ttnn.get_device_tensors(gathered_tensor)
-
-        seen_intra_positions: set[int] = set()
-        unique_pairs: list[tuple] = []
-        for c, dt in zip(mesh_coords, device_tensors):
-            if not view.is_local(c):
-                continue
-            intra_pos = int(c[intra_host_axis])
-            if intra_pos in seen_intra_positions:
-                continue
-            seen_intra_positions.add(intra_pos)
-            unique_pairs.append((c, dt))
-
-        local_host_tensors = [dt.cpu(blocking=False) for _, dt in unique_pairs]
+        # Step 3: DMA all local shards and reassemble on host.
+        # Single .cpu() on the mesh tensor batches all local DMA reads into
+        # one C++ dispatch — the reader thread pool processes all device
+        # completion queues in parallel.
+        host_tensor = gathered_tensor.cpu(blocking=False)
         ttnn.synchronize_device(mesh_device)
 
-        logical_shape = list(local_host_tensors[0].shape)
+        # Extract local shard buffers via get_shard (zero-copy, no MPI).
+        host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+        distributed_buf = host_tensor.host_buffer()
+        tt_dtype = host_tensor.dtype
+        padded_shape = list(host_tensor.padded_shape)
+        logical_shape = list(host_tensor.shape)
         trim = tuple(slice(0, d) for d in logical_shape)
-        shards = [_to_torch_zero_copy(s)[trim] for s in local_host_tensors]
 
-        if concat_dims[intra_host_axis] is not None and len(shards) > 1:
-            local_coords = [c for c, _ in unique_pairs]
-            by_intra = sorted(zip(local_coords, shards), key=lambda x: int(x[0][intra_host_axis]))
-            return torch.cat([s for _, s in by_intra], dim=concat_dims[intra_host_axis])
-        return shards[0]
+        local_coords_and_bufs = []
+        for c in host_mesh_coords:
+            if not view.is_local(c):
+                continue
+            buf = distributed_buf.get_shard(c)
+            if buf is not None:
+                local_coords_and_bufs.append((c, buf))
+
+        shards = [_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim] for _, buf in local_coords_and_bufs]
+
+        # Build local mesh shape and 0-based coordinates for _reassemble_2d.
+        local_inter_positions = sorted({int(c[inter_host_axis]) for c, _ in local_coords_and_bufs})
+        local_intra_positions = sorted({int(c[intra_host_axis]) for c, _ in local_coords_and_bufs})
+        local_mesh_shape = [0, 0]
+        local_mesh_shape[inter_host_axis] = len(local_inter_positions)
+        local_mesh_shape[intra_host_axis] = len(local_intra_positions)
+        local_mesh_shape = tuple(local_mesh_shape)
+
+        inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
+        intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}
+        local_coords = []
+        for c, _ in local_coords_and_bufs:
+            coord = [0, 0]
+            coord[inter_host_axis] = inter_remap[int(c[inter_host_axis])]
+            coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
+            local_coords.append(tuple(coord))
+
+        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
