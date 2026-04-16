@@ -143,8 +143,11 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(uint32_t chip_id, uint64_
         return;
     }
 
-    // Create a short device-side zone at the given device timestamp.
-    // Uses the same core as the realtime profiler zones but with an orange color to distinguish.
+    // Use same core as program zones but a different RiscType (SYNC) so the
+    // sync check zone lives on its own Tracy lane. Program and sync zones on
+    // the same lane would have to be strictly nested/non-overlapping, and any
+    // edge case (zone straddling sync, rounding at LOD boundaries) caused
+    // program zones to visually disappear or duplicate.
     constexpr uint32_t kRealtimeProfilerCore_X = 100;
     constexpr uint32_t kRealtimeProfilerCore_Y = 100;
 
@@ -152,7 +155,7 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(uint32_t chip_id, uint64_
     start_marker.chip_id = chip_id;
     start_marker.core_x = kRealtimeProfilerCore_X;
     start_marker.core_y = kRealtimeProfilerCore_Y;
-    start_marker.risc = tracy::RiscType::BRISC;
+    start_marker.risc = tracy::RiscType::NCRISC;
     start_marker.timestamp = device_timestamp;
     start_marker.runtime_host_id = 0;
     start_marker.marker_name = "SYNC_CHECK";
