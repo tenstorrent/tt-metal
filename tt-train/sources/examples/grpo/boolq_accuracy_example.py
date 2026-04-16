@@ -113,38 +113,24 @@ if __name__ == "__main__":
         )
         csv_writer.writeheader()
 
-<<<<<<< HEAD
-        transformer_config = TransformerConfig({"transformer_config": TRANSFORMER_CONFIG})
-        device_config = DeviceConfig({"device_config": DEVICE_CONFIG})
-
-        if device_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(device_config.total_devices())
-        ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
-
-        ctx = setup_inference(
-            TEMPERATURE, MAX_COMPLETION_LENGTH, NUM_GENERATIONS, transformer_config, device_config, MODEL_ID
+        llama = LlamaCompletion(
+            ctx=CompletionCtx(
+                max_tokens_to_complete=MAX_COMPLETION_LENGTH,
+                temperature=TEMPERATURE,
+                completions_per_prompt=NUM_GENERATIONS,
+            ),
+            transformer_config=TRANSFORMER_CONFIG,
+            device_config=DEVICE_CONFIG,
+            model_source=MODEL_ID,
         )
-=======
-    llama = LlamaCompletion(
-        ctx=CompletionCtx(
-            max_tokens_to_complete=MAX_COMPLETION_LENGTH,
-            temperature=TEMPERATURE,
-            completions_per_prompt=NUM_GENERATIONS,
-        ),
-        transformer_config=TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=MODEL_ID,
-    )
->>>>>>> c24c420bfe4 (move grpotrainer into ttml, decouple it from llama)
 
         correct_answers = 0
         wrong_answers = 0
         total_chars = 0
         start_time = time.perf_counter()
 
-<<<<<<< HEAD
         for i, prompt, completion in iter_generated_completions(
-            ctx, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
+            llama, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
         ):
             correct, model_answer = compare_boolq_answers(completion, answers[i])
             total_chars += len(completion)
@@ -152,17 +138,6 @@ if __name__ == "__main__":
                 correct_answers += 1
             else:
                 wrong_answers += 1
-=======
-    for i, prompt, completion in iter_generated_completions(
-        llama, prompts[:PROMPTS_TO_VALIDATE], batch_size=BATCH_SIZE
-    ):
-        correct, model_answer = compare_boolq_answers(completion, answers[i])
-        total_chars += len(completion)
-        if correct:
-            correct_answers += 1
-        else:
-            wrong_answers += 1
->>>>>>> c24c420bfe4 (move grpotrainer into ttml, decouple it from llama)
 
             total = correct_answers + wrong_answers
             accuracy = correct_answers / total
