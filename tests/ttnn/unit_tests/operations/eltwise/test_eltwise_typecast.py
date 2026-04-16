@@ -129,6 +129,34 @@ class TestTypecast:
         assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
+@pytest.mark.parametrize("tt_output_dtype", [ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_output_dtype):
+    """Regression: fp32/bf16 zero must typecast to integer 0 for all int output types.
+
+    SFPEXEXP has a hardware quirk for zero/subnormal inputs: biased_exp=0
+    returns an incorrect unbiased value, causing naive kernels to produce
+    incorrect results (e.g. 2 for fp32->uint8) for 0.0 inputs.  The random
+    inputs in test_run_eltwise_typecast_op are vanishingly unlikely to include
+    exact zero, so this dedicated test ensures the corner case is always covered
+    across all supported integer output types.
+    """
+    shape = [1, 1, 32, 32]
+    torch_input = torch.zeros(shape, dtype=pt_input_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype)
+    result = ttnn.to_torch(tt_output)
+
+    assert torch.all(result == 0), f"0.0 -> {tt_output_dtype} produced non-zero values: {result.unique().tolist()}"
+
+
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)
