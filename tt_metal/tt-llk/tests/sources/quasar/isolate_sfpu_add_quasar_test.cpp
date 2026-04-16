@@ -128,12 +128,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Binary: 2 instructions per auto-loop iteration (one per operand)
     if (PARAM_SRCS_32BIT_MODE)
     {
-        _llk_unpack_srcs_config_<2, 16>();
         _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 16>();
     }
     else
     {
-        _llk_unpack_srcs_config_<2, 8>();
         _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 8>();
     }
     _llk_math_eltwise_unary_sfpu_init_();
@@ -141,15 +139,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
-        // _llk_unpack_srcs_binary_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack_0, buf_desc_id_unpack_1, i * PARAM_SRCS_SLICE_COUNT);
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
-        TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
-        TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
-
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
+            // No auto-loops due to HW bug for binary unpacking. Issue #1635: https://github.com/tenstorrent/tt-llk/issues/1635
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+
             // SFPU add inlined for sfpmem_mod control (same rationale as square kernel).
             // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
             // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.

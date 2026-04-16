@@ -87,7 +87,27 @@ def prepare_add_inputs(
     if input_torch_format == torch.bfloat16 and not input_format.is_mx_format():
         max_safe_value = min(max_safe_value, 1e4)
 
-    min_magnitude = max(1e-6, input_finfo.tiny * 100)
+    # Use format-appropriate minimum magnitude.
+    # MX formats map to torch.bfloat16 in format_dict, but actual FP8 element
+    # types have much larger minimums than bfloat16.tiny.  Using bfloat16.tiny
+    # produces values far below FP8 representable range, causing quantization
+    # mismatches between golden and hardware.
+    if input_format.is_mx_format():
+        if input_format == DataFormat.MxFp8P:
+            # E4M3 min normal = 2^-6 = 0.015625; stay well above subnormals
+            min_magnitude = 0.0625  # 2^-4
+        else:
+            # E5M2 min normal = 2^-14 ≈ 6.1e-5; stay well above subnormals
+            min_magnitude = 2.44e-4  # 2^-12
+    else:
+        min_magnitude = max(1e-6, input_finfo.tiny * 100)
+
+    # Also respect output format minimum if output is MX
+    if output_format.is_mx_format():
+        if output_format == DataFormat.MxFp8P:
+            min_magnitude = max(min_magnitude, 0.0625)
+        else:
+            min_magnitude = max(min_magnitude, 2.44e-4)
 
     def clamp_tensor(src: torch.Tensor) -> torch.Tensor:
         src_float = src.to(torch.float32)
@@ -186,11 +206,11 @@ def generate_sfpu_add_combinations(
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        # DataFormat.MxFp8R,
-        # DataFormat.MxFp8P,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.Float16_b,
-        # DataFormat.Float16,
-        # DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float32,
     ]
 )
 
@@ -218,14 +238,11 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         sfpu=True,
-        const_face=True,
-        const_value_A=1,
-        const_value_B=2,
     )
 
-    # src_A, src_B = prepare_add_inputs(
-    #     src_A, src_B, formats.input_format, formats.output_format
-    # )
+    src_A, src_B = prepare_add_inputs(
+        src_A, src_B, formats.input_format, formats.output_format
+    )
 
     num_faces = 4
 
@@ -243,6 +260,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         [input_dimensions[0] * 2, input_dimensions[1]],
         formats.output_format,
         skip_tilize=True,
+        input_format=formats.input_format,
     )[
         : src_A.numel()
     ]  # Extract only the result region (A's tiles)
