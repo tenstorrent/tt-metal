@@ -81,6 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
+#include "sfpu/ckernel_sfpu_reduce.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
