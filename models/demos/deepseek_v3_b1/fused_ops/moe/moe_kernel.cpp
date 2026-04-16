@@ -93,7 +93,7 @@ struct Core {
 };
 
 void kernel_main() {
-#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+#if defined(RECONFIG_MOE_CBS)
     {
         constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
         uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
@@ -958,7 +958,7 @@ void kernel_main() {
         }
 #endif
 
-#if defined(RECONFIG_MOE_CBS) && !defined(UCK_CHLKC_MATH)
+#if defined(RECONFIG_MOE_CBS)
         {
             constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
             uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);

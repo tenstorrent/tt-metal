@@ -2456,6 +2456,9 @@ void kernel_main() {
             residual_mcast(moe.routed.residual_mcast_args);
         }
         if constexpr (!Core::is_input_core) {
+            // TODO: This is probably a stricter sync than what we actually need
+            // MLA syncs all riscs since the ops depend on reading updated position id
+            // We can simplify the moe sync back to only DM riscs if we use a different semaphore for moe
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
             unified_kernels::sync_riscs_enter(ccl_sync_sem);
