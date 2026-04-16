@@ -1,0 +1,125 @@
+# This file defines the test matrix for the Runtime integration tests.
+# These include multi-device C++ tests (cross-chip communication) and
+# FD Python API tests (eager ops + sweep tests).
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# =============================================================================
+# Multi-Card C++ Tests (BH)
+# =============================================================================
+
+# --- Ethernet Tests (FD + SD + single AERISC) ---
+- name: bh_multicard_eth
+  cmd: |
+    ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_eth
+  skus:
+    bh_quietbox:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Sockets (distributed HD socket) ---
+- name: bh_multicard_sockets
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*'
+  skus:
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# =============================================================================
+# FD Python API Tests (eager ops + sweep)
+# =============================================================================
+
+# --- Eager Python Unit Tests (7 parallel splits) ---
+- name: runtime_fd_python_1
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_2
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_3
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_4
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_5
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_6
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_fd_python_7
+  cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Sweep Tests ---
+- name: runtime_fd_python_sweep
+  cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
