@@ -155,24 +155,18 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
-#ifdef PERF_COUNTERS_COMPILED
-// Counter hooks called from zone_scoped ctor/dtor.
-// Declared in profiler.h, defined in counters.h (via trisc.cpp).
-// noinline: counter code stays out of zone_scoped's always_inline expansion,
-// so the compiler sees the same code complexity in run_kernel as NC builds.
+// Counter hooks — defined in counters.h (WC: real, NC: stubs).
+// Called from zone_scoped unconditionally so both builds produce identical codegen.
 __attribute__((noinline)) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out);
 __attribute__((noinline)) void _profiler_counter_stop(std::uint32_t zone, bool active);
-#endif
 
 template <std::uint16_t id16>
 class zone_scoped
 {
 private:
-    bool is_opened = false;
-#ifdef PERF_COUNTERS_COMPILED
+    bool is_opened               = false;
     std::uint32_t m_counter_zone = 0;
     bool m_counter_active        = false;
-#endif
 
 public:
     zone_scoped(const zone_scoped&)            = delete;
@@ -182,10 +176,7 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
-#ifdef PERF_COUNTERS_COMPILED
-        // Counter start BEFORE profiler zone start — timestamp captured after counter start
         _profiler_counter_start(m_counter_zone, m_counter_active);
-#endif
         if (!is_buffer_full())
         {
             is_opened = true;
@@ -201,10 +192,7 @@ public:
             write_entry(EntryType::ZONE_END, id16);
             --open_zone_cnt;
         }
-#ifdef PERF_COUNTERS_COMPILED
-        // Counter stop AFTER profiler zone end — timestamp captured before counter stop
         _profiler_counter_stop(m_counter_zone, m_counter_active);
-#endif
     }
 };
 

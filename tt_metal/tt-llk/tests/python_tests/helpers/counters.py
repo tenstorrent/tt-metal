@@ -344,9 +344,13 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         return []
 
     sync_word = sync_ctrl[0]
+    logger.info(
+        f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
+    )
 
     # Zone was never used (BRISC clears sync to 0 before each run)
     if sync_word == 0:
+        logger.info(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
         return []
 
     # Lightweight stop writes SYNC_ZONE_COMPLETE (0xFF) in low byte + stopper thread ID.

@@ -13,9 +13,7 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
-#ifdef PERF_COUNTERS_COMPILED
 #include "counters.h"
-#endif
 #line 16
 #include "profiler.h"
 
@@ -59,6 +57,22 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 {
     extern const volatile struct RuntimeParams __runtime_args_start[];
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
+}
+
+// Custom memset — overrides libc_a-memset.o.
+// Without this, libc's memset is placed AFTER .text.zzz_perf_counters in the
+// linker output. Counter code size changes between NC and WC shift memset's
+// address, causing different icache state during profiler init and a consistent
+// 2-6% overhead on tight pack loops. Placing memset here (in trisc.o's .text)
+// keeps it before .text.zzz_perf_counters, at a fixed address in both builds.
+extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memset(void* s, int c, std::size_t n)
+{
+    auto* dst = static_cast<std::uint8_t*>(s);
+    while (n--)
+    {
+        *dst++ = static_cast<std::uint8_t>(c);
+    }
+    return s;
 }
 
 int main(void)

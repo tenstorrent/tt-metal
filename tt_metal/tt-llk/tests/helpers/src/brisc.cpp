@@ -107,14 +107,24 @@ int main()
                 commit_store(profiler_barrier + 2, 0U);
 
                 device_setup();
-                clear_trisc_soft_reset();
 
 #ifdef PERF_COUNTERS_COMPILED
+                // Configure + arm counters BEFORE releasing TRISCs, so counters
+                // are counting from the very first TRISC instruction.
                 llk_perf::configure_and_arm_from_brisc();
 #endif
 
+                clear_trisc_soft_reset();
+
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+
+#ifdef PERF_COUNTERS_COMPILED
+                // Zone 0 (INIT): poll for done, freeze+read+re-arm
+                llk_perf::handle_zone_boundary_from_brisc(0);
+                // Zone 1 (TILE_LOOP): poll for done, freeze+read+deconfigure
+                llk_perf::handle_last_zone_from_brisc(1);
+#endif
                 break;
 
             case BriscCommandState::RESET_TRISCS:
