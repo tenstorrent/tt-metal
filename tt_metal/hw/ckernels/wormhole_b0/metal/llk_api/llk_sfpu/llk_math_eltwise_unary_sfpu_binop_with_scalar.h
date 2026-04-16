@@ -17,7 +17,6 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
         sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, 8>, dst_index, vector_mode, scalar);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
 }

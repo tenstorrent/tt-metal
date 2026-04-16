@@ -18,7 +18,6 @@ inline void llk_math_eltwise_binary_sfpu_logsigmoid(
         sfpu::calculate_logsigmoid<APPROXIMATE, ITERATIONS>, dst_index0, dst_index1, odst, vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_logsigmoid_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused>();
 }

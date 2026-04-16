@@ -10,7 +10,6 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gcd_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::gcd>(sfpu::calculate_sfpu_gcd_init);
 }

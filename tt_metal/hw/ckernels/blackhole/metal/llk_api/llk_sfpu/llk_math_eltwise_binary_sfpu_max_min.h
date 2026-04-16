@@ -11,7 +11,6 @@
 namespace ckernel {
 
 // Binary maximum
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::max>(sfpu::binary_max_min_init<true>);
 }
@@ -23,7 +22,6 @@ inline void llk_math_eltwise_binary_sfpu_binary_max(
         ckernel::sfpu::calculate_binary_max_min<true>, dst_index0, dst_index1, odst, vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_int32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::max_int32>(sfpu::binary_max_min_int32_init<true, false>);
 }
@@ -35,7 +33,6 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_int32(
         ckernel::sfpu::calculate_binary_max_min_int32<true, false>, dst_index0, dst_index1, odst, vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_uint32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::max_uint32>(sfpu::binary_max_min_int32_init<true, true>);
 }
@@ -48,7 +45,6 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_uint32(
 }
 
 // Binary minimum
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::min>(sfpu::binary_max_min_init<false>);
 }
@@ -60,7 +56,6 @@ inline void llk_math_eltwise_binary_sfpu_binary_min(
         ckernel::sfpu::calculate_binary_max_min<false>, dst_index0, dst_index1, odst, vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_int32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::min_int32>(sfpu::binary_max_min_int32_init<false, false>);
 }
@@ -72,7 +67,6 @@ inline void llk_math_eltwise_binary_sfpu_binary_min_int32(
         ckernel::sfpu::calculate_binary_max_min_int32<false, false>, dst_index0, dst_index1, odst, vector_mode);
 }
 
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_uint32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::min_uint32>(sfpu::binary_max_min_int32_init<false, true>);
 }
