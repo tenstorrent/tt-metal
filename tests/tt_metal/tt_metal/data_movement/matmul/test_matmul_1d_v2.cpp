@@ -143,9 +143,9 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     }
 
     // Write per-core in0 source data: each core (c, r) gets K subblocks {c, c+C, c+2C, ...} for row r
-    for (uint32_t core_idx = 0; core_idx < matmul_cores_list.size(); core_idx++) {
-        uint32_t col_idx = matmul_cores_list[core_idx].x - test_config.start_logical_core.x;
-        uint32_t row_idx = matmul_cores_list[core_idx].y - test_config.start_logical_core.y;
+    for (auto & core_idx : matmul_cores_list) {
+        uint32_t col_idx = core_idx.x - test_config.start_logical_core.x;
+        uint32_t row_idx = core_idx.y - test_config.start_logical_core.y;
 
         vector<uint32_t> core_in0_data;
         uint32_t row_base = row_idx * row_data_size_uint32;
