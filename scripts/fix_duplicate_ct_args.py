@@ -21,20 +21,21 @@ from pathlib import Path
 
 
 def find_duplicates(path: str) -> dict:
-    """Return {list_name: [dup_key, ...]} for all lists with duplicates."""
+    """Return {list_name: {dup_key: "conflict"|"same"}} for all lists with duplicates."""
     src = open(path).read()
     issues = {}
 
     # Collect individual list definitions: foo_named_compile_time_args = [...]
+    # Also track values so we can detect conflicting duplicates.
     individual: dict[str, list[str]] = {}
+    individual_kv: dict[str, list[tuple[str, str]]] = {}
     for m in re.finditer(r"(\w+_named_compile_time_args)\s*=\s*\[(.*?)\]", src, re.DOTALL):
         name, body = m.group(1), m.group(2)
-        keys = re.findall(r'\(\s*["\'](\w+)["\']', body)
-        individual[name] = keys
-        seen: dict[str, int] = {}
-        for k in keys:
-            seen[k] = seen.get(k, 0) + 1
-        dups = [k for k, v in seen.items() if v > 1]
+        # Extract (key, value_expr) pairs — value is everything after the comma up to the closing paren
+        pairs = re.findall(r'\(\s*["\'](\w+)["\'],\s*([^)]+?)\s*\)', body)
+        individual[name] = [k for k, _ in pairs]
+        individual_kv[name] = pairs
+        dups = _dup_report(pairs)
         if dups:
             issues[f"{name} (inline)"] = dups
 
@@ -42,17 +43,27 @@ def find_duplicates(path: str) -> dict:
     for m in re.finditer(r"(\w+_named_compile_time_args(?:_base)?)\s*=\s*\((.*?)\)", src, re.DOTALL):
         base_name, body = m.group(1), m.group(2)
         sublists = re.findall(r"(\w+_named_compile_time_args)\b", body)
-        all_keys: list[str] = []
+        all_pairs: list[tuple[str, str]] = []
         for sl in sublists:
-            all_keys.extend(individual.get(sl, []))
-        seen = {}
-        for k in all_keys:
-            seen[k] = seen.get(k, 0) + 1
-        dups = [k for k, v in seen.items() if v > 1]
+            all_pairs.extend(individual_kv.get(sl, []))
+        dups = _dup_report(all_pairs)
         if dups:
             issues[f"{base_name} (combined)"] = dups
 
     return issues
+
+
+def _dup_report(pairs: list[tuple[str, str]]) -> dict[str, str]:
+    """Return {key: "same"|"CONFLICT"} for keys appearing more than once."""
+    seen: dict[str, str] = {}
+    result: dict[str, str] = {}
+    for key, val in pairs:
+        if key in seen:
+            status = "same" if seen[key] == val else "CONFLICT"
+            result[key] = status
+        else:
+            seen[key] = val
+    return result
 
 
 def fix_file(path: str) -> bool:
@@ -111,10 +122,18 @@ def main() -> int:
             continue
 
         if args.fix:
+            issues_before = find_duplicates(path)
+            conflicts = {ln: {k: s for k, s in dups.items() if s == "CONFLICT"} for ln, dups in issues_before.items()}
+            conflicts = {ln: d for ln, d in conflicts.items() if d}
+            if conflicts:
+                print(f"\nWARNING: {path} has conflicting duplicates — skipping auto-fix, manual review required:")
+                for list_name, dups in conflicts.items():
+                    print(f"  {list_name}: {list(dups.keys())}")
+                found_any = True
+                continue
             changed = fix_file(path)
             if changed:
                 print(f"Fixed: {path}")
-            # Re-check after fix to report residual issues
             issues = find_duplicates(path)
         else:
             issues = find_duplicates(path)
@@ -123,7 +142,9 @@ def main() -> int:
             found_any = True
             print(f"\n{path}:")
             for list_name, dups in issues.items():
-                print(f"  {list_name}: {dups}")
+                for key, status in dups.items():
+                    tag = " [CONFLICT - manual fix required]" if status == "CONFLICT" else ""
+                    print(f"  {list_name}: {key!r}{tag}")
 
     if not found_any:
         print("All clean.")
