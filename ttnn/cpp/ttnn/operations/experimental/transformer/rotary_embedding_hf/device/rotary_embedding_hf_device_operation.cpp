@@ -88,7 +88,7 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
 tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto shape = input_tensor.padded_shape();
+    auto shape = input_tensor.logical_shape();
 
     if (args.output_mem_config.is_sharded()) {
         tt::tt_metal::ShardSpec shard_spec{tt::tt_metal::CoreRangeSet(), {0, 0}};
