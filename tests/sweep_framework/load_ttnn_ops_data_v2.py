@@ -866,7 +866,7 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
 
     if emit_id_file and trace_run_cache:
         new_ids = sorted(set(trace_run_cache.values()))
-        emit_path = Path(emit_id_file)
+        emit_path = Path(emit_id_file).resolve()
         emit_path.parent.mkdir(parents=True, exist_ok=True)
         emit_path.write_text("\n".join(str(i) for i in new_ids) + "\n")
         print(f"  Wrote {len(new_ids)} trace_run_id(s) to {emit_path}")

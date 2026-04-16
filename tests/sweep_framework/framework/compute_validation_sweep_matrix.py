@@ -382,20 +382,20 @@ def main():
 
     if args.vectors_root and args.scope_target:
         matrix = compute_combined_validation_matrix(
-            master_json_path=Path(args.master_json_path),
-            vectors_root=Path(args.vectors_root),
+            master_json_path=Path(args.master_json_path).resolve(),
+            vectors_root=Path(args.vectors_root).resolve(),
             scope_target=args.scope_target,
             batch_size=args.batch_size,
-            manifest_path=Path(args.manifest_path) if args.manifest_path else None,
+            manifest_path=Path(args.manifest_path).resolve() if args.manifest_path else None,
             pinned_trace_run_id=args.pinned_trace_run_id,
         )
     elif args.vectors_dir and args.validation_scope:
         if not args.manifest_path:
             parser.error("--manifest-path is required when using --vectors-dir with --validation-scope.")
         matrix = compute_validation_matrix(
-            manifest_path=Path(args.manifest_path),
-            master_json_path=Path(args.master_json_path),
-            vectors_dir=Path(args.vectors_dir),
+            manifest_path=Path(args.manifest_path).resolve(),
+            master_json_path=Path(args.master_json_path).resolve(),
+            vectors_dir=Path(args.vectors_dir).resolve(),
             validation_scope=args.validation_scope,
             batch_size=args.batch_size,
         )

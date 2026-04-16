@@ -266,7 +266,7 @@ def main(argv=None):
 
     merged = merge_master_jsons(loaded, trace_uid)
 
-    output_path = Path(args.output)
+    output_path = Path(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(merged, f, indent=2, sort_keys=True, default=str)

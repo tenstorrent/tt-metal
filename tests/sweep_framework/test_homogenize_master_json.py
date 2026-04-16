@@ -15,7 +15,6 @@ Covers the merge semantics the homogenize CLI must preserve:
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 
