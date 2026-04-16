@@ -4,30 +4,26 @@ set -eo pipefail
 # Default ARCH_NAME for local runs when not set by CI.
 export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 
-# Prefer `tt-run` on PATH (from pip/editable install). Otherwise run `ttrun.py` directly so
-# multihost scripts work when console scripts are not installed (avoids importing `ttnn` package
-# root, which is unnecessary for the launcher).
-_tt_run() {
+# Prefer tt-run on PATH; otherwise run ttrun.py directly.
+tt_run() {
     if command -v tt-run >/dev/null 2>&1; then
         command tt-run "$@"
         return
     fi
     if [[ -z "${TT_METAL_HOME:-}" ]]; then
-        echo "_tt_run: tt-run not on PATH and TT_METAL_HOME is unset; cannot locate ttrun.py" >&2
+        echo "tt_run: tt-run not on PATH and TT_METAL_HOME is unset; cannot locate ttrun.py" >&2
         return 1
     fi
-    local _ttrun_py="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    if [[ ! -f "${_ttrun_py}" ]]; then
-        echo "_tt_run: expected launcher at ${_ttrun_py} (missing); install ttnn or set TT_METAL_HOME" >&2
+    local ttrun_py="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    if [[ ! -f "${ttrun_py}" ]]; then
+        echo "tt_run: expected launcher at ${ttrun_py} (missing); install ttnn or set TT_METAL_HOME" >&2
         return 1
     fi
-    "${PYTHON:-python3}" "${_ttrun_py}" "$@"
+    "${PYTHON:-python3}" "${ttrun_py}" "$@"
 }
 
-# MPI/OpenFabrics TCP binding: CI / many Galaxy boxes use "cnx1". If it is missing, pick the
-# first non-virtual interface in operstate up (skips lo, docker, tailscale, …) so local clusters
-# like UF-* hosts get a valid btl_tcp_if_include without manual export.
-_default_mpi_tcp_interface() {
+# Pick cnx1 when present, else first up non-virtual NIC.
+default_mpi_tcp_interface() {
     if [[ -d /sys/class/net/cnx1 ]]; then
         echo "cnx1"
         return 0
@@ -47,11 +43,11 @@ _default_mpi_tcp_interface() {
     echo "cnx1"
 }
 
-_export_tcp_interface_for_multihost() {
-    export TCP_INTERFACE="${TCP_INTERFACE:-$(_default_mpi_tcp_interface)}"
+export_tcp_interface_for_multihost() {
+    export TCP_INTERFACE="${TCP_INTERFACE:-$(default_mpi_tcp_interface)}"
 }
 
-_extract_hosts_from_hostfile() {
+extract_hosts_from_hostfile() {
     local host_count="$1"
     local hostfile="${2:-/etc/mpirun/hostfile}"
 
@@ -65,10 +61,10 @@ _extract_hosts_from_hostfile() {
 run_quad_galaxy_unit_tests() {
   fail=0
 
-  _export_tcp_interface_for_multihost
+  export_tcp_interface_for_multihost
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="${TCP_INTERFACE}"
-  local hosts="$(_extract_hosts_from_hostfile 4)"
+  local hosts="$(extract_hosts_from_hostfile 4)"
   local rank_binding_yaml="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
   local tt_mpi_args="--host $hosts --map-by rankfile:file=/etc/mpirun/rankfile --bind-to none --output-filename logs/mpi_job"
   local mpi_host="--host $hosts"
@@ -83,12 +79,12 @@ run_quad_galaxy_unit_tests() {
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  _tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
-  #_tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
+  #tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  _tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -99,7 +95,7 @@ run_quad_galaxy_unit_tests() {
 # Environment setup helpers
 ###############################################################################
 
-_resolve_deepseekv3_cache() {
+resolve_deepseekv3_cache() {
     local ci_cache="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
         local resolved
@@ -116,7 +112,7 @@ _resolve_deepseekv3_cache() {
     fi
 }
 
-_resolve_deepseekv3_model() {
+resolve_deepseekv3_model() {
     local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
@@ -133,10 +129,10 @@ _resolve_deepseekv3_model() {
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
-    export HOSTS="$(_extract_hosts_from_hostfile 2)"
+    export HOSTS="$(extract_hosts_from_hostfile 2)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    _export_tcp_interface_for_multihost
+    export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -157,8 +153,8 @@ setup_dual_galaxy_env() {
         exit 1
     fi
 
-    _resolve_deepseekv3_model
-    _resolve_deepseekv3_cache
+    resolve_deepseekv3_model
+    resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
     export USE_TORUS_MODE=0
     echo "Dual Galaxy: USE_TORUS_MODE=0 (torus/ring mode disabled)."
@@ -167,10 +163,10 @@ setup_dual_galaxy_env() {
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
-    export HOSTS="$(_extract_hosts_from_hostfile 4)"
+    export HOSTS="$(extract_hosts_from_hostfile 4)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    _export_tcp_interface_for_multihost
+    export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -191,17 +187,14 @@ setup_quad_galaxy_env() {
     echo "Using MPI TCP interface (tt-run / Open MPI): ${TCP_INTERFACE}"
     echo "Using quad Galaxy rankfile: ${RANKFILE}"
 
-    _resolve_deepseekv3_model
-    _resolve_deepseekv3_cache
+    resolve_deepseekv3_model
+    resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 
-    # DeepSeek V3 currently interprets any set USE_TORUS_MODE as torus/ring.
-    # This script uses USE_TORUS_MODE=0 as an explicit OFF sentinel; _run_deepseekv3_tt
-    # unsets it for child test processes so OFF works while still overriding ambient env.
-    # Default is ON; set DS_QUAD_USE_TORUS_MODE=0 or pass --no-torus to disable.
-    local _ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
-    _ds_quad_torus="${_ds_quad_torus,,}"
-    case "${_ds_quad_torus}" in
+    # DS_QUAD_USE_TORUS_MODE defaults to 1; set 0 or --no-torus to disable torus mode.
+    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    ds_quad_torus="${ds_quad_torus,,}"
+    case "${ds_quad_torus}" in
         ""|1|true|yes|on)
             export USE_TORUS_MODE=1
             echo "Quad Galaxy: USE_TORUS_MODE=1 (DeepSeek V3 torus/ring mode enabled)."
@@ -229,7 +222,7 @@ _demo_timeout() {
     fi
 }
 
-_resolve_upr_mode() {
+resolve_upr_mode() {
     local upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-all}"
     upr_mode="${upr_mode,,}"
     case "${upr_mode}" in
@@ -250,11 +243,11 @@ _resolve_upr_mode() {
     esac
 }
 
-_demo_case_selector() {
+demo_case_selector() {
     local setup_name="$1"
     local profile_name="$2"
     local upr_mode
-    upr_mode="$(_resolve_upr_mode)"
+    upr_mode="$(resolve_upr_mode)"
 
     case "${upr_mode}" in
         both)
@@ -271,21 +264,20 @@ _demo_case_selector() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    # DeepSeek uses presence-only checks on USE_TORUS_MODE today.
-    # Treat "0" as explicit OFF by unsetting for the launched process.
+    # USE_TORUS_MODE=0 means OFF, so unset it for the launched process.
     if [[ "${USE_TORUS_MODE:-}" == "0" ]]; then
         if [[ -n "${MPI_ARGS:-}" ]]; then
-            ( unset USE_TORUS_MODE; _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@" )
+            ( unset USE_TORUS_MODE; tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@" )
         else
-            ( unset USE_TORUS_MODE; _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@" )
+            ( unset USE_TORUS_MODE; tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@" )
         fi
         return
     fi
 
     if [[ -n "${MPI_ARGS:-}" ]]; then
-        _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@"
+        tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" --mpi-args "$MPI_ARGS" "$@"
     else
-        _tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@"
+        tt_run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" "$@"
     fi
 }
 
@@ -391,7 +383,7 @@ run_dual_demo_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
     local selector
-    selector="$(_demo_case_selector "dual" "full")"
+    selector="$(demo_case_selector "dual" "full")"
 
     _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_output.log"
 }
@@ -408,7 +400,7 @@ run_quad_demo_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
     local selector
-    selector="$(_demo_case_selector "quad" "full")"
+    selector="$(demo_case_selector "quad" "full")"
 
     _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_output.log"
 }
@@ -428,7 +420,7 @@ run_dual_demo_stress_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 5400)
     local selector
-    selector="$(_demo_case_selector "dual" "stress")"
+    selector="$(demo_case_selector "dual" "stress")"
 
     _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
 }
@@ -437,7 +429,7 @@ run_quad_demo_stress_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 5400)
     local selector
-    selector="$(_demo_case_selector "quad" "stress")"
+    selector="$(demo_case_selector "quad" "stress")"
 
     _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
 }
@@ -492,26 +484,11 @@ run_quad_galaxy_tests() {
 }
 
 ###############################################################################
-# Environment - prepare a runnable multihost test environment
-#
-# Goal: make local runs work out of the box while keeping CI compatibility.
-# CI sets most of these variables externally; local runs can rely on this
-# script to fill in missing defaults.
-#
-# Optional overrides:
-#   MULTIHOST_SKIP_SHARED_VENV=1     - skip setup_shared_venv.sh activation
-#   MULTIHOST_SOURCE_VENV=/path      - source venv for setup_shared_venv.sh
-#   MULTIHOST_MATCH_CI_HOME=1        - export HOME=\$TT_METAL_HOME (CI parity)
-#   MULTIHOST_FORCE_PYTHONHOME=0     - disable PYTHONHOME override for ranks
-#   DS_QUAD_USE_TORUS_MODE=0         - quad DeepSeek runs: set USE_TORUS_MODE=0 (debug /
-#                                    linear fabric). Default is 1. Also:
-#                                    pass --no-torus on the command line.
+# Environment setup for local and CI-compatible multihost runs.
 ###############################################################################
 
-_set_multihost_pythonhome_if_needed() {
-    # Some physical hosts cannot resolve the base interpreter from copied venv metadata
-    # (for example when pyvenv.cfg points to a host-local uv install path). Explicitly
-    # setting PYTHONHOME to the shared venv keeps Python startup deterministic on all ranks.
+set_multihost_pythonhome_if_needed() {
+    # Force PYTHONHOME when copied venv metadata points to host-local interpreters.
     if [[ "${MULTIHOST_FORCE_PYTHONHOME:-1}" == "0" ]]; then
         return 0
     fi
@@ -532,7 +509,7 @@ _set_multihost_pythonhome_if_needed() {
     fi
 }
 
-_init_multihost_test_env() {
+init_multihost_test_env() {
     export TT_METAL_HOME="$(cd -- "${TT_METAL_HOME}" && pwd -P)"
     cd "${TT_METAL_HOME}"
 
@@ -541,34 +518,34 @@ _init_multihost_test_env() {
     export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
     export LOGURU_LEVEL="${LOGURU_LEVEL:-INFO}"
 
-    local _reports="${TT_METAL_HOME}/generated/test_reports"
-    export GTEST_OUTPUT="${GTEST_OUTPUT:-xml:${_reports}/}"
-    mkdir -p "${_reports}"
+    local reports_dir="${TT_METAL_HOME}/generated/test_reports"
+    export GTEST_OUTPUT="${GTEST_OUTPUT:-xml:${reports_dir}/}"
+    mkdir -p "${reports_dir}"
 
     if [[ "${MULTIHOST_MATCH_CI_HOME:-}" == "1" ]]; then
         export HOME="${TT_METAL_HOME}"
     fi
 
     if [[ "${MULTIHOST_SKIP_SHARED_VENV:-0}" == "1" ]]; then
-        _set_multihost_pythonhome_if_needed
+        set_multihost_pythonhome_if_needed
         return 0
     fi
 
-    local _setup_venv="${TT_METAL_HOME}/tests/scripts/multihost/setup_shared_venv.sh"
-    local _py_env="${TT_METAL_HOME}/python_env"
-    local _src_venv="${MULTIHOST_SOURCE_VENV:-/opt/venv}"
-    if [[ ! -x "${_setup_venv}" ]]; then
-        echo "Warning: ${_setup_venv} is missing; skipping shared venv activation." >&2
-        _set_multihost_pythonhome_if_needed
+    local setup_venv_script="${TT_METAL_HOME}/tests/scripts/multihost/setup_shared_venv.sh"
+    local py_env_dir="${TT_METAL_HOME}/python_env"
+    local source_venv="${MULTIHOST_SOURCE_VENV:-/opt/venv}"
+    if [[ ! -x "${setup_venv_script}" ]]; then
+        echo "Warning: ${setup_venv_script} is missing; skipping shared venv activation." >&2
+        set_multihost_pythonhome_if_needed
         return 0
     fi
-    if [[ -d "${_py_env}" ]] || [[ -d "${_src_venv}" ]]; then
-        eval "$("${_setup_venv}" --activate "${_src_venv}" "${_py_env}")"
+    if [[ -d "${py_env_dir}" ]] || [[ -d "${source_venv}" ]]; then
+        eval "$("${setup_venv_script}" --activate "${source_venv}" "${py_env_dir}")"
     else
-        echo "Warning: neither ${_py_env} nor ${_src_venv} exists; skipping setup_shared_venv.sh. Use a venv with ttnn installed or set MULTIHOST_SOURCE_VENV." >&2
+        echo "Warning: neither ${py_env_dir} nor ${source_venv} exists; skipping setup_shared_venv.sh. Use a venv with ttnn installed or set MULTIHOST_SOURCE_VENV." >&2
     fi
 
-    _set_multihost_pythonhome_if_needed
+    set_multihost_pythonhome_if_needed
 }
 
 ###############################################################################
@@ -587,16 +564,9 @@ main() {
         echo "TT_METAL_HOME not set; defaulting to current directory: ${TT_METAL_HOME}"
     fi
 
-    _init_multihost_test_env
+    init_multihost_test_env
 
-    # Support running specific test function via argument.
-    # Positional compatibility:
-    #   $1 test function (default: all)
-    #   $2 UPR mode (all|32|8), optional when it is not an option flag
-    # Optional local-testing flags:
-    #   --no-torus                       - quad DeepSeek: set USE_TORUS_MODE=0 (see DS_QUAD_USE_TORUS_MODE)
-    #   --model-path <path>
-    #   --cache-path <path>
+    # Args: [test_function] [upr_mode] plus --no-torus/--model-path/--cache-path.
     local test_function="all"
     if [[ $# -gt 0 ]]; then
         test_function="$1"
@@ -610,8 +580,8 @@ main() {
     fi
     if [[ -n "${upr_mode_arg}" ]]; then
         export DEEPSEEK_DEMO_UPR_MODE="${upr_mode_arg}"
-        _resolve_upr_mode >/dev/null
-        echo "Using demo UPR mode: $(_resolve_upr_mode)"
+        resolve_upr_mode >/dev/null
+        echo "Using demo UPR mode: $(resolve_upr_mode)"
     fi
 
     while [[ $# -gt 0 ]]; do
