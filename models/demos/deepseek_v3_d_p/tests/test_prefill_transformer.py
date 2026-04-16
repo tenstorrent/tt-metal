@@ -203,6 +203,7 @@ def test_prefill_transformer(
     # --- Create input (needed early for reference computation) ---
     if input_source == "random":
         token_ids = torch.randint(0, config.vocab_size, (1, isl_total), dtype=torch.int64)
+        attention_mask = torch.ones(1, isl_total, dtype=torch.int64)
     else:
         profiler.start("tokenization")
         tok = request.getfixturevalue("tokenizer")
