@@ -30,14 +30,13 @@ namespace moe_ring {
 
 constexpr uint32_t NUM_CORES = 12;
 
-constexpr uint32_t NUM_W0_W1_TILES_H = 224;
-constexpr uint32_t NUM_W2_TILES_H = 64;
-
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
 
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W2_TILES_PER_TXN = 14;
+
+constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables (generated at compile time)
@@ -67,6 +66,9 @@ constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(cons
 }  // namespace detail
 
 struct DeepSeekRingConfig {
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 224;
+    static constexpr uint32_t NUM_W2_TILES_H = 64;
+
     static constexpr uint32_t W2_BLOCKS_PER_EXPERT = 50;
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 4;
 
@@ -120,12 +122,63 @@ struct DeepSeekRingConfig {
     static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
 };
 
-// Create aliases at namespace level for backward compatibility
-constexpr auto W2_BLOCKS_PER_EXPERT = DeepSeekRingConfig::W2_BLOCKS_PER_EXPERT;
-constexpr auto& W0_W1_TILES_PER_CORE_PER_STEP = DeepSeekRingConfig::W0_W1_TILES_PER_CORE_PER_STEP;
-constexpr auto& W2_TILES_PER_CORE = DeepSeekRingConfig::W2_TILES_PER_CORE;
-constexpr auto IN2_TILES_PER_STEP = DeepSeekRingConfig::IN2_TILES_PER_STEP;
-constexpr auto NUM_A2A_ITERS = DeepSeekRingConfig::NUM_A2A_ITERS;
-constexpr auto& COMBINE_W_OFFSET_PER_CORE = DeepSeekRingConfig::COMBINE_W_OFFSET_PER_CORE;
+// GPT configuration for hidden_size = intermediate_size = 2880 (90 tiles)
+// Note: This config assumes NUM_W0_W1_TILES_H = NUM_W2_TILES_H = 90
+// For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
+struct GptRingConfig {
+    // GPT-specific tile heights (vs 224/64 in DeepSeek)
+    // static constexpr uint32_t GPT_W0_W1_TILES_H = 90;
+    // static constexpr uint32_t GPT_W2_TILES_H = 90;
+
+    // static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+    //     (((91 * 8) - 1) / (W2_TILES_PER_TXN * W2_TXNS_PER_BLOCK)) + 1;  // Different calculation for GPT
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT;
+
+    static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 3;  // vs 4 in DeepSeek
+    static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
+
+    // Boundary-optimized: tiles[core_id][step] - cores {0,1,4,5,8,9} get 8 tiles
+    static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
+        // Core 0: sources [0,11,10,9,8,7,6,5,4,3,2,1]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 1: sources [1,0,11,10,9,8,7,6,5,4,3,2]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 2: sources [2,1,0,11,10,9,8,7,6,5,4,3]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 3: sources [3,2,1,0,11,10,9,8,7,6,5,4]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+        // Core 4: sources [4,3,2,1,0,11,10,9,8,7,6,5]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 5: sources [5,4,3,2,1,0,11,10,9,8,7,6]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 6: sources [6,5,4,3,2,1,0,11,10,9,8,7]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 7: sources [7,6,5,4,3,2,1,0,11,10,9,8]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+        // Core 8: sources [8,7,6,5,4,3,2,1,0,11,10,9]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 9: sources [9,8,7,6,5,4,3,2,1,0,11,10]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 10: sources [10,9,8,7,6,5,4,3,2,1,0,11]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 11: sources [11,10,9,8,7,6,5,4,3,2,1,0]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+    };
+
+    // W2 tiles per core: 90 tiles / 12 cores = 7.5 -> 6 cores get 8, 6 cores get 7
+    static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7};
+
+    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
+
+    // GPT uses a different algorithm with custom comparator
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE, OUTPUT_WIDTH_SHARD_DIM);
+
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
+
+    // Additional GPT-specific constants
+    static constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = 90 / OUTPUT_WIDTH_SHARD_DIM;          // 30
+    static constexpr uint32_t RING_CORES_PER_COMBINE_COL = NUM_CORES / OUTPUT_WIDTH_SHARD_DIM;  // 4
+};
 
 }  // namespace moe_ring
