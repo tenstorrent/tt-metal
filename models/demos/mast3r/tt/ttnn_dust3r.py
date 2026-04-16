@@ -565,11 +565,15 @@ def full_decoder(
     state: dict,
     device,
     depth: int = 12,
+    compute_norm: bool = True,
 ):
     """Dual-branch DUSt3R decoder on TT.
 
     feat1, feat2: (B, N, 1024) encoder outputs.  pos: (B, N, 2).
     Returns (out1, out2) each (B, N, 768).
+
+    When ``compute_norm=False`` (the dust3r_forward path), the final dec_norm
+    + downloads are skipped — DPT only consumes tap-layer features.
     """
     # Pre-upload decoder weights once (memoized on module).
     cache_key = ("dec", id(state))
@@ -602,10 +606,13 @@ def full_decoder(
             dev_taps1.append(tt_f1)
             dev_taps2.append(tt_f2)
 
-    tt_out1 = ttnn.layer_norm(tt_f1, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
-    tt_out2 = ttnn.layer_norm(tt_f2, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
-    out1 = ttnn.to_torch(tt_out1)
-    out2 = ttnn.to_torch(tt_out2)
+    if compute_norm:
+        tt_out1 = ttnn.layer_norm(tt_f1, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
+        tt_out2 = ttnn.layer_norm(tt_f2, weight=full_decoder._dnorm_g, bias=full_decoder._dnorm_b, epsilon=1e-6)
+        out1 = ttnn.to_torch(tt_out1)
+        out2 = ttnn.to_torch(tt_out2)
+    else:
+        out1 = out2 = None
     taps1 = [ttnn.to_torch(t) for t in dev_taps1]
     taps2 = [ttnn.to_torch(t) for t in dev_taps2]
     return out1, out2, taps1, taps2
@@ -623,7 +630,7 @@ def dust3r_forward(img1: torch.Tensor, img2: torch.Tensor, state: dict, device):
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
     pos = torch.stack((gy, gx), dim=-1).reshape(hp * wp, 2).unsqueeze(0).expand(B, -1, -1).contiguous()
 
-    _, _, taps1, taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device)
+    _, _, taps1, taps2 = full_decoder(tt_enc1, tt_enc2, pos, state, device, compute_norm=False)
     # Now download enc tensors for DPT head input.
     enc1 = ttnn.to_torch(tt_enc1)
     enc2 = ttnn.to_torch(tt_enc2)
