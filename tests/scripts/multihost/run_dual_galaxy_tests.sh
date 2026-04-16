@@ -18,12 +18,15 @@ run_dual_galaxy_unit_tests() {
   local tcp_interface="cnx1"
   # heuristic to extract only 2 first hosts from the hostfile
   local hosts="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
+  local reversed_hosts="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | tac | paste -sd,)"
 
   local mpi_args="--host $hosts $mpi_args_base"
+  local mpi_args_reversed="--host $reversed_hosts $mpi_args_base"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpirun_args="--host $hosts $mpirun_args_base"
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
+  local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
@@ -36,7 +39,8 @@ run_dual_galaxy_unit_tests() {
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace" ; fail+=$?
+
 
   # Record the end time
   end_time=$(date +%s)
