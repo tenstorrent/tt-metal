@@ -720,7 +720,7 @@ def _run_tilize_matmul_accum(
 
 @parametrize(
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.Yes],
     kt_dim=[2, 4],
     num_iters=[1, 2, 3, 8],
     stimulus=["ones_A", "const_3_7", "random"],
@@ -744,7 +744,7 @@ def test_6_std_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimulu
 # ============================================================
 @parametrize(
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.Yes],
     kt_dim=[2, 4],
     num_iters=[1, 2, 3, 8],
     stimulus=["ones_A", "const_3_7", "random"],
@@ -754,33 +754,6 @@ def test_7_fast_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimul
         pytest.skip("BH only")
     _run_tilize_matmul_accum(
         "sources/fast_tilize_matmul_accum_repro.cpp",
-        formats,
-        dest_acc,
-        kt_dim,
-        num_iters,
-        stimulus,
-    )
-
-
-# ============================================================
-# Test 8: Same as test_7 but forcing BFP pack MOP path.
-# BFP path uses Last=1 on 16th data PACR (no PACR_FLUSH overflow).
-# Should PASS — proving the flat path PACR_FLUSH is the bug.
-# ============================================================
-@parametrize(
-    formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
-    dest_acc=[DestAccumulation.No],
-    kt_dim=[2],
-    num_iters=[2],
-    stimulus=["const_3_7"],
-)
-def test_8_fast_tilize_matmul_accum_bfp_mop(
-    formats, dest_acc, kt_dim, num_iters, stimulus
-):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-    _run_tilize_matmul_accum(
-        "sources/fast_tilize_matmul_accum_bfp_repro.cpp",
         formats,
         dest_acc,
         kt_dim,

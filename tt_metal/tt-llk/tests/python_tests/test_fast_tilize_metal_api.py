@@ -19,6 +19,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
+    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -61,6 +62,7 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
             TILE_COUNT(tile_count),
             LOOP_FACTOR(1),
             NUM_FACES(4),
+            NUM_GUARD_TILES(0),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

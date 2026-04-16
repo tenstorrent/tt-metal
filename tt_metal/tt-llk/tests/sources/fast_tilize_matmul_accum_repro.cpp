@@ -60,7 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
             _llk_unpack_tilize_uninit_(formats.unpack_A_dst, FACE_R_DIM);
 #endif
-            _llk_unpack_A_init_<>();
+            _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+                0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
             _llk_unpack_A_<>(L1_ADDRESS(params.buffer_Res[KT_DIM]));
         }
 

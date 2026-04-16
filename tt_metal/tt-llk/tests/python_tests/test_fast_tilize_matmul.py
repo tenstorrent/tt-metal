@@ -53,8 +53,10 @@ def test_fast_tilize_matmul(formats, dest_acc, kt_dim, tilize_mode):
         input_dimensions_B=wt_dims,
     )
 
-    # Golden uses row-major A and B
-    golden = get_golden_generator(MatmulGolden)(
+    # Golden: row-major matmul, then tilize to match pack output layout
+    from helpers.tilize_untilize import tilize
+
+    golden_rm = get_golden_generator(MatmulGolden)(
         src_A,
         src_B,
         formats.output_format,
@@ -62,6 +64,7 @@ def test_fast_tilize_matmul(formats, dest_acc, kt_dim, tilize_mode):
         input_A_dimensions=act_dims,
         input_B_dimensions=wt_dims,
     )
+    golden = tilize(golden_rm).to(format_dict[formats.output_format])
 
     source_file = (
         "sources/tilize_matmul_test.cpp"

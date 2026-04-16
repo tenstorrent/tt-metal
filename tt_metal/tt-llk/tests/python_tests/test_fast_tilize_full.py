@@ -74,16 +74,6 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     input_height_tiles, input_width_tiles = dimensions
     assert input_width_tiles >= 1, "ct_dim must be >= 1"
 
-    # BFP and Float32: reduced dimension subset to keep test time reasonable
-    if formats.output_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
-        if dimensions not in [(1, 4), (1, 5), (1, 6), (1, 7), (2, 4), (2, 8)]:
-            pytest.skip("BFP output: reduced dimension set")
-
-    # Float32 input: reduced subset — validates unpack format handling
-    if formats.input_format == DataFormat.Float32:
-        if dimensions not in [(1, 4), (1, 5), (1, 8), (2, 4), (2, 8)]:
-            pytest.skip("Float32 input: reduced dimension set")
-
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
 

@@ -23,6 +23,11 @@ def test_perf_measure(perf_report, ct_dim):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
 
+    import os
+
+    if os.environ.get("TT_UMD_SIMULATOR_PATH", "").endswith(".so"):
+        pytest.skip("Perf profiling not supported on ttsim")
+
     fmt = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     tile_count = ct_dim
     dims = (32, ct_dim * 32)
@@ -59,7 +64,7 @@ def test_perf_measure(perf_report, ct_dim):
     total_tiles = tile_count * 4  # LOOP_FACTOR=4
 
     for name, addr in [("Unpack", 0x16B000), ("Math", 0x16C000), ("Pack", 0x16D000)]:
-        data = read_words_from_device(addr=addr, word_count=0x400)
+        data = read_words_from_device(location="0,0", addr=addr, word_count=0x400)
         starts = {}
         zones = []
         for i in range(0, len(data), 2):

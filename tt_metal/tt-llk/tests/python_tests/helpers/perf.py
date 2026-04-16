@@ -359,7 +359,7 @@ class PerfConfig(TestConfig):
         import sys
 
         print(
-            f"[PERF_DBG] MODE={TestConfig.MODE} run_configs={len(self.run_configs)} SOL={TestConfig.SPEED_OF_LIGHT}",
+            f"[PERF_DBG] BUILD_MODE={TestConfig.BUILD_MODE} run_configs={len(self.run_configs)} SOL={TestConfig.SPEED_OF_LIGHT}",
             file=sys.stderr,
             flush=True,
         )

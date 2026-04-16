@@ -8,12 +8,14 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "llk_defs.h"
 #include "params.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t tile_size                = 128;
 
 // buffer_A = row-major activation (KT_DIM tiles wide, 1 tile tall)
 // buffer_B = weights (KT_DIM tiles, already tilized)
@@ -30,6 +32,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t KT_DIM = params.BLOCK_CT_DIM;
 
+    // Initialize semaphores — needed on ttsim where firmware doesn't pre-init
+    TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_0); // sem 0: FPU_SFPU datacopy
+
     // === Phase 0: hw_configure ===
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
@@ -44,9 +49,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 
+    // Wait for tilize pack done before starting matmul
+    t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
+    t6_semaphore_get<>(semaphore::PACK_DONE);
+
     // === Phase 2: Matmul (tilized activation × weights) ===
-    // Standard tilize uninit to fully restore unpack config (out_data_format,
-    // throttle_mode, face dims) that fast-tilize uninit doesn't restore.
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, false>(formats.unpack_A_src, formats.unpack_A_dst, tile_size);
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, false>(formats.unpack_B_src, formats.unpack_B_dst, tile_size);
 #ifdef ARCH_BLACKHOLE
     _llk_unpack_tilize_uninit_(formats.unpack_A_dst, 4, FACE_R_DIM);
 #else
@@ -83,6 +92,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t KT_DIM = params.BLOCK_CT_DIM;
 
+    // Initialize semaphores — needed on ttsim where firmware doesn't pre-init
+    TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_0); // sem 0: FPU_SFPU datacopy
+
     // === Phase 0: sync_init + hw_configure ===
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -97,11 +109,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Uninit: restore math state for matmul
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
 
-    // Compensate odd section_done count
-    update_dest_offset_id();
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
-
     // === Phase 2: Matmul ===
+    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(formats.math);
+    _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, false>(formats.math);
     _llk_math_matmul_init_<MathFidelity::HiFi4, 0>(TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, 0, 1, 1);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -125,6 +135,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     const std::uint32_t KT_DIM = params.BLOCK_CT_DIM;
 
+    // Initialize semaphores — needed on ttsim where firmware doesn't pre-init
+    TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_0);      // sem 0: FPU_SFPU datacopy
+    TTI_SEMINIT(2, 0, 1 << semaphore::PACK_DONE); // sem 4: pack→unpack barrier
+
     // === Phase 0: pack dest_init + hw_configure ===
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
@@ -138,14 +152,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     // Uninit: restore pack state for matmul
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4, formats.pack_src);
+    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4);
 
-    // Compensate odd section_done
-    flip_packer_dest_offset_id();
-    select_packer_dest_registers<DstSync::SyncHalf>();
+    // Signal unpack that phase 1 pack is done
+    t6_semaphore_post<>(semaphore::PACK_DONE);
 
     // Re-init pack for standard (non-tilize) mode
-    _llk_pack_init_<false, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, tile_size);
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_init_<false, false, false>(formats.pack_dst);
+#endif
 
     // === Phase 2: Matmul pack ===
     _llk_packer_wait_for_math_done_();
