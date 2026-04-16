@@ -42,7 +42,7 @@ private:
     uint32_t get_fabric_router_sync_timeout_ms() const;
 
     // Probe all active ERISC router channels for stale firmware and terminate any found.
-    // Sends TERMINATE, polls for EDMStatus::TERMINATED (2 s), falls back to assert+deassert
+    // Sends TERMINATE, polls for EDMStatus::TERMINATED (50 ms), falls back to assert+deassert
     // ERISC reset so that the already-loaded firmware image can boot cleanly.
     // Called before configure_fabric_cores() clears L1 (Fix A) and in
     // wait_for_fabric_router_sync() as defence-in-depth (Fix C/D).

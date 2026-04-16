@@ -295,7 +295,7 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_.tes
 // Checks every active fabric ETH channel (not just the master) because all channels run
 // independent router firmware instances.  For each stale channel:
 //   1. Send TERMINATE to termination_signal_address on that ERISC core's L1.
-//   2. Poll edm_status_address for EDMStatus::TERMINATED (up to 2 s).
+//   2. Poll edm_status_address for EDMStatus::TERMINATED (up to 50 ms).
 //   3. On timeout: assert RISC reset to halt the stale firmware.
 //   4. Deassert RISC reset (Fix D) so the newly-loaded firmware image can boot.
 void FabricFirmwareInitializer::terminate_stale_erisc_routers(
@@ -307,7 +307,7 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
     const auto [term_addr, term_signal] = builder_context.get_fabric_router_termination_address_and_signal();
     constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-    constexpr uint32_t stale_timeout_ms = 2000;
+    constexpr uint32_t stale_timeout_ms = 50;
     constexpr uint32_t kSpinsBetweenSleeps = 64;
 
     const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
@@ -451,14 +451,6 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
 
         const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
-
-        // Fix C/D (defence-in-depth): after configure_fabric_cores() loaded the new firmware,
-        // check again for any channels that are still running stale firmware and terminate them.
-        // terminate_stale_erisc_routers() already ran before configure (Fix A), but a channel
-        // that was clean then might have raced to a stale state, and this catches any that
-        // configure_fabric_cores() may have missed.  Also handles any channels not covered by
-        // the pre-configure probe (e.g. non-active-in-new-config channels from prior sessions).
-        terminate_stale_erisc_routers(dev, builder_context);
 
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
