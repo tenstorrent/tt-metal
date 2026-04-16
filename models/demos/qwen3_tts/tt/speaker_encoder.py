@@ -89,6 +89,12 @@ class SpeakerEncoder(LightweightModule):
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
+        self._conv1d_config = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=None,
+            deallocate_activation=False,
+        )
+        self._ttnn_conv1d = ttnn.conv1d
 
     def compute_mel_spectrogram(
         self,
@@ -195,11 +201,51 @@ class SpeakerEncoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _ttnn_nlc_to_torch_ncl(self, x_nlc: ttnn.Tensor) -> torch.Tensor:
-        t = ttnn.to_torch(x_nlc, dtype=torch.float32)
-        if t.dim() == 4:
-            t = t.squeeze(1)
-        return t.permute(0, 2, 1).contiguous()
+    def _ttnn_nlc_to_ttnn_ncl(self, x_nlc: ttnn.Tensor) -> ttnn.Tensor:
+        """NLC ``[B, L, C]`` (or ``[B, 1, L, C]``) → NCL ``[B, C, L]`` on device; no host round-trip."""
+        m = ttnn.DRAM_MEMORY_CONFIG
+        sh = tuple(x_nlc.shape)
+        if len(sh) == 4 and sh[1] == 1:
+            x_nlc = ttnn.reshape(x_nlc, (sh[0], sh[2], sh[3]), memory_config=m)
+        return ttnn.permute(x_nlc, (0, 2, 1), memory_config=m)
+
+    def _run_ttnn_conv1d(
+        self,
+        x_nlc: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        input_length: int,
+        *,
+        padding: int = 0,
+        dilation: int = 1,
+    ) -> Tuple[ttnn.Tensor, int, int]:
+        """Single TTNN conv1d entry point used by speaker encoder."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        out_channels = int(weight.shape[0])
+        kernel_size = int(weight.shape[-1] if len(tuple(weight.shape)) == 3 else weight.shape[-2])
+        bias_tt = bias
+        if len(tuple(bias_tt.shape)) == 1:
+            bias_tt = ttnn.reshape(bias_tt, (1, 1, 1, out_channels), memory_config=mc)
+        y, y_len = self._ttnn_conv1d(
+            input_tensor=x_nlc,
+            weight_tensor=weight,
+            device=self.device,
+            in_channels=int(weight.shape[1]),
+            out_channels=out_channels,
+            batch_size=int(x_nlc.shape[0]),
+            input_length=input_length,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+            dilation=dilation,
+            bias_tensor=bias_tt,
+            conv_config=self._conv1d_config,
+            compute_config=self._compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=mc,
+            return_output_dim=True,
+        )
+        return y, int(y_len), out_channels
 
     def _conv1d_same_padding(
         self, x: ttnn.Tensor, weight: ttnn.Tensor, bias: ttnn.Tensor, dilation: int = 1
@@ -231,17 +277,27 @@ class SpeakerEncoder(LightweightModule):
         )
 
     def _time_delay_net_block(
-        self, x: torch.Tensor, conv_weight: torch.Tensor, conv_bias: torch.Tensor, dilation: int = 1
-    ) -> torch.Tensor:
-        """Time Delay Network Block: reflect conv (host) + ``ttnn.relu`` on device."""
+        self, x: ttnn.Tensor, conv_weight: torch.Tensor, conv_bias: torch.Tensor, dilation: int = 1
+    ) -> ttnn.Tensor:
+        """Time Delay Network Block in TTNN (NLC in/out)."""
         w_tt, b_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
-        y_tt = ttnn.relu(self._conv1d_same_padding(self._torch_ncl_to_ttnn_nlc(x), w_tt, b_tt, dilation))
-        return self._ttnn_nlc_to_torch_ncl(y_tt)
+        y_tt = self._conv1d_same_padding(x, w_tt, b_tt, dilation)
+        return ttnn.relu(y_tt)
 
-    def _res2net_block(self, x: torch.Tensor, prefix: str, scale: int = 8) -> torch.Tensor:
-        """Res2Net block with multi-scale feature extraction."""
-        batch, channels, seq_len = x.shape
-        parts = list(torch.chunk(x, scale, dim=1))
+    def _res2net_block(self, x: ttnn.Tensor, prefix: str, scale: int = 8) -> ttnn.Tensor:
+        """Res2Net block with multi-scale feature extraction in TTNN (NLC)."""
+        mc = ttnn.L1_MEMORY_CONFIG
+        x_nlc = (
+            x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]), memory_config=mc)
+        )
+        batch, seq_len, channels = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+        assert channels % scale == 0, f"channels {channels} must be divisible by scale {scale}"
+        part_channels = channels // scale
+
+        parts = []
+        for i in range(scale):
+            c0, c1 = i * part_channels, (i + 1) * part_channels
+            parts.append(ttnn.slice(x_nlc, [0, 0, c0], [batch, seq_len, c1], memory_config=mc))
         outputs = []
 
         output_part = None
@@ -259,29 +315,49 @@ class SpeakerEncoder(LightweightModule):
                 conv_weight = self.pytorch_weights.get(f"{prefix}blocks.{i-1}.conv.weight")
                 conv_bias = self.pytorch_weights.get(f"{prefix}blocks.{i-1}.conv.bias")
                 if conv_weight is not None:
-                    output_part = self._time_delay_net_block(hidden_part + output_part, conv_weight, conv_bias)
+                    output_part = self._time_delay_net_block(
+                        ttnn.add(hidden_part, output_part, memory_config=mc), conv_weight, conv_bias
+                    )
                 else:
-                    output_part = hidden_part + output_part
+                    output_part = ttnn.add(hidden_part, output_part, memory_config=mc)
             outputs.append(output_part)
 
-        return torch.cat(outputs, dim=1)
+        return ttnn.concat(outputs, dim=2, memory_config=mc)
 
     def _squeeze_excitation_block(
         self,
-        x: torch.Tensor,
-        conv1_weight: torch.Tensor,
-        conv1_bias: torch.Tensor,
-        conv2_weight: torch.Tensor,
-        conv2_bias: torch.Tensor,
-    ) -> torch.Tensor:
-        """Squeeze-and-Excitation block."""
-        y = x.mean(dim=2, keepdim=True)
-        y = F.relu(F.conv1d(y, conv1_weight, conv1_bias))
-        y = torch.sigmoid(F.conv1d(y, conv2_weight, conv2_bias))
-        return x * y
+        x: ttnn.Tensor,
+        conv1_weight: ttnn.Tensor,
+        conv1_bias: ttnn.Tensor,
+        conv2_weight: ttnn.Tensor,
+        conv2_bias: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Squeeze-and-Excitation block in TTNN (NLC in/out)."""
+        mc = ttnn.L1_MEMORY_CONFIG
+        x_nlc = (
+            x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]), memory_config=mc)
+        )
+        batch = int(x_nlc.shape[0])
+        seq_len = int(x_nlc.shape[1])
 
-    def _se_res2net_block(self, x: torch.Tensor, block_idx: int, scale: int = 8) -> torch.Tensor:
-        """SERes2NetBlock: TDNN1 -> Res2Net -> TDNN2 -> SE -> residual add."""
+        # Squeeze over sequence length: [B, L, C] -> [B, 1, C]
+        y = ttnn.mean(x_nlc, dim=1, keepdim=True)
+        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=mc)
+
+        y, y_len, out1_ch = self._run_ttnn_conv1d(y, conv1_weight, conv1_bias, input_length=1)
+        y = ttnn.reshape(y, (batch, y_len, out1_ch), memory_config=mc)
+        y = ttnn.relu(y)
+
+        y, y_len, out2_ch = self._run_ttnn_conv1d(y, conv2_weight, conv2_bias, input_length=y_len)
+        y = ttnn.reshape(y, (batch, y_len, out2_ch), memory_config=mc)
+        y = ttnn.sigmoid(y)
+
+        # Expand [B,1,C] -> [B,L,C] and apply channel-wise scale.
+        y = ttnn.repeat(y, (1, seq_len, 1))
+        return ttnn.multiply(x_nlc, y)
+
+    def _se_res2net_block(self, x: ttnn.Tensor, block_idx: int, scale: int = 8) -> ttnn.Tensor:
+        """SERes2NetBlock in TTNN (NLC): TDNN1 -> Res2Net -> TDNN2 -> SE -> residual add."""
         prefix = f"blocks.{block_idx}."
         residual = x
 
@@ -306,45 +382,51 @@ class SpeakerEncoder(LightweightModule):
         se_conv2_weight = self.pytorch_weights.get(f"{prefix}se_block.conv2.weight")
         se_conv2_bias = self.pytorch_weights.get(f"{prefix}se_block.conv2.bias")
         if se_conv1_weight is not None:
-            x = self._squeeze_excitation_block(x, se_conv1_weight, se_conv1_bias, se_conv2_weight, se_conv2_bias)
+            se_w1_tt, se_b1_tt = self._conv1d_params_to_ttnn(se_conv1_weight, se_conv1_bias)
+            se_w2_tt, se_b2_tt = self._conv1d_params_to_ttnn(se_conv2_weight, se_conv2_bias)
+            x = self._squeeze_excitation_block(x, se_w1_tt, se_b1_tt, se_w2_tt, se_b2_tt)
 
-        return x + residual
+        return ttnn.add(x, residual, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def _attentive_statistics_pooling(
         self,
-        x: torch.Tensor,
+        x: ttnn.Tensor,
         tdnn_weight: torch.Tensor,
         tdnn_bias: torch.Tensor,
         conv_weight: torch.Tensor,
         conv_bias: torch.Tensor,
         eps: float = 1e-12,
-    ) -> torch.Tensor:
-        """Attentive Statistics Pooling."""
-        batch, channels, seq_len = x.shape
-        mask = torch.ones(batch, 1, seq_len, device=x.device, dtype=x.dtype)
+    ) -> ttnn.Tensor:
+        """Attentive Statistics Pooling in TTNN, NLC input/output."""
+        mc = ttnn.L1_MEMORY_CONFIG
+        x_nlc = (
+            x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]), memory_config=mc)
+        )
+        seq_len = int(x_nlc.shape[1])
 
-        mean = (mask * x).sum(dim=2)
-        std = torch.sqrt(((mask * (x - mean.unsqueeze(2)).pow(2)).sum(dim=2)).clamp(eps))
+        mean = ttnn.mean(x_nlc, dim=1, keepdim=True)
+        centered = ttnn.subtract(x_nlc, mean, memory_config=mc)
+        std = ttnn.sqrt(ttnn.clamp(ttnn.mean(ttnn.multiply(centered, centered), dim=1, keepdim=True), min=eps))
 
-        mean_expanded = mean.unsqueeze(2).repeat(1, 1, seq_len)
-        std_expanded = std.unsqueeze(2).repeat(1, 1, seq_len)
-
-        attention_input = torch.cat([x, mean_expanded, std_expanded], dim=1)
+        mean_expanded = ttnn.repeat(mean, (1, seq_len, 1))
+        std_expanded = ttnn.repeat(std, (1, seq_len, 1))
+        attention_input = ttnn.concat([x_nlc, mean_expanded, std_expanded], dim=2, memory_config=mc)
 
         tw_tt, tb_tt = self._conv1d_params_to_ttnn(tdnn_weight, tdnn_bias)
         cw_tt, cb_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
-        a_tt = self._conv1d_same_padding(self._torch_ncl_to_ttnn_nlc(attention_input), tw_tt, tb_tt)
+        a_tt = self._conv1d_same_padding(attention_input, tw_tt, tb_tt)
         a_tt = ttnn.tanh(a_tt)
         a_tt = self._conv1d_same_padding(a_tt, cw_tt, cb_tt)
-        attention = self._ttnn_nlc_to_torch_ncl(a_tt)
-        attention = attention.masked_fill(mask == 0, float("-inf"))
-        attention = F.softmax(attention, dim=2)
+        attention = ttnn.softmax(a_tt, dim=1, memory_config=mc)
 
-        weighted_mean = (attention * x).sum(dim=2)
-        weighted_std = torch.sqrt(((attention * (x - weighted_mean.unsqueeze(2)).pow(2)).sum(dim=2)).clamp(eps))
-
-        pooled_stats = torch.cat([weighted_mean, weighted_std], dim=1)
-        return pooled_stats.unsqueeze(2)
+        weighted_mean = ttnn.sum(ttnn.multiply(attention, x_nlc), dim=1, keepdim=True)
+        centered_w = ttnn.subtract(x_nlc, weighted_mean, memory_config=mc)
+        weighted_std = ttnn.sqrt(
+            ttnn.clamp(
+                ttnn.sum(ttnn.multiply(attention, ttnn.multiply(centered_w, centered_w)), dim=1, keepdim=True), min=eps
+            )
+        )
+        return ttnn.concat([weighted_mean, weighted_std], dim=2, memory_config=mc)
 
     def _ensure_fc_linear_params(self, fc_weight: torch.Tensor, fc_bias: torch.Tensor) -> None:
         """Lazy-build ``[1, 1, in, out]`` weight + bias for ``ttnn.linear`` (matches Talker layout)."""
@@ -386,29 +468,30 @@ class SpeakerEncoder(LightweightModule):
             # Input is [batch, time, n_mels], transpose to [batch, n_mels, time]
             hidden = hidden.transpose(1, 2)
 
-        hidden_states_list = []
+        hidden_tt = self._torch_ncl_to_ttnn_nlc(hidden)
+        hidden_states_list_tt = []
 
         # blocks[0]: Initial TDNN
         conv_weight = self.pytorch_weights.get("blocks.0.conv.weight")
         conv_bias = self.pytorch_weights.get("blocks.0.conv.bias")
         if conv_weight is not None:
-            hidden = self._time_delay_net_block(hidden, conv_weight, conv_bias, dilation=1)
-        hidden_states_list.append(hidden)
+            hidden_tt = self._time_delay_net_block(hidden_tt, conv_weight, conv_bias, dilation=1)
+        hidden_states_list_tt.append(hidden_tt)
 
         # blocks[1-3]: SERes2NetBlocks
         for block_idx in range(1, 4):
             if f"blocks.{block_idx}.tdnn1.conv.weight" in self.pytorch_weights:
-                hidden = self._se_res2net_block(hidden, block_idx, scale=8)
-            hidden_states_list.append(hidden)
+                hidden_tt = self._se_res2net_block(hidden_tt, block_idx, scale=8)
+            hidden_states_list_tt.append(hidden_tt)
 
         # MFA: concatenate blocks 1-3
-        hidden = torch.cat(hidden_states_list[1:], dim=1)
+        hidden_tt = ttnn.concat(hidden_states_list_tt[1:], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # MFA TDNN
         mfa_weight = self.pytorch_weights.get("mfa.conv.weight")
         mfa_bias = self.pytorch_weights.get("mfa.conv.bias")
         if mfa_weight is not None:
-            hidden = self._time_delay_net_block(hidden, mfa_weight, mfa_bias, dilation=1)
+            hidden_tt = self._time_delay_net_block(hidden_tt, mfa_weight, mfa_bias, dilation=1)
 
         # Attentive Statistics Pooling
         asp_tdnn_weight = self.pytorch_weights.get("asp.tdnn.conv.weight")
@@ -417,25 +500,33 @@ class SpeakerEncoder(LightweightModule):
         asp_conv_bias = self.pytorch_weights.get("asp.conv.bias")
 
         if asp_tdnn_weight is not None:
-            hidden = self._attentive_statistics_pooling(
-                hidden, asp_tdnn_weight, asp_tdnn_bias, asp_conv_weight, asp_conv_bias
+            hidden_tt = self._attentive_statistics_pooling(
+                hidden_tt, asp_tdnn_weight, asp_tdnn_bias, asp_conv_weight, asp_conv_bias
             )
         else:
-            mean = hidden.mean(dim=2)
-            std = hidden.std(dim=2)
-            hidden = torch.cat([mean, std], dim=1).unsqueeze(2)
+            mean = ttnn.mean(hidden_tt, dim=1, keepdim=True)
+            centered = ttnn.subtract(hidden_tt, mean, memory_config=ttnn.L1_MEMORY_CONFIG)
+            std = ttnn.sqrt(
+                ttnn.clamp(
+                    ttnn.mean(ttnn.multiply(centered, centered), dim=1, keepdim=True),
+                    min=1e-12,
+                )
+            )
+            hidden_tt = ttnn.concat([mean, std], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Final FC: ``ttnn.linear`` (kernel 1 conv); weights prepared once
         fc_weight = self.pytorch_weights.get("fc.weight")
         fc_bias = self.pytorch_weights.get("fc.bias")
         if fc_weight is not None:
             self._ensure_fc_linear_params(fc_weight, fc_bias)
-            b, ch, tlen = hidden.shape
-            x_tt = ttnn.from_torch(
-                hidden.reshape(b, 1, tlen, ch),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+            b, tlen, ch = int(hidden_tt.shape[0]), int(hidden_tt.shape[1]), int(hidden_tt.shape[2])
+            x_tt = ttnn.to_layout(
+                ttnn.reshape(
+                    hidden_tt,
+                    (b, 1, tlen, ch),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             out_tt = ttnn.linear(
@@ -447,7 +538,7 @@ class SpeakerEncoder(LightweightModule):
             )
             hidden = ttnn.to_torch(out_tt, dtype=torch.float32).reshape(b, -1)
         else:
-            hidden = hidden.squeeze(-1)
+            hidden = ttnn.to_torch(hidden_tt, dtype=torch.float32).reshape(int(hidden_tt.shape[0]), -1)
 
         return hidden
 

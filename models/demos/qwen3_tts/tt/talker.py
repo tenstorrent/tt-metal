@@ -70,9 +70,9 @@ class Talker(LightweightModule):
                 memory_config=_dram,
                 mesh_mapper=_mesh_mapper,
             )
-            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=_dram)
+            w_tx = ttnn.transpose(w_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(w_tt)
-            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=_dram)
+            w_4d = ttnn.reshape(w_tx, [1, 1, in_f, out_f], memory_config=ttnn.L1_MEMORY_CONFIG)
             host = ttnn.to_torch(w_4d).contiguous()
             ttnn.deallocate(w_4d)
             ttnn.deallocate(w_tx)

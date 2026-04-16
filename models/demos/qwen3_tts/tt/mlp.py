@@ -100,9 +100,9 @@ class MLP(LightweightModule):
                 memory_config=_dram,
                 mesh_mapper=_mesh_mapper,
             )
-            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=_dram)
+            weight_tx = ttnn.transpose(weight_tt, -2, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(weight_tt)
-            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=_dram)
+            weight_4d = ttnn.reshape(weight_tx, [1, 1, in_features, out_features], memory_config=ttnn.L1_MEMORY_CONFIG)
 
             # Read reshape output before freeing transpose input; reshape may alias weight_tx storage.
             weight_host = ttnn.to_torch(weight_4d).contiguous()
