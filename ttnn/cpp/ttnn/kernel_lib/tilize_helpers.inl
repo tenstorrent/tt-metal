@@ -135,10 +135,14 @@ ALWI void tilize(
         // Reconfigure srcA for unpack
         reconfig_data_format_srca(input_cb);
 
+#ifndef ARCH_BLACKHOLE
         if constexpr (use_fast) {
-            // Reconfigure srcB only in fast mode
+            // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
+            // BH fast-tilize only uses SrcA — SrcB must not be touched so matmul
+            // weights stay configured correctly.
             reconfig_data_format_srcb(input_cb);
         }
+#endif
     }
 
     if constexpr (use_pack_reconfig) {

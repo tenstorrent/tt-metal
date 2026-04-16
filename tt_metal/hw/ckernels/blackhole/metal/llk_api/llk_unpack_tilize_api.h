@@ -62,6 +62,46 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 }
 
 /*************************************************************************
+ * LLK UNPACK FAST TILIZE SRC A (BH)
+ *************************************************************************/
+
+inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t init_unit_dim = (full_dim <= 1) ? 1 : 4;
+    _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim, init_unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_fast_tilize_uninit() {
+    _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+}
+
+inline void llk_unpack_fast_tilize_reinit_xdim(const std::uint32_t unit_dim) {
+    _llk_unpack_fast_tilize_reinit_xdim_(unit_dim);
+}
+
+inline void llk_unpack_fast_tilize_block(
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units,
+    const std::uint32_t full_dim,
+    const std::uint32_t col_start = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+
+    // Set L1 base address via coprocessor instructions (trace mode compatible).
+    TT_SETDMAREG(0, LOWER_HALFWORD(base_address), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(base_address), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+
+    _llk_unpack_fast_tilize_block_(
+        base_address, tile_index, unpack_src_format[operand_id],
+        unit_dim, num_units, full_dim, num_faces, col_start);
+}
+
+/*************************************************************************
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
 

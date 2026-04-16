@@ -67,3 +67,29 @@ template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_d
 inline void llk_math_eltwise_unary_datacopy_uninit() {
     _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
 }
+
+/*************************************************************************
+ * LLK MATH FAST TILIZE (BH)
+ *************************************************************************/
+
+inline void llk_math_fast_tilize_init(const std::uint32_t operand, const std::uint32_t unit_dim) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    _llk_math_fast_tilize_init_<DST_ACCUM_MODE>(unpack_dst_format[operand_id], unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
+}
+
+inline void llk_math_fast_tilize_block_(
+    const std::uint32_t dst_index,
+    const std::uint32_t operand,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    _llk_math_fast_tilize_block_<DST_ACCUM_MODE>(
+        dst_index, unpack_dst_format[operand_id], unit_dim, num_units, num_faces);
+}

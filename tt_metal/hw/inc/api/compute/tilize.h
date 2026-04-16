@@ -260,8 +260,10 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_init(icb, full_dim, ocb, call_line);
+    uint32_t init_udim = (full_dim <= 1) ? 1 : 4;
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
+    MATH((llk_math_fast_tilize_init(icb, 4)));
+    PACK((llk_pack_fast_tilize_init(icb, ocb, init_udim)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
@@ -270,28 +272,59 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+#ifdef ARCH_BLACKHOLE
+    // BH fast-tilize only uses SrcA — do not touch SrcB so matmul weights stay configured.
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(icb, icb)));
+#else
+    // WH fast-tilize uses both SrcA and SrcB.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+#endif
 
     fast_tilize_init(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
-#ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_uninit(icb, ocb);
-#else
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
     MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
-#endif
 }
 
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
-    tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+    // BH fast-tilize: process block tiles, 4 at a time (one MOP run = 4 tiles).
+    // Each chunk: wait_for_dest + unpack + math + pack + section_done.
+    {
+        uint32_t tiles_done = 0;
+        uint32_t prev_chunk = (block <= 1) ? 1 : 4;  // matches init_udim from fast_tilize_init
+
+        while (tiles_done < block) {
+            // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
+            // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
+            // Matches LLK decompose_row order.
+            uint32_t remaining = block - tiles_done;
+            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+
+            MATH((llk_math_wait_for_dest_available()));
+            PACK((llk_packer_wait_for_math_done()));
+
+            if (chunk != prev_chunk) {
+                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
+                prev_chunk = chunk;
+            }
+            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, 1, chunk, tiles_done)));
+            MATH((llk_math_fast_tilize_block_(0, icb, 4, 1)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk, 1)));
+
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+
+            tiles_done += chunk;
+        }
+    }
 #else
     uint32_t full_dim = block;
 
