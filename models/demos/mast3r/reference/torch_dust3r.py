@@ -240,7 +240,8 @@ class ResConvUnit(nn.Module):
     def forward(self, x):
         out = F.relu(x)
         out = self.conv1(out)
-        out = F.relu(out)
+        # In-place relu: out is conv1 output, only used by conv2 next.
+        out = F.relu_(out)
         out = self.conv2(out)
         return out + x
 
@@ -322,7 +323,8 @@ class DPTHead(nn.Module):
         x = self.head0(p1)
         x = F.interpolate(x, scale_factor=2.0, mode="bilinear", align_corners=True)
         x = self.head2(x)
-        x = F.relu(x)
+        # In-place relu before head4 saves a 32M-element allocation @ 512x512.
+        x = F.relu_(x)
         x = self.head4(x)
         return x  # (B, 4, H_img, W_img)
 
