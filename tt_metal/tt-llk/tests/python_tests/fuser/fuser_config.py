@@ -107,6 +107,8 @@ class FuserConfig(TestConfig):
         self.build_elfs()
 
     def run_perf_test(self, worker_id: str, run_count: int = 2):
+        """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
+
         from .fused_generator import FUSED_TESTS_DIR
 
         self.global_config.profiler_enabled = True
@@ -180,6 +182,8 @@ class FuserConfig(TestConfig):
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")
 
     def run_regular_test(self):
+        """Run functional test: generate, build, write inputs to L1, execute kernel, read outputs and verify against golden."""
+
         from .fused_generator import FUSED_TESTS_DIR
         from .fused_golden import FusedGolden
 
