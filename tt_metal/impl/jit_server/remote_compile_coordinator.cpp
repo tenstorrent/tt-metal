@@ -71,11 +71,11 @@ void RemoteCompileCoordinator::submit(KernelCompileDescriptor descriptor) {
         sessions_[ep_idx]->send(descriptor.request);
         pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
     } catch (...) {
-        new_promise->set_exception(std::current_exception());
         {
             std::lock_guard lock(s_dedup_mutex_);
             s_dedup_cache_.erase(hash);
         }
+        new_promise->set_exception(std::current_exception());
         throw;
     }
 }
@@ -132,8 +132,8 @@ void RemoteCompileCoordinator::finish() {
             std::lock_guard lock(s_dedup_mutex_);
             for (auto& pend : pending) {
                 if (pend.dedup_promise) {
-                    pend.dedup_promise->set_exception(ex);
                     s_dedup_cache_.erase(pend.descriptor.kernel_hash);
+                    pend.dedup_promise->set_exception(ex);
                 }
             }
             throw;
@@ -216,6 +216,10 @@ void RemoteCompileCoordinator::ensure_firmware_uploaded(std::size_t endpoint_ind
             response.error_message);
         gate_promise->set_value();
     } catch (...) {
+        {
+            std::lock_guard lock(s_fw_gate_mutex_);
+            s_fw_gate_.erase(gate_key);
+        }
         gate_promise->set_exception(std::current_exception());
         throw;
     }
