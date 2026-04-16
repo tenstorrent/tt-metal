@@ -545,6 +545,21 @@ def _filter_results(outputs, default_results, results):
     return outputs
 
 
+def _dispatch_inputs_valid(ops) -> bool:
+    """Check that all non-set_input slots have valid tensors in op.input_tensors.
+
+    Returns False if any slot is None that wasn't written by update() this cycle
+    (i.e., a previously-cleared slot that the user didn't repopulate).  Callers
+    should fall back to ``_container_run`` in this case.
+    """
+    for op in ops:
+        updated = set(op._updated_indices)
+        for i, t in enumerate(op.input_tensors):
+            if t is None and i not in updated:
+                return False
+    return True
+
+
 def _clear_updated_inputs(container):
     """Clear input slots that ``update()`` wrote this cycle, plus stale outputs.
 
@@ -910,7 +925,7 @@ class Sequential:
             List of output tensors, one per descriptor in *results*.
         """
         state = self._dispatch_state
-        if state is not None and state.ready():
+        if state is not None and state.ready() and _dispatch_inputs_valid(self._cached_ops):
             outputs = state.dispatch()
             _clear_updated_inputs(self)
             return _filter_results(outputs, self._default_results, results)
@@ -1053,7 +1068,7 @@ class Parallel:
             List of output tensors, one per descriptor in *results*.
         """
         state = self._dispatch_state
-        if state is not None and state.ready():
+        if state is not None and state.ready() and _dispatch_inputs_valid(self._cached_ops):
             outputs = state.dispatch()
             _clear_updated_inputs(self)
             return _filter_results(outputs, self._default_results, results)
