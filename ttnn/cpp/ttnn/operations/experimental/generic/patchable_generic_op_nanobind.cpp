@@ -7,9 +7,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include <optional>
-#include <unordered_set>
-
 #include "device/patchable_generic_op_device_operation.hpp"
 #include "device/patchable_generic_op_helpers.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -100,23 +97,13 @@ std::vector<Tensor> allocate_outputs(
     return outputs;
 }
 
-/// Reference to one element of a Python list.  Used to read input tensors
-/// from live ``op.input_tensors`` at dispatch time when ``set_input()`` hasn't
-/// provided a value for that slot this cycle.
-struct PyListRef {
-    nb::object py_list;
-    Py_ssize_t idx;
-};
-
-/// Persistent dispatch state — caches all marshalling work at construction.
+/// Persistent dispatch state — caches MeshProgramDescriptor (patched in-place)
+/// and output allocation metadata.  Holds no tensors and no Python objects.
 ///
-/// Each input slot has two sources: a C++ ``optional<Tensor>`` (populated by
-/// ``set_input()``) and a Python-list fallback (``py_refs_``).  At dispatch
-/// time, ``has_value()`` slots use the C++ tensor; empty slots read from
-/// Python.  After dispatch, all C++ slots are cleared — zero tensors pinned
-/// between calls.
+/// ``dispatch(inputs)`` takes deduped inputs from Python, allocates ephemeral
+/// outputs, patches the cached descriptor, dispatches, and returns outputs.
+/// No tensor state between calls.
 class FusionDispatchState {
-    // Program state (immutable after construction)
     std::vector<TensorSpec> output_specs_;
     std::vector<std::uint32_t> shared_output_map_;
     std::vector<std::uint32_t> result_reorder_;
@@ -124,96 +111,34 @@ class FusionDispatchState {
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     tt::tt_metal::experimental::MeshProgramDescriptor mesh_desc_;
 
-    // Per dedup index: C++ slot (from set_input, cleared after dispatch)
-    // and Python fallback (from op.input_tensors, for inputs not provided
-    // via set_input this cycle).
-    std::vector<std::optional<Tensor>> inputs_;
-    std::vector<PyListRef> py_refs_;
-
-    // True after any set_input() call; cleared after dispatch().
-    bool ready_ = false;
-
 public:
     FusionDispatchState(
-        nb::list ops_input_tensors,
-        nb::list output_specs_py,
+        const std::vector<TensorSpec>& output_specs,
         const std::vector<std::uint32_t>& shared_output_map,
         const std::vector<std::uint32_t>& result_reorder,
         const tt::tt_metal::ProgramDescriptor& program_descriptor,
-        const AddressSlots& address_slots) :
-        shared_output_map_(shared_output_map), result_reorder_(result_reorder), address_slots_(address_slots) {
-        // 1. Dedup inputs and record where each lives in the Python lists.
-        std::unordered_set<PyObject*> seen;
-        std::vector<Tensor> init_tensors;  // temporary — only for mesh_device extraction
-        for (auto op_list_handle : ops_input_tensors) {
-            auto op_list = nb::cast<nb::list>(op_list_handle);
-            for (Py_ssize_t j = 0; j < static_cast<Py_ssize_t>(nb::len(op_list)); ++j) {
-                PyObject* py_ptr = op_list[j].ptr();
-                if (seen.insert(py_ptr).second) {
-                    init_tensors.push_back(nb::cast<Tensor>(op_list[j]));
-                    py_refs_.push_back({nb::borrow(op_list_handle), j});
-                }
-            }
-        }
-        TT_FATAL(!init_tensors.empty(), "ops_input_tensors must contain at least one tensor");
-
-        // 2. Convert output specs.
-        output_specs_.reserve(output_specs_py.size());
-        for (auto item : output_specs_py) {
-            output_specs_.push_back(nb::cast<TensorSpec>(item));
-        }
-
-        // 3. Extract mesh device from first tensor.
-        auto* device = init_tensors.front().device();
-        mesh_device_ = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
-        TT_FATAL(mesh_device_ != nullptr, "Tensor must be on a MeshDevice");
-
-        // 4. Build MeshProgramDescriptor ONCE.
+        const AddressSlots& address_slots,
+        tt::tt_metal::distributed::MeshDevice* mesh_device) :
+        output_specs_(output_specs),
+        shared_output_map_(shared_output_map),
+        result_reorder_(result_reorder),
+        address_slots_(address_slots),
+        mesh_device_(mesh_device) {
         mesh_desc_.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device_->shape()), program_descriptor);
-
-        // 5. All slots start empty.  set_input() populates individual slots;
-        //    dispatch() reads the rest from Python via py_refs_.
-        inputs_.resize(py_refs_.size(), std::nullopt);
     }
 
-    void set_input(size_t dedup_idx, const Tensor& t) {
-        inputs_[dedup_idx] = t;
-        ready_ = true;
-    }
-
-    bool ready() const { return ready_; }
-
-    std::vector<Tensor> dispatch() {
-        // 1. Allocate ephemeral outputs.
+    std::vector<Tensor> dispatch(const std::vector<Tensor>& inputs) {
         auto outputs = allocate_outputs(mesh_device_, output_specs_, shared_output_map_);
 
-        // 2. Build io_tensors: set_input slots from C++, others from Python.
         std::vector<Tensor> io_tensors;
-        io_tensors.reserve(py_refs_.size() + outputs.size());
-        for (size_t i = 0; i < py_refs_.size(); ++i) {
-            if (inputs_[i].has_value()) {
-                io_tensors.push_back(*inputs_[i]);
-            } else {
-                auto& ref = py_refs_[i];
-                io_tensors.push_back(nb::cast<Tensor>(ref.py_list[ref.idx]));
-            }
-        }
+        io_tensors.reserve(inputs.size() + outputs.size());
+        io_tensors.insert(io_tensors.end(), inputs.begin(), inputs.end());
         io_tensors.insert(io_tensors.end(), outputs.begin(), outputs.end());
 
-        // 3. Patch descriptor in place.
         auto& desc = mesh_desc_.mesh_programs.back().second;
         patch_stale_descriptor(desc, io_tensors, address_slots_);
-
-        // 4. Dispatch.
         (void)ttnn::prim::patchable_generic_op(io_tensors, mesh_desc_);
 
-        // 5. Clear all C++ input slots — no tensors pinned between dispatches.
-        for (auto& slot : inputs_) {
-            slot.reset();
-        }
-        ready_ = false;
-
-        // 6. Reorder if needed.
         if (!result_reorder_.empty()) {
             std::vector<Tensor> reordered;
             reordered.reserve(result_reorder_.size());
@@ -342,28 +267,27 @@ void bind_patchable_generic_op(nb::module_& mod) {
         )doc");
 
     nb::class_<FusionDispatchState>(mod, "FusionDispatchState", R"doc(
-        Persistent dispatch state that caches all marshalling work at construction.
-        ``set_input()`` writes tensors into deduped slots; ``dispatch()`` allocates
-        ephemeral outputs, patches the descriptor in-place, and dispatches — all
-        with zero per-call argument marshalling.
+        Caches MeshProgramDescriptor (patched in-place) and output allocation
+        metadata.  Holds no tensors and no Python objects.
+
+        ``dispatch(inputs)`` takes deduped inputs, allocates ephemeral outputs,
+        patches, dispatches, and returns outputs.
     )doc")
         .def(
             nb::init<
-                nb::list,
-                nb::list,
+                const std::vector<TensorSpec>&,
                 const std::vector<std::uint32_t>&,
                 const std::vector<std::uint32_t>&,
                 const tt::tt_metal::ProgramDescriptor&,
-                const AddressSlots&>(),
-            nb::arg("ops_input_tensors"),
+                const AddressSlots&,
+                tt::tt_metal::distributed::MeshDevice*>(),
             nb::arg("output_specs"),
             nb::arg("shared_output_map"),
             nb::arg("result_reorder"),
             nb::arg("program_descriptor"),
-            nb::arg("address_slots"))
-        .def("set_input", &FusionDispatchState::set_input, nb::arg("dedup_idx"), nb::arg("tensor"))
-        .def("dispatch", &FusionDispatchState::dispatch)
-        .def("ready", &FusionDispatchState::ready);
+            nb::arg("address_slots"),
+            nb::arg("mesh_device"))
+        .def("dispatch", &FusionDispatchState::dispatch, nb::arg("inputs"));
 }
 
 }  // namespace ttnn::operations::experimental::generic::detail

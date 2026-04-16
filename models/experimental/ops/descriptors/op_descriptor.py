@@ -153,7 +153,6 @@ class OpDescriptor:
         "program_cache_key",
         "_input_names",
         "_complete_fn",
-        "_fusion_input_setter",
         "_updated_indices",
     )
 
@@ -200,7 +199,6 @@ class OpDescriptor:
         else:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
-        self._fusion_input_setter = None
         self._updated_indices = []
 
     def update(self, *args, **kwargs):
@@ -214,42 +212,24 @@ class OpDescriptor:
 
             desc.update(input_tensor=new_q)
             desc.update(input_a=new_a, input_b=new_b)
-        """
-        # Fast path: write to C++ set_input() AND keep Python list current.
-        # Slots not provided via set_input() are read from Python at dispatch time.
-        setter = self._fusion_input_setter
-        if setter is not None:
-            state, mappings = setter
-            if args:
-                pending = self._updated_indices
-                for i, t in enumerate(args):
-                    state.set_input(mappings[i][0], t)
-                    self.input_tensors[i] = t
-                    pending.append(i)
-                return
-            elif kwargs:
-                names = self._input_names
-                if names is not None:
-                    pending = self._updated_indices
-                    for name, t in kwargs.items():
-                        idx = names.get(name)
-                        if idx is not None:
-                            state.set_input(mappings[idx][0], t)
-                            self.input_tensors[idx] = t
-                            pending.append(idx)
-                    return
 
+        Updated positions are tracked in ``_updated_indices`` so that
+        ``run()`` can clear them after dispatch (zero tensor pinning).
+        """
         if args:
             if kwargs:
                 raise ValueError("update(): positional OR keyword arguments, not both")
+            updated = self._updated_indices
             for i, t in enumerate(args):
                 self.input_tensors[i] = t
+                updated.append(i)
         elif kwargs:
             names = self._input_names
             if names is None:
                 raise ValueError(
                     "Keyword update requires named inputs. " "This OpDescriptor was created without input_names."
                 )
+            updated = self._updated_indices
             for name, t in kwargs.items():
                 idx = names.get(name)
                 if idx is None:
@@ -257,6 +237,7 @@ class OpDescriptor:
                         f"Unknown input name {name!r} for {self.name!r} op. " f"Valid names: {sorted(names)}"
                     )
                 self.input_tensors[idx] = t
+                updated.append(idx)
 
         if self._complete_fn is not None and self.program_cache_key is None:
             if all(t is not None and not isinstance(t, _DeferredOutput) for t in self.input_tensors):
