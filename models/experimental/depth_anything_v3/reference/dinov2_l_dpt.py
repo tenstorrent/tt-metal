@@ -34,15 +34,6 @@ HEAD_FEATURES = 256
 HEAD_OUT_CHANNELS = (256, 512, 1024, 1024)
 
 
-class _LayerScale(nn.Module):
-    def __init__(self, dim: int) -> None:
-        super().__init__()
-        self.gamma = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x * self.gamma
-
-
 class _Attention(nn.Module):
     def __init__(self, dim: int, num_heads: int) -> None:
         super().__init__()
@@ -77,14 +68,14 @@ class _Block(nn.Module):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = _Attention(dim, num_heads)
-        self.ls1 = _LayerScale(dim)
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.mlp = _Mlp(dim, dim * mlp_ratio)
-        self.ls2 = _LayerScale(dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.ls1(self.attn(self.norm1(x)))
-        x = x + self.ls2(self.mlp(self.norm2(x)))
+        # ls1/ls2 gammas are pre-folded into attn.proj and mlp.fc2 by
+        # `_fold_layerscale_into_state_dict` at load time.
+        x = x + self.attn(self.norm1(x))
+        x = x + self.mlp(self.norm2(x))
         return x
 
 
@@ -265,9 +256,32 @@ class DA3Metric(nn.Module):
         return depth
 
 
+def _fold_layerscale_into_state_dict(remapped: dict) -> dict:
+    """Pre-fold ls1.gamma into attn.proj and ls2.gamma into mlp.fc2 so the
+    runtime forward pass can drop the per-block elementwise multiplications."""
+    out = dict(remapped)
+    block_indices = sorted(
+        {int(k.split(".")[2]) for k in remapped if k.startswith("backbone.blocks.")}
+    )
+    for i in block_indices:
+        for ls_key, lin_w_key, lin_b_key in [
+            (f"backbone.blocks.{i}.ls1.gamma",
+             f"backbone.blocks.{i}.attn.proj.weight",
+             f"backbone.blocks.{i}.attn.proj.bias"),
+            (f"backbone.blocks.{i}.ls2.gamma",
+             f"backbone.blocks.{i}.mlp.fc2.weight",
+             f"backbone.blocks.{i}.mlp.fc2.bias"),
+        ]:
+            gamma = out.pop(ls_key)
+            # Linear weight has shape [out, in]; gamma multiplies per output channel.
+            out[lin_w_key] = out[lin_w_key] * gamma.unsqueeze(1)
+            out[lin_b_key] = out[lin_b_key] * gamma
+    return out
+
+
 def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> dict:
-    """Read only the `model.da3_metric.*` slice of the checkpoint and remap keys
-    onto the DA3Metric module above."""
+    """Read only the `model.da3_metric.*` slice of the checkpoint, remap keys
+    onto the DA3Metric module above, and pre-fold layerscale into linears."""
     from safetensors import safe_open
 
     state = {}
@@ -278,20 +292,13 @@ def load_da3_metric_state_dict(safetensors_path: str | Path = HF_SNAPSHOT) -> di
                 continue
             state[k[len(prefix):]] = f.get_tensor(k)
 
-    # Remap backbone keys: pretrained.* -> backbone.*
     remapped = {}
     for k, v in state.items():
         if k.startswith("backbone.pretrained."):
-            new_k = "backbone." + k[len("backbone.pretrained."):]
-            # patch_embed.proj.{weight,bias}  -> backbone.patch_embed.proj.{...}
-            # blocks.{i}.* unchanged
-            # ls1.gamma / ls2.gamma unchanged (we already named them gamma)
-            remapped[new_k] = v
-        elif k.startswith("head."):
-            remapped[k] = v
+            remapped["backbone." + k[len("backbone.pretrained."):]] = v
         else:
             remapped[k] = v
-    return remapped
+    return _fold_layerscale_into_state_dict(remapped)
 
 
 def build_da3_metric(load_weights: bool = True, img_size: int = DEFAULT_INPUT_SIZE) -> DA3Metric:
