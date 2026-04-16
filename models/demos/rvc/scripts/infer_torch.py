@@ -8,6 +8,7 @@ import os
 import soundfile as sf
 
 from models.demos.rvc.torch_impl.vc.pipeline import Pipeline
+from models.demos.rvc.utils.f0 import F0Method
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +37,7 @@ def main() -> None:
         num="48k",
         speaker_id=args.speaker_id,
         f0_up_key=args.f0_up_key,
-        f0_method=args.f0_method,
+        f0_method=F0Method.from_str(args.f0_method),
         index_rate=args.index_rate,
         rms_mix_rate=args.rms_mix_rate,
         protect=args.protect,

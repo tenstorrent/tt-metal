@@ -24,6 +24,7 @@ from models.demos.rvc.utils.config import (
     get_hubert_paths,
     get_model_and_config_paths,
 )
+from models.demos.rvc.utils.f0 import F0Method
 
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
@@ -146,7 +147,7 @@ class Pipeline:
         config: Config | None = None,
         speaker_id: int = 0,
         f0_up_key: int = 0,
-        f0_method: str = "rapt",
+        f0_method: F0Method = F0Method.RAPT,
         index_rate: float = 0.75,
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
@@ -192,7 +193,7 @@ class Pipeline:
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
-        if self.f0_method == "rapt":
+        if self.f0_method is F0Method.RAPT:
             audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float32)
             audio_scaled = np.clip(audio_np * 32767, -32768, 32767)
             rapt_threshold = 0.525
@@ -207,7 +208,7 @@ class Pipeline:
                 otype="f0",
             )
             f0 = torch.from_numpy(f0)
-        elif self.f0_method == "dio":
+        elif self.f0_method is F0Method.DIO:
             audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
             frame_period = self.window / self.sr * 1000.0
             dio_threshold = 0.444
@@ -223,25 +224,24 @@ class Pipeline:
             f0 = pw.stonemask(audio_np, f0, t, self.sr)
             f0 = torch.from_numpy(f0.astype(np.float32))
         else:
-            raise ValueError(f"Unsupported f0_method: {self.f0_method}")
+            raise ValueError(f"Unsupported f0_method: {self.f0_method}, must be one of {list(F0Method)}")
 
-        pad_size = (num_frames - len(f0) + 1) // 2
-        if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
-            f0 = F.pad(f0, (pad_size, num_frames - len(f0) - pad_size), mode="constant")
+        f0 = f0.unsqueeze(0)
+        f0_len = f0.shape[1]
+        if f0_len < num_frames:
+            pad_size = (num_frames - f0_len + 1) // 2
+            f0 = F.pad(f0, (pad_size, num_frames - f0_len - pad_size), mode="constant")
+        else:
+            f0 = f0[:, :num_frames]
 
         f0 *= pow(2, self.f0_up_key / 12)
         f0_continuous = f0.clone()
         f0_mel = 1127 * torch.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
-        f0_mel[f0_mel <= 1] = 1
-        f0_mel[f0_mel > 255] = 255
+        f0_mel = torch.clamp(f0_mel, min=1, max=255)
         f0_coarse = torch.round(f0_mel)
 
-        f0_coarse = f0_coarse[:num_frames]
-        f0_continuous = f0_continuous[:num_frames]
-        f0_coarse = f0_coarse.unsqueeze(0).long()
-        f0_continuous = f0_continuous.unsqueeze(0).float()
-        return f0_coarse, f0_continuous
+        return f0_coarse.to(torch.int64), f0_continuous.to(torch.float32)
 
     def _get_time_stamps(self, audio, num_frames):
         batch_size = audio.shape[0]

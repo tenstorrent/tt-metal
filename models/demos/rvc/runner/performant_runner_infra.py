@@ -10,6 +10,8 @@ import numpy as np
 import torch
 from loguru import logger
 
+from models.demos.rvc.utils.f0 import F0Method
+
 
 @dataclass(frozen=True)
 class RVCModelConfig:
@@ -23,7 +25,7 @@ class RVCInferenceConfig:
     num_secs: float
     speaker_id: int = 0
     f0_up_key: int = 0
-    f0_method: str = "rapt"
+    f0_method: F0Method = F0Method.RAPT
     index_rate: float = 0.75
     rms_mix_rate: float = 0.25
     protect: float = 0.33
