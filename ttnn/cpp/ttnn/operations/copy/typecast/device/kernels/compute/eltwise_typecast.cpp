@@ -54,12 +54,16 @@ void kernel_main() {
 
     // Phase 2: typecast from intermediate_cb → output_cb.
     // init_sfpu must come after tilize — tilize needs clean hardware without SFPU state.
+    // Drain ALL pending coprocessor instructions (including stale REG2FLOP from tilize
+    // phase) BEFORE init_sfpu. tensix_sync() is a RISC-V blocking store that forces
+    // the coprocessor backend to process its entire queue before RISC-V continues.
+    // Without this, init_sfpu's own tensix_sync() (in llk_pack_dest_init) flushes
+    // the stale REG2FLOP AFTER init_sfpu has already written the correct THCON value.
+    tensix_sync();
     init_sfpu(intermediate_cb, output_cb);
 #if FP32_DEST_ACC_EN && !defined(TYPECAST_OUTPUT_32BIT)
     disable_fp32_dest_acc();
 #endif
-    // Ensure all config writes (init_sfpu + optional disable_fp32_dest_acc) are
-    // committed before the pack loop starts.
     constexpr auto stall_until_config_done = []() { TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::PACK); };
     PACK((stall_until_config_done()));
 
