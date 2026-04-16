@@ -49,6 +49,7 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 # ---------- RoPE (host-side, identical to reference) ----------
 
 _ROPE_CACHE: dict = {}
+_POS_MAX_CACHE: dict = {}
 
 
 def _rope_cos_sin(D: int, max_pos: int, base: float, dtype):
@@ -64,12 +65,24 @@ def _rope_cos_sin(D: int, max_pos: int, base: float, dtype):
     return c
 
 
+def _pos_max_plus_one(pos: torch.Tensor) -> int:
+    # pos is reused across all encoder/decoder blocks every inference; the
+    # `.item()` host sync was repeating ~96 times per call. Memoise on object
+    # id (positions are constructed once per dust3r_forward).
+    key = id(pos)
+    v = _POS_MAX_CACHE.get(key)
+    if v is None:
+        v = int(pos.max().item()) + 1
+        _POS_MAX_CACHE[key] = v
+    return v
+
+
 def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) -> torch.Tensor:
     """Apply DUSt3R 2D RoPE100 on host. tokens: (B, H, N, Dh), pos: (B, N, 2)."""
     B, H, N, Dh = tokens.shape
     assert Dh % 2 == 0
     D = Dh // 2
-    max_pos = int(pos.max().item()) + 1
+    max_pos = _pos_max_plus_one(pos)
     cos, sin = _rope_cos_sin(D, max_pos, base, tokens.dtype)
 
     y = tokens[..., :D]
