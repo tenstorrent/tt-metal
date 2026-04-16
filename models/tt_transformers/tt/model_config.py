@@ -9,7 +9,7 @@ import os
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from loguru import logger
@@ -1134,9 +1134,8 @@ class ModelArgs:
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
-    @lru_cache(maxsize=None)
-    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
-        """Get the memory config for decode residual tensors."""
+    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
+        """Get the memory config for residual tensors (decode: sharded L1; prefill: L1 for short-seq on single-chip)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 num_residual_worker_cores = 32 if self.num_devices == 4 else 16
@@ -1167,25 +1166,28 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     def use_short_seq_l1_prefill(self, seq_len: int = None):
-        """L1-backed prefill activations for N150, batch 1, max/active seq ≤ 512.
+        """L1-backed prefill activations on single-chip meshes when batch is 1 and sequence is short.
 
-        Used for Qwen3-Embedding and other models on N150 to reduce DRAM traffic on short prompts.
-        Opt out with TT_PREFILL_FORCE_DRAM=1.
+        Reduces DRAM traffic for short prompts (e.g. Qwen3-Embedding). Threshold is
+        ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
         """
         force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
         if force_dram:
-            enabled = False
-        elif self.is_galaxy or self.device_name != "N150" or self.max_batch_size != 1:
-            enabled = False
-        else:
-            effective_seq_len = self.max_seq_len if seq_len is None else seq_len
-            enabled = effective_seq_len <= 512
-        return enabled
+            return False
+        if self.is_galaxy:
+            return False
+        if self.num_devices != 1:
+            return False
+        if self.max_batch_size != 1:
+            return False
+        max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
+        effective_seq_len = self.max_seq_len if seq_len is None else seq_len
+        return effective_seq_len <= max_short
 
     def get_prefill_activation_mem_config(self, seq_len: int = None):
         """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
@@ -1194,8 +1196,9 @@ class ModelArgs:
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
-    @lru_cache(maxsize=None)
-    def get_mlp_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1219,7 +1222,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1334,8 +1337,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff1_3_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1350,12 +1354,11 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1370,13 +1373,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: Cannot use @lru_cache here because tensor parameter would cause memory leak
     # by keeping references to all tensors passed to this function
-    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
+    def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return (
@@ -1399,7 +1402,7 @@ class ModelArgs:
             else:
                 return tensor.memory_config()
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1449,8 +1452,7 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
-    @lru_cache(maxsize=None)
-    def get_mlp_act_mem_config(self, mode: Mode):
+    def get_mlp_act_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for MLP activation (TG specific)."""
         if mode == Mode.DECODE:
             if self.dim >= 4096:
@@ -1469,7 +1471,7 @@ class ModelArgs:
                     ttnn.ShardSpec(full_grid, [32, nearest_32(56)], ttnn.ShardOrientation.ROW_MAJOR),
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1548,8 +1550,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_input_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_input_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
@@ -1581,7 +1584,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1645,8 +1648,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_qkv_mm_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_qkv_mm_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1666,12 +1670,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_qkv_all_reduce_output_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_qkv_all_reduce_output_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for QKV all-reduce output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1695,22 +1700,22 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_create_head_input_mem_config(self, mode: Mode):
+    def get_attn_create_head_input_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for create_head input (TG specific)."""
         if mode == Mode.DECODE:
             return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_create_head_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1736,13 +1741,16 @@ class ModelArgs:
                 else:
                     return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
-        self, mode: Mode, batch_size_per_device_group: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        batch_size_per_device_group: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for SDPA output in attention."""
         if mode == Mode.DECODE:
@@ -1770,12 +1778,13 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             # Match concat_heads / WO: keeps SDPA output off DRAM when use_short_seq_l1_prefill (embedding <512)
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_concat_heads_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_concat_heads_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention concat_heads output before WO matmul."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1806,12 +1815,13 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_all_gather_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_all_gather_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for attention all-gather output."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1840,7 +1850,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1959,8 +1969,9 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_wo_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_wo_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for WO matmul output in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1977,12 +1988,13 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_dense_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_attn_dense_output_mem_config(
+        self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for dense output (after all-reduce) in attention."""
         if mode == Mode.DECODE:
             if self.ccl_topology() == ttnn.Topology.Ring and prefetcher is None:
@@ -2005,13 +2017,17 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
     def get_attn_all_reduce_output_mem_config(
-        self, mode: Mode, hidden_size: int = 0, mesh_rows: int = 1, prefetcher: Prefetcher = None
+        self,
+        mode: Mode,
+        hidden_size: int = 0,
+        mesh_rows: int = 1,
+        prefetcher: Prefetcher = None,
+        prefill_seq_len: Optional[int] = None,
     ):
         """Get the memory config for attention all-reduce output (TG specific configs)."""
         if mode == Mode.DECODE:
@@ -2033,12 +2049,13 @@ class ModelArgs:
                 else:
                     return self.get_residual_mem_config(Mode.DECODE, None)
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
-    def get_attn_gather_users_mem_config(self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_gather_users_mem_config(
+        self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
+    ):
         """Get the memory config for gather users in attention (TG path)."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -2058,7 +2075,7 @@ class ModelArgs:
             else:
                 return self.model_config["GATHER_USERS_MEMCFG"](mesh_cols)
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config()
+            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 

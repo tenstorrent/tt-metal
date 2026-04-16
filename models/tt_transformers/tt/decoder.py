@@ -218,7 +218,8 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        prefill_seq_len = int(x.shape[-2]) if mode == Mode.PREFILL else None
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, prefill_seq_len=prefill_seq_len)
 
         assert (
             x.memory_config() == skip_mem_cfg
