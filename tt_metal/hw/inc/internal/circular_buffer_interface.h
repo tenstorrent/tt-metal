@@ -115,7 +115,10 @@ __attribute__((noinline)) inline bool cb_access_within_bounds(
 }
 
 __attribute__((noinline)) inline bool cb_access_divides_size_evenly(uint32_t cb_id, uint32_t num_tiles) {
-    return num_tiles > 0 && get_local_cb_interface(cb_id).fifo_num_pages % num_tiles == 0;
+    if (num_tiles == 0) {
+        return true;
+    }
+    return get_local_cb_interface(cb_id).fifo_num_pages % num_tiles == 0;
 }
 
 __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uint32_t num_tiles, bool reset = false) {
@@ -124,6 +127,10 @@ __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uin
 
     if (reset) {
         last_count[cb_id] = 0;
+        return true;
+    }
+
+    if (num_tiles == 0) {
         return true;
     }
 
