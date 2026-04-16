@@ -297,7 +297,7 @@ for (uint32_t i = 0; i < C; i++) {
 
     // ---- Verify in0 multicast output ----
     // After the K loop, each core should have all K subblocks for its row in order
-    for (uint32_t i = 0; i < matmul_cores_list.size(); i++) {
+    for (auto & i : matmul_cores_list) {
         vector<uint32_t> in0_read_output;
         detail::ReadFromDeviceL1(
             device, matmul_cores_list[i], in0_mcast_output_addr, in0_output_total_bytes, in0_read_output);
