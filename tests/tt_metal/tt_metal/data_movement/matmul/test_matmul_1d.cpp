@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "test_matmul_common.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -23,30 +23,15 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::one_d_matmul {
 
-uint32_t runtime_host_id = 0;
+using MatmulTestConfig = unit_tests::dm::matmul::MatmulTestConfig;
 
-// Test config
-struct one_d_Matmul_Config {
-    uint32_t test_id = 0;
-    CoreCoord origin_logical_core;
-    CoreCoord start_logical_core;
-    CoreCoord end_logical_core;
-    uint32_t num_subblocks_r_dim = 2;  // how many subblocks in r dim
-    uint32_t num_subblocks_c_dim = 2;
-    uint32_t num_subblocks_k_dim = 1;
-    uint32_t subblock_r_dim = 1;  // how many pages each subblock in r dim takes up
-    uint32_t subblock_c_dim = 1;
-    uint32_t subblock_k_dim = 1;
-    uint32_t page_size_bytes = 1;
-    DataFormat l1_data_format = DataFormat::Float16_b;
-    uint32_t dram_bank_id = 0;  // dram bank that all cores will read from
-};
+uint32_t runtime_host_id = 0;
 
 /// @brief Reads from DRAM to L1 with each core reading only its adjacent bank
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test
 /// @return true if test passes
-bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, const one_d_Matmul_Config& test_config) {
+bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulTestConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
 
     // Check that the requested grid fits within the device's compute grid.
@@ -218,7 +203,7 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     // Kernels
     auto risc0_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/1d_matmul/kernels/in0_kernel.cpp",
+        "tests/tt_metal/tt_metal/data_movement/matmul/kernels/in0_kernel.cpp",
         matmul_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -227,7 +212,7 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     auto risc1_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/1d_matmul/kernels/in1_kernel.cpp",
+        "tests/tt_metal/tt_metal/data_movement/matmul/kernels/in1_kernel.cpp",
         matmul_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -326,11 +311,10 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     return true;
 }
 
-bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, one_d_Matmul_Config test_config) {
+bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, MatmulTestConfig test_config) {
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
     test_config.page_size_bytes = bytes_per_page;
-    test_config.origin_logical_core = test_config.start_logical_core;
     test_config.end_logical_core = CoreCoord(
         test_config.start_logical_core.x + test_config.num_subblocks_c_dim - 1,
         test_config.start_logical_core.y + test_config.num_subblocks_r_dim - 1);
@@ -339,184 +323,14 @@ bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, one
 
 }  // namespace unit_tests::dm::one_d_matmul
 
-/* =================================== */
-/* =========== TEST CASES ============ */
-/* =================================== */
-
-using unit_tests::dm::one_d_matmul::run_single_test;
-
-/* ======== GRID SHAPE TESTS ======== */
-
-// 2x2 grid (default config)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulIdeal) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 650}));
+TEST_P(Matmul1DParamFixture, Test1DMatmul) {
+    EXPECT_TRUE(unit_tests::dm::one_d_matmul::run_single_test(get_mesh_device(), GetParam()));
 }
 
-// 1x1: sender multicasts to itself, reads full in1 from DRAM
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulSingleCore) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 651, .num_subblocks_r_dim = 1, .num_subblocks_c_dim = 1}));
-}
-
-// 1x3 row: one sender multicasts in0 to 3 receivers
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulSingleRow) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 652, .num_subblocks_r_dim = 1, .num_subblocks_c_dim = 3}));
-}
-
-// 3x1 column: 3 independent senders each multicast to self
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulSingleColumn) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 653, .num_subblocks_r_dim = 3, .num_subblocks_c_dim = 1}));
-}
-
-// 2x3 non-square grid (R=3, C=2)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulNonSquare2x3) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 654, .num_subblocks_r_dim = 3, .num_subblocks_c_dim = 2}));
-}
-
-// 3x2 non-square grid (R=2, C=3)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulNonSquare3x2) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 655, .num_subblocks_r_dim = 2, .num_subblocks_c_dim = 3}));
-}
-
-// 4x4 large grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargeGrid4x4) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 656, .num_subblocks_r_dim = 4, .num_subblocks_c_dim = 4}));
-}
-
-// 6x6 large grid with K=2: 36 cores, 6-way multicast per row
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargeGrid6x6) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 657, .num_subblocks_r_dim = 6, .num_subblocks_c_dim = 6, .num_subblocks_k_dim = 2}));
-}
-
-// 1x8 wide row: max multicast fan-out (8 receivers)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulWideMulticast8Col) {
-    EXPECT_TRUE(
-        run_single_test(get_mesh_device(), {.test_id = 658, .num_subblocks_r_dim = 1, .num_subblocks_c_dim = 8}));
-}
-
-// 8x1 tall column with deep K=4: 8 independent senders, deep accumulation
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulTall8RowDeepK) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 659, .num_subblocks_r_dim = 8, .num_subblocks_c_dim = 1, .num_subblocks_k_dim = 4}));
-}
-
-/* ======== NON-ORIGIN START TESTS ======== */
-
-// 2x2 grid starting at logical core (2,2)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulNonOriginStart) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 660, .start_logical_core = CoreCoord(2, 2)}));
-}
-
-// 5x3 non-square grid starting at (2,3) with K=2
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulNonOriginLargeNonSquare) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 661,
-         .start_logical_core = CoreCoord(2, 3),
-         .num_subblocks_r_dim = 3,
-         .num_subblocks_c_dim = 5,
-         .num_subblocks_k_dim = 2}));
-}
-
-/* ======== K DIMENSION TESTS ======== */
-
-// K=2 on 2x2 grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargerK) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 662, .num_subblocks_k_dim = 2}));
-}
-
-// K=3 on 3x2 grid (R=3, C=2)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulMultipleKSubblocks) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 663, .num_subblocks_r_dim = 3, .num_subblocks_c_dim = 2, .num_subblocks_k_dim = 3}));
-}
-
-/* ======== SUBBLOCK DIMENSION TESTS ======== */
-
-// subblock_r=2 on 2x2 grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargerSubblockR) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 664, .subblock_r_dim = 2}));
-}
-
-// subblock_c=2 on 2x2 grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargerSubblockC) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 665, .subblock_c_dim = 2}));
-}
-
-// subblock_k=2 on 2x2 grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargerSubblockK) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 666, .subblock_k_dim = 2}));
-}
-
-// All subblocks=2 with K=2 on 2x2 grid
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulAllSubblocksLarger) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 667, .num_subblocks_k_dim = 2, .subblock_r_dim = 2, .subblock_c_dim = 2, .subblock_k_dim = 2}));
-}
-
-// All subblocks=4 with K=2 on 2x2 grid: maximum subblock dimensions
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulMaxSubblockDims) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 668, .num_subblocks_k_dim = 2, .subblock_r_dim = 4, .subblock_c_dim = 4, .subblock_k_dim = 4}));
-}
-
-// Asymmetric subblocks (R=2, C=6, K=3, sub_r=3, sub_c=2, sub_k=2)
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulAsymmetricSubblocks) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 669,
-         .num_subblocks_r_dim = 2,
-         .num_subblocks_c_dim = 6,
-         .num_subblocks_k_dim = 3,
-         .subblock_r_dim = 3,
-         .subblock_c_dim = 2,
-         .subblock_k_dim = 2}));
-}
-
-/* ======== STRESS TESTS ======== */
-
-// 4x4 grid, K=4, all subblocks=2: stress all dimensions simultaneously
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulLargeGridDeepKLargeSubblocks) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 670,
-         .num_subblocks_r_dim = 4,
-         .num_subblocks_c_dim = 4,
-         .num_subblocks_k_dim = 4,
-         .subblock_r_dim = 2,
-         .subblock_c_dim = 2,
-         .subblock_k_dim = 2}));
-}
-
-// 1x6 wide row, K=3, sub_r=3, sub_c=2, sub_k=2: big multicast + big DRAM reads
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulWideMulticastLargePayload) {
-    EXPECT_TRUE(run_single_test(
-        get_mesh_device(),
-        {.test_id = 671,
-         .num_subblocks_r_dim = 1,
-         .num_subblocks_c_dim = 6,
-         .num_subblocks_k_dim = 3,
-         .subblock_r_dim = 3,
-         .subblock_c_dim = 2,
-         .subblock_k_dim = 2}));
-}
-
-/* ======== DRAM BANK TESTS ======== */
-
-// 2x2 grid reading in1 from DRAM bank 1
-TEST_F(GenericMeshDeviceFixture, Test1DMatmulDramBank1) {
-    EXPECT_TRUE(run_single_test(get_mesh_device(), {.test_id = 672, .dram_bank_id = 1}));
-}
+INSTANTIATE_TEST_SUITE_P(
+    Matmul1DSweep,
+    Matmul1DParamFixture,
+    ::testing::ValuesIn(unit_tests::dm::matmul::get_matmul_test_configs()),
+    unit_tests::dm::matmul::MatmulTestNameGenerator());
 
 }  // namespace tt::tt_metal

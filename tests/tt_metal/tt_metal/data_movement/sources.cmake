@@ -31,5 +31,6 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     noc_estimator_tests/test_noc_estimator.cpp
     dram_neighbour/test_dram_neighbour.cpp
     quasar_cache/test_quasar_cache.cpp
-    1d_matmul/test_matmul_1d.cpp
+    matmul/test_matmul_1d.cpp
+    matmul/test_matmul_1d_v2.cpp
 )
