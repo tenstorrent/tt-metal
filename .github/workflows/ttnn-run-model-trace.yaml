@@ -59,6 +59,7 @@ jobs:
     outputs:
       arch: ${{ steps.derive.outputs.arch }}
       platform: ${{ steps.derive.outputs.platform }}
+      ci-version: ${{ steps.derive.outputs.ci_version }}
     steps:
       - name: Verify tenstorrent org membership
         env:
@@ -108,9 +109,21 @@ jobs:
               ARCH="wormhole_b0"
               ;;
           esac
+          # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
+          # via the in-cluster large file cache. Bare-metal labels run on CIv1
+          # with /mnt/MLPerf (Weka) instead.
+          case "$RUNNER" in
+            N150|N300|P100a|P150b)
+              CI_VERSION="civ2"
+              ;;
+            *)
+              CI_VERSION="civ1"
+              ;;
+          esac
           echo "arch=$ARCH" >> $GITHUB_OUTPUT
           echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
-          echo "Derived arch=$ARCH for runner=$RUNNER"
+          echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
+          echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
   build-artifact:
     name: Build
@@ -137,14 +150,18 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
+        # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
+        # + LFC so HF_HOME is left unset (falls back to the container default).
+        HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
         --device /dev/tenstorrent
         --device /dev/ipmi0
         --privileged
-        -e TT_GH_CI_INFRA=1
+        ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
     defaults:
       run:
         shell: bash
@@ -177,6 +194,7 @@ jobs:
           TEST_PATH: ${{ inputs.test_path }}
           RUNNER_LABEL: ${{ inputs.runner-label }}
           ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          CI_VERSION: ${{ needs.validate-inputs.outputs.ci-version }}
           INPUT_HF_MODEL: ${{ inputs.HF_MODEL }}
           STORE_RAW: ${{ inputs.store-raw-traces }}
           LOAD_DB: ${{ inputs.load-to-db }}
@@ -184,6 +202,11 @@ jobs:
           TIMEOUT: ${{ inputs.timeout-minutes }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
+          if [[ "$CI_VERSION" == "civ2" ]]; then
+            HF_SOURCE="LFC via TT_GH_CI_INFRA=1"
+          else
+            HF_SOURCE="/mnt/MLPerf (HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home)"
+          fi
           echo "::group::Trace Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    Model Trace Configuration                │"
@@ -191,8 +214,9 @@ jobs:
           echo "│ Test Path:            $TEST_PATH"
           echo "│ Runner:               $RUNNER_LABEL"
           echo "│ Architecture:         $ARCH"
+          echo "│ CI version:           $CI_VERSION"
           echo "│ HF_MODEL:             ${INPUT_HF_MODEL:-(not set)}"
-          echo "│ CIv2 (TT_GH_CI_INFRA): 1 (weights resolved via LFC)"
+          echo "│ HF weights source:    $HF_SOURCE"
           echo "│ Store Raw Traces:     $STORE_RAW"
           echo "│ Load to DB:           $LOAD_DB"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
@@ -200,6 +224,41 @@ jobs:
           echo "│ tt-metal SHA:         $TT_METAL_SHA"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
+
+      - name: Probe LFC for HF_MODEL (CIv2)
+        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && inputs.HF_MODEL != '' }}
+        env:
+          INPUT_HF_MODEL: ${{ inputs.HF_MODEL }}
+        run: |
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          URL="${LFC_BASE}/${INPUT_HF_MODEL}/config.json"
+          echo "Probing LFC: $URL"
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
+          echo "HTTP status: $STATUS"
+          if [[ "$STATUS" != "200" ]]; then
+            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
+            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
+            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
+            echo "::error::where /mnt/MLPerf provides the weights."
+            exit 1
+          fi
+          echo "LFC has ${INPUT_HF_MODEL}"
+
+      - name: Verify CIv1 weights (MLPerf)
+        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && inputs.HF_MODEL != '' }}
+        env:
+          INPUT_HF_MODEL: ${{ inputs.HF_MODEL }}
+        run: |
+          if ! mountpoint -q /mnt/MLPerf; then
+            echo "::error::/mnt/MLPerf is not mounted on this CIv1 runner."
+            exit 1
+          fi
+          EXPECTED="/mnt/MLPerf/tt_dnn-models/${INPUT_HF_MODEL}"
+          if [[ -d "$EXPECTED" ]]; then
+            echo "Found CIv1 weights at $EXPECTED"
+          else
+            echo "::warning::No CIv1 weights under $EXPECTED; HF loader will try HF_HOME cache and may fail if unpopulated."
+          fi
 
       - name: Run model trace
         id: trace
