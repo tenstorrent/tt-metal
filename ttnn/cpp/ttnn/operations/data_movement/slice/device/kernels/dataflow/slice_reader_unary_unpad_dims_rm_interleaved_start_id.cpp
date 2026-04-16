@@ -7,6 +7,11 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    constexpr uint32_t num_pages_in_row = get_compile_time_arg_val(0);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t size_of_valid_data_in_last_page_in_row = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
+
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_stick_size = get_arg_val<uint32_t>(1);
     const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(2);
@@ -22,12 +27,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -39,20 +41,40 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
-            if (misalignment != 0) {
+            if (num_pages_in_row == 1) {
+                uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
+                noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
+                if (misalignment != 0) {
+                    noc_async_read_barrier();
+                    tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                        src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
+                }
+                src_buffer_l1_addr += stick_size_offset;
+                src_stick_id += 1;
+            } else {
+                uint32_t row_l1 = src_buffer_l1_addr;
+                for (uint32_t p = 0; p < num_pages_in_row - 1; p++) {
+                    uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
+                    noc_async_read(src_noc_addr, row_l1, page_size);
+                    noc_async_read_barrier();
+                    row_l1 += page_size;
+                    src_stick_id += 1;
+                }
+                uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
+                noc_async_read(src_noc_addr, row_l1, size_of_valid_data_in_last_page_in_row);
                 noc_async_read_barrier();
-                tt::data_movement::common::tt_memmove<false, false, false, 0>(
-                    src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
+                src_stick_id += 1;
+                if (misalignment != 0) {
+                    tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                        src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
+                }
+                src_buffer_l1_addr += stick_size_offset;
             }
-            src_buffer_l1_addr += stick_size_offset;
-            src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
                     id_per_dim[j] = 0;
-                    src_stick_id += num_padded_sticks[j];
+                    src_stick_id += num_padded_sticks[j] * num_pages_in_row;
                 } else {
                     break;
                 }

@@ -264,7 +264,7 @@ target_sources(
             slice/slice_nanobind.hpp
             slice/device/slice_device_operation.hpp
             slice/device/slice_device_operation_types.hpp
-            slice/device/slice_program_factory_rm.hpp
+            slice/device/slice_program_factory_rm_default.hpp
             slice/device/slice_program_factory_rm_sharded.hpp
             slice/device/slice_program_factory_rm_stride.hpp
             slice/device/slice_program_factory_tile.hpp
@@ -455,7 +455,7 @@ target_sources(
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_device_operation.cpp
-        slice/device/slice_program_factory_rm.cpp
+        slice/device/slice_program_factory_rm_default.cpp
         slice/device/slice_program_factory_rm_sharded.cpp
         slice/device/slice_program_factory_rm_stride.cpp
         slice/device/slice_program_factory_tile.cpp

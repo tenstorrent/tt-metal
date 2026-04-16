@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_default.hpp"
 
 #include <optional>
 #include <tt-metalium/work_split.hpp>
@@ -11,6 +11,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -18,6 +19,31 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 namespace {
+
+uint32_t get_shard_width_elems(const Tensor& t) {
+    if (!t.is_sharded()) {
+        return t.logical_shape()[-1];
+    }
+    if (t.shard_spec().has_value()) {
+        return t.shard_spec()->shape[1];
+    }
+    return t.nd_shard_spec()->shard_shape[-1];
+}
+
+void get_rm_page_params_for_tensor(
+    const Tensor& t, uint32_t& num_pages_in_row, uint32_t& page_size_bytes, uint32_t& size_valid_last_page_bytes) {
+    const uint32_t unpadded_row_bytes = t.logical_shape()[-1] * t.element_size();
+    if (!t.is_sharded() || t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_pages_in_row = 1;
+        page_size_bytes = unpadded_row_bytes;
+        size_valid_last_page_bytes = unpadded_row_bytes;
+        return;
+    }
+    page_size_bytes = t.buffer()->page_size();
+    const uint32_t shard_w = get_shard_width_elems(t);
+    num_pages_in_row = tt::div_up(t.logical_shape()[-1], shard_w);
+    size_valid_last_page_bytes = unpadded_row_bytes - (num_pages_in_row - 1) * page_size_bytes;
+}
 
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm(
     const Tensor& input_tensor,
@@ -29,7 +55,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
-    uint32_t max_read_size) {
+    uint32_t max_read_size,
+    uint32_t num_pages_in_row_in,
+    uint32_t num_pages_in_row_out) {
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -90,7 +118,12 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val;
     ret_val.reserve(num_cores);
 
-    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+    const uint32_t shard_w_in = get_shard_width_elems(input_tensor);
+    const uint32_t row_start_pages =
+        ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start) * num_pages_in_row_in;
+    const uint32_t col_page_offset = (num_pages_in_row_in > 1) ? (output_tensor_start[-1] / shard_w_in) : 0;
+    const uint32_t start_page_offset = row_start_pages + col_page_offset;
+
     uint32_t num_sticks_written = 0;
     for (const auto& core : all_cores_vec) {
         uint32_t num_sticks_per_core;
@@ -114,12 +147,12 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
-        uint32_t start_id = id_per_dim[0] + start_offset;
+        uint32_t start_id = id_per_dim[0] + start_page_offset;
 
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_unpadded_sticks_per_dim[j];
             unpadded_written = unpadded_written / num_unpadded_sticks_per_dim[j];
-            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
+            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1] * num_pages_in_row_in;
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
@@ -131,6 +164,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
+        const uint32_t writer_start_page_id = num_sticks_written * num_pages_in_row_out;
+
         std::vector<uint32_t> writer_kernel_args = {
             output_buffer->address(),
             unpadded_row_size_bytes,
@@ -138,7 +173,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core,
             num_sticks_per_core_read,
             num_read_per_barrier,
-            num_sticks_written,
+            writer_start_page_id,
             0};
         num_sticks_written += num_sticks_per_core;
         ret_val.emplace_back(reader_kernel_args, writer_kernel_args);
@@ -192,7 +227,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
+SliceRmDefaultProgramFactory::cached_program_t SliceRmDefaultProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -223,10 +258,27 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    uint32_t num_pages_in_row_in = 1;
+    uint32_t page_size_in = input.logical_shape()[-1] * input.element_size();
+    uint32_t size_valid_last_in = page_size_in;
+    ttnn::operations::data_movement::get_rm_page_params_for_tensor(
+        input, num_pages_in_row_in, page_size_in, size_valid_last_in);
+
+    uint32_t num_pages_in_row_out = 1;
+    uint32_t page_size_out = output.logical_shape()[-1] * output.element_size();
+    uint32_t size_valid_last_out = page_size_out;
+    ttnn::operations::data_movement::get_rm_page_params_for_tensor(
+        output, num_pages_in_row_out, page_size_out, size_valid_last_out);
+
+    std::vector<uint32_t> writer_compile_time_args_vec = {
+        (std::uint32_t)src0_cb_index, num_pages_in_row_out, page_size_out, size_valid_last_out};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args_vec);
 
-    std::vector<uint32_t> reader_compile_time_args_vec;
+    std::vector<uint32_t> reader_compile_time_args_vec = {
+        num_pages_in_row_in,
+        page_size_in,
+        size_valid_last_in,
+    };
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -253,7 +305,9 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE,
+        num_pages_in_row_in,
+        num_pages_in_row_out);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores_vec[i], all_runtime_args[i].first);
@@ -265,7 +319,7 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
         {unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, args.sub_core_grids, cb_src0}};
 }
 
-void SliceRmProgramFactory::override_runtime_arguments(
+void SliceRmDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& src_tensor = tensor_args.input;
     const auto& slice_start = args.slice_start;
@@ -285,6 +339,18 @@ void SliceRmProgramFactory::override_runtime_arguments(
     UpdateCircularBufferTotalSize(cached_program.program, cached_program.shared_variables.cb_src0, cb_size_bytes);
     UpdateCircularBufferPageSize(cached_program.program, cached_program.shared_variables.cb_src0, 0, cb_page_size);
 
+    uint32_t num_pages_in_row_in = 1;
+    uint32_t page_size_in = 0;
+    uint32_t size_valid_last_in = 0;
+    ttnn::operations::data_movement::get_rm_page_params_for_tensor(
+        src_tensor, num_pages_in_row_in, page_size_in, size_valid_last_in);
+
+    uint32_t num_pages_in_row_out = 1;
+    uint32_t page_size_out = 0;
+    uint32_t size_valid_last_out = 0;
+    ttnn::operations::data_movement::get_rm_page_params_for_tensor(
+        output, num_pages_in_row_out, page_size_out, size_valid_last_out);
+
     auto all_cores_vec = corerange_to_cores(all_cores);
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm(
         src_tensor,
@@ -296,7 +362,9 @@ void SliceRmProgramFactory::override_runtime_arguments(
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE);
+        ttnn::operations::data_movement::MAX_READ_SIZE,
+        num_pages_in_row_in,
+        num_pages_in_row_out);
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         auto& reader_runtime_args = GetRuntimeArgs(
