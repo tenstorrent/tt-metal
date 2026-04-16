@@ -70,6 +70,8 @@ def test_tokenize_prompt_to_chat_template(tokenizer):
 def test_first_token_from_reference(input_path, model_path, config_only, tokenizer):
     # Use weights_only=False since this is a trusted local file with custom objects
     logger.info(f"{input_path=}")
+    if not input_path.exists():
+        pytest.skip(f"Reference artifact not found: {input_path}")
     data = torch.load(input_path, weights_only=False)
 
     if "norm_output" in data:  # this is ttnn output; norm only
