@@ -33,12 +33,12 @@ captured at ``build()`` before dispatch (so in-place branch tensor updates are
 visible). Pass ``launch(*ops)`` to refresh from a different op tuple instead.
 
 **Steady state API:** :meth:`Sequential.run` and :meth:`Parallel.run` dispatch
-via :func:`_container_run` which does a ``_BUILD_CACHE`` lookup + direct
-``patchable_generic_op`` dispatch without constructing or retaining a
-``FusedOp``. After dispatch, branch ops' output tensor slots are released
-(via :meth:`LazyOutputList.release`) so that persistent containers do not
-pin L1 device memory across forward passes. The retained ``_alloc_fn``
-re-allocates fresh outputs on the next call.
+via :func:`_container_run`.  Persistent containers cache a ``_cached_entry``
+pointer to the shared ``_CacheEntry``; on call 2+ the C++
+``FusionDispatchState`` allocates ephemeral outputs, patches, and dispatches
+in a single call — zero L1 pinning between forward passes.  Inline
+containers (new each call) always use the lightweight warm path (3-arg
+``patchable_generic_op``, reused output tensors).
 """
 
 import os
@@ -100,6 +100,10 @@ class _CacheEntry:
     # for the allocating patchable_generic_op overload.  Populated on the cold path.
     output_specs: Optional[List] = None
     shared_output_map: List = field(default_factory=list)
+    # C++ FusionDispatchState — created once after output_specs populated,
+    # shared across all containers with the same cache key.  Persistent
+    # containers reach it via _cached_entry; inline containers never use it.
+    dispatch_state: Any = None
 
 
 def _flatten_ops(items) -> List[OpDescriptor]:
@@ -427,20 +431,25 @@ def _materialize_chain(items, edges: List[Tuple[int, int, int, int]], ops=None) 
 def _container_run(container: Any, surface_prefix: str, results, device=None, kernel_dir: Optional[str] = None):
     """Shared implementation for :meth:`Sequential.run` / :meth:`Parallel.run`.
 
-    Fast path: if ``_BUILD_CACHE`` has an entry, go straight from cache to
-    ``patchable_generic_op`` — no ``build()``, no ``FusedOp``, no redundant IO
-    iteration.  Falls back to ``build()`` + ``launch()`` on cache miss.
+    Two dispatch paths:
 
-    Output tensors are **ephemeral**: allocated fresh each call from cached
-    ``TensorSpec`` metadata (~3 µs via ``allocate_tensor_on_device``) and
-    returned to the caller.  Branch ops never own output tensors after the
-    cold path — zero L1 pinning between calls.
+    **Persistent hot path** (call 2+ on the same container): ``_cached_entry``
+    points to the shared ``_CacheEntry`` whose ``dispatch_state`` allocates
+    ephemeral outputs, patches, and dispatches in C++.  Skips cache-key
+    computation entirely.  After dispatch, updated activation slots are cleared
+    (zero L1 pinning between calls).
+
+    **Cache-lookup path** (inline warm, first persistent call, or cold miss):
+    computes the cache key, looks up ``_BUILD_CACHE``.  On hit, does a
+    lightweight parent-style 3-arg dispatch (reuses output tensors from ops).
+    On miss, does a full ``build()`` + ``launch()``.  Sets ``_cached_entry``
+    so the next call on the same container goes hot.
     """
-    # Persistent hot path: dedup inputs → dispatch (ephemeral outputs) → clear.
-    # Dedup happens BEFORE clearing so all tensors are present.
-    # Clearing happens AFTER dispatch so activations aren't pinned between calls.
-    state = getattr(container, "_dispatch_state", None)
-    if state is not None:
+    # ── Persistent hot path ──
+    # _cached_entry is set after the first run on a persistent container.
+    # dispatch_state on the shared _CacheEntry does the C++ dispatch.
+    entry = getattr(container, "_cached_entry", None)
+    if entry is not None and entry.dispatch_state is not None:
         seen: Set[int] = set()
         inputs: List = []
         for op in container._cached_ops:
@@ -449,19 +458,18 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
                 if tid not in seen:
                     inputs.append(t)
                     seen.add(tid)
-        outputs = state.dispatch(inputs)
+        outputs = entry.dispatch_state.dispatch(inputs)
         for op in container._cached_ops:
             updated = op._updated_indices
             if updated:
                 for idx in updated:
                     op.input_tensors[idx] = None
                 updated.clear()
-                # Clear stale materialization outputs — dispatch() allocates fresh
-                # ones.  Only done for ops that use update() (persistent mode).
                 if op.output_tensors:
                     op.output_tensors = []
         return _filter_results(outputs, container._default_results, results)
 
+    # ── Cache lookup (inline warm OR first persistent call) ──
     cache_device = device
     if cache_device is None:
         try:
@@ -472,10 +480,9 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
-        # Warm path: lightweight dispatch like the parent branch — reuse output
-        # tensors from ops, no allocation.  Safe because this container is either
-        # inline (discarded after one call, no pinning concern) or persistent on
-        # its first cache hit (second+ calls go through the persistent hot path above).
+        # Warm path: parent-style dispatch — reuse output tensors from ops,
+        # no allocation.  Fast for inline (no FusionDispatchState overhead).
+        # For persistent: sets _cached_entry so next call → hot path.
         seen: Set[int] = set()
         inputs: List = []
         for op in ops:
@@ -492,20 +499,6 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         ttnn._ttnn.operations.experimental.patchable_generic_op(
             io_tensors, entry.cached_descriptor, entry.address_slots
         )
-        container._has_run = True
-
-        # Wire FusionDispatchState on the second+ call to the same container.
-        # Skip on first call to avoid penalizing inline mode (new container each call).
-        if getattr(container, "_has_run", False) and any(op.input_tensors for op in ops):
-            first_tensor = next(t for op in ops for t in op.input_tensors if t is not None)
-            container._dispatch_state = ttnn._ttnn.operations.experimental.FusionDispatchState(
-                entry.output_specs,
-                entry.shared_output_map,
-                entry.result_reorder,
-                entry.cached_descriptor,
-                entry.address_slots,
-                first_tensor.device(),
-            )
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
@@ -522,6 +515,8 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     # Cache output specs in **output_sources order** (matching io_tensors /
     # address_slots) and compute the reorder mapping to default_results order.
+    # Then create FusionDispatchState once — shared across all containers
+    # with the same cache key.
     if entry is not None and entry.output_specs is None:
         if entry.output_sources and ret and ret[0] is not None:
             src_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
@@ -547,7 +542,21 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         elif ret and ret[0] is not None:
             entry.output_specs = [t.spec for t in ret if t is not None]
 
-    container._has_run = True
+    # Create FusionDispatchState once on the shared _CacheEntry.
+    if entry is not None and entry.dispatch_state is None and entry.output_specs is not None:
+        first_tensor = next((t for op in ops for t in op.input_tensors if t is not None), None)
+        if first_tensor is not None:
+            entry.dispatch_state = ttnn._ttnn.operations.experimental.FusionDispatchState(
+                entry.output_specs,
+                entry.shared_output_map,
+                entry.result_reorder,
+                entry.cached_descriptor,
+                entry.address_slots,
+                first_tensor.device(),
+            )
+
+    # Set _cached_entry so persistent containers go hot on the next call.
+    container._cached_entry = entry
     return ret
 
 
@@ -789,7 +798,7 @@ class Sequential:
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results(all_items)
-        self._dispatch_state = None
+        self._cached_entry = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -799,7 +808,7 @@ class Sequential:
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results(self._items)
-        self._dispatch_state = None
+        self._cached_entry = None
 
     def add(self, item):
         """Append an item.  Returns self for chaining."""
@@ -865,7 +874,7 @@ class Sequential:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        if self._dispatch_state is None:
+        if self._cached_entry is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "S", results, device=device, kernel_dir=kernel_dir)
 
@@ -922,7 +931,7 @@ class Parallel:
         self._cached_ops = _flatten_ops(all_items)
         self._internal_edges = _detect_internal_edges(all_items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(all_items)
-        self._dispatch_state = None
+        self._cached_entry = None
         _register_named_descriptors(self, named_items)
 
     def invalidate_run(self) -> None:
@@ -932,7 +941,7 @@ class Parallel:
         self._cached_ops = _flatten_ops(self._items)
         self._internal_edges = _detect_internal_edges(self._items, self._cached_ops)
         self._default_results = _default_results_parallel_branches(self._items)
-        self._dispatch_state = None
+        self._cached_entry = None
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
@@ -999,7 +1008,7 @@ class Parallel:
         Returns:
             List of output tensors, one per descriptor in *results*.
         """
-        if self._dispatch_state is None:
+        if self._cached_entry is None:
             _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         return _container_run(self, "P", results, device=device, kernel_dir=kernel_dir)
 
