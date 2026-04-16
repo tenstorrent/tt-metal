@@ -21,7 +21,8 @@
  *      bias, optionally applies SFPU activation, packs to output. Caller owns bias
  *      CB wait/pop lifecycle since the reader may push bias only once across
  *      multiple bh/batch iterations.
- *   3. Untilize (reblock_and_untilize): converts tiled output to row-major.
+ *   3. Untilize (reblock_and_untilize helper): gathers subblock-order output into
+ *      row-major and untilizes.
  *
  * NOTE: The perf microbenchmark copy at
  * tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/
@@ -32,11 +33,9 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "api/compute/pack_untilize.h"
-#include "api/compute/transpose_wh.h"
-#include "internal/mod_div_lib.h"
-
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/transpose_block_helpers.hpp"
 
 #ifdef FUSE_BIAS
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
@@ -52,88 +51,8 @@
 // With FUSE_BIAS: row_broadcast_bias (row-broadcast vs elementwise add_tiles) is compile-time arg 18 here;
 // the perf copy uses index 14 (different compile-time arg layout).
 
-// ─── Local helper functions ─────────────────────────────────────────────────
-
-/**
- * @brief Transpose a block of tiles from one CB to another (WH swap per tile).
- *
- * Used by the TransposePreKBlock functor below.
- */
-template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
-    constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
-
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        cb_wait_front(in0_transpose_cb_id, block_size);
-        tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
-        }
-        tile_regs_commit();
-        cb_pop_front(in0_transpose_cb_id, block_size);
-        cb_reserve_back(in0_cb_id, block_size);
-        tile_regs_wait();
-        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            pack_tile(tile_idx, in0_cb_id);
-        }
-        tile_regs_release();
-        cb_push_back(in0_cb_id, block_size);
-    }
-
-    if constexpr (last_block_size > 0) {
-        cb_wait_front(in0_transpose_cb_id, last_block_size);
-        tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
-        }
-        tile_regs_commit();
-        cb_pop_front(in0_transpose_cb_id, last_block_size);
-        cb_reserve_back(in0_cb_id, last_block_size);
-        tile_regs_wait();
-        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            pack_tile(tile_idx, in0_cb_id);
-        }
-        tile_regs_release();
-        cb_push_back(in0_cb_id, last_block_size);
-    }
-}
-
-/**
- * @brief Reblock and untilize matmul output from sub-block layout to row-major.
- */
-template <uint32_t out_subblock_w, uint32_t out_block_w>
-inline void reblock_and_untilize(
-    uint32_t num_out_subblocks_in_col,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_cb_id,
-    uint32_t out_cb_id) {
-    uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
-
-    uint32_t within_block_index = 0;
-    for (uint32_t h = 0; h < out_subblock_h; h++) {
-        uint32_t block_offset = 0;
-        cb_reserve_back(out_cb_id, out_block_w);
-        for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < out_subblock_w; w++) {
-                copy_tile(interm_cb_id, block_offset + within_block_index + w, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
-            tile_regs_release();
-            block_offset += out_subblock_num_tiles;
-        }
-        cb_push_back(out_cb_id, out_block_w);
-        within_block_index += out_subblock_w;
-    }
-    cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
-}
-
 // ─── Functors for matmul_block / add_bias_bcast_rows callbacks ──────────────
+
 
 #ifdef SFPU_OP_INIT_ACTIVATION
 // Applied per output sub-block after matmul (no-bias) or after bias addition.
@@ -145,44 +64,6 @@ struct SFPUPostCompute {
     }
 };
 #endif
-
-/**
- * PreKBlockFn: transposes input block before each K-block iteration.
- * Reconfigures data formats for the transpose, runs the transpose, then reinits matmul.
- * The matmul_block helper's L1_ACC management restores accumulation state afterward.
- */
-template <
-    uint32_t in0_block_num_tiles_v,
-    uint32_t in0_transpose_cb_id_v,
-    uint32_t in0_cb_id_v,
-    uint32_t in1_cb_id_v,
-    uint32_t in1_transpose_tile_v,
-    uint32_t out_subblock_w_v,
-    uint32_t out_subblock_h_v,
-    uint32_t in0_block_w_v,
-    uint32_t mm_partials_cb_id_v>
-struct TransposePreKBlock {
-    ALWI void operator()(uint32_t, uint32_t, bool) const {
-        reconfig_data_format_srca(in1_cb_id_v, in0_transpose_cb_id_v);
-        transpose_wh_init_short(in0_transpose_cb_id_v);
-        PACK((pack_reconfig_data_format(in0_cb_id_v)));
-#ifdef PACKER_L1_ACC
-        PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
-        transpose_tile_block<in0_block_num_tiles_v>(in0_transpose_cb_id_v, in0_cb_id_v);
-        mm_block_init_short_with_dt(
-            in0_cb_id_v,
-            in1_cb_id_v,
-            in0_transpose_cb_id_v,
-            in1_transpose_tile_v,
-            out_subblock_w_v,
-            out_subblock_h_v,
-            in0_block_w_v);
-        PACK((pack_reconfig_data_format(mm_partials_cb_id_v)));
-    }
-};
-
-// ─── kernel_main ────────────────────────────────────────────────────────────
 
 void kernel_main() {
     using namespace compute_kernel_lib;
@@ -286,14 +167,12 @@ void kernel_main() {
         out_subblock_h,
         in0_block_w,
         mm_partials_cb_id>;
-    using NoPreFn = NoPreKBlock;
-    using NoPostFn = NoPostCompute;
-    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreFn>;
+    using PreFn = std::conditional_t<in0_transpose_tile, XposeFn, NoPreKBlock>;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
-    using PostFn = std::conditional_t<pack_last_to_interm, NoPostFn, SFPUPostCompute>;
+    using PostFn = std::conditional_t<pack_last_to_interm, NoPostCompute, SFPUPostCompute>;
 #else
-    using PostFn = NoPostFn;
+    using PostFn = NoPostCompute;
 #endif
 
     // ── Init ────────────────────────────────────────────────────────────
