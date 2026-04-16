@@ -8,8 +8,10 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_reduce_api.h"
 #include "llk_math_matmul_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
@@ -31,7 +33,9 @@ namespace ckernel {
  * | Function   | ocb    | Output circular buffer identifier             | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <uint32_t block_ct_dim = 1>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
@@ -42,6 +46,10 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
+#endif
+#else
+    UNPACK((llk_unpack_tilize_init<block_ct_dim>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
 }
 
@@ -89,6 +97,7 @@ ALWI void tilizeA_B_reduce_init(
 }
 #endif
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Re-initializes the tilize operation and reconfigures the unpacker with CB data type.
@@ -120,6 +129,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb, 1, new_icb)));
 #endif
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -141,21 +151,24 @@ ALWI void tilize_block(
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
-        // Acquire dst
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        // Datacopy
+#ifndef ARCH_QUASAR
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/)));
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
+#else
+        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+#endif
 
-        // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Unpacks and tilizes a block from two input CBs.
@@ -191,6 +204,7 @@ ALWI void unpack_tilizeA_B_block(
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -207,12 +221,16 @@ ALWI void unpack_tilizeA_B_block(
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, false /*tilize en*/>(ocb)));
 #endif
 }
+#endif  // !ARCH_QUASAR
+
+#ifndef ARCH_QUASAR
 
 // clang-format off
 /**
@@ -370,5 +388,7 @@ ALWI void fast_tilize_block(
  */
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
+
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel
