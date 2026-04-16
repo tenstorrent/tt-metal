@@ -243,7 +243,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
     const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
     bool fp32_dest_acc_en = is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
-
+    constexpr uint32_t num_batches = 2;  // perf tuning parameter, default  = 2
     // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
     // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
     // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
@@ -251,9 +251,9 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     const uint32_t num_tiles_per_batch =
         fp32_dest_acc_en or operation_attributes.is_sfpu
             ? 1
-            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size;
+            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) /
+                  (single_tile_size * num_batches);
 
-    constexpr uint32_t num_batches = 2;  // perf tuning parameter, default  = 2
     const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * num_batches;
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
