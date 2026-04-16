@@ -6,7 +6,7 @@
 #include "ternary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/cb_utils.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
@@ -205,12 +205,6 @@ void setup_reader_defines(
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
-
-std::uint32_t* copy_common_runtime_args(const tt::tt_metal::Buffer& buffer, std::uint32_t* dst) {
-    const auto src = tt::tt_metal::TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-                         .get_common_runtime_args();
-    return std::copy(src.begin(), src.end(), dst);
-}
 
 bool is_llk_bcast(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
@@ -523,17 +517,14 @@ void setup_ts_reader_args_and_dims(
     }
 }
 
-template <typename F>
-void set_or_update_runtime_arguments(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::KernelHandle compute_kernel_id,
+void populate_runtime_arguments(
+    KernelDescriptor& reader_desc,
+    KernelDescriptor& writer_desc,
+    KernelDescriptor& compute_desc,
     const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
     const TernaryDeviceOperation::tensor_args_t& tensor_args,
     TernaryDeviceOperation::tensor_return_value_t& output,
-    ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
-    F handle_args) {
+    ttnn::operations::ternary::TernaryBroadcastType broadcast_type) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     TernaryVariant variant = operation_attributes.ternary_variant;
     uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
@@ -638,9 +629,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
+            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(num_reader_args, 0));
+            writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(num_writer_args, 0));
+            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs(num_kernel_args, 0));
             continue;
         }
 
@@ -699,7 +690,7 @@ void set_or_update_runtime_arguments(
                 out_rank,
                 tile_h,
                 tile_w);
-            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
         } else if (variant == TernaryVariant::TTT) {
             auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_h, tile_w);
             auto true_dims = extract_tensor_dimensions(value_true_tensor.value(), out_rank, tile_h, tile_w);
@@ -738,7 +729,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[25] = c_current_shard_width;    // 25: dst_shard_width
             reader_runtime_args[26] = a_num_tiles;              // 26: src_num_tiles (predicate)
 
-            handle_args(program, reader_kernel_id, core, reader_runtime_args);
+            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
         } else {
             TT_FATAL(false, "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
         }
@@ -757,7 +748,7 @@ void set_or_update_runtime_arguments(
             output_dims.ND,              // 9: cND
             0u                           // 10: padding
         };
-        handle_args(program, writer_kernel_id, core, writer_runtime_args);
+        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
 
         // Compute runtime args
         uint32_t scalar_arg = 0u;
@@ -791,7 +782,7 @@ void set_or_update_runtime_arguments(
             }
         }();
         std::array<uint32_t, num_kernel_args> compute_runtime_args = {num_tiles_per_core, freq, counter, scalar_arg};
-        handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
 
         start_tile_id += num_tiles_per_core;
     }
@@ -832,7 +823,7 @@ std::optional<AllShardVolumes> get_shard_volumes(
     };
 }
 
-TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOperation::TernaryProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -849,7 +840,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     auto compute_kernel = kernel_config.compute_kernel;
     auto writer_kernel = kernel_config.writer_kernel;
 
-    auto program = CreateProgram();
+    ProgramDescriptor desc;
 
     auto predicate_data_format = datatype_to_dataformat_converter(predicate_tensor.dtype());
     /*  The where_llk uses UINT16 instrn set for bfloat16 inputs.
@@ -901,106 +892,124 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     constexpr uint32_t num_tiles_per_cb = 2;
+
+    // ---- Circular Buffers ----
+
     // Input buffers - Create predicate CB (always c_0)
-    auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_0,
-        program,
-        all_device_cores,
-        predicate_single_tile_size,
-        predicate_num_tiles_per_shard.value_or(num_tiles_per_cb),
-        predicate_data_format,
-        predicate_sharded ? predicate_tensor.buffer() : nullptr);
+    uint32_t predicate_tensor_cb = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = predicate_single_tile_size * predicate_num_tiles_per_shard.value_or(num_tiles_per_cb),
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(predicate_tensor_cb),
+            .data_format = predicate_data_format,
+            .page_size = predicate_single_tile_size,
+        }}},
+        .buffer = predicate_sharded ? predicate_tensor.buffer() : nullptr,
+    });
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    [[maybe_unused]] tt::tt_metal::CBHandle value_true_tensor_cb_handle{};
     uint32_t value_false_tensor_cb = 0;
-    [[maybe_unused]] tt::tt_metal::CBHandle value_false_tensor_cb_handle{};
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)
-        auto [cb, cb_handle] = create_cb(
-            tt::CBIndex::c_1,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            true_num_tiles_per_shard.value_or(num_tiles_per_cb),
-            value_true_data_format,
-            true_sharded ? value_true_tensor->buffer() : nullptr);
-        value_true_tensor_cb = cb;
-        value_true_tensor_cb_handle = cb_handle;
+        value_true_tensor_cb = tt::CBIndex::c_1;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_true_single_tile_size * true_num_tiles_per_shard.value_or(num_tiles_per_cb),
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(value_true_tensor_cb),
+                .data_format = value_true_data_format,
+                .page_size = value_true_single_tile_size,
+            }}},
+            .buffer = true_sharded ? value_true_tensor->buffer() : nullptr,
+        });
     } else if (variant == TernaryVariant::TST) {
         // TST: c_1 = value_false tensor (value_true is scalar)
-        auto [cb, cb_handle] = create_cb(
-            tt::CBIndex::c_1,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,
-            false_num_tiles_per_shard.value_or(num_tiles_per_cb),
-            value_false_data_format,
-            false_sharded ? value_false_tensor->buffer() : nullptr);
-        value_false_tensor_cb = cb;
-        value_false_tensor_cb_handle = cb_handle;
+        value_false_tensor_cb = tt::CBIndex::c_1;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_false_single_tile_size * false_num_tiles_per_shard.value_or(num_tiles_per_cb),
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(value_false_tensor_cb),
+                .data_format = value_false_data_format,
+                .page_size = value_false_single_tile_size,
+            }}},
+            .buffer = false_sharded ? value_false_tensor->buffer() : nullptr,
+        });
     } else if (variant == TernaryVariant::TTT) {
-        auto [cb1, cb1_handle] = create_cb(
-            tt::CBIndex::c_1,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            true_num_tiles_per_shard.value_or(num_tiles_per_cb),
-            value_true_data_format,
-            true_sharded ? value_true_tensor->buffer() : nullptr);
-        value_true_tensor_cb = cb1;
-        value_true_tensor_cb_handle = cb1_handle;
+        value_true_tensor_cb = tt::CBIndex::c_1;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_true_single_tile_size * true_num_tiles_per_shard.value_or(num_tiles_per_cb),
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(value_true_tensor_cb),
+                .data_format = value_true_data_format,
+                .page_size = value_true_single_tile_size,
+            }}},
+            .buffer = true_sharded ? value_true_tensor->buffer() : nullptr,
+        });
 
         // Create CB for value_false (using actual false tensor)
-        auto [cb2, cb2_handle] = create_cb(
-            tt::CBIndex::c_2,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,
-            false_num_tiles_per_shard.value_or(num_tiles_per_cb),
-            value_false_data_format,
-            false_sharded ? value_false_tensor->buffer() : nullptr);
-        value_false_tensor_cb = cb2;
-        value_false_tensor_cb_handle = cb2_handle;
+        value_false_tensor_cb = tt::CBIndex::c_2;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_false_single_tile_size * false_num_tiles_per_shard.value_or(num_tiles_per_cb),
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(value_false_tensor_cb),
+                .data_format = value_false_data_format,
+                .page_size = value_false_single_tile_size,
+            }}},
+            .buffer = false_sharded ? value_false_tensor->buffer() : nullptr,
+        });
     } else {
         TT_FATAL(false, "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
     }
 
     if (variant == TernaryVariant::TTT && broadcast_type == TernaryBroadcastType::ROW_BCAST) {
-        create_cb(
-            tt::CBIndex::c_4,
-            program,
-            all_device_cores,
-            predicate_single_tile_size,
-            num_tiles_per_cb,
-            predicate_data_format);
-        create_cb(
-            tt::CBIndex::c_5,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
-        create_cb(
-            tt::CBIndex::c_6,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,
-            num_tiles_per_cb,
-            value_false_data_format);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = predicate_single_tile_size * num_tiles_per_cb,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = predicate_data_format,
+                .page_size = predicate_single_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_true_single_tile_size * num_tiles_per_cb,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = value_true_data_format,
+                .page_size = value_true_single_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = value_false_single_tile_size * num_tiles_per_cb,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+                .data_format = value_false_data_format,
+                .page_size = value_false_single_tile_size,
+            }}},
+        });
     }
+
     // Output buffer - use c_3 for all cases now
     auto output_cb_index = tt::CBIndex::c_3;
-    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
-        output_cb_index,
-        program,
-        all_device_cores,
-        output_single_tile_size,
-        output_num_tiles_per_shard.value_or(num_tiles_per_cb),
-        output_data_format,
-        output_sharded ? output.buffer() : nullptr);
+    uint32_t output_tensor_cb = output_cb_index;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_single_tile_size * output_num_tiles_per_shard.value_or(num_tiles_per_cb),
+        .core_ranges = all_device_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_tensor_cb),
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+        .buffer = output_sharded ? output.buffer() : nullptr,
+    });
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
     bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
@@ -1085,12 +1094,14 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
             reader_defines["BCAST_LLK"] = "0";
         }
     }
-    tt_metal::ReaderDataMovementConfig reader_config;
+
+    // ---- Reader Kernel ----
+    std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
-        std::vector<uint32_t> reader_compile_time_args = {
+        reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
         tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -1098,20 +1109,17 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         tt::tt_metal::TensorAccessorArgs(
             *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
 
     } else if (variant == TernaryVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
-        std::vector<uint32_t> reader_compile_time_args = {
+        reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
         tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
             *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else if (variant == TernaryVariant::TTT) {
-        std::vector<uint32_t> reader_compile_time_args;
         reader_compile_time_args.push_back((std::uint32_t)predicate_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_true_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_false_tensor_cb);
@@ -1124,7 +1132,6 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
             *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     }
 
     bool is_fpu = false;
@@ -1137,10 +1144,16 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
                   predicate_tensor.dtype() != DataType::UINT32);
     }
 
-    auto reader_kernel_id =
-        tt_metal::CreateKernel(program, get_kernel_file_path(reader_kernel, is_fpu), all_device_cores, reader_config);
-    tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, reader_common_runtime_args);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = get_kernel_file_path(reader_kernel, is_fpu);
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_device_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.common_runtime_args = reader_common_runtime_args;
 
+    // ---- Writer Kernel ----
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
     std::vector<uint32_t> writer_common_runtime_args;
     tt::tt_metal::TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -1148,14 +1161,17 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     std::map<std::string, std::string> writer_defines;
     writer_defines["DST_SHARDED"] = (output_sharded && has_sharding) ? "1" : "0";
-    tt_metal::WriterDataMovementConfig writer_config =
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines);
 
-    auto writer_kernel_id =
-        tt_metal::CreateKernel(program, get_kernel_file_path(writer_kernel, is_fpu), all_device_cores, writer_config);
-    tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common_runtime_args);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = get_kernel_file_path(writer_kernel, is_fpu);
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_device_cores;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.common_runtime_args = writer_common_runtime_args;
 
-    // COMPUTE KERNEL - Use kernel path from utils
+    // ---- Compute Kernel ----
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
@@ -1250,122 +1266,36 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
     }
 
-    tt_metal::ComputeConfig compute_config{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .compile_args = compute_kernel_args,
-        .defines = kernel_defines};
-
     std::string compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
                                        operation_attributes.dtype == DataType::INT32)
                                           ? override_addcmul_compute_kernel(compute_kernel)
                                           : get_kernel_file_path(compute_kernel, is_fpu);
-    auto compute_kernel_id = tt_metal::CreateKernel(program, compute_kernel_path, all_device_cores, compute_config);
 
-    auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = compute_kernel_path;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_device_cores;
+    compute_desc.compile_time_args = compute_kernel_args;
+    compute_desc.defines = {kernel_defines.begin(), kernel_defines.end()};
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
+    // ---- Per-core runtime args ----
+    CMAKE_UNIQUE_NAMESPACE::populate_runtime_arguments(
+        reader_desc,
+        writer_desc,
+        compute_desc,
         operation_attributes,
         tensor_args,
         output,
-        broadcast_type,
-        set_runtime_args);
+        broadcast_type);
 
-    // Update dynamic circular buffer addresses for sharded tensors
-    if (has_sharding) {
-        TT_FATAL(
-            value_true_tensor.has_value() && value_false_tensor.has_value(),
-            "Dynamic buffer updates only supported for TTT variant");
-        if (predicate_tensor.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, predicate_tensor_cb_handle, *predicate_tensor.buffer());
-        }
-        if (value_true_tensor->is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, value_true_tensor_cb_handle, *value_true_tensor->buffer());
-        }
-        if (value_false_tensor->is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, value_false_tensor_cb_handle, *value_false_tensor->buffer());
-        }
-        if (output.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, output_tensor_cb_handle, *output.buffer());
-        }
-    }
-
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id}};
-}
-
-void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-
-    {
-        const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
-        auto* predicate_buffer = predicate_tensor.buffer();
-        auto* output_buffer = output.buffer();
-
-        // Update common runtime args for reader kernel
-        auto* args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
-        if (operation_attributes.ternary_variant == TernaryVariant::TTS) {
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
-            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
-        } else if (operation_attributes.ternary_variant == TernaryVariant::TST) {
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
-            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
-        } else {  // TTT
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*predicate_buffer, args);
-            args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_true_tensor.value().buffer(), args);
-            CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*value_false_tensor.value().buffer(), args);
-        }
-
-        // Update common runtime args for writer kernel
-        args = GetCommonRuntimeArgs(program, writer_kernel_id).data();
-        CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*output_buffer, args);
-    }
-
-    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        auto& all_args = GetRuntimeArgs(program, kernel_id);
-        auto& core_args = all_args.at(core.x).at(core.y);
-        std::copy(args.begin(), args.end(), core_args.data());
-    };
-
-    // Detect broadcast type for the cached program
-    const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
-    TernaryBroadcastType broadcast_type = TernaryBroadcastType::NONE;
-    if (operation_attributes.ternary_variant == TernaryVariant::TTT) {
-        broadcast_type = get_broadcast_type(
-            predicate_tensor.logical_shape(),
-            value_true_tensor.value().logical_shape(),
-            value_false_tensor.value().logical_shape());
-    }
-    if (operation_attributes.ternary_variant == TernaryVariant::TTS) {
-        broadcast_type =
-            get_broadcast_type(predicate_tensor.logical_shape(), value_true_tensor.value().logical_shape());
-    }
-    if (operation_attributes.ternary_variant == TernaryVariant::TST) {
-        broadcast_type =
-            get_broadcast_type(predicate_tensor.logical_shape(), value_false_tensor.value().logical_shape());
-    }
-
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
-        cached_program.shared_variables.compute_kernel_id,
-        operation_attributes,
-        tensor_args,
-        output,
-        broadcast_type,
-        update_args);
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
 }
 
 }  // namespace ttnn::operations::ternary
