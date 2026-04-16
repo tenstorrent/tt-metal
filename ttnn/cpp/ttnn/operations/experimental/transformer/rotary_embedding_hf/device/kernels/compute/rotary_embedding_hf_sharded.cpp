@@ -26,9 +26,8 @@ void kernel_main() {
 
     binary_op_init_common(in_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
-    // Fill scalar CB with -1.0
-    cb_reserve_back(scalar_cb, onetile);
-    cb_push_back(scalar_cb, onetile);
+    // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
+    // write -1.0 into the scalar CB and push it.
     cb_wait_front(scalar_cb, onetile);
 
     // Get the sin/cos matrices
