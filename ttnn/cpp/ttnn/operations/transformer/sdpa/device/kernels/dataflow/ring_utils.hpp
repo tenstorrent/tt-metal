@@ -116,3 +116,30 @@ inline uint32_t find_last_active_ring_iter(
 
     return last_active;
 }
+
+/**
+ * Count valid (non-skipped) K chunks for a ring iteration.
+ * Same skip logic as compute: local K chunks whose global start tile >= logical_nt are skipped.
+ *
+ * @param num_kv_chunks      Total K chunks this ring iter (local + joint if applicable)
+ * @param num_local_k_chunks Number of local (non-joint) K chunks
+ * @param ring_iter_kv_start_tile  First tile index of this ring iter's KV range
+ * @param Sk_chunk_t         K chunk size in tiles
+ * @param logical_nt         Logical sequence length in tiles (logical_n / TILE_HEIGHT)
+ */
+inline uint32_t count_valid_kv_chunks(
+    uint32_t num_kv_chunks,
+    uint32_t num_local_k_chunks,
+    uint32_t ring_iter_kv_start_tile,
+    uint32_t Sk_chunk_t,
+    uint32_t logical_nt) {
+    uint32_t count = 0;
+    for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+        const bool is_joint = k >= num_local_k_chunks;
+        if (!is_joint && (ring_iter_kv_start_tile + k * Sk_chunk_t >= logical_nt)) {
+            continue;
+        }
+        count++;
+    }
+    return count;
+}
