@@ -26,11 +26,11 @@ Encoder SDPA picks the largest **Q** and **K** chunk in ``(256, 128, 64, 32)`` t
 (capped at 256 to avoid oversized K tiles), with ``exp_approx_mode`` **False**, to reduce tiling
 iterations without the softmax shortcuts that hurt PCC. Matmul linears use the default ``ttnn`` program config.
 
-**S32 / small compile-time ``max_seq_len``:** when ``runtime sequence_length <= 32``, matmul ``core_grid``
-row count is **capped at four** (full width) so a single-tile ``M`` does not schedule an entire 8-row
-device grid that is mostly idle (a narrower single-row grid regressed wall time in practice). When
-``max_seq_len <= 32``, Wormhole matmul / LN / SDPA compute configs also set ``packer_l1_acc=False`` to trim
-packer staging on short activations; Blackhole and longer ``max_seq_len`` builds keep ``packer_l1_acc=True``.
+**S32 / short ``runtime sequence_length``:** matmul ``core_grid`` row count is **capped at four** (full width)
+only when ``batch_size <= 1`` (single-batch S32: one-tile ``M``, full 8-row grid is mostly idle). For
+``batch_size > 1``, the **full** compute grid is used so multi-batch S32 (e.g. batch 25) gets better
+device utilization; this does not change batch 1. ``packer_l1_acc=False`` on Wormhole only for **single-batch**
+short ``max_seq_len`` (``max_batch_size <= 1``); multi-batch S32 uses ``packer_l1_acc=True`` like longer seq.
 """
 
 from __future__ import annotations
@@ -52,8 +52,21 @@ BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN = 32
 BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP = 4
 
 # When compile-time ``max_seq_len`` is at or below this, Wormhole may disable L1 packer accumulation on
-# matmul / layernorm / SDPA compute kernels for faster short-sequence runs (long-seq builds unchanged).
+# matmul / layernorm / SDPA compute kernels — only for **single-batch** short-seq (see packer helpers).
 BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN = 32
+
+
+def _wormhole_use_fast_packer_offload(
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+) -> bool:
+    """True → ``packer_l1_acc=False`` on Wormhole. Single-batch S32 only; multi-batch matches S64+ policy."""
+    if max_seq_len is None:
+        return False
+    if int(max_seq_len) > BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN:
+        return False
+    b = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    return b <= 1
 
 
 def is_wormhole_family_device(mesh_device: ttnn.MeshDevice) -> bool:
@@ -121,13 +134,14 @@ def bge_m3_mlp_wi_output_memory_config(
 def bge_m3_matmul_core_grid(
     mesh_device: ttnn.MeshDevice | None,
     sequence_length: int | None = None,
+    batch_size: int | None = None,
 ) -> ttnn.CoreGrid:
     """Core grid for ``ttnn.linear(..., core_grid=...)``.
 
-    Uses the device compute grid for moderate/long sequences. For ``sequence_length`` at or below
-    ``BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN``, **row count is capped** at ``BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP``
-    while keeping full width, matching the case where ``M`` is only one tile high (e.g. S32) so extra
-    rows are pure scheduling overhead.
+    For ``sequence_length`` at or below ``BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN``, row count is **capped** at
+    ``BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP`` only when ``batch_size`` is omitted or ``<= 1`` (single-batch
+    short-seq: one-tile ``M``). For ``batch_size > 1``, the full grid height is used so multi-batch short
+    sequences (e.g. batch 25, S32) are not under-scheduled on cores.
     """
     if mesh_device is None:
         gx, gy = 8, 8
@@ -138,7 +152,9 @@ def bge_m3_matmul_core_grid(
         except Exception:
             gx, gy = 8, 8
 
-    if sequence_length is not None and sequence_length <= BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN:
+    use_short_seq_row_cap = sequence_length is not None and sequence_length <= BGE_M3_MATMUL_SHORT_SEQ_MAX_LEN
+    single_batch = batch_size is None or int(batch_size) <= 1
+    if use_short_seq_row_cap and single_batch:
         return ttnn.CoreGrid(y=min(BGE_M3_MATMUL_SHORT_SEQ_CORE_ROWS_CAP, gy), x=gx)
     return ttnn.CoreGrid(y=gy, x=gx)
 
@@ -146,28 +162,24 @@ def bge_m3_matmul_core_grid(
 def bge_m3_matmul_compute_kernel_config(
     mesh_device: ttnn.MeshDevice,
     max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
     """Return a compute kernel config for matmul operations in BGE-M3.
 
     **Blackhole** and **Wormhole** use **HiFi4** (required for PCC > 0.94 at S8192 on WH). Other archs
     fall back to HiFi2.
 
-    For Wormhole only, when ``max_seq_len <= BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN``, sets
-    ``packer_l1_acc=False`` to reduce packer work on very short compile-time envelopes; otherwise
-    L1 packer accumulation stays enabled. FP32 destination accumulation is always enabled.
+    For Wormhole only, ``packer_l1_acc=False`` when ``_wormhole_use_fast_packer_offload`` (single-batch
+    short ``max_seq_len``); multi-batch S32 keeps ``packer_l1_acc=True``. FP32 destination acc stays on.
     """
     if ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
         fidelity = ttnn.MathFidelity.HiFi4
     else:
         fidelity = ttnn.MathFidelity.HiFi2
     packer_l1_acc = True
-    if (
-        not ttnn_is_blackhole(mesh_device)
-        and is_wormhole_family_device(mesh_device)
-        and max_seq_len is not None
-        and max_seq_len <= BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN
-    ):
-        packer_l1_acc = False
+    if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+        if _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
+            packer_l1_acc = False
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
@@ -180,26 +192,22 @@ def bge_m3_matmul_compute_kernel_config(
 def bge_m3_sdpa_compute_kernel_config(
     mesh_device: ttnn.MeshDevice,
     max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
     """Return the compute kernel config for scaled dot-product attention (SDPA) in BGE-M3.
 
     **Blackhole** and **Wormhole** use **HiFi4**, matching matmul fidelity for end-to-end PCC.
 
-    Wormhole uses the same ``packer_l1_acc`` policy as ``bge_m3_matmul_compute_kernel_config`` when
-    ``max_seq_len`` is at or below ``BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN``.
+    Same ``packer_l1_acc`` policy as ``bge_m3_matmul_compute_kernel_config`` (single-batch short-seq only).
     """
     if ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
         sdpa_fidelity = ttnn.MathFidelity.HiFi4
     else:
         sdpa_fidelity = ttnn.MathFidelity.HiFi2
     packer_l1_acc = True
-    if (
-        not ttnn_is_blackhole(mesh_device)
-        and is_wormhole_family_device(mesh_device)
-        and max_seq_len is not None
-        and max_seq_len <= BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN
-    ):
-        packer_l1_acc = False
+    if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+        if _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
+            packer_l1_acc = False
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=sdpa_fidelity,
@@ -212,22 +220,18 @@ def bge_m3_sdpa_compute_kernel_config(
 def bge_m3_layernorm_compute_kernel_config(
     mesh_device: ttnn.MeshDevice,
     max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
     """Return the compute kernel config for LayerNorm in BGE-M3 on the given mesh device.
 
     Matches ``ttnn`` layer_norm defaults in Metal (``layernorm.cpp``): HiFi4, FP32 dest acc.
 
-    For Wormhole only, when ``max_seq_len <= BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN``, uses
-    ``packer_l1_acc=False`` (same short-seq policy as matmul).
+    Same ``packer_l1_acc`` policy as matmul (single-batch short-seq only).
     """
     packer_l1_acc = True
-    if (
-        not ttnn_is_blackhole(mesh_device)
-        and is_wormhole_family_device(mesh_device)
-        and max_seq_len is not None
-        and max_seq_len <= BGE_M3_FAST_PACKER_OFFLOAD_MAX_SEQ_LEN
-    ):
-        packer_l1_acc = False
+    if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
+        if _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
+            packer_l1_acc = False
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
