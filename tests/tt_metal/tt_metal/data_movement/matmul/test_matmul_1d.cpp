@@ -233,7 +233,7 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
             risc0_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
             risc0_barrier_done_sem_id,             // 8  Barrier done semaphore ID
         };
-        uint32_t col_idx = matmul_cores_list[i].x - test_config.start_logical_core.x;
+        uint32_t col_idx = i.x - test_config.start_logical_core.x;
         vector<uint32_t> risc1_core_runtime_args = {
             in1_per_core_read_addr[col_idx],       // 0  Each core reads from addr based on its column
             in1_per_core_read_size_bytes,          // 1  Each core reads the same amount of data
