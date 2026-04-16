@@ -8,6 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/pack_untilize.h"
 #include "internal/circular_buffer_interface.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Push 1 stick or partial stick to a cb (a (partial) stick consists of num_pages pages, in our case, size of a page is
 // the width of a tile (setup in program factory))
@@ -24,9 +25,10 @@ inline void llk_push_pages_bilinear(const std::int32_t operand, const std::int32
 }
 
 template <uint32_t tiles_per_reduction, uint32_t unpA_face_r_dim>
-inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
+inline void reduce_h_fused(experimental::CB in_cb, experimental::CB scalar_cb, experimental::CB out_cb) {
+    const uint32_t out_cb_id = out_cb.get_cb_id();
     tile_regs_acquire();
-    cb_wait_front(in_cb_id, 4);
+    in_cb.wait_front(4);
 
     // Template parameters for unpack_tilizeA_B_block:
     constexpr bool use_neginf_srcA = false;  // Don't use negative infinity for source A
@@ -39,11 +41,11 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     constexpr uint32_t num_faces = 2;  // Unpack 2 faces (top faces contain 4 rows needed for bilinear interpolation)
 
     unpack_tilizeA_B_block<use_neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        in_cb_id, in_scalar_cb_id, tiles_per_reduction, scalar_tile_idx, num_faces, unpA_face_r_dim);
+        in_cb.get_cb_id(), scalar_cb.get_cb_id(), tiles_per_reduction, scalar_tile_idx, num_faces, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
         reduce_tile_math(c_i, num_faces);  // Reduce the 2 faces (containing 4 rows for bilinear interpolation)
     }
-    cb_pop_front(in_cb_id, 4);
+    in_cb.pop_front(4);
 
     tile_regs_wait();
     tile_regs_commit();
@@ -85,19 +87,24 @@ void kernel_main() {
     constexpr uint32_t num_faces = 2;        // Use 2 faces (top faces contain 4 rows for bilinear interpolation)
     constexpr uint32_t face_r_dim = 4;       // 4 rows per face (sufficient for bilinear interpolation)
 
+    experimental::CB tilize_reduce_cb0(tilize_reduce_cb_0);
+    experimental::CB tilize_reduce_cb1(tilize_reduce_cb_1);
+    experimental::CB scalar_cb_1(in_scalar_cb_id1);
+    experimental::CB scalar_cb_2(in_scalar_cb_id2);
+    experimental::CB out_cb(out_cb_id);
+
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
         tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id, num_faces, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, 1, num_faces); /* pack 1 row (1x32) from 2 faces */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
-        const uint32_t cb_id = (i % 2 == 0) ? tilize_reduce_cb_0 : tilize_reduce_cb_1;
-        const uint32_t scalar_cb_id = (i % 2 == 0) ? in_scalar_cb_id1 : in_scalar_cb_id2;
+        experimental::CB cur_in_cb = (i % 2 == 0) ? tilize_reduce_cb0 : tilize_reduce_cb1;
+        experimental::CB cur_scalar_cb = (i % 2 == 0) ? scalar_cb_1 : scalar_cb_2;
 
         for (uint32_t j = 0; j < blocks - 1; j++) {
-            // Wait for the core to push data in cb
-            reduce_h_fused<max_tiles_per_iter, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
-            cb_pop_front(scalar_cb_id, 1);
+            reduce_h_fused<max_tiles_per_iter, window_size_hw>(cur_in_cb, cur_scalar_cb, out_cb);
+            cur_scalar_cb.pop_front(1);
         }
-        reduce_h_fused<partial_iter_output_tiles, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
-        cb_pop_front(scalar_cb_id, 1);
+        reduce_h_fused<partial_iter_output_tiles, window_size_hw>(cur_in_cb, cur_scalar_cb, out_cb);
+        cur_scalar_cb.pop_front(1);
     }
 }  // void kernel_main()

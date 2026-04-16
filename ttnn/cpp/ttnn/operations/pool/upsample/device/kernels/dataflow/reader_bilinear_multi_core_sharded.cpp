@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "bilinear_weights_lut.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 //
 // Halo padding configuration
@@ -295,7 +295,13 @@ void kernel_main() {
     constexpr uint32_t blocks = get_compile_time_arg_val(14);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(15);
 
-    uint32_t l1_read_addr = get_read_ptr(halo_cb_id);
+    experimental::CB halo_cb(halo_cb_id);
+    experimental::CB tilize_reduce_cb(tilize_reduce_cb_id);
+    experimental::CB scalar_cb(in_scalar_cb_id);
+    experimental::Noc noc;
+    experimental::UnicastEndpoint self_ep;
+
+    uint32_t l1_read_addr = halo_cb.get_read_ptr();
 
     // Split work between reader and writer threads
     // Reader gets ceiling(N/2), writer gets floor(N/2)
@@ -352,34 +358,54 @@ void kernel_main() {
         uint32_t block_offset = 0;
 #pragma unroll
         for (uint32_t i = 0; i < blocks; i++) {
-            cb_reserve_back(tilize_reduce_cb_id, 4);
+            tilize_reduce_cb.reserve_back(4);
 
             uint32_t current_block_size_bytes = (i == blocks - 1) ? last_block_size_bytes : input_block_size_bytes;
 
-            uint32_t l1_write_addr = get_write_ptr(tilize_reduce_cb_id);
+            uint32_t write_offset = 0;
 
             // Read 4 neighbor stick segments
-            noc_async_read(get_noc_addr(y1x1_addr + block_offset), l1_write_addr, current_block_size_bytes);
-            l1_write_addr += input_block_size_bytes;
+            noc.async_read(
+                self_ep,
+                tilize_reduce_cb,
+                current_block_size_bytes,
+                experimental::local_addr(y1x1_addr + block_offset),
+                {.offset_bytes = write_offset});
+            write_offset += input_block_size_bytes;
 
-            noc_async_read(get_noc_addr(y1x2_addr + block_offset), l1_write_addr, current_block_size_bytes);
-            l1_write_addr += input_block_size_bytes;
+            noc.async_read(
+                self_ep,
+                tilize_reduce_cb,
+                current_block_size_bytes,
+                experimental::local_addr(y1x2_addr + block_offset),
+                {.offset_bytes = write_offset});
+            write_offset += input_block_size_bytes;
 
-            noc_async_read(get_noc_addr(y2x1_addr + block_offset), l1_write_addr, current_block_size_bytes);
-            l1_write_addr += input_block_size_bytes;
+            noc.async_read(
+                self_ep,
+                tilize_reduce_cb,
+                current_block_size_bytes,
+                experimental::local_addr(y2x1_addr + block_offset),
+                {.offset_bytes = write_offset});
+            write_offset += input_block_size_bytes;
 
-            noc_async_read(get_noc_addr(y2x2_addr + block_offset), l1_write_addr, current_block_size_bytes);
+            noc.async_read(
+                self_ep,
+                tilize_reduce_cb,
+                current_block_size_bytes,
+                experimental::local_addr(y2x2_addr + block_offset),
+                {.offset_bytes = write_offset});
 
             // Write weights for compute kernel
             fill_four_val(
-                get_write_ptr(in_scalar_cb_id),
+                scalar_cb.get_write_ptr(),
                 weight_top_left_bf16,
                 weight_top_right_bf16,
                 weight_bottom_left_bf16,
                 weight_bottom_right_bf16);
-            cb_push_back(in_scalar_cb_id, 1);
+            scalar_cb.push_back(1);
 
-            cb_push_back(tilize_reduce_cb_id, 4);
+            tilize_reduce_cb.push_back(4);
             block_offset += current_block_size_bytes;
         }
 
