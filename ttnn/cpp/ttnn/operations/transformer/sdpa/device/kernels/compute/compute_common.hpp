@@ -1732,8 +1732,7 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true) {
-    // TODO: pick up dst_size from dest_helper once available.
-    constexpr uint32_t dst_size = 8;
+    constexpr uint32_t dst_size = DST_ACCUM_MODE ? 4 : 8;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
