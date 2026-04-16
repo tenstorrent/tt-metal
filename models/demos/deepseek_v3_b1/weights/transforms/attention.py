@@ -72,9 +72,17 @@ def _make_q_ab_kv_a_overlap_entries(
     q_a_proj_weights: torch.Tensor,
     q_b_proj_weights: torch.Tensor,
     kv_a_proj_weights: torch.Tensor,
-    dtype: ttnn.DataType,
+    q_ab_dtype: ttnn.DataType,
+    kv_a_dtype: ttnn.DataType | None = None,
 ) -> list[OverlapEntry]:
-    """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O)."""
+    """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O).
+
+    When ``kv_a_dtype`` is ``None`` (used by :func:`fuse_q_ab_kv_a`) it
+    defaults to ``q_ab_dtype``.
+    """
+    if kv_a_dtype is None:
+        kv_a_dtype = q_ab_dtype
+
     q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
     assert (
@@ -100,17 +108,17 @@ def _make_q_ab_kv_a_overlap_entries(
         OverlapEntry(
             "q_a_proj",
             q_a_packed,
-            replace(cfg.q_a_shard_spec, raw_tensor_shape=tuple(q_a_packed.shape), dtype=dtype),
+            replace(cfg.q_a_shard_spec, raw_tensor_shape=tuple(q_a_packed.shape), dtype=q_ab_dtype),
         ),
         OverlapEntry(
             "q_b_proj",
             q_b_preprocessed,
-            replace(cfg.q_b_shard_spec, raw_tensor_shape=tuple(q_b_preprocessed.shape), dtype=dtype),
+            replace(cfg.q_b_shard_spec, raw_tensor_shape=tuple(q_b_preprocessed.shape), dtype=q_ab_dtype),
         ),
         OverlapEntry(
             "kv_a_proj",
             kv_reordered,
-            replace(cfg.kv_a_shard_spec, raw_tensor_shape=tuple(kv_reordered.shape), dtype=dtype),
+            replace(cfg.kv_a_shard_spec, raw_tensor_shape=tuple(kv_reordered.shape), dtype=kv_a_dtype),
         ),
     ]
 
@@ -179,7 +187,8 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     device,
     *,
     o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    q_ab_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    kv_a_dtype: ttnn.DataType = ttnn.bfloat8_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse TP4 ``shuffle_q_a`` o_proj, norms, and q_a / q_b / kv_a into one per-core L1 buffer.
@@ -221,7 +230,7 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     )
 
     q_entries = _make_q_ab_kv_a_overlap_entries(
-        q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mla_proj_dtype
+        q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, q_ab_dtype, kv_a_dtype
     )
 
     result = overlap_tensors(

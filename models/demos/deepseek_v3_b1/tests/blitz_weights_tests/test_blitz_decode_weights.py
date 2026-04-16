@@ -506,7 +506,7 @@ def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, me
         kv_raw,
         submesh,
         o_proj_dtype=o_proj_dtype,
-        mla_proj_dtype=o_proj_dtype,
+        q_ab_dtype=o_proj_dtype,
     )
     o_proj = fused["o_proj"]
     gate_mm = fused["gate_mm"]
