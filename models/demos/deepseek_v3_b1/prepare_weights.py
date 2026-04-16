@@ -365,6 +365,7 @@ def _mtp_norm_target(name: str) -> TensorTarget:
 
 
 def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+    k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
@@ -376,8 +377,9 @@ def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(eh_shard_grid, (k_per_device, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
         ),
+        mesh_mapper_config=ShardMeshMapper(dim=0),
     )
 
 
@@ -1143,14 +1145,27 @@ def load_lm_head_weights(path: str | Path, device) -> DeepSeekV3LMHeadWeights:
 
 
 def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
-    """Pad to DRAM bank alignment and tile-shuffle. Input: already transposed (K, N)."""
+    """Pad to DRAM bank alignment and tile-shuffle per device.
+
+    Input: already transposed (K, N) where K = 2*H is sharded across 8 mesh devices along dim-0.
+    The tile shuffle must be applied per-device slice so that ShardTensorToMesh(dim=0) gives each
+    device a correctly column-major-ordered shard for DRAM streaming.
+    """
     K, N = eh_proj_weight_T.shape
+    num_devices = 8
+    k_per_device = K // num_devices
+    assert K % num_devices == 0, f"eh_proj K={K} must be divisible by {num_devices} devices"
     assert N % _MTP_NUM_DRAM_BANKS == 0, f"eh_proj N={N} must be divisible by {_MTP_NUM_DRAM_BANKS} DRAM banks"
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
-    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_weight_T.dtype)
-    eh_padded[:, :N] = eh_proj_weight_T
-    return BlitzDecodeWeights._shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS).contiguous()
+
+    device_slices = []
+    for d in range(num_devices):
+        slice_d = eh_proj_weight_T[d * k_per_device : (d + 1) * k_per_device, :]
+        padded_d = torch.zeros((k_per_device, padded_N), dtype=slice_d.dtype)
+        padded_d[:, :N] = slice_d
+        device_slices.append(BlitzDecodeWeights._shuffle_dram_tiles(padded_d, 32, _MTP_NUM_DRAM_BANKS))
+    return torch.cat(device_slices, dim=0).contiguous()
 
 
 def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
@@ -1161,6 +1176,7 @@ def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: b
     and creates a WIDTH_SHARDED DRAM tensor.
     """
     K, N = eh_proj_torch.shape
+    k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shuffled = _transform_eh_proj(eh_proj_torch)
 
@@ -1175,7 +1191,7 @@ def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: b
     eh_proj_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(eh_shard_grid, (k_per_device, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
     )
     return ttnn.from_torch(
         eh_shuffled,
@@ -1184,7 +1200,7 @@ def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: b
         device=device if move_to_device else None,
         memory_config=eh_proj_mem_config,
         tile=_MTP_B_TILE,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
     )
 
 
@@ -1317,6 +1333,7 @@ def load_mtp_weights(
         e_gamma=e_gamma,
         eh_projection=eh_projection,
     )
+
 
 def load_shared_head_norm_weights(path: str | Path, device) -> ttnn.Tensor:
     """Load only the shared_head_norm tensor from the MTP cache directory."""

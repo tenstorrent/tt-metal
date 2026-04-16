@@ -202,10 +202,10 @@ struct DRAMStreamingMatmul {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            DPRINT << ">dsmm reserve" << ENDL();
+            DPRINT << ">dsmm reserve, cb in1: " << CTArgs::cb_in1 << ENDL();
             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
             l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
-            DPRINT << "<dsmm reserve" << ENDL();
+            DPRINT << "<dsmm reserve, subblock_k: " << CTArgs::subblock_k << ENDL();
             // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
             uint32_t cb_in1_base;
             if constexpr (ResetCBIn1) {
@@ -243,6 +243,7 @@ struct DRAMStreamingMatmul {
                 }
             }
 
+            DPRINT << ">dsmm push remaining blocks" << ENDL();
             // Push remaining blocks
             for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
                 noc_async_read_barrier_with_trid(block_trid_to_wait);
@@ -285,8 +286,19 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
+            DPRINT << ">dsmm subblock k:" << CTArgs::subblock_k << ENDL();
+            DPRINT << ">dsmm num_subblocks_k:" << CTArgs::num_subblocks_k << ENDL();
+            DPRINT << ">dsmm num_tiles_k:" << num_tiles_k << ENDL();
+            DPRINT << ">dsmm wait front in0" << ENDL();
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
+            DPRINT << ">dsmm wait front in0 done" << ENDL();
+            DPRINT << ">dsmm subblock n:" << num_subblocks_n << ENDL();
+            DPRINT << ">dsmm subblock w:" << CTArgs::subblock_w << ENDL();
+
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
+                if (sb_n == 0) {
+                    DPRINT << ">dsmm rb0" << ENDL();
+                }
                 cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_w);
 
                 if constexpr (CTArgs::fuse_silu) {
@@ -368,6 +380,7 @@ struct DRAMStreamingMatmul {
                 }
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
+            DPRINT << "<dsmm push back out" << ENDL();
             custom_mm_block_uninit<dense_packing>();
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
@@ -376,6 +389,7 @@ struct DRAMStreamingMatmul {
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);
             }
+            DPRINT << "<dsmm pop" << ENDL();
 #endif
         }
     };  // class Op

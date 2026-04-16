@@ -114,19 +114,22 @@ class BroadcastConfig:
         self.output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
 
         input_sample = self.input_tensors_per_device[0]
-        tile_height, tile_width = input_sample.tile.tile_shape
-        element_size = dtype_size(input_sample.dtype)
-        self.tensor0_page_size = tile_height * tile_width * element_size
-        shard_spec = input_sample.memory_config().shard_spec
-        shard_height, shard_width = shard_spec.shape
-        if shard_height % tile_height != 0 or shard_width % tile_width != 0:
-            raise ValueError(
-                f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
-            )
-        self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
-        self.tensor_size_bytes = (
-            tensor_size_bytes if tensor_size_bytes is not None else self.tensor0_page_size * self.num_pages_to_read
-        )
+        if tensor_size_bytes is not None:
+            self.tensor0_page_size = tensor_size_bytes
+            self.num_pages_to_read = 1
+            self.tensor_size_bytes = tensor_size_bytes
+        else:
+            tile_height, tile_width = input_sample.tile.tile_shape
+            element_size = dtype_size(input_sample.dtype)
+            self.tensor0_page_size = tile_height * tile_width * element_size
+            shard_spec = input_sample.memory_config().shard_spec
+            shard_height, shard_width = shard_spec.shape
+            if shard_height % tile_height != 0 or shard_width % tile_width != 0:
+                raise ValueError(
+                    f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
+                )
+            self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
+            self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
         if self.socket is not None:

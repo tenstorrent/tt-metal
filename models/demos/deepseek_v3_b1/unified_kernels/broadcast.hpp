@@ -160,6 +160,8 @@ struct Broadcast {
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        DPRINT << ">conn " << connection_idx << " dst_chip=" << dst_chip_id
+                               << " dst_mesh=" << dst_mesh_id << ENDL();
                         connections[connection_idx] =
                             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                                 arg_idx);
@@ -258,11 +260,15 @@ struct Broadcast {
                     }
                     DPRINT << ">fc3d 8" << ENDL();
                 }
-                DPRINT << ">fc3d 9" << ENDL();
+                DPRINT << ">fc3d 9 num_conn=" << CTArgs::num_connections << ENDL();
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
+                    DPRINT << ">close " << i << ENDL();
                     connections[i].close();
+                    DPRINT << "<close " << i << ENDL();
                 }
+                DPRINT << ">fc3d 10" << ENDL();
                 noc_async_full_barrier();
+                DPRINT << ">fc3d 11" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

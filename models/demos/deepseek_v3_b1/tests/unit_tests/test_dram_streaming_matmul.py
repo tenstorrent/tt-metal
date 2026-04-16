@@ -116,8 +116,8 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
 
 @pytest.mark.parametrize(
     "k, n, fused_activation",
-    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None), (14336, 7168, None)],
-    ids=["up_proj", "gate_proj", "down_proj", "eh"],
+    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None), (14336, 7168, None), (1792, 7168, None)],
+    ids=["up_proj", "gate_proj", "down_proj", "eh", "new_eh"],
 )
 @pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_dest", "not_fp32"])
@@ -135,7 +135,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
     """
 
     # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
-    num_loop_iters = 100 if m == 1 else 1
+    num_loop_iters = 100
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 
@@ -200,7 +200,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1_shuffled,
-        dtype=ttnn.bfloat4_b,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in1_memory_config,
@@ -231,7 +231,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
 
     # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
     in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
-    in1_dtype = ttnn.bfloat4_b
+    in1_dtype = ttnn.bfloat8_b
     num_in1_buffers = 3
     in1_CB_tiles = subblock_k * num_in1_buffers
     # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]

@@ -207,46 +207,47 @@ struct ReduceToOneB1 {
             // NCRISC - Reader: receives data from fabric via semaphore waits
             // ================================================================
             if constexpr (CTArgs::is_fabric_core) {
-                // Fabric cores have no reader work
                 return;
             }
 
             if constexpr (
                 CTArgs::device_role == MESH_ROOT3 || CTArgs::device_role == MESH_ROOT2 ||
                 CTArgs::device_role == MESH_ROOT1) {
-                // Skip this when fused - previous op already pushed to local_cb
                 if constexpr (!SkipLocalCbPush) {
                     cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
                     cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
                 }
 
-                // Round 1: Wait for shard from LEAF (page 0 of received_cb)
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
+                DPRINT << ">w1 s=" << *recv_sem1_ptr << ENDL();
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem1_ptr);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "<w1" << ENDL();
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Round 2: Wait for result from ROOT3 (page 1 of received_cb)
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
+                DPRINT << ">w2 s=" << *recv_sem2_ptr << ENDL();
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem2_ptr);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "<w2" << ENDL();
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Round 3: Wait for result from ROOT2 (page 2 of received_cb)
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
+                DPRINT << ">w3 s=" << *recv_sem3_ptr << ENDL();
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem3_ptr);
                 cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "<w3" << ENDL();
             }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -257,9 +258,6 @@ struct ReduceToOneB1 {
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                        // Persistent fabric core: wait for aggregator signal, then send
-                        // cross-device atomic inc to bcast sender on entry device.
-                        // Persistent args start after the worker sem addrs.
                         size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
                         uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
                         uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
@@ -291,10 +289,11 @@ struct ReduceToOneB1 {
                         sender.close();
                         noc_async_full_barrier();
                     }
+                    DPRINT << ">reduce done sig" << ENDL();
+                    DPRINT << "<reduce done sig" << ENDL();
                     return;
                 }
 
-                // Read worker semaphore addresses from runtime args
                 size_t arg_idx = CTArgs::fabric_rt_arg_base;
                 uint32_t worker_sem_addr[CTArgs::num_workers];
                 for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
@@ -303,12 +302,15 @@ struct ReduceToOneB1 {
 
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
 
-                // Build fabric connection from runtime args
+                uint32_t eth_ch = get_arg_val<uint32_t>(arg_idx);
+                DPRINT << "eth_ch=" << eth_ch << ENDL();
+
                 auto fabric_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                DPRINT << ">op" << ENDL();
                 fabric_sender.open();
+                DPRINT << "<op" << ENDL();
 
-                // Forward worker packets
                 uint32_t slot_base = packet_buffer_addr;
                 for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
                     uint32_t worker_header_addr = slot_base;
@@ -316,19 +318,25 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                    DPRINT << ">ws" << worker << ENDL();
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
                     unified_kernels::semaphore_dec(worker_sem_ptr);
+                    DPRINT << "<ws" << worker << ENDL();
 
                     fabric_sender.wait_for_empty_write_slot();
+                    DPRINT << ">sd" << worker << ENDL();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
                         worker_payload_addr, CTArgs::payload_size_bytes);
                     fabric_sender.send_payload_flush_blocking_from_address(
                         worker_header_addr, packet_header_size_bytes);
+                    DPRINT << "<sd" << worker << ENDL();
 
                     slot_base += CTArgs::slot_size_bytes;
                 }
 
+                DPRINT << ">cl" << ENDL();
                 fabric_sender.close();
+                DPRINT << "<cl" << ENDL();
                 noc_async_write_barrier();
                 return;
             }
@@ -337,15 +345,17 @@ struct ReduceToOneB1 {
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
 
-            // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                DPRINT << ">R1 scw" << ENDL();
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "<R1 scw" << ENDL();
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
                 uint64_t dst_noc_addr_0 =
                     get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
                 noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
+                DPRINT << "<R1 wr" << ENDL();
 
                 if constexpr (CTArgs::enable_downstream_socket) {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
@@ -355,11 +365,11 @@ struct ReduceToOneB1 {
                         const uint32_t socket_page_size = (is_last_worker_metadata_forwarder && is_last_worker)
                                                               ? useful_per_shard + CTArgs::forward_metadata_size_bytes
                                                               : useful_per_shard;
-                        DPRINT << "shard_idx: " << args.shard_idx << " socket_page_size: " << socket_page_size
-                               << ENDL();
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                         set_sender_socket_page_size(sender_socket, socket_page_size);
+                        DPRINT << ">R1 sres" << ENDL();
                         socket_reserve_pages(sender_socket, 1);
+                        DPRINT << "<R1 sres" << ENDL();
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
                         uint64_t fifo_dst = get_noc_addr(
@@ -370,11 +380,6 @@ struct ReduceToOneB1 {
 
                         if constexpr (is_last_worker_metadata_forwarder) {
                             if (is_last_worker) {
-                                DPRINT << "WRITE METADATA" << CTArgs::forward_metadata_size_bytes << ENDL();
-                                DPRINT << "FIFO DST: " << (uint32_t)fifo_dst
-                                       << " USEFUL PER SHARD: " << useful_per_shard << ENDL();
-                                DPRINT << "METADATA ADDR: " << args.metadata_addr
-                                       << " FORWARD METADATA SIZE: " << CTArgs::forward_metadata_size_bytes << ENDL();
                                 noc_async_write(
                                     args.metadata_addr,
                                     fifo_dst + useful_per_shard,
@@ -382,19 +387,21 @@ struct ReduceToOneB1 {
                             }
                         }
                         noc_async_writes_flushed();
-                        DPRINT << "PUSH" << ENDL();
 
                         socket_push_pages(sender_socket, 1);
                         socket_notify_receiver(sender_socket);
+                        DPRINT << ">R1 sbar" << ENDL();
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
+                        DPRINT << "<R1 sbar" << ENDL();
                         update_socket_config(sender_socket);
-                        DPRINT << "UPDATE SOCKET CONFIG" << ENDL();
                     }
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                        DPRINT << ">R1 agg" << ENDL();
                         noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        DPRINT << "<R1 agg" << ENDL();
                         noc_semaphore_set(agg_sem_ptr, 0);
 
                         uint64_t fc_sem = get_noc_addr(
@@ -402,18 +409,21 @@ struct ReduceToOneB1 {
                         noc_semaphore_inc(fc_sem, 1);
                         noc_async_write_barrier();
                     } else if (args.agg_sem_l1_addr != 0) {
+                        DPRINT << ">R1 ainc" << ENDL();
                         uint64_t agg_sem_noc =
                             get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
                         noc_semaphore_inc(agg_sem_noc, 1);
                         noc_async_atomic_barrier();
+                        DPRINT << "<R1 ainc" << ENDL();
                     }
                 }
 
+                DPRINT << ">R1 pop" << ENDL();
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                DPRINT << "<R1 pop" << ENDL();
                 return;
             }
 
-            // Non-ROOT1: send via fabric
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
@@ -445,6 +455,8 @@ struct ReduceToOneB1 {
 
             // Source CB: LEAF uses local_cb, others use scratch_cb
             constexpr uint32_t source_cb = (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
+            DPRINT << "r21 device_role=" << CTArgs::device_role << ENDL();
+            DPRINT << ">r20 source_cb=" << source_cb << ENDL();
 
             // Wait for data
             // - LEAF: when fused (SkipLocalCbPush=true), previous op pushed to local_cb, so we wait
@@ -452,33 +464,37 @@ struct ReduceToOneB1 {
             // - Others: always wait for compute to finish writing to scratch_cb
             if constexpr (CTArgs::device_role == MESH_LEAF) {
                 if constexpr (SkipLocalCbPush) {
+                    DPRINT << ">r20 local_cb wait" << ENDL();
                     cb_wait_front(source_cb, CTArgs::num_tiles);
+                    DPRINT << "<r20 local_cb wait" << ENDL();
                 }
             } else {
+                DPRINT << ">r20 scratch_cb wait" << ENDL();
                 cb_wait_front(source_cb, CTArgs::num_tiles);
+                DPRINT << "<r20 scratch_cb wait" << ENDL();
             }
             uint32_t data_addr = get_read_ptr(source_cb);
 
-            // Send header and payload to fabric core
+            DPRINT << ">wr" << ENDL();
             noc_async_write(reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
             noc_async_write(data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
 
-            // Signal fabric core
             uint64_t arrival_sem_noc_addr =
                 get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
             noc_semaphore_inc(arrival_sem_noc_addr, 1);
 
             noc_async_write_barrier();
             noc_async_atomic_barrier();
+            DPRINT << "<wr" << ENDL();
 
-            // Pop source_cb to free it for the next iteration.
-            // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)
-            // uses sharded setup (no push/pop tracking), so skip the pop.
             if constexpr (CTArgs::device_role == MESH_LEAF) {
+                DPRINT << ">r20 local_cb pop" << ENDL();
                 if constexpr (SkipLocalCbPush) {
+                    DPRINT << ">r20 local_cb pop" << ENDL();
                     cb_pop_front(source_cb, CTArgs::num_tiles);
                 }
             } else {
+                DPRINT << ">r20 local_cb pop" << ENDL();
                 cb_pop_front(source_cb, CTArgs::num_tiles);
             }
 
@@ -487,58 +503,60 @@ struct ReduceToOneB1 {
             // TRISC - Compute: performs reduction
             // ================================================================
             if constexpr (CTArgs::is_fabric_core || CTArgs::device_role == MESH_LEAF) {
-                // Fabric cores and LEAFs have no compute
                 return;
             }
 
-            // Initialize for binary operations
             reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
-            // Load local tiles to dest
             copy_tile_to_dst_init_short(CTArgs::local_cb);
+            DPRINT << ">r20 local_cb wait" << ENDL();
             cb_wait_front(CTArgs::local_cb, CTArgs::num_tiles);
             acquire_dst();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 copy_tile(CTArgs::local_cb, i, i);
             }
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
-
-            // Accumulate from received_cb page 0 (LEAF data)
+            DPRINT << "<r20 local_cb wait" << ENDL();
             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
+            DPRINT << ">r21 br_wait" << ENDL();
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
             }
             cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "<r21 br_wait" << ENDL();
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb page 1 (ROOT3 data)
+                DPRINT << ">r22 br_wait" << ENDL();
                 cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                         CTArgs::received_cb, i, i);
                 }
                 cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "<r22 br_wait" << ENDL();
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb page 2 (ROOT2 data)
+                DPRINT << ">r23 br_wait" << ENDL();
                 cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                         CTArgs::received_cb, i, i);
                 }
                 cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
+                DPRINT << "<r23 br_wait" << ENDL();
             }
 
-            // Pack result to scratch_cb
+            DPRINT << ">r24 br_wait" << ENDL();
             cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 pack_tile(i, CTArgs::scratch_cb, i);
             }
             release_dst();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
+            DPRINT << "<r24 br_wait" << ENDL();
 #endif
         }
     };  // class Op

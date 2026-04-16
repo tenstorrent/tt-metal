@@ -126,7 +126,9 @@ struct RMSNorm {
             {
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
+                DPRINT << ">rmsnorm wait front, input_cb=" << CTArgs::input_cb << ", num_tiles=" << num_tiles << ENDL();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
+                DPRINT << ">rmsnorm wait front done" << ENDL();
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
@@ -139,22 +141,36 @@ struct RMSNorm {
                 rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(CTArgs::input_cb);
                 rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
                 if constexpr (pop_input) {
+                    DPRINT << ">rmsnorm pop front, input_cb=" << CTArgs::input_cb << ENDL();
                     cb_pop_front(CTArgs::input_cb, num_tiles);
                 }
             }
             {
                 // Multiply by the weight
+                DPRINT << ">rmsnorm reserve back, output_cb=" << CTArgs::output_cb << ", num_tiles=" << num_tiles
+                       << ENDL();
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
+                DPRINT << ">rmsnorm reserve back done" << ENDL();
                 binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                DPRINT << ">rmsnorm binary dest reuse tiles init done" << ENDL();
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
                 }
 
+                DPRINT << ">rmsnorm tile regs commit" << ENDL();
                 tile_regs_commit();
+                DPRINT << ">rmsnorm tile regs commit done" << ENDL();
+                DPRINT << ">rmsnorm tile regs wait" << ENDL();
                 tile_regs_wait();
+                DPRINT << ">rmsnorm tile regs wait done" << ENDL();
+                DPRINT << ">rmsnorm pack tile block" << ENDL();
                 pack_tile_block(0, CTArgs::output_cb, num_tiles);
+                DPRINT << ">rmsnorm pack tile block done" << ENDL();
 
+                DPRINT << ">rmsnorm push back, output_cb=" << CTArgs::output_cb << ", num_tiles=" << num_tiles
+                       << ENDL();
                 cb_push_back(CTArgs::output_cb, num_tiles);
+                DPRINT << ">rmsnorm push back done" << ENDL();
                 tile_regs_release();
             }
         }

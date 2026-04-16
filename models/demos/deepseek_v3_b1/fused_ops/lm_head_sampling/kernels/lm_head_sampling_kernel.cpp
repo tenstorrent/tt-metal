@@ -59,7 +59,7 @@
 #include "../../../unified_kernels/socket_send.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
-#include "../../../unified_kernels/gather.hpp"
+#include "../../../unified_kernels/reduce_to_one_b1.hpp"
 #include "../../../metadata/metadata.hpp"
 #include "api/debug/dprint.h"
 
@@ -81,7 +81,7 @@ struct Core {
     static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
-    static constexpr bool is_argmax_core = is_matmul_core;
+    static constexpr bool is_argmax_core = get_named_compile_time_arg_val("is_argmax_core") == 1;
     static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
     static constexpr bool is_argmax_mesh_sender_core =
         get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
@@ -108,8 +108,12 @@ struct Core {
     static constexpr bool is_base_stage = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
     static constexpr bool is_spec_stage = get_named_compile_time_arg_val("is_mtp_verify_stage") == 1;
     static constexpr bool is_eh_matmul_core = enable_mtp && get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
-    static constexpr bool gather_use_per_core_sender_idx =
-        enable_mtp && get_named_compile_time_arg_val("gather_use_per_core_sender_idx") == 1;
+    static constexpr bool is_eh_reduce_worker_core =
+        enable_mtp && get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
+    static constexpr bool is_eh_reduce_fabric_core =
+        enable_mtp && get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
+    static constexpr bool is_e_norm_device = enable_mtp && get_named_compile_time_arg_val("is_e_norm_device") == 1;
+    static constexpr uint32_t reduce_gate_semaphore_id = get_named_compile_time_arg_val("reduce_gate_semaphore_id");
 
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
@@ -251,10 +255,12 @@ void kernel_main() {
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
     }
-    if constexpr (Core::enable_mtp && Core::is_input_core) {
+    if constexpr (Core::enable_mtp && Core::is_input_core && !Core::is_e_norm_device) {
         constexpr uint32_t h_gamma_cb = get_named_compile_time_arg_val("h_gamma_cb");
         constexpr uint32_t rmsnorm_h_num_tiles = get_named_compile_time_arg_val("rmsnorm_h_num_tiles");
         unified_kernels::setup_sharded_buffer(h_gamma_cb, rmsnorm_h_num_tiles);
+    }
+    if constexpr (Core::enable_mtp && Core::is_input_core && Core::is_e_norm_device) {
         constexpr uint32_t e_gamma_cb = get_named_compile_time_arg_val("e_gamma_cb");
         constexpr uint32_t rmsnorm_e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
         unified_kernels::setup_sharded_buffer(e_gamma_cb, rmsnorm_e_num_tiles);
@@ -292,26 +298,63 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_eh_bank_id"),
         get_named_compile_time_arg_val("matmul_eh_vc")>;
 
-    // ── Output gather sender args
-    deepseek_b1_ops::Gather::DMArgs eh_logits_gather_args{
-        .sender =
-            {
-                get_named_compile_time_arg_val("gather_dest_noc_x"),
-                get_named_compile_time_arg_val("gather_dest_noc_y"),
-                get_named_compile_time_arg_val("gather_data_size_bytes"),
-                get_semaphore(get_named_compile_time_arg_val("gather_receiver_semaphore_id")),
-                get_named_compile_time_arg_val("gather_src_cb"),
-                get_named_compile_time_arg_val("gather_src_num_pages"),
-                get_named_compile_time_arg_val("gather_sender_grid_start_x"),
-                get_named_compile_time_arg_val("gather_sender_grid_start_y"),
-                get_named_compile_time_arg_val("gather_sender_grid_end_x"),
-                get_named_compile_time_arg_val("gather_sender_grid_end_y"),
-                get_named_compile_time_arg_val("gather_row_major"),
-                get_named_compile_time_arg_val("gather_receiver_data_addr"),
-                get_named_compile_time_arg_val("gather_sender_idx"),
-            },
-        .receiver = {},
+    // ------------------------------------------------------------------------
+    // ReduceToOneB1 (reader - receives data from fabric via semaphore waits)
+    // ------------------------------------------------------------------------
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ReaderCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+    // Reader runtime args
+    deepseek_b1_ops::ReduceToOneB1::ReaderArgs reduce_rt_args{
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // recv_sem_round1
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // recv_sem_round2
+        get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // recv_sem_round3
     };
+
+    // ── MTP token broadcast (tree-based, uses Broadcast::Op) ─────────
+#if !defined(SKIP_CCL)
+    using MtpBcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("mtp_bcast_data_cb_id"),
+        get_named_compile_time_arg_val("mtp_bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("mtp_bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("mtp_bcast_num_neighbors"),
+        get_named_compile_time_arg_val("mtp_bcast_num_links"),
+        get_named_compile_time_arg_val("mtp_bcast_is_root"),
+        get_named_compile_time_arg_val("mtp_bcast_chunk_size_bytes"),
+        get_named_compile_time_arg_val("mtp_bcast_last_chunk_size_bytes"),
+        get_named_compile_time_arg_val("mtp_bcast_num_chunks")>;
+#endif
+    constexpr uint32_t mtp_bcast_writer_common_rt_count = 5;
+    deepseek_b1_ops::Broadcast::WriterArgs mtp_bcast_args{};
+#if !defined(SKIP_CCL)
+    if constexpr (!Core::skip_ccl && Core::enable_mtp) {
+        uint32_t mtp_bcast_rta_num_args = 0;
+        uint32_t mtp_bcast_rta_offset = 0;
+        if constexpr (Core::is_input_core) {
+            mtp_bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            mtp_bcast_rta_offset = per_core_rta_arg_idx;
+            per_core_rta_arg_idx += mtp_bcast_rta_num_args;
+        }
+        mtp_bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // tensor_address0
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // my_noc_x
+            get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // my_noc_y
+            {
+                get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // sem_bank_addrs[0]
+                get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),  // sem_bank_addrs[1]
+            },
+            mtp_bcast_rta_offset,
+            mtp_bcast_rta_num_args,
+        };
+    }
+#endif
+    if constexpr (!Core::enable_mtp || Core::skip_ccl) {
+        ncrisc_rt_arg_idx += mtp_bcast_writer_common_rt_count;
+    }
 
 #elif defined(COMPILE_FOR_BRISC)
     // ========================================================================
@@ -375,6 +418,20 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = sampling_args.persistent_dst_sem_addr;
 
+    // ── MTP token broadcast reader (BRISC side of Broadcast::Op) ─────
+#if !defined(SKIP_CCL)
+    using MtpBcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("mtp_bcast_data_cb_id"),
+        get_named_compile_time_arg_val("mtp_bcast_num_pages_to_read"),
+        get_named_compile_time_arg_val("mtp_bcast_is_root"),
+        0>;  // no socket for MTP token bcast
+#endif
+    deepseek_b1_ops::Broadcast::ReaderArgs mtp_bcast_args{
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_config_addr (0)
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_page_size (0)
+        get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_num_pages (0)
+    };
+
     constexpr uint32_t metadata_output_l1_addr = get_named_compile_time_arg_val("metadata_output_l1_addr");
 
     // ── Mcast sender (input_core) ───────────────────────────────────
@@ -407,6 +464,7 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+    constexpr uint32_t eh_norm_slice_offset_bytes = get_named_compile_time_arg_val("eh_norm_slice_offset_bytes");
 
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
@@ -418,22 +476,43 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_eh_data_size_bytes"),
         mcast_eh_src_cb,
         get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
-        Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) : 0,
+        Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) + eh_norm_slice_offset_bytes : 0,
         get_write_ptr(mcast_eh_dst_cb),
     };
-    // Output gather receiver args
-    deepseek_b1_ops::Gather::DMArgs eh_logits_gather_args{
-        .sender = {},
-        .receiver =
-            {
-                get_named_compile_time_arg_val("gather_noc0_num_senders"),
-                get_named_compile_time_arg_val("gather_noc1_num_senders"),
-                get_semaphore(get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id")),
-                get_semaphore(get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id")),
-                get_named_compile_time_arg_val("gather_dst_cb"),
-                get_named_compile_time_arg_val("gather_dst_num_pages"),
-            },
-    };
+    // ------------------------------------------------------------------------
+    // ReduceToOneB1 (writer - sends data via fabric or NOC)
+    // ------------------------------------------------------------------------
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::WriterCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_payload_size_bytes"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_scratch_cb"),
+        get_named_compile_time_arg_val("reduce_packet_cb"),
+        get_named_compile_time_arg_val("reduce_num_hops"),
+        get_named_compile_time_arg_val("reduce_dst_fabric_node_chip_id"),
+        get_named_compile_time_arg_val("reduce_dst_fabric_node_mesh_id"),
+        get_named_compile_time_arg_val("reduce_output_core_noc_x"),
+        get_named_compile_time_arg_val("reduce_output_core_noc_y"),
+        get_named_compile_time_arg_val("reduce_num_workers"),
+        get_named_compile_time_arg_val("reduce_slot_size_bytes"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+
+    // Writer runtime args for worker cores (skip past argmax mesh sender args if co-located)
+    constexpr size_t reduce_brisc_arg_start = Core::is_argmax_mesh_sender_core ? 5 : 0;
+    deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
+    if constexpr (Core::is_eh_reduce_worker_core) {
+        reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),  // fabric_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),  // fabric_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),  // my_slot_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),  // worker_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),  // dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),  // dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),  // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),  // shard_idx
+        };
+    }
 
 #elif defined(COMPILE_FOR_TRISC)
     // ========================================================================
@@ -456,7 +535,17 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::ComputeArgs mcast_eh_args{};
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
     deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
-    deepseek_b1_ops::Gather::ComputeArgs eh_logits_gather_args{};
+
+    // ── ReduceToOneB1 compute (eh_reduce cores) ─────────────────────
+    using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
+        get_named_compile_time_arg_val("reduce_device_role"),
+        get_named_compile_time_arg_val("reduce_num_tiles"),
+        get_named_compile_time_arg_val("reduce_local_cb"),
+        get_named_compile_time_arg_val("reduce_received_cb"),
+        get_named_compile_time_arg_val("reduce_output_cb"),
+        get_named_compile_time_arg_val("reduce_scratch_cb"),
+        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+    deepseek_b1_ops::ReduceToOneB1::ComputeArgs reduce_rt_args{};
 
     // ── RMSNorm compute (input_core / rmsnorm_core) ─────────────────
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
@@ -518,7 +607,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_eh_num_subblocks_k"),
         1,
         0,
-        0>;
+        DST_ACCUM_MODE>;
 
     compute_kernel_hw_startup(0, 0, 0);
 #endif
@@ -529,7 +618,7 @@ void kernel_main() {
             sampling_op;
 
     deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
+        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_matmul_core, true>
             mcast;
 
     uint32_t iteration_count = 0;
@@ -575,10 +664,8 @@ void kernel_main() {
         if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
             auto next_iteration_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
-            DPRINT << ">next_iteration_sem" << ENDL();
             noc_semaphore_wait(next_iteration_semaphore, 1);
             noc_semaphore_set(next_iteration_semaphore, 0);
-            DPRINT << "next_iteration_sem" << ENDL();
         }
 #endif
 
@@ -587,10 +674,8 @@ void kernel_main() {
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
             auto* bcast_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
-            DPRINT << ">bcast_turn_sem" << ENDL();
             noc_semaphore_wait(bcast_turn_sem, 1);
             noc_semaphore_set(bcast_turn_sem, 0);
-            DPRINT << "bcast_turn_sem<" << ENDL();
         }
 #endif
 
@@ -609,14 +694,12 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         // Device-local fabric gate (post-bcast release to argmax side).
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
-            DPRINT << ">ax turn_sem inc" << ENDL();
             auto argmax_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_argmax_noc_x,
                 Core::fabric_gate_argmax_noc_y,
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
             noc_semaphore_inc(argmax_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << "<ax turn_sem inc" << ENDL();
         }
 #endif
 
@@ -637,7 +720,6 @@ void kernel_main() {
             constexpr uint32_t metadata_size = 64;
             constexpr uint32_t bcast_num_pages = 225;
             constexpr uint32_t activation_size_bytes = 14336;
-
             uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
             uint32_t metadata_src = rmsnorm_buffer_addr + activation_size_bytes;
 
@@ -645,7 +727,6 @@ void kernel_main() {
             uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, metadata_output_l1_addr);
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
-
             uint64_t sem_addr = get_noc_addr(
                 argmax_noc_x,
                 argmax_noc_y,
@@ -657,7 +738,8 @@ void kernel_main() {
 
         {
             DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, !Core::enable_mtp> rmsnorm;
+            constexpr bool pop_rmsnorm_src = Core::is_e_norm_device || !Core::enable_mtp;
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, pop_rmsnorm_src> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
@@ -676,12 +758,8 @@ void kernel_main() {
         if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
             auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
-
-            DPRINT << ">ax turn_sem" << ENDL();
             noc_semaphore_wait(argmax_turn_sem, 1);
-            DPRINT << ">ax turn_sem set" << ENDL();
             noc_semaphore_set(argmax_turn_sem, 0);
-            DPRINT << "<ax turn_sem" << ENDL();
         }
 #endif
 
@@ -695,11 +773,24 @@ void kernel_main() {
     // MTP Lambda
     // ====================================================================
     auto mtp = [&]() {
+
     // ====================================================================
-    // [MTP] Token transfer + Embedding lookup + e_rmsnorm + EH matmul
+    // [MTP] Token broadcast to e_norm devices
+    //
+    // The argmax final token lives at mtp_argmax_output_addr on the exit
+    // device's argmax_final_core. We need it on ALL e_norm devices so each
+    // can do embedding lookup + e_rmsnorm.
+    //
+    // Flow:
+    //   1. argmax_final_core NOC-writes token to input_core (always on exit)
+    //   2. input_core waits for token, then fabric-sends to remote e_norm input_cores
+    //   3. remote e_norm input_cores wait for fabric token
+    //
+    // The fabric sender lives on input_core (not argmax_final_core) to
+    // avoid L1 pressure on argmax_final_core which is already CB-heavy.
     // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_argmax_final_core) {
+        if constexpr (Core::is_argmax_final_core && Core::is_exit_device) {
             DPRINT << ">mtp token write" << ENDL();
             uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
             noc_async_write(mtp_argmax_output_addr, dst, 4);
@@ -710,18 +801,62 @@ void kernel_main() {
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << ">mtp token write done" << ENDL();
+            DPRINT << "<mtp token write" << ENDL();
         }
 #endif
 
-#if defined(COMPILE_FOR_NCRISC)
+        // MTP token broadcast via tree-based Broadcast::Op.
+        // Root (exit device): wait for token from argmax_final_core, then
+        // BRISC pushes CB and NCRISC runs the broadcast writer tree.
+        // Non-root: NCRISC broadcast writer waits for fabric semaphore.
+#if defined(COMPILE_FOR_BRISC)
+#if !defined(SKIP_CCL)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">mtp token read" << ENDL();
-            volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
-            noc_semaphore_wait(mtp_ready_sem, 1);
-            noc_semaphore_set(mtp_ready_sem, 0);
-            DPRINT << ">mtp token read done" << ENDL();
+            DPRINT << ">mtp_bcast brisc" << ENDL();
+            deepseek_b1_ops::Broadcast::Op<MtpBcastCTArgs, Core::is_input_core> token_bcast_sender;
+            token_bcast_sender(mtp_bcast_args);
+            DPRINT << "<mtp_bcast brisc" << ENDL();
+        }
+#endif
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+#if !defined(SKIP_CCL)
+        if constexpr (Core::is_input_core) {
+            if constexpr (Core::is_exit_device) {
+                DPRINT << ">mtp_bcast root wait" << ENDL();
+                volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
+                noc_semaphore_wait(mtp_ready_sem, 1);
+                noc_semaphore_set(mtp_ready_sem, 0);
+            }
+            deepseek_b1_ops::Broadcast::Op<MtpBcastCTArgs, Core::is_input_core> token_bcast_receiver;
+            token_bcast_receiver(mtp_bcast_args);
+        }
+#endif
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+        // Pre-reduce gate: BRISC on argmax_final_core is the last to close
+        // fabric connections (it runs the argmax writer / fabric sender).
+        // Signal the 2 reduce fabric cores that it is safe to open theirs.
+        if constexpr (Core::is_input_core && !Core::skip_ccl) {
+            DPRINT << ">reduce gate" << ENDL();
+            noc_semaphore_inc(
+                get_noc_addr(
+                    get_named_compile_time_arg_val("reduce_fc_noc_0_x"),
+                    get_named_compile_time_arg_val("reduce_fc_noc_0_y"),
+                    get_semaphore(Core::reduce_gate_semaphore_id)),
+                1);
+            noc_async_atomic_barrier();
+            noc_semaphore_inc(
+                get_noc_addr(
+                    get_named_compile_time_arg_val("reduce_fc_noc_1_x"),
+                    get_named_compile_time_arg_val("reduce_fc_noc_1_y"),
+                    get_semaphore(Core::reduce_gate_semaphore_id)),
+                1);
+            noc_async_atomic_barrier();
+            DPRINT << "<reduce gate" << ENDL();
         }
 #endif
 
@@ -729,9 +864,8 @@ void kernel_main() {
         // [MTP] Embedding lookup (NCRISC on input_core)
         // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_input_core) {
+        if constexpr (Core::is_input_core && Core::is_e_norm_device) {
             DPRINT << ">el" << ENDL();
-
             constexpr uint32_t embedding_size_bytes = get_named_compile_time_arg_val("embedding_size_bytes");
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t emb_cb = get_named_compile_time_arg_val("embedding_cb");
@@ -748,6 +882,7 @@ void kernel_main() {
                                     ? metadata_ptr->prefill_token_id
                                     : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_token_addr);
 
+            DPRINT << "token_id=" << token_id << ENDL();
             cb_reserve_back(emb_cb, e_num_tiles);
             noc_async_read(embedding_addr_gen.get_noc_addr(token_id), get_write_ptr(emb_cb), embedding_size_bytes);
             noc_async_read_barrier();
@@ -764,61 +899,43 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_rmsnorm_core) {
-            {
-                DPRINT << "h_rmsnorm start" << ENDL();
-                deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
-                DeviceZoneScopedN("MTP_H_RMSNORM");
-                DPRINT << ">mtp h_rmsnorm start" << ENDL();
-                PACK(({
-                    uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("rmsnorm_h_output_cb");
-                    auto& iface = get_local_cb_interface(mcast_eh_src_cb);
-                    uint32_t eh_src_base = (iface.fifo_limit - iface.fifo_size) << cb_addr_shift;
-                    unified_kernels::override_cb_wr_ptr(
-                        mcast_eh_src_cb, eh_src_base + 14336);  // 14k bytes offset for h_norm
-                }));
-                h_rmsnorm(rmsnorm_args);
-                DPRINT << ">mtp h_rmsnorm done" << ENDL();
-            }
-            {
-                DPRINT << ">mtp e_rmsnorm start" << ENDL();
+            if constexpr (Core::is_e_norm_device) {
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
-                DPRINT << "e_rmsnorm start" << ENDL();
                 e_rmsnorm(rmsnorm_args);
-                DPRINT << ">mtp e_rmsnorm done" << ENDL();
+            } else {
+                DeviceZoneScopedN("MTP_H_RMSNORM");
+                deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
+                h_rmsnorm(rmsnorm_args);
             }
         }
 #endif
 
         // ====================================================================
-        // [MTP] Second mcast — multicast [e_norm|h_norm] from sender to all cores
+        // [MTP] Second mcast — multicast e norm or h norm chunks from sender to all cores
         // ====================================================================
         {
-            deepseek_b1_ops::Mcast::Op<
-                McastEhCTArgs,
-                Core::enable_mtp && Core::is_input_core,
-                Core::enable_mtp && Core::is_mcast_receiver_core,
-                Core::enable_mtp && Core::is_eh_matmul_core,
-                true>
-                mcast_eh;
+            deepseek_b1_ops::Mcast::
+                Op<McastEhCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_eh_matmul_core, true>
+                    mcast_eh;
             DeviceZoneScopedN("MTP_EH_MCAST");
             mcast_eh(mcast_eh_args);
         }
 
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_eh_matmul_core) {
-            constexpr uint32_t _eh_in0_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+        if constexpr (Core::is_eh_matmul_core && Core::enable_mtp) {
+            constexpr uint32_t eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
             invalidate_l1_cache();
-            uint32_t _base = get_read_ptr(_eh_in0_cb);
-            volatile uint16_t* _p0 = reinterpret_cast<volatile uint16_t*>(_base);
-            volatile uint16_t* _p7168 = reinterpret_cast<volatile uint16_t*>(_base + 14336);
-            DPRINT << "EH_IN0[0]=" << BF16(_p0[0]) << " [7168]=" << BF16(_p7168[0]) << ENDL();
+            auto* eh_base = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(eh_dst_cb));
+            DPRINT << "eh_act:";
+            for (uint32_t i = 0; i < 8; i++) DPRINT << " " << BF16(eh_base[i]);
+            DPRINT << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
-            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 3> eh_matmul;
+            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 2> eh_matmul;
             {
                 DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
                 eh_matmul();
@@ -826,28 +943,85 @@ void kernel_main() {
         }
 #endif
 
+#if defined(COMPILE_FOR_TRISC)
+        // Bridge: drain CB17 (EH matmul output, 28 [1,32] tiles) and expose through
+        // reduce_local_cb (CB21, aliased L1, 1 page of payload_size_bytes).
+        // This lets the reduce see the full shard as 1 compute tile (num_tiles=1).
+        if constexpr (Core::is_eh_matmul_core) {
+            cb_wait_front(eh_out_cb, eh_out_w);
+
+#ifdef TRISC_PACK
+            {
+                auto& cb17_iface = get_local_cb_interface(eh_out_cb);
+                uint32_t base_addr = (cb17_iface.fifo_limit - cb17_iface.fifo_size) << cb_addr_shift;
+                auto* bp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_addr);
+                DPRINT << "eh_out:";
+                for (uint32_t i = 0; i < 8; i++) DPRINT << " " << BF16(bp[i]);
+                DPRINT << ENDL();
+            }
+#endif
+
+            cb_pop_front(eh_out_cb, eh_out_w);
+            constexpr uint32_t reduce_lcb = get_named_compile_time_arg_val("reduce_local_cb");
+            cb_reserve_back(reduce_lcb, 1);
+            cb_push_back(reduce_lcb, 1);
+        }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_eh_reduce_fabric_core) {
+            auto* reduce_gate =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::reduce_gate_semaphore_id));
+            DPRINT << "reduce gate sem_l1=" << (uint32_t)reduce_gate << ENDL();
+            noc_semaphore_wait(reduce_gate, 1);
+            noc_semaphore_set(reduce_gate, 0);
+            DPRINT << "<reduce gate wait" << ENDL();
+        }
+#endif
+
         {
-            DeviceZoneScopedN("OUTPUT_GATHER");
-            deepseek_b1_ops::Gather::Op<
-                Core::is_eh_matmul_core,
-                Core::is_argmax_final_core,
-                /*pop_src=*/true,
-                Core::gather_use_per_core_sender_idx>
-                eh_logits_gather;
-            eh_logits_gather(eh_logits_gather_args);
+            DeviceZoneScopedN("REDUCE_TO_ONE");
+            constexpr bool is_reduce_core = Core::is_eh_reduce_worker_core || Core::is_eh_reduce_fabric_core;
+            deepseek_b1_ops::ReduceToOneB1::Op<ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
+            reduce_op(reduce_rt_args);
         }
 
 #if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_eh_reduce_fabric_core || Core::is_eh_reduce_worker_core) {
+            DPRINT << ">reduce gate signal" << ENDL();
+            constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
+            constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
+            uint64_t sync_noc_addr =
+                get_noc_addr(argmax_noc_x, argmax_noc_y, get_semaphore(Core::reduce_gate_semaphore_id));
+            noc_semaphore_inc(sync_noc_addr, 1);
+            noc_async_atomic_barrier();
+            DPRINT << "<reduce gate signal" << ENDL();
+        }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_argmax_final_core) {
+            constexpr uint32_t reduce_done_num = get_named_compile_time_arg_val("reduce_gate_num_targets");
+            auto* reduce_done_sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::reduce_gate_semaphore_id));
+            noc_semaphore_wait(reduce_done_sem, reduce_done_num);
+            noc_semaphore_set(reduce_done_sem, 0);
+        }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_argmax_final_core && Core::is_exit_device) {
+            DPRINT << ">metadata wait" << ENDL();
             // Wait for metadata unicast from exit input core (same buffer spec stage reads).
             volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
             noc_semaphore_wait(metadata_ready_sem, 1);
             noc_semaphore_set(metadata_ready_sem, 0);
 
-            // auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
+
+            // Write token metadata to gather destination CB
             invalidate_l1_cache();
             uint32_t base_token_type = metadata_ptr->tok0_type;
             uint32_t base_token_pos = metadata_ptr->position_id;
@@ -856,14 +1030,16 @@ void kernel_main() {
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
-            DPRINT << ">argmax wait front" << ENDL();
+            constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
+
+            cb_reserve_back(eh_gather_dst_cb, eh_gather_num_pages);
+            cb_push_back(eh_gather_dst_cb, eh_gather_num_pages);
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, input_pos_id, slot_id);
             cb_pop_front(argmax_socket_cb, 1);
-            DPRINT << ">argmax pop token done" << ENDL();
+            DPRINT << "<metadata wait" << ENDL();
         }
 #endif
     };
@@ -955,49 +1131,42 @@ void kernel_main() {
             Core::persistent_mode) {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
-                    DPRINT << ">mtp socket send" << ENDL();
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
-                    DPRINT << ">socket send from cb for base stage mtp" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
-                    DPRINT << ">mtp socket send done" << ENDL();
                 } else {
-                    DPRINT << ">mtp socket send done" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
                         ArgmaxCTArgs::socket_cb_id,
                         1,
                         ArgmaxCTArgs::socket_page_size_bytes);
-                    DPRINT << ">mtp socket send done" << ENDL();
                 }
 
             } else if constexpr (Core::is_spec_stage) {
-                DPRINT << ">mtp socket send" << ENDL();
                 unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                     sampling_args.socket_config_addr,
                     ArgmaxCTArgs::socket_cb_id,
                     1,
                     ArgmaxCTArgs::socket_page_size_bytes);
-                DPRINT << ">mtp socket send done" << ENDL();
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
-            DPRINT << ">socket send from cb for stage done" << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-        // Device-local fabric gate (post-sampling release back to bcast side).
         if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+            DPRINT << ">bt" << ENDL();
             auto bcast_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
             noc_semaphore_inc(bcast_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
+            DPRINT << "<bt" << ENDL();
         }
 #endif
 

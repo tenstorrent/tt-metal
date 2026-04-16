@@ -377,7 +377,8 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << ">mcast wait front" << ENDL();
+                DPRINT << ">mcast wait front, src_cb=" << args.src_cb << ", src_num_pages=" << args.src_num_pages
+                       << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
                 DPRINT << ">mcast send 1" << ENDL();
                 mcast_send_with_state<
@@ -411,6 +412,7 @@ struct Mcast {
             // ================================================================
             // NCRISC - Receiver cores: reserve, wait, push (all in operator)
             // ================================================================
+            DPRINT << ">mc_nc" << ENDL();
             if constexpr (IsReceiverCore) {
                 DPRINT << ">mcast recv 1" << ENDL();
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
@@ -427,9 +429,12 @@ struct Mcast {
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
+                DPRINT << ">mcast recv 6, dst_sem=" << args.data_receiver_semaphore_addr << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                DPRINT << ">mcast recv 7" << ENDL();
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             }
+            DPRINT << "<mc_nc" << ENDL();
 #endif
         }
 
