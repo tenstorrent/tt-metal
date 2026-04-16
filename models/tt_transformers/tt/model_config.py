@@ -1171,7 +1171,11 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     def use_short_seq_l1_prefill(self, seq_len: int = None):
-        """Enable aggressive L1 prefill for short-seq single-user N150 runs."""
+        """L1-backed prefill activations for N150, batch 1, max/active seq ≤ 512.
+
+        Used for Qwen3-Embedding and other models on N150 to reduce DRAM traffic on short prompts.
+        Opt out with TT_PREFILL_FORCE_DRAM=1.
+        """
         force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
         if force_dram:
             enabled = False
@@ -1214,7 +1218,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1394,7 +1398,7 @@ class ModelArgs:
             else:
                 return tensor.memory_config()
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1700,7 +1704,7 @@ class ModelArgs:
         if mode == Mode.DECODE:
             return self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1764,7 +1768,8 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            # Match concat_heads / WO: keeps SDPA output off DRAM when use_short_seq_l1_prefill (embedding <512)
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2052,7 +2057,7 @@ class ModelArgs:
             else:
                 return self.model_config["GATHER_USERS_MEMCFG"](mesh_cols)
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return self.get_prefill_activation_mem_config()
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
