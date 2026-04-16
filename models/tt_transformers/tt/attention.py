@@ -521,54 +521,6 @@ class Attention(LightweightModule):
         )
         return q_heads_1BQD, k_heads_1BKD
 
-    def _should_use_hf_rotary_width_workaround(self, rotary_tensor):
-        return self.partial_rotary_factor != 1.0 and rotary_tensor.shape[-1] == 32
-
-    def _pad_hf_rotary_tensor_only_to_64(self, rotary_tensor):
-        # Fast path when cos/sin are pre-padded at rope init: only pad the rotary tensor.
-        # Same block-interleaved layout: [q1..q_n/2, 0..0 | q_{n/2+1}..q_n, 0..0].
-        assert rotary_tensor.shape[-1] == 32, "HF rotary width workaround expects a 32-wide rotary slice"
-        rotary_tensor = ttnn.to_memory_config(rotary_tensor, ttnn.L1_MEMORY_CONFIG)
-        half = rotary_tensor.shape[-1] // 2
-        first, second = ttnn.split(rotary_tensor, split_size=[half, half], dim=3)
-        first_padded = ttnn.pad(first, padding=[(0, 0), (0, 0), (0, 0), (0, half)], value=0.0)
-        second_padded = ttnn.pad(second, padding=[(0, 0), (0, 0), (0, 0), (0, half)], value=0.0)
-        ttnn.deallocate(first)
-        ttnn.deallocate(second)
-        out = ttnn.concat([first_padded, second_padded], dim=3)
-        ttnn.deallocate(first_padded)
-        ttnn.deallocate(second_padded)
-        return out
-
-    def _unpad_hf_rotary_width_from_64(self, rotary_tensor):
-        rotary_tensor = ttnn.to_memory_config(rotary_tensor, ttnn.L1_MEMORY_CONFIG)
-        padded_half_width = rotary_tensor.shape[-1] // 2
-        rotary_half_width = padded_half_width // 2
-
-        rotary_first_block = ttnn.slice(
-            rotary_tensor,
-            starts=(0, 0, 0, 0),
-            ends=(rotary_tensor.shape[0], rotary_tensor.shape[1], rotary_tensor.shape[2], rotary_half_width),
-            steps=(1, 1, 1, 1),
-        )
-        rotary_second_block = ttnn.slice(
-            rotary_tensor,
-            starts=(0, 0, 0, padded_half_width),
-            ends=(
-                rotary_tensor.shape[0],
-                rotary_tensor.shape[1],
-                rotary_tensor.shape[2],
-                padded_half_width + rotary_half_width,
-            ),
-            steps=(1, 1, 1, 1),
-        )
-        rotary_unpadded = ttnn.concat([rotary_first_block, rotary_second_block], dim=3)
-
-        ttnn.deallocate(rotary_first_block)
-        ttnn.deallocate(rotary_second_block)
-
-        return rotary_unpadded
-
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
         cos, sin = rot_mats[0], rot_mats[1]
         # Must match padded batch in rot_mats (rope) and nlp_create_qkv_heads_decode output; avoids
@@ -584,18 +536,6 @@ class Attention(LightweightModule):
         q_out_mem = q_heads_pre_rot_1BQD.memory_config()
         k_out_mem = k_heads_pre_rot_1BKD.memory_config()
 
-        use_width_workaround = self._should_use_hf_rotary_width_workaround(q_heads_pre_rot_1BQD)
-
-        # Partial-HF RoPE width workaround: pad q/k rotary tensors to width 64.
-        # cos/sin are expected to be pre-padded at rope init (see HfRotarySetup.hf_rotary_pre_padded_width);
-        # if they are still 32-wide (legacy/test path), pad them here as a fallback.
-        if use_width_workaround:
-            # Invariant: when rotary tensor is 32-wide, HfRotarySetup pre-pads cos/sin to 64.
-            assert cos.shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
-            q_heads_pre_rot_1BQD = self._pad_hf_rotary_tensor_only_to_64(q_heads_pre_rot_1BQD)
-            k_heads_pre_rot_1BKD = self._pad_hf_rotary_tensor_only_to_64(k_heads_pre_rot_1BKD)
-        cos_padded, sin_padded = cos, sin
-
         # Sharded concat only supports the last dim (width) on height-sharded tensors, not batch (dim=1).
         # Merge per-batch rotary outputs in interleaved space, then resharding to match create_qkv_heads.
         q_il_parts = []
@@ -603,8 +543,8 @@ class Attention(LightweightModule):
         for b in range(B_iter):
             q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
             k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
-            cos_b = cos_padded[:, :, b : b + 1, :]
-            sin_b = sin_padded[:, :, b : b + 1, :]
+            cos_b = cos[:, :, b : b + 1, :]
+            sin_b = sin[:, :, b : b + 1, :]
 
             q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
             k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
@@ -625,15 +565,6 @@ class Attention(LightweightModule):
                 ttnn.deallocate(t)
             for t in k_il_parts:
                 ttnn.deallocate(t)
-
-        # Unpad once on the merged 64-wide tensor; output width drops back to rotary_ndims.
-        if use_width_workaround:
-            q_merged_il_unpadded = self._unpad_hf_rotary_width_from_64(q_merged_il)
-            k_merged_il_unpadded = self._unpad_hf_rotary_width_from_64(k_merged_il)
-            ttnn.deallocate(q_merged_il)
-            ttnn.deallocate(k_merged_il)
-            q_merged_il = q_merged_il_unpadded
-            k_merged_il = k_merged_il_unpadded
 
         q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
         k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
@@ -681,43 +612,20 @@ class Attention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        if self._should_use_hf_rotary_width_workaround(q_heads_1QSD_pre_rot):
-            assert rot_mats[0].shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
-            q_heads_1QSD_pre_rot_padded = self._pad_hf_rotary_tensor_only_to_64(q_heads_1QSD_pre_rot)
-            q_heads_1QSD = ttnn.experimental.rotary_embedding(
-                q_heads_1QSD_pre_rot_padded,
-                rot_mats[0],
-                rot_mats[1],
-            )
-            q_heads_1QSD = self._unpad_hf_rotary_width_from_64(q_heads_1QSD)
-            ttnn.deallocate(q_heads_1QSD_pre_rot_padded)
-        else:
-            q_heads_1QSD = ttnn.experimental.rotary_embedding(
-                q_heads_1QSD_pre_rot,
-                rot_mats[0],
-                rot_mats[1],
-            )
-
-        # # K Rotary Embeddings - HF-style (no transformation matrix)
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        if self._should_use_hf_rotary_width_workaround(k_heads_1KSD_pre_rot):
-            assert rot_mats[0].shape[-1] == 64, "HF rotary workaround requires cos/sin pre-padded to width 64"
-            k_heads_1KSD_pre_rot_padded = self._pad_hf_rotary_tensor_only_to_64(k_heads_1KSD_pre_rot)
-            k_heads_1KSD = ttnn.experimental.rotary_embedding(
-                k_heads_1KSD_pre_rot_padded,
-                rot_mats[0],
-                rot_mats[1],
-            )
-            k_heads_1KSD = self._unpad_hf_rotary_width_from_64(k_heads_1KSD)
-            ttnn.deallocate(k_heads_1KSD_pre_rot_padded)
-        else:
-            k_heads_1KSD = ttnn.experimental.rotary_embedding(
-                k_heads_1KSD_pre_rot,
-                rot_mats[0],
-                rot_mats[1],
-            )
+        q_heads_1QSD = ttnn.experimental.rotary_embedding(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+        )
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+        )
 
         return q_heads_1QSD, k_heads_1KSD
 
