@@ -105,8 +105,17 @@ Tensor to_layout_impl(
                     const auto tensor_tile = tensor.tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
                     uint32_t tile_width = tensor_tile.get_width();
-                    const auto shard_shape = get_memory_config(tensor).value().shard_spec().value().shape;
-                    if (shard_shape[0] % tile_height != 0 or shard_shape[1] % tile_width != 0) {
+                    const auto mem_config = get_memory_config(tensor).value();
+                    uint32_t shard_h, shard_w;
+                    if (mem_config.shard_spec().has_value()) {
+                        shard_h = mem_config.shard_spec().value().shape[0];
+                        shard_w = mem_config.shard_spec().value().shape[1];
+                    } else {
+                        const auto& nd_spec = mem_config.nd_shard_spec().value();
+                        shard_h = nd_spec.shard_shape[-2];
+                        shard_w = nd_spec.shard_shape[-1];
+                    }
+                    if (shard_h % tile_height != 0 or shard_w % tile_width != 0) {
                         TT_THROW(
                             "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
                             "TILE_SIZE!");
