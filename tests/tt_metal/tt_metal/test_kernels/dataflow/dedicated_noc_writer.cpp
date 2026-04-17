@@ -58,7 +58,7 @@ void kernel_main() {
 
     // Test gen_fast
     constexpr auto s_args = TensorAccessorArgs<2>();
-    const auto s0 = TensorAccessor(s_args, l1_read_addr, page_size);
+    const auto s0 = TensorAccessor(s_args, l1_read_addr);
 
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t noc = noc_index;

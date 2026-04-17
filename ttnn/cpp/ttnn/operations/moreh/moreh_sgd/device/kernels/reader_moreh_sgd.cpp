@@ -37,13 +37,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto param_in_args = TensorAccessorArgs<0>();
-    auto param_in = TensorAccessor(param_in_args, param_in_addr, get_tile_size(cb_param_in));
+    auto param_in = TensorAccessor(param_in_args, param_in_addr);
     constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
-    auto grad = TensorAccessor(grad_args, grad_addr, get_tile_size(cb_grad));
+    auto grad = TensorAccessor(grad_args, grad_addr);
 
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
     constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
-    auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr, get_tile_size(cb_momentum_in));
+    auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr);
 #endif
 
     fill_cb_with_value(cb_scalar_args, lr);

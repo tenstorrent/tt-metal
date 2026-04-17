@@ -5,10 +5,12 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape, dtype, mem_config",
@@ -47,6 +49,7 @@ def test_tilize(mesh_device, shape, dtype, mem_config, layout, enable_trace):
     run_test(mesh_device, run_op, check_op, enable_trace)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "in_shape, out_shape, pad_val, dtype, mem_config",
