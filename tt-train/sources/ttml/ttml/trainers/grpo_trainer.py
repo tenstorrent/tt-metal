@@ -27,26 +27,6 @@ class GRPOCompleter(ABC):
     Subclass this for each model architecture (Llama, Qwen, etc.).
     """
 
-    @property
-    @abstractmethod
-    def tokenizer(self):
-        """The tokenizer used by this completion engine."""
-
-    @property
-    @abstractmethod
-    def dp_mapper(self):
-        """Mesh mapper for sharding tensors across devices (None for single-device)."""
-
-    @property
-    @abstractmethod
-    def dp_composer(self):
-        """Mesh composer for gathering tensors from devices (None for single-device)."""
-
-    @property
-    @abstractmethod
-    def model(self):
-        """The underlying tt model used for forward passes and optimization."""
-
     @abstractmethod
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
         """Generate completions for a batch of tokenised prompts.
@@ -90,6 +70,16 @@ class GRPOCompleter(ABC):
                 left-padding, and tile-padding.
         """
 
+    @property
+    @abstractmethod
+    def tokenizer(self):
+        """The tokenizer used by this completion engine."""
+
+    @property
+    @abstractmethod
+    def model(self):
+        """The underlying tt model used for forward passes and optimization."""
+
 
 @dataclass
 class GRPOConfig:
@@ -107,6 +97,28 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+
+
+def _get_dp_mapper():
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    device = autograd_ctx.get_device()
+    if device.get_num_devices() > 1:
+        return ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+    return None
+
+
+def _get_dp_composer():
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    device = autograd_ctx.get_device()
+    if device.get_num_devices() > 1:
+        return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    return None
+
+
+def _get_num_devices():
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    device = autograd_ctx.get_device()
+    return device.get_num_devices()
 
 
 def _deallocate_tensors(tensors) -> None:
@@ -271,8 +283,6 @@ class GRPOTrainer:
         adv_tt: ttml.autograd.Tensor,
         completions_batch_len: int,
         eps: float,
-        dp_mapper=None,
-        dp_composer=None,
     ) -> ttml.autograd.Tensor:
         """Compute the clipped GRPO surrogate loss."""
         B_local, Tp = nlog_probs_old.shape()
@@ -283,10 +293,12 @@ class GRPOTrainer:
         surr2 = clipped_ratio * adv_tt
         surr = ttml.ops.binary.min(surr1, surr2)
 
-        mask_np = mask.to_numpy(composer=dp_composer)
+        mask_np = mask.to_numpy(composer=_get_dp_composer())
         tokens_per_completion = np.maximum(mask_np.sum(axis=1, keepdims=True), 1.0)
         weight_np = (mask_np / tokens_per_completion).astype(np.float32)
-        weight_tt = ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, dp_mapper)
+        weight_tt = ttml.autograd.Tensor.from_numpy(
+            weight_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, _get_dp_mapper()
+        )
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
@@ -297,8 +309,6 @@ class GRPOTrainer:
         completer = self.completer
         tt_model = completer.model
         tokenizer = completer.tokenizer
-        dp_mapper = completer.dp_mapper
-        dp_composer = completer.dp_composer
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_config_dict)
@@ -356,7 +366,7 @@ class GRPOTrainer:
                         adv_slice.reshape((B, 1)),
                         ttnn.Layout.ROW_MAJOR,
                         ttnn.DataType.BFLOAT16,
-                        dp_mapper,
+                        _get_dp_mapper(),
                     )
                     adv_tt.set_requires_grad(False)
 
@@ -370,8 +380,6 @@ class GRPOTrainer:
                         adv_tt,
                         len(prompts_batch) * grad_accum,
                         grpo_cfg.epsilon,
-                        dp_mapper=dp_mapper,
-                        dp_composer=dp_composer,
                     )
 
                     loss.backward(retain_graph=False)
@@ -387,7 +395,7 @@ class GRPOTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if dp_mapper is not None:
+                    if _get_dp_mapper() is not None:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:
@@ -420,7 +428,7 @@ class GRPOTrainer:
                             tt_model,
                             num_steps,
                             grpo_cfg.output_dir,
-                            dp_composer=dp_composer,
+                            dp_composer=_get_dp_composer(),
                             tokenizer=tokenizer,
                             grpo_config=grpo_cfg,
                             optimizer=optimizer,
