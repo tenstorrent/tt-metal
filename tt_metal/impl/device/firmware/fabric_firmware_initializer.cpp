@@ -25,6 +25,38 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// Returns true iff `status` is one of the well-known EDMStatus sentinel values written by
+// a live fabric ERISC router at some point in its lifecycle. Any other nonzero value at
+// the router_sync_address indicates the L1 slot is corrupt or has been overwritten by
+// unrelated NOC traffic — the ERISC is NOT running recognizable firmware and the
+// TERMINATE handshake will not complete.
+//
+// See tt_metal/fabric/fabric_edm_packet_header.hpp for the authoritative enum list.
+bool is_known_edm_status(uint32_t status) {
+    switch (status) {
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STARTED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::VCS_OPENED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED):
+        case static_cast<uint32_t>(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE): return true;
+        default: return false;
+    }
+}
+
+}  // namespace
+
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
     FirmwareInitializer(std::move(descriptor)), control_plane_(control_plane) {}
@@ -289,19 +321,31 @@ void FabricFirmwareInitializer::post_teardown() {
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
-// Fix A/C/D: Detect stale ERISC router firmware on ALL active channels for a device and
-// terminate/reset them before configure_fabric_cores() clears L1 and loads new firmware.
+// Fix A/C/D + F4 (#42429): Detect stale ERISC router firmware on ALL active channels for a
+// device and terminate/reset them before configure_fabric_cores() clears L1 and loads new
+// firmware.
 //
-// Checks every active fabric ETH channel (not just the master) because all channels run
-// independent router firmware instances.  For each stale channel:
-//   1. Send TERMINATE to termination_signal_address on that ERISC core's L1.
-//   2. Poll edm_status_address for EDMStatus::TERMINATED (up to 50 ms).
-//   3. On timeout: log a warning and continue — do NOT assert RISC reset.
-//      Rationale: a non-responsive channel is almost certainly running base firmware
-//      (RiscFirmwareInitializer already assert+deasserted all ERISCs during device open);
-//      the stale edm_status value is a harmless L1 artifact from the halted predecessor.
-//      Calling assert_risc_reset_at_core on a WH ERISC tears down the ETH PHY link,
-//      breaking non-MMIO L1 access for all subsequent chips in the mesh.
+// For each active fabric ETH channel, read router_sync_address and classify:
+//   - 0 or TERMINATED         -> clean, nothing to do
+//   - CORRUPT (F4, #42429)    -> status is not a valid EDMStatus value. Typically caused by
+//                                a prior process whose worker (mux) spun in close_finish()
+//                                waiting for an EDM ACK that never arrived, then was
+//                                BRISC-halted by Device::close(), leaving L1 mid-handshake.
+//                                Action: send TERMINATE best-effort (one shot, no poll), log
+//                                loudly, continue. The 50ms poll would always time out here
+//                                (no firmware is running that will ever write TERMINATED) so
+//                                skipping it saves ~42s on a T3K where 800+ channels can be
+//                                corrupt.
+//   - STALE RUNNING           -> status is a valid non-terminal EDMStatus (e.g.
+//                                READY_FOR_TRAFFIC). Send TERMINATE, poll up to 50ms for
+//                                TERMINATED. On timeout, log and continue — do NOT assert
+//                                RISC reset. Rationale: a non-responsive channel in base
+//                                firmware can be safely L1-overwritten by
+//                                configure_fabric_cores(); resetting a WH ERISC tears down
+//                                the ETH PHY link and breaks non-MMIO L1 access for the
+//                                rest of the mesh.
+//                                TODO(F2, #42429): replace with surgical per-channel reset
+//                                once single-ERISC reset is verified to not drop the PHY.
 void FabricFirmwareInitializer::terminate_stale_erisc_routers(
     Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const {
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
@@ -317,6 +361,10 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
     const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
     const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
+    uint32_t corrupt_count = 0;
+    uint32_t stale_running_count = 0;
+    uint32_t stale_timeout_count = 0;
+
     for (const auto& [eth_chan_id, direction] : active_channels) {
         const auto eth_logical_core =
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
@@ -328,6 +376,34 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             continue;  // clean — nothing to do
         }
 
+        // Fix F4 (#42429): if the status word is not a valid EDMStatus value, the L1 slot is
+        // corrupt — either from a prior process's mid-handshake crash (e.g. close_finish
+        // spinning forever on a lost EDM ACK, then BRISC-halted by Device::close()), or from
+        // unrelated stray NOC traffic. In either case, the TERMINATE probe will time out
+        // because no recognizable firmware is running at the peer.  Skip the 50ms wait per
+        // channel (saves ~42s on a T3K with ~840 corrupt channels) but still send the
+        // TERMINATE write as a best-effort — if there IS firmware behind the garbage word,
+        // it gets a chance to notice.  configure_fabric_cores() will clear the L1 and load
+        // the new router firmware; whether that recovers cleanly is observed downstream at
+        // wait_for_fabric_endpoint_ready.
+        const bool known_status = is_known_edm_status(status_buf[0]);
+        if (!known_status) {
+            log_error(
+                tt::LogMetal,
+                "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} is NOT a "
+                "valid EDMStatus value — ERISC L1 appears CORRUPT (likely stuck-mid-handshake "
+                "from a prior process; see #42429). Sending TERMINATE best-effort, NOT polling "
+                "(would time out). configure_fabric_cores() will reset L1 next.",
+                dev->id(),
+                eth_chan_id,
+                status_buf[0]);
+
+            std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
+            detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
+            corrupt_count++;
+            continue;
+        }
+
         log_warning(
             tt::LogMetal,
             "terminate_stale_erisc_routers: Device {} ETH chan={} edm_status=0x{:08x} "
@@ -336,6 +412,7 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             eth_chan_id,
             status_buf[0],
             terminated_val);
+        stale_running_count++;
 
         std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
         detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
@@ -370,6 +447,8 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
             // The ERISC is almost certainly running base firmware (stale L1 value from a
             // halted predecessor); configure_fabric_cores() will safely overwrite L1 and
             // the new fabric firmware will boot normally.
+            // TODO(F2, #42429): once single-ERISC reset is verified not to drop the PHY link,
+            // promote this path to a surgical per-channel reset.
             log_warning(
                 tt::LogMetal,
                 "terminate_stale_erisc_routers: Device {} chan={} did not respond to TERMINATE "
@@ -377,7 +456,19 @@ void FabricFirmwareInitializer::terminate_stale_erisc_routers(
                 dev->id(),
                 eth_chan_id,
                 stale_timeout_ms);
+            stale_timeout_count++;
         }
+    }
+
+    if (corrupt_count > 0 || stale_running_count > 0) {
+        log_info(
+            tt::LogMetal,
+            "terminate_stale_erisc_routers: Device {} summary: corrupt={} stale_running={} "
+            "stale_term_timeout={} (of stale_running)",
+            dev->id(),
+            corrupt_count,
+            stale_running_count,
+            stale_timeout_count);
     }
 }
 

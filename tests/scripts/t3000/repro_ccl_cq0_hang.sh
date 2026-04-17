@@ -41,6 +41,12 @@ mkdir -p "${TRIAGE_DIR}"
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="${TT_METAL_OPERATION_TIMEOUT_SECONDS:-30}"
 export TT_METAL_LOGGER_LEVEL="${TT_METAL_LOGGER_LEVEL:-Info}"
 
+# Pass B diagnostic: enable per-channel fabric ETH edm_status snapshots around
+# every quiesce_devices() call in the failing test. Used to correlate ETH router
+# state transitions with the dispatch-timeout hang described in #42429.
+# See log_fabric_eth_health_for_all_devices() in test_ccl_multi_cq_multi_device.cpp.
+export TT_METAL_FABRIC_HEALTH_PROBE="${TT_METAL_FABRIC_HEALTH_PROBE:-1}"
+
 # Wire up the triage / hang-report hook the same way the CI setup action does,
 # but only if the user hasn't already configured something. See
 # .github/actions/setup-job/action.yml.

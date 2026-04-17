@@ -103,7 +103,19 @@ run_t3000_ttnn_tests() {
   # instead of just getting a SIGKILL'd log tail. Keep this at the top of the
   # list so the triage artifact is produced before any later step perturbs
   # device state. See tests/scripts/t3000/repro_ccl_cq0_hang.sh.
+  #
+  # #42429 (fabric close_finish deadlock) root-cause investigation: while the
+  # fixes land and stabilize, this stage runs ONLY the Pass B diagnostic
+  # reproducer (TT_METAL_FABRIC_HEALTH_PROBE=1) so each CI run produces a
+  # clean single-test signal. The `exit $fail` below preserves the repro's
+  # exit code (0 on pass, non-zero on repro of the hang) — prior versions of
+  # this script hard-coded `exit 1` and masked successful repro runs. Restore
+  # the rest of the suite (pytest multi_device tests, trace tests, etc.) once
+  # the hang is confirmed fixed.
   ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh ; fail+=$?
+
+  exit "${fail}"
+
   timeout 300 ./build/test/ttnn/unit_tests_ttnn ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_tensor ; fail+=$?
   timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; fail+=$?
