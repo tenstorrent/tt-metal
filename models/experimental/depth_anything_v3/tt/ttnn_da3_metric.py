@@ -123,14 +123,16 @@ def _ttnn_block(x, p, attention_mask):
         qkv, memory_config=ttnn.L1_MEMORY_CONFIG, num_heads=NUM_HEADS,
     )
     ttnn.deallocate(qkv)
-    attn_scores = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    attn_scores = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                              compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(q)
     ttnn.deallocate(k)
     # Fused: scale by 1/sqrt(head_dim), add additive mask, then softmax.
     attn_probs = ttnn.transformer.attention_softmax_(
         attn_scores, attention_mask=attention_mask, head_size=head_dim,
     )
-    ctx = ttnn.matmul(attn_probs, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    ctx = ttnn.matmul(attn_probs, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                      compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(attn_probs)
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
