@@ -12,7 +12,6 @@
 // BF16 I/O, FP32 internal. Only BF16 truncation at input unpack and output pack.
 
 #include <cstdint>
-#include <tools/profiler/kernel_profiler.hpp>
 
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
@@ -26,8 +25,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
-
 constexpr auto cb_input = tt::CBIndex::c_0;
 constexpr auto cb_sq_acc = tt::CBIndex::c_1;
 constexpr auto cb_recv = tt::CBIndex::c_3;
@@ -35,9 +32,11 @@ constexpr auto cb_norm = tt::CBIndex::c_4;
 constexpr auto cb_output = tt::CBIndex::c_5;
 constexpr auto cb_sq_partial = tt::CBIndex::c_7;
 
+constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
+
 void kernel_main() {
-    uint32_t rt = 0;
-    uint32_t eps_u32 = get_arg_val<uint32_t>(rt++);
+    uint32_t runtime_args_counter = 0;
+    const uint32_t eps_u32 = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t accum_reg = 0;
     constexpr uint32_t work_reg = 1;
@@ -49,13 +48,12 @@ void kernel_main() {
     // Phase 1: Square and accumulate all input tiles into one FP32 tile
     // =========================================================================
     {
-        DeviceZoneScopedN("COMPUTE-P1-SQ-ACC");
         if (num_tiles_per_core > 0) {
             cb_reserve_back(cb_sq_acc, 1);
             tile_regs_acquire();
             for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
                 cb_wait_front(cb_input, 1);
-                auto reg = (i == 0) ? accum_reg : work_reg;
+                const auto reg = (i == 0) ? accum_reg : work_reg;
                 copy_tile_init(cb_input);
                 copy_tile(cb_input, 0, reg);
                 mul_binary_tile_init();
@@ -73,12 +71,12 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_sq_acc, 1);
         }
-    }  // COMPUTE-P1-SQ-ACC
+    }
 
     // Drain padding tiles from reader's blocked Push (block_size=4, tail padded)
     {
         constexpr uint32_t block_size = 4;
-        uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
+        constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
         for (uint32_t p = 0; p < padding; ++p) {
             cb_wait_front(cb_input, 1);
             cb_pop_front(cb_input, 1);
@@ -89,7 +87,6 @@ void kernel_main() {
     // Phase 2: sfpu_reduce → scalar. Pack to cb_sq_partial for reader to write to origin.
     // =========================================================================
     {
-        DeviceZoneScopedN("COMPUTE-P2-REDUCE");
         cb_wait_front(cb_sq_acc, 1);
         cb_reserve_back(cb_sq_partial, 1);
 
@@ -110,14 +107,13 @@ void kernel_main() {
         pack_tile(0, cb_sq_partial);
         tile_regs_release();
         cb_push_back(cb_sq_partial, 1);
-    }  // COMPUTE-P2-REDUCE
+    }
 
     // =========================================================================
     // Phase 3 (origin only): sfpu_reduce the reduction tile (all partials summed
     // into one FP32 tile by reader), then sqrt + eps + recip → cb_norm.
     // =========================================================================
     {
-        DeviceZoneScopedN("COMPUTE-P3-REDUCE");
 #ifdef IS_ORIGIN
         {
             // cb_recv has one tile with all partials at positions 0, 4, 8, ...
@@ -153,22 +149,21 @@ void kernel_main() {
             cb_push_back(cb_norm, 1);
         }
 #endif  // IS_ORIGIN
-    }  // COMPUTE-P3-REDUCE
+    }
 
     // =========================================================================
     // Phase 4: Multiply each tile by 1/norm (block of 4)
     // =========================================================================
     {
-        DeviceZoneScopedN("COMPUTE-P4-NORM");
         cb_wait_front(cb_norm, 1);
-        uint32_t norm_u32 = read_tile_value(cb_norm, 0, 0);
+        const uint32_t norm_u32 = read_tile_value(cb_norm, 0, 0);
         cb_pop_front(cb_norm, 1);
 
         init_sfpu(cb_input, cb_output);
 
         constexpr uint32_t block_size = 4;
-        uint32_t num_blocks = num_tiles_per_core / block_size;
-        uint32_t remainder = num_tiles_per_core % block_size;
+        constexpr uint32_t num_blocks = num_tiles_per_core / block_size;
+        constexpr uint32_t remainder = num_tiles_per_core % block_size;
 
         for (uint32_t b = 0; b < num_blocks; ++b) {
             copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
@@ -198,10 +193,10 @@ void kernel_main() {
             pack_and_push_block(cb_output, remainder);
         }
         // Drain Pass 2 padding tiles
-        uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
+        constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
         for (uint32_t p = 0; p < padding; ++p) {
             cb_wait_front(cb_input, 1);
             cb_pop_front(cb_input, 1);
         }
-    }  // COMPUTE-P4-NORM
+    }
 }
