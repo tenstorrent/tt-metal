@@ -7,7 +7,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.experimental.droid_slam.tt.ttnn_layers import RELU, TtConv2d
+from models.experimental.droid_slam.tt.ttnn_layers import RELU, SIGMOID, TANH, TtConv2d
 
 
 def _broadcast_glo(glo_small, batch_size, h, w, channels):
@@ -105,13 +105,14 @@ class _TtConvGRU:
         )
 
         # Broadcast-add the (batch, 1, 1, C) context onto the per-spatial
-        # tensor. ttnn.add handles trailing-dim broadcast when shapes align.
-        z = ttnn.sigmoid(ttnn.add(zr_z, glo_z))
-        r = ttnn.sigmoid(ttnn.add(zr_r, glo_r))
+        # tensor, fusing the activation so each (add, sigmoid/tanh) pair
+        # becomes a single kernel.
+        z = ttnn.add(zr_z, glo_z, activations=[SIGMOID])
+        r = ttnn.add(zr_r, glo_r, activations=[SIGMOID])
         r_net = ttnn.multiply(r, net)
         q_input = ttnn.concat([r_net, inp_cat], dim=-1)
         q_conv, _, _ = self.convq(q_input, device, batch_size, h, w)
-        q = ttnn.tanh(ttnn.add(q_conv, glo_q))
+        q = ttnn.add(q_conv, glo_q, activations=[TANH])
 
         # (1-z)*net + z*q  ==  net + z*(q - net)
         q_minus_net = ttnn.subtract(q, net)
