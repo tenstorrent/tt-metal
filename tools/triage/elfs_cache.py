@@ -15,6 +15,7 @@ Owner:
     adjordjevic-TT
 """
 
+import io
 import os
 import threading
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
@@ -25,6 +26,32 @@ from ttexalens.tt_exalens_lib import parse_elf
 script_config = ScriptConfig(
     data_provider=True,
 )
+
+
+def _release_elf_file_descriptor(parsed_elf: ParsedElfFile) -> None:
+    """
+    Replace the underlying file stream of a ParsedElfFile's ELFFile object
+    with an in-memory BytesIO buffer, then close the original OS file descriptor.
+
+    pyelftools' ELFFile reads sections and DWARF data lazily from its stream.
+    parse_elf() opens each ELF with open(path, "rb"), and the resulting file
+    descriptor stays alive as long as the ParsedElfFile is cached. With ~500
+    unique ELF files in a typical triage run, this exhausts the OS file
+    descriptor limit (ulimit -n), causing [Errno 24] Too many open files.
+
+    By copying the file content into a BytesIO buffer, the ELFFile can still
+    perform lazy reads while the real file descriptor is released immediately.
+    """
+    elf_obj = parsed_elf.elf  # pyelftools ELFFile
+    stream = elf_obj.stream
+    if stream is None or isinstance(stream, io.BytesIO):
+        return  # Already in-memory or no stream to close
+    try:
+        stream.seek(0)
+        content = stream.read()
+        elf_obj.stream = io.BytesIO(content)
+    finally:
+        stream.close()
 
 
 class ElfsCache:
@@ -69,6 +96,7 @@ class ElfsCache:
                     raise TTTriageError(
                         f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
                     )
+                _release_elf_file_descriptor(parsed_elf)
                 self._cache[elf_path] = parsed_elf
             return self._cache[elf_path]
 
