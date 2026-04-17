@@ -1,24 +1,7 @@
 # Tested on 1x p150.
 # MGD: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
 
-transformer_config:
-  model_type: "llama"
-  num_heads: 32
-  num_groups: 8
-  embedding_dim: 2048
-  intermediate_dim: 8192
-  dropout_prob: 0.0
-  num_blocks: 16
-  weight_tying: "enabled"
-  vocab_size: 32000
-  max_sequence_length: 1024
-  runner_type: "memory_efficient"
-  theta: 500000.0
-  rope_scaling:
-    scaling_factor: 32.0
-    high_freq_factor: 4.0
-    low_freq_factor: 1.0
-    original_context_length: 8192
+transformer_config_path: "../model_configs/llama3_2_1B.yaml"
 
 device_config:
   enable_ddp: false
