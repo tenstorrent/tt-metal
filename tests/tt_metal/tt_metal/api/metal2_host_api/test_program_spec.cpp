@@ -1561,8 +1561,9 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
 // These tests use the WH mock device, not real hardware.
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
-    // {0, 8}: y=8 is one past the 8-tall compute grid.
-    const NodeCoord oob_node{0, 8};
+    // Use a large y coordinate that is out of bounds on any WH/BH grid configuration
+    // (including unharvested "galaxy" variants with up to 10 rows).
+    const NodeCoord oob_node{0, 1000};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
@@ -1577,8 +1578,8 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
-    // {8, 0} is out of bounds: x=8 is beyond the 8-wide compute grid.
-    const NodeCoord oob_node{8, 0};
+    // Use a large x coordinate that is out of bounds on any WH/BH grid configuration.
+    const NodeCoord oob_node{1000, 0};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
@@ -1596,7 +1597,7 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
     // valid node, but the DFB it produces to targets an OOB node.
     const NodeCoord valid_node{0, 0};
-    const NodeCoord oob_node{0, 100};
+    const NodeCoord oob_node{0, 1000};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
