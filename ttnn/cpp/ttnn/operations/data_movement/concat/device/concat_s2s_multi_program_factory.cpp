@@ -71,10 +71,14 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
         elements_per_page_height = TILE_HEIGHT;
     }
 
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
-    std::vector<uint32_t> input_num_pages_per_stick(num_input_tensors);
-    std::vector<uint32_t> input_num_sticks(num_input_tensors);
-    std::vector<uint32_t> input_write_offsets(num_input_tensors);
+    std::vector<CBHandle> cb_inputs;
+    std::vector<uint32_t> input_num_pages_per_stick;
+    std::vector<uint32_t> input_num_sticks;
+    std::vector<uint32_t> input_write_offsets;
+    cb_inputs.reserve(num_input_tensors);
+    input_num_pages_per_stick.reserve(num_input_tensors);
+    input_num_sticks.reserve(num_input_tensors);
+    input_write_offsets.reserve(num_input_tensors);
 
     // Assume inputs and output have the same sharding grid.
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
@@ -83,16 +87,16 @@ ConcatS2SMultiProgramFactory::cached_program_t ConcatS2SMultiProgramFactory::cre
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
-        input_num_pages_per_stick[input_id] = tt::div_up(shard_spec.shape[1], elements_per_page_width);
-        input_num_sticks[input_id] = tt::div_up(shard_spec.shape[0], elements_per_page_height);
-        input_write_offsets[input_id] = curr_input_write_offset;
+        input_num_pages_per_stick.push_back(tt::div_up(shard_spec.shape[1], elements_per_page_width));
+        input_num_sticks.push_back(tt::div_up(shard_spec.shape[0], elements_per_page_height));
+        input_write_offsets.push_back(curr_input_write_offset);
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
         const CircularBufferConfig input_cb_config =
             CircularBufferConfig(page_size * input_num_pages, {{input_id, cb_data_format}})
                 .set_page_size(input_id, page_size)
                 .set_globally_allocated_address(*input_tensors[input_id].buffer());
-        cb_inputs[input_id] = CreateCircularBuffer(program, all_cores, input_cb_config);
+        cb_inputs.push_back(CreateCircularBuffer(program, all_cores, input_cb_config));
 
         curr_input_write_offset +=
             page_size * (is_height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
