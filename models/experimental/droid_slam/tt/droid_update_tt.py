@@ -7,7 +7,7 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.experimental.droid_slam.tt.ttnn_layers import RELU, SIGMOID, SOFTPLUS, TANH, TtConv2d
+from models.experimental.droid_slam.tt.ttnn_layers import RELU, SIGMOID, TANH, TtConv2d
 
 
 def _broadcast_glo(glo_small, batch_size, h, w, channels):
@@ -132,13 +132,14 @@ class _TtGraphAggFastPath:
         self.conv1 = TtConv2d(ref_agg.conv1, activation=RELU)
         self.conv2 = TtConv2d(ref_agg.conv2, activation=RELU)
         # eta: Conv(128→1, 3x3) + Softplus; upmask: Conv(128→576, 1x1).
-        self.eta_conv = TtConv2d(ref_agg.eta[0], activation=SOFTPLUS)
+        self.eta_conv = TtConv2d(ref_agg.eta[0], activation=None)
         self.upmask_conv = TtConv2d(ref_agg.upmask[0], activation=None)
 
     def __call__(self, net, device, batch_size, h, w):
         x, h1, w1 = self.conv1(net, device, batch_size, h, w)
         x, h2, w2 = self.conv2(x, device, batch_size, h1, w1)
-        eta, eh, ew = self.eta_conv(x, device, batch_size, h2, w2)
+        eta_raw, eh, ew = self.eta_conv(x, device, batch_size, h2, w2)
+        eta = ttnn.softplus(eta_raw)
         upmask, uh, uw = self.upmask_conv(x, device, batch_size, h2, w2)
         return eta, eh, ew, upmask, uh, uw
 
