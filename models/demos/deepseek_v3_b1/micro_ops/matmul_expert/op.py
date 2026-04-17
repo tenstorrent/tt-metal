@@ -357,7 +357,7 @@ def _build_program_for_device(
     # cb_in1_dram and cb_fmt_dram share one backing tensor (dram_backing_tensor).
     # in1 region: [0, in1_region_bytes), fmt region: [in1_region_bytes, total).
     num_subblocks_k = Kt // subblock_k
-    max_tile_size = _TILE_SIZES[0]
+    max_tile_size = _TILE_SIZES[1]
     max_subblock_bytes = subblock_k * subblock_n * max_tile_size
     in1_region_bytes = subblock_k * subblock_n * num_in1_buffers * max_tile_size
     cb_in1_dram_total_bytes = in1_region_bytes
@@ -371,8 +371,8 @@ def _build_program_for_device(
     cb4_desc.format_descriptors = [
         ttnn.CBFormatDescriptor(
             buffer_index=cb_in1_dram,
-            data_format=ttnn.bfloat8_b,
-            page_size=max_tile_size,
+            data_format=ttnn.bfloat4_b,
+            page_size=_TILE_SIZES[1],
         ),
     ]
     cbs.append(cb4_desc)
@@ -842,7 +842,7 @@ def create_dram_expert_tensors_multi_device(
 
     logger.info("  Creating dram_backing_tensor (in1 + fmt, replicated mesh tensor)...")
     num_cores = len(compute_cores_list)
-    max_tile_size = _TILE_SIZES[0]
+    max_tile_size = _TILE_SIZES[1]
     in1_cb_tiles = subblock_k * subblock_n * num_in1_buffers
     in1_region_bytes = in1_cb_tiles * max_tile_size
 

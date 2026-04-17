@@ -723,6 +723,8 @@ def _compute_dram_matmul_params(
 def _build_assigner(formats_per_device):
     """Create CompressedTensorAssigner from per-device format lists."""
     all_formats = list({fmt for fmts in formats_per_device for fmt in fmts})
+    # op.py sizes DRAM CB slots for bfp4 — bfp8 tiles would overflow the slot.
+    assert "bfp8" not in all_formats, "DRAM expert CBs are sized for bfp4 only; remove bfp8 from formats_per_device"
     bfp0_mae = 1e-3 if "bfp0" in all_formats else 0.01
     return CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=all_formats, bfp0_mae_threshold=bfp0_mae)
 
