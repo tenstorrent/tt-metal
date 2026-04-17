@@ -77,6 +77,12 @@ def create_multimodal_model(
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 
+    # Gemma3 SDPA decode with auto-selected k_chunk_size hangs the decode trace on N300 (TP=2)
+    # when context is long (multi-image prompts ~2k+ tokens). Force a fixed 256-token k chunk,
+    # matching the stable configuration already used in text_demo and in accuracy mode.
+    if tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+        tt_model_args.force_fixed_decode_k_chunk = True
+
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
         tt_model_args.vision_n_layers = num_layers

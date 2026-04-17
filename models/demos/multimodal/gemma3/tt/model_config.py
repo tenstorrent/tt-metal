@@ -96,6 +96,9 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
+        # Gemma3 vocab (262144) is large; BFP8 quantizes many logits to identical values
+        # within a tile, causing argmax to pick the lowest-index tied token.
+        self.lm_head_dtype = ttnn.bfloat16
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
