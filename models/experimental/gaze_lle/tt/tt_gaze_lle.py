@@ -196,10 +196,12 @@ class TtGazeLLE:
         self.final_norm_w = _to_device(backbone.norm.weight.unsqueeze(0), device)
         self.final_norm_b = _to_device(backbone.norm.bias.unsqueeze(0), device)
 
-        # --- Patch embed as fold + matmul. Pad C=3 to 4 in the weight up front so the
-        # input can be uploaded as NHWC/C=4 (zero-filled last channel).
-        w_padded = F.pad(backbone.patch_embed_proj.weight.detach(), (0, 0, 0, 0, 0, 1))
-        w_flat = w_padded.permute(2, 3, 1, 0).reshape(-1, self.embed_dim).contiguous()
+        # --- Patch embed as a single on-device matmul. The equivalent torch op is
+        # Conv2d(3, embed_dim, k=patch_size, s=patch_size, padding=0). We flatten each
+        # patch to (patch_size*patch_size*3) features and run one (588, 768) matmul.
+        # Host pre-reshapes the input tensor (pure layout, not inference compute).
+        pe_w = backbone.patch_embed_proj.weight.detach()  # (embed_dim, 3, ps, ps)
+        w_flat = pe_w.permute(2, 3, 1, 0).reshape(-1, self.embed_dim).contiguous()  # (ps*ps*3, embed_dim)
         self.patch_embed_w = _to_device(w_flat, device, dtype=ttnn.bfloat8_b)
         self.patch_embed_b = _to_device(backbone.patch_embed_proj.bias.detach().unsqueeze(0), device)
 
@@ -244,25 +246,18 @@ class TtGazeLLE:
 
         self.gaze_block_params = [_GazeBlockParams(blk, device) for blk in ref_model.transformer]
 
-    def _patch_embed_device(self, img_nhwc_padded_tt):
-        """(B, H, W, 4) ROW_MAJOR bf16 → (B, num_patches, embed_dim) TILE bf16 via fold + matmul."""
-        shape = img_nhwc_padded_tt.shape
-        b, h, w, _ = shape[0], shape[1], shape[2], shape[3]
-        ps = self.patch_size
-        x = ttnn.reshape(img_nhwc_padded_tt, (b, h, w // ps, 4 * ps))
-        x = ttnn.fold(x, ps, 1)  # stride_h=ps, stride_w=1 → (B, h/ps, w/ps, 4*ps*ps)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.linear(
-            x,
-            self.patch_embed_w,
-            bias=self.patch_embed_b,
-            core_grid=_CORE_GRID,
-            compute_kernel_config=_LOFI,
+    @staticmethod
+    def _reshape_image_for_matmul(images: torch.Tensor, num_patches_side: int, patch_size: int) -> torch.Tensor:
+        """(B, 3, H, W) → (B, num_patches, ps*ps*3). Pure layout (permute+reshape)."""
+        b = images.shape[0]
+        n = num_patches_side
+        ps = patch_size
+        return (
+            images.view(b, 3, n, ps, n, ps)
+            .permute(0, 2, 4, 3, 5, 1)
+            .reshape(b, n * n, ps * ps * 3)
+            .contiguous()
         )
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (b, self.num_patches, self.embed_dim))
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        return x
 
     @torch.no_grad()
     def __call__(self, images: torch.Tensor, bboxes: List[Sequence[float]]):
@@ -270,16 +265,20 @@ class TtGazeLLE:
         b = images.shape[0]
         assert b == 1, "TtGazeLLE currently supports B=1 only"
 
-        # ---- 1. Upload image as NHWC/C=4 (single pure-view permute + zero-pad on host).
-        img_nhwc = images.permute(0, 2, 3, 1).contiguous()
-        img_padded = F.pad(img_nhwc, (0, 1))  # (B, H, W, 4)
-        img_tt = ttnn.from_torch(
-            img_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
+        # ---- 1. Upload pre-patched image. A single pure-layout permute+reshape on host
+        # turns the (B, 3, H, W) image into (B, num_patches, ps*ps*3) so the device side
+        # is a clean matmul with no fold / layout-conversion overhead.
+        patches_host = self._reshape_image_for_matmul(images, self.num_patches_side, self.patch_size)
+        patches_tt = _to_device(patches_host, self.device)
 
-        # ---- 2. Patch embed on device.
-        patches_tt = self._patch_embed_device(img_tt)
-        ttnn.deallocate(img_tt)
+        # ---- 2. Patch embed (on device): (B, N, 588) @ (588, 768) + bias.
+        patches_tt = ttnn.linear(
+            patches_tt,
+            self.patch_embed_w,
+            bias=self.patch_embed_b,
+            core_grid=_CORE_GRID,
+            compute_kernel_config=_LOFI,
+        )
 
         # ---- 3. Add DINOv2 pos_embed for patch tokens, then prepend [CLS+pos_cls, REG].
         patches_tt = ttnn.add(patches_tt, self.pos_patches_tt)
@@ -302,7 +301,6 @@ class TtGazeLLE:
         ttnn.deallocate(feat_tt)
         x_tt = ttnn.add(x_tt, self.gaze_pos_embed_tt)
 
-        # head_map is a tiny (B, 1024, 1) binary mask; compute + upload is cheap.
         head_map = torch.stack([ref._bbox_to_head_map(bb) for bb in bboxes]).view(b, -1, 1).contiguous()
         head_map_tt = _to_device(head_map, self.device)
         head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # broadcast → (B, 1024, 256)
@@ -341,8 +339,7 @@ class TtGazeLLE:
         hm = ttnn.sigmoid(hm)
 
         # ---- 9. Download the small outputs. The (B, 1024, 4) → (B, 64, 64) re-interleave is
-        # a pure view on contiguous memory; doing it on device would require a 5D permute
-        # across non-tile-aligned dims, which isn't worth the dispatch cost.
+        # a pure view on contiguous memory.
         heatmap_compact = ttnn.to_torch(hm).to(torch.float32)  # (B, 1024, 4)
         ttnn.deallocate(hm)
         heatmap = (
