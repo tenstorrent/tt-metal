@@ -66,6 +66,9 @@ ALWI void process_tile(
         tile_regs_release();
         exp_cb_raw_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
+        // Restore srca for the binary op's lhs operand; unary_bcast_init reconfigured it for
+        // cb_raw_other, and cb_left's format may differ (e.g. typecast with fp32_dest_acc_en).
+        reconfig_data_format_srca(cb_raw_other, cb_left);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));

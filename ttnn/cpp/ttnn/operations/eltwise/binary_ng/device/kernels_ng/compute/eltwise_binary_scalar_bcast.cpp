@@ -46,6 +46,10 @@ ALWI void process_tile(
     cb_push_back(cb_llk_post, num_tiles_per_cycle);
     tile_regs_release();
 
+    // unary_bcast_init reconfigured srca for cb_bcast; restore it for the binary op's
+    // lhs operand so reads of cb_post_lhs use its correct format (the 2-arg srca variant
+    // only reconfigures if the formats actually differ, avoiding unnecessary CFG writes).
+    reconfig_data_format_srca(cb_bcast, cb_post_lhs);
     pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));

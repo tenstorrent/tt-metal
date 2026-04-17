@@ -332,10 +332,10 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            tt::ARCH arch = tt::tt_metal::hal::get_arch();
-            if (arch == tt::ARCH::WORMHOLE_B0) {
-                return true;
-            }
+            // tt::ARCH arch = tt::tt_metal::hal::get_arch();
+            // if (arch == tt::ARCH::WORMHOLE_B0) {
+            return true;
+            //}
         }
     }
 
@@ -587,17 +587,29 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         });
     }
 
+    // When Dest accumulator is FP32 (c_data_format is FP32/INT32/UINT32), the LLK broadcast
+    // intermediate CBs (c_5/c_6) must declare a format that matches what the packer writes
+    // from Dest. unary_bcast_init reconfigures the packer for this CB's format; if it stays
+    // at the input format (BF16) while Dest is FP32, the pack produces PACR format mismatch
+    // (intermediate=FP32 vs late_from=BF16).
+    const bool llk_bcast_dest_fp32 = c_data_format == tt::DataFormat::UInt32 ||
+                                     c_data_format == tt::DataFormat::Int32 || c_data_format == tt::DataFormat::Float32;
+    auto a_llk_post_format = llk_bcast_dest_fp32 ? c_data_format : a_data_format;
+    auto b_llk_post_format = llk_bcast_dest_fp32 ? c_data_format : b_data_format;
+    uint32_t a_llk_post_tile_size = tt::tile_size(a_llk_post_format);
+    uint32_t b_llk_post_tile_size = tt::tile_size(b_llk_post_format);
+
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A) {
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_single_tile_size * 2,
+            .total_size = a_llk_post_tile_size * 2,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = a_data_format,
-                .page_size = a_single_tile_size,
+                .data_format = a_llk_post_format,
+                .page_size = a_llk_post_tile_size,
             }}},
         });
     }
@@ -606,12 +618,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_single_tile_size * 2,
+            .total_size = b_llk_post_tile_size * 2,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-                .data_format = b_data_format,
-                .page_size = b_single_tile_size,
+                .data_format = b_llk_post_format,
+                .page_size = b_llk_post_tile_size,
             }}},
         });
     }
@@ -691,7 +703,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
@@ -702,18 +715,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         } else {
-            unpack_to_dest_mode[src0_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src0interim_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1interim_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = (a_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = (b_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
         }
     }
 
@@ -753,7 +772,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                  sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
                  sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
             if (uses_movb2d) {
-                use_llk_bcast = false;
+                // use_llk_bcast = false;
             }
         }
     }
@@ -826,7 +845,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const auto cWt_r = c.padded_shape()[-1];
 
         const auto [aD, aN, aC, aHt, aWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(a);
-        const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
+        const auto [bD, bN, bC, bHt, bWt] =
+            b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
         const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
         const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
@@ -834,7 +854,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const bool rt_has_sharding = shard_specs.has_value();
         auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
-        const auto row_major = rt_has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
+        const auto row_major =
+            rt_has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
 
         bool zero_start_grid = false;
         CoreCoord compute_with_storage_grid;
@@ -861,7 +882,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         uint32_t num_cores;
         std::vector<CoreCoord> cores;
 
-        const bool row_major_inputs = CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
+        const bool row_major_inputs =
+            CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
         const uint32_t a_alignment = a.buffer()->alignment();
         const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
         const uint32_t c_alignment = c.buffer()->alignment();
@@ -944,7 +966,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             c_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->c_shard_spec, c);
             c_shard_height = shard_specs->c_shard_spec.shape[0] / tile_height;
             c_shard_width = shard_specs->c_shard_spec.shape[1] / tile_width;
-            num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
+            num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(
+                shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
 
             if (zero_start_grid) {
                 auto bbox = core_group_1.bounding_box();
@@ -959,12 +982,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             }
         } else if (zero_start_grid) {
             std::tie(
-                num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_tiles_per_core_group_1,
+                num_tiles_per_core_group_2) =
                 tt::tt_metal::split_work_to_cores(compute_with_storage_grid, rt_c_num_tiles, row_major);
             cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
         } else {
             std::tie(
-                num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_tiles_per_core_group_1,
+                num_tiles_per_core_group_2) =
                 tt::tt_metal::split_work_to_cores(all_device_cores, rt_c_num_tiles, row_major);
             cores = corerange_to_cores(all_device_cores, {}, row_major);
         }
@@ -985,22 +1018,29 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 // inflate the per-kernel max runtime-arg allocation.
                 if (row_major_inputs) {
                     std::array<uint32_t, 26> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
+                    reader_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
                     std::array<uint32_t, 14> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
+                    writer_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
                 } else if (b.has_value()) {
                     std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
+                    reader_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
                     std::array<uint32_t, 11> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
+                    writer_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
                 } else {
                     std::array<uint32_t, 21> dummy_reader{0};
-                    reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
+                    reader_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_reader.begin(), dummy_reader.end()});
                     std::array<uint32_t, 12> dummy_writer{0};
-                    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
+                    writer_desc.runtime_args.emplace_back(
+                        core, KernelDescriptor::CoreRuntimeArgs{dummy_writer.begin(), dummy_writer.end()});
                 }
                 std::array<uint32_t, 4> dummy_compute{0};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
+                compute_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{dummy_compute.begin(), dummy_compute.end()});
                 continue;
             }
 
@@ -1026,14 +1066,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
             const bool rt_is_quant_op = operation_attributes.is_quant_op;
             TT_FATAL(
-                rt_is_quant_op ==
-                    ((operation_attributes.post_activations.size() == 1) &&
-                     (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+                rt_is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
+                                   (operation_attributes.post_activations[0].type() ==
+                                    ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
                 "Quantization op needs to exactly one zero-point value as a post activation");
             const uint32_t quantization_zero_point =
                 rt_is_quant_op ? std::bit_cast<uint32_t>(
-                                  operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
-                            : 0u;
+                                     operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
+                               : 0u;
             uint32_t compute_scalar_value = quantization_zero_point;
 
             uint32_t compute_tiles = row_major_inputs ? (c_num_tiles_core * tiles_per_row_width) : c_num_tiles_core;
@@ -1079,10 +1119,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         cND,
                         0u};
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
 
-                auto [freq, counter] =
-                    CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+                auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
+                    operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
                 if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                     operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                     compute_scalar_value = pack_scalar_runtime_arg(
@@ -1093,7 +1134,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     counter = 0;
                 }
                 std::array compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                compute_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             } else {
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
@@ -1130,10 +1172,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         cND,
                         0u};
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
 
                 std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
+                compute_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             }
             std::vector<uint32_t> reader_runtime_args;
 
@@ -1198,7 +1242,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 };
             }
 
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {
