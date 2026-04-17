@@ -81,7 +81,7 @@ The rest of this document provides implementation details for the various compon
 - [Argument Concatenation](#argument-concatenation)
   - [Runtime Args](#runtime-args) | [Compile-Time Args](#compile-time-args)
 - [Build Cache](#build-cache)
-  - [OpDescriptor Construction Modes](#opdescriptor-construction-modes) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: patchable_generic_op](#dispatch-patchable_generic_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
+  - [OpDescriptor Construction Modes](#opdescriptor-construction-modes) | [Cache Key](#cache-key) | [What Gets Cached](#what-gets-cached) | [Cache Hit](#cache-hit-fast-path) | [Cache Miss](#cache-miss-full-build) | [Dispatch: fusion_dispatch_op](#dispatch-fusion_dispatch_op) | [Steady-State Pattern: run()](#steady-state-pattern-run) | [Cache Invalidation](#cache-invalidation)
 - [Constraints and Limitations](#constraints-and-limitations)
 - [File Map](#file-map)
 
@@ -2557,7 +2557,7 @@ Fused dispatch uses a **three-level caching architecture**:
 
 The fusion build cache lives in a process-global dict and does not persist to
 disk — it is lost on process exit.  The device program cache and slot
-patching are handled by `patchable_generic_op` on the C++ side.
+patching are handled by `fusion_dispatch_op` on the C++ side.
 
 
 ### OpDescriptor Construction Modes
@@ -2625,7 +2625,7 @@ def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
 3. **Mesh device id**: `MeshDevice.id()` when available (monotonic Metal mesh
    id), else Python `id(device)`, else `0` when no device is known.  This
    prevents cross-mesh cache collisions — the device program cache behind
-   `patchable_generic_op` is tied to a specific mesh.
+   `fusion_dispatch_op` is tied to a specific mesh.
 
 Two builds with the same key have identical fused kernel source, CB layout,
 barrier configuration, and semaphore structure.  Only runtime args (tensor
@@ -2640,7 +2640,7 @@ hit without re-running codegen:
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `patchable_generic_op` on every launch |
+| `cached_descriptor` | `ProgramDescriptor` | The fused descriptor — dispatched via `fusion_dispatch_op` on every launch |
 | `semaphores` | `tuple` | Keeps `GlobalSemaphore` objects alive (pinning their L1 addresses) |
 | `kernel_labels` | `tuple` | Op name labels for `_apply_kernel_dir` file naming |
 | `output_sources` | `tuple((op_idx, tensor_idx), ...)` or `None` | Maps each merged output to its source branch op and tensor index |
@@ -2661,13 +2661,13 @@ when activations are reallocated between forward passes.
 ### Cache Hit: Fast Path
 
 On a cache hit, `_container_run` dispatches directly via the allocating
-`patchable_generic_op` overload — no `FusedOp` is constructed:
+`fusion_dispatch_op` overload — no `FusedOp` is constructed:
 
 ```python
 entry = _BUILD_CACHE.get(cache_key)
 if entry is not None:
     inputs = <identity-deduplicated branch input_tensors>
-    outputs = patchable_generic_op(
+    outputs = fusion_dispatch_op(
         inputs, entry.output_specs, entry.shared_output_map,
         entry.cached_descriptor, entry.address_slots,
     )
@@ -2677,7 +2677,7 @@ The hit path:
 
 1. **Collect merged inputs**: Identity-deduplicate branch `input_tensors` in
    flatten order.
-2. **Allocate + dispatch (single C++ call)**: `patchable_generic_op` allocates
+2. **Allocate + dispatch (single C++ call)**: `fusion_dispatch_op` allocates
    fresh output tensors from the cached `TensorSpec` list, patches the
    descriptor with the new addresses via `AddressSlots`, and dispatches.
 3. **Reorder**: The returned outputs (in `output_sources` order) are reordered
@@ -2705,7 +2705,7 @@ _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
 
 1. **Memoize descriptor hash**: Sets `desc.custom_program_hash` to the
    pre-computed `compute_program_descriptor_hash(desc)`.  This turns every
-   subsequent device program cache lookup (inside `patchable_generic_op`) into
+   subsequent device program cache lookup (inside `fusion_dispatch_op`) into
    an O(1) integer read instead of an O(descriptor) walk over all kernels, CBs,
    and semaphores.
 
@@ -2715,9 +2715,9 @@ _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
    different op object instances.
 
 
-### Dispatch: patchable_generic_op
+### Dispatch: fusion_dispatch_op
 
-`patchable_generic_op` has two overloads, both taking inputs and outputs as
+`fusion_dispatch_op` has two overloads, both taking inputs and outputs as
 separate vectors:
 
 **Allocating (5-arg, hot path):** Allocates fresh output tensors from cached
@@ -2726,7 +2726,7 @@ C++ call.  `shared_output_map` handles the case where multiple kernel outputs
 alias the same buffer (e.g. sharded branches writing to a shared output).
 
 ```python
-outputs = patchable_generic_op(
+outputs = fusion_dispatch_op(
     inputs, output_specs, shared_output_map,
     descriptor, address_slots,
 )
@@ -2737,7 +2737,7 @@ tensors.  Used by `FusedOp.launch()` on the cold path where outputs already
 exist from `build()`:
 
 ```python
-patchable_generic_op(
+fusion_dispatch_op(
     list(self.input_tensors), list(self.output_tensors),
     self.descriptor, self._address_slots,
 )
@@ -2748,7 +2748,7 @@ tensor lists into the fused op's merged IO lists — so in-place updates to
 branch tensor lists (e.g. activation buffer swaps between forward passes) are
 visible to the dispatch.
 
-On the C++ side, `PatchableGenericMeshProgramFactory` implements a two-phase
+On the C++ side, `FusionDispatchMeshProgramFactory` implements a two-phase
 protocol:
 
 **First dispatch (device program cache miss):** `create_mesh_workload` builds
@@ -2784,13 +2784,13 @@ called on the same container:
 | Call # | Path | Overhead |
 |--------|------|----------|
 | 1st | `_materialize_chain` → `_container_run` (cold build) | Full codegen |
-| 2nd+ | `_container_run` (cache hit → `patchable_generic_op`) | ~tens of µs |
+| 2nd+ | `_container_run` (cache hit → `fusion_dispatch_op`) | ~tens of µs |
 
 The first `run()` call builds the fused program and populates `_BUILD_CACHE`
 (including `output_specs` and `shared_output_map`).  All subsequent calls hit
 the cache directly — `_container_run` gathers inputs from the branch
 descriptors' current tensors, deduplicates them, and dispatches via the
-allocating `patchable_generic_op` overload which allocates ephemeral output
+allocating `fusion_dispatch_op` overload which allocates ephemeral output
 tensors from the cached specs.  No `FusedOp` is retained on the container
 between calls, and output tensors are not pinned in the cache — zero L1
 retention between forward passes.

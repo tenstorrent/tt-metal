@@ -5,7 +5,7 @@
 """
 High-Level Fusion API: Sequential and Parallel.
 
-Fused execution uses ``patchable_generic_op`` so the device program cache can patch
+Fused execution uses ``fusion_dispatch_op`` so the device program cache can patch
 only tensor-address slots on repeat launches.
 
 **Fusion build cache** (``_BUILD_CACHE``): collision-free tuple key
@@ -20,12 +20,12 @@ current branch ops' tensors. This avoids pinning device buffers in the cache.
 The cache key includes **mesh identity** (:meth:`MeshDevice.id` when available,
 else Python ``id`` of the device object) from ``build(device=...)`` or inferred
 from branch tensors, so entries never cross different open meshes — required
-because the device program cache behind ``patchable_generic_op`` is tied to a
+because the device program cache behind ``fusion_dispatch_op`` is tied to a
 specific mesh.
 
 **Steady state:** each ``build()`` call creates new branch descriptors (cheap:
 params + hash, no factory), gets a cache hit (reuses the fused
-``ProgramDescriptor``), and ``launch()`` dispatches via ``patchable_generic_op``
+``ProgramDescriptor``), and ``launch()`` dispatches via ``fusion_dispatch_op``
 which patches only changed tensor-address slots.
 
 **Launch path:** :meth:`FusedOp.launch` copies merged IO from the branch ops
@@ -38,7 +38,7 @@ pointer to the shared ``_CacheEntry``; on call 2+ the C++
 ``FusionDispatchState`` allocates ephemeral outputs, patches, and dispatches
 in a single call — zero L1 pinning between forward passes.  Inline
 containers (new each call) always use the lightweight warm path (3-arg
-``patchable_generic_op``, reused output tensors).
+``fusion_dispatch_op``, reused output tensors).
 """
 
 import os
@@ -62,7 +62,7 @@ from models.experimental.ops.descriptors.fusion.common import (
 # No IO tensor objects are stored.  The cached descriptor's buffer addresses and
 # pointers may go stale between launches; ``address_slots`` (an opaque C++ object)
 # ensures they are always refreshed from live IO tensors before any C++ code
-# dereferences them (see ``patchable_generic_op`` / ``patch_stale_descriptor``).
+# dereferences them (see ``fusion_dispatch_op`` / ``patch_stale_descriptor``).
 _BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 
@@ -76,11 +76,11 @@ class _CacheEntry:
     The cached ``ProgramDescriptor`` may have stale buffer addresses (CB buffer
     pointers and runtime arg values) after the original tensors are freed.
     ``address_slots`` (opaque C++ ``AddressSlots``) records every descriptor
-    position that references an IO tensor so ``patchable_generic_op`` can
+    position that references an IO tensor so ``fusion_dispatch_op`` can
     refresh them from live tensors before dispatch.
     """
 
-    cached_descriptor: Any  # ProgramDescriptor — dispatched via patchable_generic_op on hit
+    cached_descriptor: Any  # ProgramDescriptor — dispatched via fusion_dispatch_op on hit
     semaphores: tuple  # Keeps GlobalSemaphore L1 alive
     kernel_labels: tuple  # For _apply_kernel_dir file naming
     # (op_idx, tensor_idx) per merged output; None when the fused op has no outputs.
@@ -89,7 +89,7 @@ class _CacheEntry:
     merged_input_len: Optional[int] = None
     # Opaque C++ AddressSlots — maps every stale descriptor position (CB buffer
     # pointers, runtime args, common args) to an IO tensor index.  Computed once
-    # at build time via compute_address_slots, passed to patchable_generic_op.
+    # at build time via compute_address_slots, passed to fusion_dispatch_op.
     address_slots: Any = None
     # result_reorder[j] = index into the outputs list (output_sources order)
     # for default_results[j].  Used on the hot path to reorder the ephemeral
@@ -97,7 +97,7 @@ class _CacheEntry:
     # Stored as a list (not tuple) for zero-conversion C++ consumption.
     result_reorder: List[int] = field(default_factory=list)
     # Cached output TensorSpecs (output_sources order) and shared_output_map
-    # for the allocating patchable_generic_op overload.  Populated on the cold path.
+    # for the allocating fusion_dispatch_op overload.  Populated on the cold path.
     output_specs: Optional[List] = None
     shared_output_map: List = field(default_factory=list)
     # C++ FusionDispatchState — created once after output_specs populated,
@@ -240,10 +240,10 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], output_sou
     """Record a slim cache entry from a freshly-built FusedOp (no tensor refs).
 
     ``address_slots`` must be pre-computed (while addresses are valid) and
-    already set on *fused_op*.  Stored in the cache so ``patchable_generic_op``
+    already set on *fused_op*.  Stored in the cache so ``fusion_dispatch_op``
     can refresh all stale addresses from live IO tensors before dispatch.
     """
-    # Memoize the descriptor hash so patchable_generic_op skips the full
+    # Memoize the descriptor hash so fusion_dispatch_op skips the full
     # kernel/CB/semaphore walk on every launch (O(1) instead of O(descriptor)).
     desc = fused_op.descriptor
     if desc.custom_program_hash is None:
@@ -496,9 +496,7 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
         else:
             outputs = list(ops[-1].output_tensors) if ops else []
         io_tensors = inputs + outputs
-        ttnn._ttnn.operations.experimental.patchable_generic_op(
-            io_tensors, entry.cached_descriptor, entry.address_slots
-        )
+        ttnn._ttnn.operations.experimental.fusion_dispatch_op(io_tensors, entry.cached_descriptor, entry.address_slots)
     else:
         # Cold path: full build (populates _BUILD_CACHE), then launch.
         fused = container.build(device=device, kernel_dir=kernel_dir)
@@ -629,7 +627,7 @@ class FusedOp:
         return self.op.output_tensors
 
     def launch(self, *branch_ops_override: Any):
-        """Dispatch via ``patchable_generic_op`` with separate inputs/outputs.
+        """Dispatch via ``fusion_dispatch_op`` with separate inputs/outputs.
 
         With no positional arguments, merged IO is refreshed from the branch
         ops captured at ``build()`` before dispatch. With positional arguments,
@@ -640,7 +638,7 @@ class FusedOp:
         elif self._branch_ops is not None:
             self.refresh_merged_io(list(self._branch_ops))
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn._ttnn.operations.experimental.patchable_generic_op(io_tensors, self.descriptor, self._address_slots)
+        ttnn._ttnn.operations.experimental.fusion_dispatch_op(io_tensors, self.descriptor, self._address_slots)
         return self.output_tensors
 
     def refresh_merged_io(self, ops: List) -> None:
@@ -859,7 +857,7 @@ class Sequential:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """Dispatch the fused program via ``_BUILD_CACHE`` + ``patchable_generic_op``.
+        """Dispatch the fused program via ``_BUILD_CACHE`` + ``fusion_dispatch_op``.
 
         First call builds the fused program and populates ``_BUILD_CACHE``.
         Subsequent calls hit the cache directly — no ``FusedOp`` is retained
@@ -994,7 +992,7 @@ class Parallel:
         return fused
 
     def run(self, *, results=None, device=None, kernel_dir: str = None):
-        """Dispatch the fused program via ``_BUILD_CACHE`` + ``patchable_generic_op``.
+        """Dispatch the fused program via ``_BUILD_CACHE`` + ``fusion_dispatch_op``.
 
         First call builds the fused program and populates ``_BUILD_CACHE``.
         Subsequent calls hit the cache directly — no ``FusedOp`` is retained
