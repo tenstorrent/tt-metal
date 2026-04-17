@@ -51,6 +51,12 @@ void kernel_main() {
         write_offset_phase_2 = get_arg_val<uint32_t>(13);
     }
 
+#ifdef FLATTENED_WORK
+    // Flatten_work: causal only, non-chunked, single phase. Args sit right after write_offset_phase_1.
+    const uint32_t global_q_start = get_arg_val<uint32_t>(12);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(13);
+#endif
+
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -109,6 +115,23 @@ void kernel_main() {
             chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
             write_offset = write_offset_phase_2;
         }
+#ifdef FLATTENED_WORK
+#ifdef FLATTEN_WORK_ZIGZAG
+        constexpr bool _flat_use_zigzag = true;
+#else
+        constexpr bool _flat_use_zigzag = false;
+#endif
+        for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
+            const uint32_t _flat_linear = global_q_start + _gq;
+            const uint32_t _flat = remap_q_index(_flat_linear, q_num_chunks, _flat_use_zigzag);
+            const uint32_t nb = _flat / (NQH * q_num_chunks);
+            const uint32_t nq = (_flat / q_num_chunks) % NQH;
+            const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;  // preserved for parity with hierarchical path
+            (void)q_batch_offset;
+            {
+                {
+                    uint32_t q_chunk = _flat % q_num_chunks;
+#else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
@@ -124,6 +147,7 @@ void kernel_main() {
                     }
 #else
                     q_chunk = local_q_start + q_iter;
+#endif
 #endif
 
                     // Generate mask only when user didn't provide one.

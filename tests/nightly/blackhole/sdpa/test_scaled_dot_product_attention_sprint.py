@@ -244,6 +244,7 @@ def run_sdpa(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        flatten_work=os.environ.get("TT_METAL_FLATTEN_WORK", "0") not in ("", "0"),
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -307,6 +308,7 @@ def run_sdpa_determinism(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        flatten_work=os.environ.get("TT_METAL_FLATTEN_WORK", "0") not in ("", "0"),
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

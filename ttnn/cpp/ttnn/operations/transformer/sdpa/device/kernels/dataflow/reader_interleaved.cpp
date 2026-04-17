@@ -112,6 +112,13 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
+#ifdef FLATTENED_WORK
+    // Flatten_work: causal only, non-chunked, no attention sink. num_phases is always 1 for this factory,
+    // so these args sit right after read_offset_phase_1 with no intervening args.
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
+#endif
+
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     // Parse chain metadata for KV forwarding (non-causal only)
@@ -282,6 +289,37 @@ void kernel_main() {
             valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
         }
 
+#ifdef FLATTENED_WORK
+        // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Restrictions enforced on host:
+        // is_causal=true, !is_chunked, !use_attention_sink, so chunked page_table and attention_sink reads
+        // are skipped, and mask_batch_offset is recomputed per (nb) change below.
+        uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
+        uint32_t mask_batch_offset = 0;
+#ifdef FLATTEN_WORK_ZIGZAG
+        constexpr bool _flat_use_zigzag = true;
+#else
+        constexpr bool _flat_use_zigzag = false;
+#endif
+        for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
+            const uint32_t _flat_linear = global_q_start + _gq;
+            const uint32_t _flat = remap_q_index(_flat_linear, q_num_chunks, _flat_use_zigzag);
+            const uint32_t nb = _flat / (NQH * q_num_chunks);
+            const uint32_t nq = (_flat / q_num_chunks) % NQH;
+            const uint32_t q_iter = _gq;  // used only by non-causal chain forwarding (disabled in flatten_work)
+            if (nb != prev_nb_flat) {
+                prev_nb_flat = nb;
+                if constexpr (!broadcast_provided_mask_batch) {
+                    if constexpr (broadcast_provided_mask_heads) {
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt;
+                    } else {
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt * NQH;
+                    }
+                }
+            }
+            {
+                {
+                    uint32_t q_chunk = _flat % q_num_chunks;
+#else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
                 // Chunked means that we have paged attention
@@ -343,6 +381,7 @@ void kernel_main() {
                     }
 #else
                     q_chunk = local_q_start + q_iter;
+#endif
 #endif
                     /*
                     Determine how many rows of Q will be read. Both start and end rows are
@@ -646,13 +685,14 @@ void kernel_main() {
                                 cb_push_back(cb_v_in, v_chunk_tiles);
                             }
                         }
-                    }
-                }
-            }
-
+                    }  // close k_chunk
+                }  // close q_iter / flatten innermost
+            }  // close nq / flatten middle
+#ifndef FLATTENED_WORK
             if constexpr (is_chunked) {
                 cb_pop_front(cb_id_page_table, 1);
             }
-        }
-    }
+#endif
+        }  // close nb / flatten outer (_gq)
+    }  // close phase
 }
