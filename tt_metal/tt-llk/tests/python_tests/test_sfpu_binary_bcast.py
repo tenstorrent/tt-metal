@@ -61,8 +61,6 @@ class INPUT_TILE_A(TemplateParameter):
 
 _FACE_R_DIM = 16
 _FACE_C_DIM = 16
-_NUM_FACES = 4
-_ELEMENTS_PER_FACE = _FACE_R_DIM * _FACE_C_DIM
 
 _BINARY_OPS = {
     MathOperation.SfpuElwadd: torch.add,
@@ -100,8 +98,8 @@ def _golden_sfpu_binary_bcast(
 
 SUPPORTED_ELTWISE_OPS = [
     MathOperation.SfpuElwadd,
-    # MathOperation.SfpuElwsub,
-    # MathOperation.SfpuElwmul,
+    MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwmul,
 ]
 
 SUPPORTED_FORMATS = input_output_formats(
@@ -143,16 +141,16 @@ def test_sfpu_binary_bcast(
     # for r in range(32):
     #     src_B_rm[r, 0] = float(r)
 
-    print("src_A (row-major view):")
-    print(src_A.view(32, 32))
-    print("src_B (row-major view, kernel does the broadcast):")
-    print(src_B.view(32, 32))
+    # print("src_A (row-major view):")
+    # print(src_A.view(32, 32))
+    # print("src_B (row-major view, kernel does the broadcast):")
+    # print(src_B.view(32, 32))
 
     op = _BINARY_OPS[eltwise_op]
     golden_tensor = _golden_sfpu_binary_bcast(src_A, src_B, bcast_dim, op)
 
-    print("golden_tensor (face-ordered):")
-    print(golden_tensor.view(32, 32))
+    # print("golden_tensor (face-ordered):")
+    # print(golden_tensor.view(32, 32))
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -194,12 +192,12 @@ def test_sfpu_binary_bcast(
     untlized_golden_tensor = untilize(
         golden_tensor, stimuli_format=formats.output_format
     )
-    print("untlized_golden_tensor:")
-    print(untlized_golden_tensor.view(32, 32))
+    # print("untlized_golden_tensor:")
+    # print(untlized_golden_tensor.view(32, 32))
 
-    untilized_res_tensor = untilize(res_tensor, stimuli_format=formats.output_format)
-    print("untilized_res_tensor:")
-    print(untilized_res_tensor.view(32, 32))
+    # untilized_res_tensor = untilize(res_tensor, stimuli_format=formats.output_format)
+    # print("untilized_res_tensor:")
+    # print(untilized_res_tensor.view(32, 32))
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
