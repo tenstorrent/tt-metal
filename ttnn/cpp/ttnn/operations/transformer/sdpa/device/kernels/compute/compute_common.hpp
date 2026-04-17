@@ -1656,8 +1656,8 @@ void sdpa_inner_loop(
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
-    constexpr bool c_skip_compute = false;  // Profiling the data movement and synchronization overhead of the loop
-                                            // without compute to find bottlenecks.
+    constexpr bool c_skip_compute = true;  // Profiling the data movement and synchronization overhead of the loop
+                                           // without compute to find bottlenecks.
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;

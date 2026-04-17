@@ -143,7 +143,7 @@ void kernel_main() {
 
     // Profiling: isolate ring iteration 0 for cost-benefit analysis
     constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
-    constexpr bool c_profile_only_ring_iter_0 = false;  // Set true to keep only iter 0 (skip iter 1+)
+    constexpr bool c_profile_only_ring_iter_0 = true;   // Set true to keep only iter 0 (skip iter 1+)
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();

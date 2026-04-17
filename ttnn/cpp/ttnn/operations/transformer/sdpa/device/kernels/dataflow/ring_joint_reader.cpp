@@ -245,7 +245,12 @@ void kernel_main() {
 
     // Profiling: isolate ring iteration 0 for cost-benefit analysis
     constexpr bool c_profile_skip_ring_iter_0 = false;  // Set true to skip iter 0 (run only iter 1+)
-    constexpr bool c_profile_only_ring_iter_0 = false;  // Set true to keep only iter 0 (skip iter 1+)
+    constexpr bool c_profile_only_ring_iter_0 = true;   // Set true to keep only iter 0 (skip iter 1+)
+
+    constexpr bool c_2x_k_read = true;
+    constexpr bool c_2x_k_fwd = true;
+    constexpr bool c_2x_v_read = true;
+    constexpr bool c_2x_v_fwd = true;
 
     /**
      * Iterate over ring indices.
@@ -454,14 +459,11 @@ void kernel_main() {
                     if constexpr (c_skip_k_dram) {
                         cb_push_back(cb_k_in, k_chunk_tiles);
                     } else {
-                        read_block(
-                            kv_chunk_is_joint ? joint_k_generator
-                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                            k_slice,
-                            end_seq_tile,
-                            cb_k_in,
-                            k_tile_bytes,
-                            true /*transpose*/
+                        const auto& k_generator = kv_chunk_is_joint
+                                                      ? joint_k_generator
+                                                      : (ring_iter == 0 ? local_k_generator : gathered_k_generator);
+                        read_block<decltype(k_generator), c_2x_k_read>(
+                            k_generator, k_slice, end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/
                         );
                     }
                 }
@@ -485,12 +487,22 @@ void kernel_main() {
                             noc_semaphore_wait(k_sender_semaphore_addr_ptr, k_sender_wait_count);
                             noc_semaphore_set(k_sender_semaphore_addr_ptr, 0);
                             uint64_t k_mcast_addr = k_mcast_base_noc_addr | cb_k_start_address;
-                            noc_async_write_multicast(
-                                cb_k_start_address,
-                                k_mcast_addr,
-                                k_chunk_tiles * k_tile_bytes,
-                                k_mcast_num_dests,
-                                true /* linked: semaphore mcast follows */);
+                            if constexpr (!c_2x_k_fwd) {
+                                noc_async_write_multicast(
+                                    cb_k_start_address,
+                                    k_mcast_addr,
+                                    k_chunk_tiles * k_tile_bytes,
+                                    k_mcast_num_dests,
+                                    true /* linked: semaphore mcast follows */);
+                            }
+                            if constexpr (c_2x_k_fwd) {
+                                noc_async_write_multicast(
+                                    cb_k_start_address,
+                                    k_mcast_addr,
+                                    2 * k_chunk_tiles * k_tile_bytes,
+                                    k_mcast_num_dests,
+                                    true /* linked: semaphore mcast follows */);
+                            }
                             noc_semaphore_set_multicast(
                                 k_valid_semaphore_addr, k_mcast_sem_noc_addr, k_mcast_num_dests);
                         } else {
@@ -501,6 +513,12 @@ void kernel_main() {
                                 get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
                             noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
                             noc_async_writes_flushed();
+
+                            if constexpr (c_2x_k_fwd) {
+                                noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                                noc_async_writes_flushed();
+                            }
+
                             noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
                         }
                     } else {
@@ -511,6 +529,11 @@ void kernel_main() {
                             get_noc_addr(k_next_physical_x, k_next_physical_y, cb_k_start_address);
                         noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
                         noc_async_writes_flushed();
+
+                        if constexpr (c_2x_k_fwd) {
+                            noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                            noc_async_writes_flushed();
+                        }
                         noc_semaphore_set_remote(k_valid_semaphore_addr, k_receiver_semaphore_noc_addr);
                     }
                 }
@@ -582,14 +605,11 @@ void kernel_main() {
                     if constexpr (c_skip_v_dram) {
                         cb_push_back(cb_v_in, v_chunk_tiles);
                     } else {
-                        read_block(
-                            kv_chunk_is_joint ? joint_v_generator
-                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                            v_slice,
-                            end_seq_tile,
-                            cb_v_in,
-                            v_tile_bytes,
-                            false /*transpose*/
+                        const auto& v_generator = kv_chunk_is_joint
+                                                      ? joint_v_generator
+                                                      : (ring_iter == 0 ? local_v_generator : gathered_v_generator);
+                        read_block<decltype(v_generator), c_2x_v_read>(
+                            v_generator, v_slice, end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/
                         );
                     }
                 }
@@ -600,17 +620,32 @@ void kernel_main() {
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                     if constexpr (mcast_enabled) {
                         uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
-                        noc_async_write_multicast(
-                            cb_v_start_address,
-                            v_mcast_addr,
-                            v_chunk_tiles * v_tile_bytes,
-                            mcast_num_dests,
-                            true /* linked: semaphore mcast follows */);
+                        if constexpr (!c_2x_v_fwd) {
+                            noc_async_write_multicast(
+                                cb_v_start_address,
+                                v_mcast_addr,
+                                v_chunk_tiles * v_tile_bytes,
+                                mcast_num_dests,
+                                true /* linked: semaphore mcast follows */);
+                        }
+                        if constexpr (c_2x_v_fwd) {
+                            noc_async_write_multicast(
+                                cb_v_start_address,
+                                v_mcast_addr,
+                                2 * v_chunk_tiles * v_tile_bytes,
+                                mcast_num_dests,
+                                true /* linked: semaphore mcast follows */);
+                        }
                         noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                     } else {
                         uint64_t v_unicast_data_addr =
                             get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                        noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                        if constexpr (!c_2x_v_fwd) {
+                            noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                        }
+                        if constexpr (c_2x_v_fwd) {
+                            noc_async_write(cb_v_start_address, v_unicast_data_addr, 2 * v_chunk_tiles * v_tile_bytes);
+                        }
                         noc_async_writes_flushed();
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }

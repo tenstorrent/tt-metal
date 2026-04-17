@@ -216,7 +216,7 @@ def compute_math_utilization(
     core_count,
     is_causal=False,
     arch="blackhole",
-    ring_iter_mode="all",
+    ring_iter_mode="only_0",
 ):
     """
     Compute math utilization as a percentage (0-100).

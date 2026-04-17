@@ -919,7 +919,7 @@ struct Slice {
     uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
-template <typename CatAddrGeneratorType>
+template <typename CatAddrGeneratorType, bool read2x = false>
 void read_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
@@ -946,6 +946,17 @@ void read_block(
                 src_slice.d3_start + col,
                 end_seq_tile,
                 write_ptr);
+
+            if constexpr (read2x) {
+                // Profiling experiment
+                cat_addr_generator.maybe_read_tile(
+                    src_slice.d0,
+                    src_slice.d1,
+                    src_slice.d2_start + row,
+                    src_slice.d3_start + col,
+                    end_seq_tile,
+                    write_ptr);
+            }
 
             write_ptr += inner_ptr_stride;
         }
