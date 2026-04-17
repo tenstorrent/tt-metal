@@ -136,3 +136,58 @@ All identifiers verified successfully:
 - `Converter::as_float` -- found in `ckernel_sfpu_converter.h` for both WH and BH
 - All file paths confirmed to exist
 - SFPI constructs (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_endif`) -- confirmed in kernel source
+
+---
+
+## Session Summary (4)
+- **Operation**: clamp_tss
+- **Status**: SUCCESS
+- **Output file**: `.claude-analysis/rrelu-1/clamp_tss_analysis.md`
+
+## Key Decisions (clamp_tss)
+
+1. **Incomplete dispatch chain**: CLAMP_TSS has a core SFPU kernel (`_calculate_clamp_`) in the tt_llk submodule but the dispatch chain through Metal is entirely missing: no `SfpuType::clamp` in Metal's enum, no LLK dispatch file, no compute API header, and `get_op_init_and_func()` does not handle it (would TT_FATAL/TT_THROW). The analysis documents the existing kernel and intended dispatch pattern.
+
+2. **Kernel style determination**: The core SFPU kernel (`ckernel_sfpu_clamp.h`) uses SFPI abstractions (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_elseif`/`v_endif`, `sfpi::s2vFloat16a`/`sfpi::s2vFloat16b`), so Style A (inline-commented source code) was selected.
+
+3. **Approximation mode**: `APPROXIMATION_MODE` is a template parameter of `_calculate_clamp_` but is completely unused by the implementation -- no `if constexpr` branch checks it.
+
+4. **Architecture differences**: WH and BH core SFPU implementations are identical.
+
+5. **Three parameters**: Unlike most unary ops with 0-1 params, clamp takes 3 params: min (FP16A), max (FP16A), offset (FP16B). The offset parameter is added to the result after clamping, which is an unusual feature.
+
+6. **Address mode**: Would use default `ADDR_MOD_7` with all-zero increments. No special-cased `SfpuType` for clamp exists.
+
+## Files Read (clamp_tss)
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.cpp`
+- `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_types.hpp`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_clamp.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_clamp.h`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h`
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h`
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu_types.h`
+- `tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h`
+- `tt_metal/hw/inc/api/compute/eltwise_unary/frac.h` (reference for dispatch pattern)
+- `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_frac.h` (reference)
+- `tt_metal/third_party/tt_llk/tests/helpers/include/llk_sfpu_types.h`
+- `tt_metal/third_party/tt_llk/tests/helpers/include/sfpu_operations.h`
+- `runtime/sfpi/include/sfpi.h`
+- `runtime/sfpi/include/sfpi_fp16.h`
+- `.claude/references/sfpu-hardware-model.md`
+- `.claude/references/logging/sfpu-operation-analyzer.md`
+- `docs/sfpu_operations/key_notes/clamp_tss_key_notes.md`
+
+## Verification Results (clamp_tss)
+All identifiers verified successfully (18 checks):
+- `_calculate_clamp_` -- found in both WH and BH tt_llk `ckernel_sfpu_clamp.h`
+- All file paths cited in Abstraction Layers and Local Knowledge Sources tables -- confirmed to exist
+- SFPI constructs (`sfpi::s2vFloat16a`, `sfpi::s2vFloat16b`, `sfpi::vFloat`, `sfpi::dst_reg`, `v_if`/`v_elseif`/`v_endif`) -- confirmed present in kernel source
+- Negative verification: confirmed NO `SfpuType::clamp` in Metal's `llk_sfpu_types.h`, NO `clamp.h` in API headers
