@@ -779,6 +779,30 @@ inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
 
 // clang-format off
 /**
+ * Issues a transaction on the given command buffer.
+ * Dispatches to the correct hardware builtin based on the buffer index:
+ *   - cmd_buf 0 (OVERLAY_WR_CMD_BUF) and 1 (OVERLAY_RD_CMD_BUF): regular command buffer
+ *   - cmd_buf 2 (OVERLAY_AT_CMD_BUF): simple command buffer
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                  | Data type | Valid range | Required |
+ * |------------------------------|----------------------------------------------|-----------|-------------|----------|
+ * | cmd_buf (template parameter) | Which command buffer to issue transaction on | uint32_t  | 0, 1, or 2  | True     |
+ */
+// clang-format on
+template <uint8_t cmd_buf>
+inline __attribute__((always_inline)) void noc_issue_transaction() {
+    static_assert(cmd_buf <= 1, "cmd_buf must be 0 (WR), 1 (RD), or 2 (AT/simple)");
+    if constexpr (cmd_buf == 2) {
+        __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+    } else {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+    }
+}
+
+// clang-format off
+/**
  * Sets the stateful registers for an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
  * get_noc_addr function). This function is used to set up the state for
