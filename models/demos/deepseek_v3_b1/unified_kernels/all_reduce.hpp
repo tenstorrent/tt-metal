@@ -163,6 +163,28 @@ private:
 
         auto connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+
+        // Ensure local data is available in the CB before signaling or sending.
+        {
+            DeviceZoneScopedN("CCL_WRITER_LOCAL_READY");
+            if constexpr (CTArgs::skip_local_push) {
+                // Fused path: preceding op (e.g. gather3) pushes to this CB.
+                cb_wait_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            } else if constexpr (CTArgs::signal_local_ready) {
+                // Standalone path: push the sharded tensor into the CB.
+                // Only the RISC with signal_local_ready does the push; the other
+                // RISC reads get_read_ptr directly (CB base points to the tensor).
+                cb_reserve_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+                cb_push_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
+            }
+
+            // Signal local_ready AFTER data is confirmed present so the receiver
+            // can safely NOC-read from the sender's L1.
+            if constexpr (CTArgs::signal_local_ready) {
+                noc_semaphore_inc(local_ready_noc_addr, 1);
+            }
+        }
+
         constexpr bool use_posted_transport_writes = true;
         constexpr uint32_t header_ring_size = 2;
         constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
@@ -188,27 +210,6 @@ private:
             }
         }
 
-        // Ensure local data is available in the CB before signaling or sending.
-        {
-            DeviceZoneScopedN("CCL_WRITER_LOCAL_READY");
-            if constexpr (CTArgs::skip_local_push) {
-                // Fused path: preceding op (e.g. gather3) pushes to this CB.
-                cb_wait_front(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
-            } else if constexpr (CTArgs::signal_local_ready) {
-                // Standalone path: push the sharded tensor into the CB.
-                // Only the RISC with signal_local_ready does the push; the other
-                // RISC reads get_read_ptr directly (CB base points to the tensor).
-                cb_reserve_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
-                cb_push_back(CTArgs::local_data_cb_id, CTArgs::input_num_tiles);
-            }
-
-            // Signal local_ready AFTER data is confirmed present so the receiver
-            // can safely NOC-read from the sender's L1.
-            if constexpr (CTArgs::signal_local_ready) {
-                noc_semaphore_inc(local_ready_noc_addr, 1);
-                noc_async_atomic_barrier();
-            }
-        }
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
         connection.open_finish();
         connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
