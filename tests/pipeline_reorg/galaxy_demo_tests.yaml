@@ -43,7 +43,7 @@
     pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
   model: llama3_70b_dp
   skus:
-    wh_galaxy_perf:
+    wh_galaxy_civ2:
       timeout: 20
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models

@@ -111,6 +111,10 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  wh_galaxy_civ2:
+    runs_on:
+      - tt-ubuntu-2204-wh-glx-6u-stable
+
   bh_p100_perf:
     runs_on:
       - pipeline-perf
