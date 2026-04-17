@@ -427,6 +427,23 @@ These test the three key relationships between K and C that affect v2's rotating
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Matmul*" --gtest_list_tests
 ```
 
+## Performance Graphs
+
+To generate performance graphs for the K subblock size sweep (test ID 1026), use the following commands. Each must be run separately since they share the same profiler log file. The gtest fixture name selects which variant runs.
+
+```bash
+# 2D matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test2DMatmul/ID1026" --plot --verbose-log
+
+# 1D matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmul/ID1026" --plot --verbose-log
+
+# 1D V2 matmul
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter="Test1DMatmulV2/ID1026" --plot --verbose-log
+```
+
+Graphs are saved to `tests/tt_metal/tt_metal/data_movement/data/<arch>/`.
+
 ## L1 Memory Layout Per Core
 
 ### v1

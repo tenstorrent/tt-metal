@@ -53,48 +53,53 @@ void kernel_main() {
         physical_end_x,
         physical_end_y);
 
-    // K-loop: iterate through all K subblocks, rotating sender across columns
-    uint32_t local_k_send_idx = 0;
+    {
+        DeviceZoneScopedN("RISCV0");
+        // K-loop: iterate through all K subblocks, rotating sender across columns
+        uint32_t local_k_send_idx = 0;
 
-    for (uint32_t k = 0; k < num_subblocks_k_dim; k++) {
-        uint32_t sender_col = k % num_cores_c_dim;
-        uint32_t output_addr = in0_mcast_output_addr + k * k_subblock_size_bytes;
+        for (uint32_t k = 0; k < num_subblocks_k_dim; k++) {
+            uint32_t sender_col = k % num_cores_c_dim;
+            uint32_t output_addr = in0_mcast_output_addr + k * k_subblock_size_bytes;
 
-        if (my_col_idx == sender_col) {
-            // --- SENDER: multicast this K subblock to all cores in my row ---
-            uint32_t src_addr = l1_base_address + local_k_send_idx * k_subblock_size_bytes;
-            local_k_send_idx++;
+            if (my_col_idx == sender_col) {
+                // --- SENDER: multicast this K subblock to all cores in my row ---
+                uint32_t src_addr = l1_base_address + local_k_send_idx * k_subblock_size_bytes;
+                local_k_send_idx++;
 
-            // Wait for all receivers in the row to signal readiness
-            noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
-            noc_semaphore_set(sender_sem_ptr, 0);
+                // Wait for all receivers in the row to signal readiness
+                noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
+                noc_semaphore_set(sender_sem_ptr, 0);
 
-            if constexpr (num_cores_c_dim > 1) {
-                uint64_t dst_data_mcast_addr = row_mcast_base | output_addr;
-                noc_async_write_multicast_loopback_src(
-                    src_addr, dst_data_mcast_addr, k_subblock_size_bytes, num_cores_c_dim, true);
+                if constexpr (num_cores_c_dim > 1) {
+                    uint64_t dst_data_mcast_addr = row_mcast_base | output_addr;
+                    noc_async_write_multicast_loopback_src(
+                        src_addr, dst_data_mcast_addr, k_subblock_size_bytes, num_cores_c_dim, true);
 
-                uint64_t dst_receiver_sem_mcast_addr = row_mcast_base | receiver_sem_addr;
-                noc_semaphore_set_multicast_loopback_src(
-                    sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+                    uint64_t dst_receiver_sem_mcast_addr = row_mcast_base | receiver_sem_addr;
+                    noc_semaphore_set_multicast_loopback_src(
+                        sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+                } else {
+                    // Single column: unicast self-write (HW limitation with single-core multicast loopback)
+                    uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], output_addr);
+                    noc_async_write(src_addr, local_dest_addr, k_subblock_size_bytes);
+                    noc_async_write_barrier();
+                    noc_semaphore_set(receiver_sem_ptr, 1);
+                }
             } else {
-                // Single column: unicast self-write (HW limitation with single-core multicast loopback)
-                uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], output_addr);
-                noc_async_write(src_addr, local_dest_addr, k_subblock_size_bytes);
-                noc_async_write_barrier();
-                noc_semaphore_set(receiver_sem_ptr, 1);
+                // --- RECEIVER: signal readiness to sender ---
+                uint32_t sender_phys_x = get_arg_val<uint32_t>(12 + sender_col);
+                uint64_t sender_sem_noc_addr = get_noc_addr(sender_phys_x, my_y[0], sender_sem_addr);
+                noc_semaphore_inc(sender_sem_noc_addr, 1);
             }
-        } else {
-            // --- RECEIVER: signal readiness to sender ---
-            uint32_t sender_phys_x = get_arg_val<uint32_t>(12 + sender_col);
-            uint64_t sender_sem_noc_addr = get_noc_addr(sender_phys_x, my_y[0], sender_sem_addr);
-            noc_semaphore_inc(sender_sem_noc_addr, 1);
-        }
 
-        // All cores wait for data arrival, then reset for next iteration
-        noc_semaphore_wait(receiver_sem_ptr, 1);
-        noc_semaphore_set(receiver_sem_ptr, 0);
+            // All cores wait for data arrival, then reset for next iteration
+            noc_semaphore_wait(receiver_sem_ptr, 1);
+            noc_semaphore_set(receiver_sem_ptr, 0);
+        }
     }
 
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", num_subblocks_k_dim);
+    DeviceTimestampedData("Transaction size in bytes", k_subblock_size_bytes);
 }

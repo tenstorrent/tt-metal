@@ -855,3 +855,7 @@ tests:
 
   911:
     name: "Quasar IDMA - 1D Strided"
+
+  1026:
+    name: "Matmul - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"

@@ -244,6 +244,8 @@ for (uint32_t i = 0; i < test_config.num_subblocks_c_dim; i++) {
             num_cores,                             // 6  Total number of cores in barrier
             risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
             risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
+            1,                                     // 9  Profiling: number of transactions
+            in1_per_core_read_size_bytes,          // 10 Profiling: transaction size in bytes
         };
         tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, i, risc0_core_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, i, risc1_core_runtime_args);
