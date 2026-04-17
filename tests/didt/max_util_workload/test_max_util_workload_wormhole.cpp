@@ -629,23 +629,24 @@ static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCycle
 //
 // Tune the values below on hardware by timing both workloads at 1000 loops.
 //
-// TODO(WH): Recalibrate for Wormhole B0; map entries below are copied from BH as a starting point.
+// Map entries scaled from WH duty measurements so hot fraction tracks ~10% steps (see comments
+// on each row for measured point before scaling).
 // ---------------------------------------------------------------------------
 
 static constexpr uint32_t kDutyCycleCalibrationLoops = 1000;
 
 // clang-format off
-// Derived experimentally at 1000 loops (BH); WH values TBD.
+// Calibrated for Wormhole B0 at 1000 loops: N_new = N × (1/d_target − 1) / (1/d_meas − 1).
 static const std::map<uint32_t, uint32_t> kDutyCycleToSlowLoopsMap = {
-    {10,  1260},  // 90/10
-    {20,   560},  // 80/20
-    {30,   327},  // 70/30
-    {40,   210},  // 60/40
-    {50,   140},  // 50/50
-    {60,    95},  // 40/60
-    {70,    61},  // 30/70
-    {80,    36},  // 20/80
-    {90,    18},  // 10/90
+    {10,  2323},  // ~10% hot (measured)
+    {20,  1054},  // ~20%
+    {30,   600},  // ~30%
+    {40,   385},  // ~40%
+    {50,   260},  // ~50%
+    {60,   171},  // ~60%
+    {70,   110},  // ~70%
+    {80,    67},  // ~80%
+    {90,    31},  // ~90%
     {100,    0},  // full duty cycle: no slow workload injected
 };
 // clang-format on
@@ -959,7 +960,7 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
     // -- Compute kernel (TRISC): SFPU cosine on L1 data --
     CreateKernel(
         program,
-        "tests/didt/max_util_workload/kernels/slow_cos_compute.cpp",
+        "tests/didt/max_util_workload/kernels/wormhole_b0/slow_cos_compute.cpp",
         core_range_set,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
