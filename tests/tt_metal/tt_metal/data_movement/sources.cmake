@@ -33,4 +33,5 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     quasar_cache/test_quasar_cache.cpp
     matmul/test_matmul_1d.cpp
     matmul/test_matmul_1d_v2.cpp
+    quasar_addrgen/test_addrgen_example.cpp
 )
