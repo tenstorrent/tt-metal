@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     encode_expert_indices,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_matmul_custom_compressed import scale_tiles_for_mixed_formats
 
 
 def _build_down_grid(device):
@@ -637,7 +636,7 @@ def _build_weight_tensors(num_experts, K, N, N_dram_per_device, sram_id_set, for
         per_dev = []
         for dev_idx in range(num_devices):
             b = torch.randn((K, N_per_dev)).float()
-            scale_tiles_for_mixed_formats(b, formats_per_device[dev_idx])
+            _scale_tiles_random_formats(b, formats_per_device[dev_idx])
             per_dev.append(b)
         torch_b_all[eidx] = per_dev
         logger.info(f"  torch_b expert {eidx}/{num_experts} created")

@@ -45,6 +45,25 @@ using namespace ckernel;
 
 namespace deepseek_b1_ops {
 
+// fmt double-buffer sync protocol — 2 slots, counter sems (0..2).
+// NCRISC is the sole producer; UNPACK (sem0) and MATH (sem1) are the consumers.
+// NCRISC can run 1 expert ahead of the slowest consumer.
+namespace fmt_sync {
+FORCE_INLINE void producer_wait_slot(uint32_t sem0, uint32_t sem1) {
+    while (unified_kernels::sem_atomic_load(sem0) >= 2 || unified_kernels::sem_atomic_load(sem1) >= 2) {
+    }
+}
+FORCE_INLINE void producer_signal(uint32_t sem0, uint32_t sem1) {
+    unified_kernels::sem_atomic_inc(sem0);
+    unified_kernels::sem_atomic_inc(sem1);
+}
+FORCE_INLINE void consumer_wait(uint32_t sem) {
+    while (unified_kernels::sem_atomic_load(sem) == 0) {
+    }
+}
+FORCE_INLINE void consumer_release(uint32_t sem) { unified_kernels::sem_atomic_dec(sem); }
+}  // namespace fmt_sync
+
 struct MatmulExpertCompressedDRAM {
     template <
         uint32_t cb_in0_,
@@ -74,6 +93,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t fmt_per_expert_bytes_,
         uint32_t fmt_per_core_bytes_,
         uint32_t fmt_cb_l1_addr_,
+        uint32_t fmt_cb_page_size_,
         uint32_t fmt_sem_addr_0_,
         uint32_t fmt_sem_addr_1_,
         uint32_t accum_experts_ = 0,
@@ -106,6 +126,7 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t fmt_per_expert_bytes = fmt_per_expert_bytes_;
         static constexpr uint32_t fmt_per_core_bytes = fmt_per_core_bytes_;
         static constexpr uint32_t fmt_cb_l1_addr = fmt_cb_l1_addr_;
+        static constexpr uint32_t fmt_cb_page_size = fmt_cb_page_size_;
         static constexpr uint32_t fmt_sem_addr_0 = fmt_sem_addr_0_;
         static constexpr uint32_t fmt_sem_addr_1 = fmt_sem_addr_1_;
         static constexpr bool accum_experts = accum_experts_ != 0;
@@ -203,6 +224,9 @@ struct MatmulExpertCompressedDRAM {
             uint32_t cb_in1_end = 0;
             bool first_dram_expert = true;
 
+            // Double-buffered fmt slot. Toggles per DRAM expert.
+            uint32_t fmt_slot = 0;
+
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (raw_idx & 0x8000) {
@@ -217,6 +241,9 @@ struct MatmulExpertCompressedDRAM {
                     noc_semaphore_wait(sem_ptr, 1);
                     noc_semaphore_set(sem_ptr, 0);
                 }
+
+                // Wait for a free fmt slot (at most 1 expert ahead of each TRISC consumer).
+                fmt_sync::producer_wait_slot(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
 
                 reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
@@ -236,7 +263,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t block_trid_to_wait = 1;
 
                 // Read fmt to double-buffered L1 slot. Shares trid 1 with first weight block.
-                uint32_t fmt_write_l1 = CTArgs::fmt_cb_l1_addr;
+                uint32_t fmt_write_l1 = CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size;
                 {
                     uint32_t fmt_dram_offset = CTArgs::fmt_dram_addr +
                                                CTArgs::core_in_bank_idx * CTArgs::fmt_per_core_bytes +
@@ -289,15 +316,10 @@ struct MatmulExpertCompressedDRAM {
                         if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
                             noc_async_read_barrier_with_trid(block_trid_to_wait);
                             cb_push_back(CTArgs::cb_in1, tiles_per_block);
-                            // Trid 1 wait also completes the fmt DRAM read.
-                            // Signal UNPACK (sem_0) and MATH (sem_1) that fmt is ready.
+                            // Trid 1 wait also completes the fmt DRAM read for this expert.
+                            // Signal fmt slot ready to UNPACK/MATH.
                             if (!fmt_signaled) {
-                                volatile tt_l1_ptr uint32_t* sem0 =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                                volatile tt_l1_ptr uint32_t* sem1 =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                                *sem0 = 1;
-                                *sem1 = 1;
+                                fmt_sync::producer_signal(CTArgs::fmt_sem_addr_0, CTArgs::fmt_sem_addr_1);
                                 fmt_signaled = true;
                             }
                             block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
@@ -329,17 +351,11 @@ struct MatmulExpertCompressedDRAM {
                     cb_push_back(CTArgs::cb_in1, tiles_per_block);
                     block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
                 }
-                noc_async_atomic_barrier();
 
-                // Wait for both UNPACK and MATH to consume fmt before overwriting.
-                {
-                    volatile tt_l1_ptr uint32_t* sem0 =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                    volatile tt_l1_ptr uint32_t* sem1 =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                    while (*sem0 != 0 || *sem1 != 0) {
-                    }
-                }
+                // Toggle double-buffer slot for next expert. The next expert's slot-free
+                // check is the wait at the top of the loop, so no blocking wait here —
+                // NCRISC can pipeline 1 expert ahead of the slowest TRISC consumer.
+                fmt_slot ^= 1;
             }
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -398,6 +414,8 @@ struct MatmulExpertCompressedDRAM {
                 if constexpr (CTArgs::accum_experts) {
                     constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
                     constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
+                    // Double-buffered fmt slot — toggles per DRAM expert on both UNPACK and MATH.
+                    uint32_t fmt_slot = 0;
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
                         cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
@@ -407,20 +425,10 @@ struct MatmulExpertCompressedDRAM {
                             PACK((llk_pack_reconfig_l1_acc(1)));
                         }
 
-                        UNPACK(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                            while (*s == 0) {
-                            }
-                        }));
-                        MATH(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                            while (*s == 0) {
-                            }
-                        }));
-                        const volatile uint32_t* fmt_base_ptr =
-                            reinterpret_cast<const volatile uint32_t*>(CTArgs::fmt_cb_l1_addr);
+                        UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
+                        MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
+                        const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
+                            CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
                         uint32_t fmt_meta_offset = 0;
                         uint32_t act_rd_ptr = in0_base + dram_act_tile_offset[i] * in0_page_size;
 
@@ -467,16 +475,9 @@ struct MatmulExpertCompressedDRAM {
                             tile_regs_release();
                         }
 
-                        UNPACK(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                            *s = 0;
-                        }));
-                        MATH(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                            *s = 0;
-                        }));
+                        UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
+                        MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
+                        fmt_slot ^= 1;
                         cb_push_back(CTArgs::cb_out, CTArgs::per_core_n);
 
                         // Reset write pointer for next expert's L1_ACC accumulation.
@@ -490,21 +491,13 @@ struct MatmulExpertCompressedDRAM {
                 } else {
                     constexpr uint32_t tiles_per_block = CTArgs::subblock_k * CTArgs::subblock_n;
                     constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_n;
+                    // Double-buffered fmt slot — toggles per DRAM expert on both UNPACK and MATH.
+                    uint32_t fmt_slot = 0;
                     for (uint32_t i = 0; i < num_dram_experts; i++) {
-                        UNPACK(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                            while (*s == 0) {
-                            }
-                        }));
-                        MATH(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                            while (*s == 0) {
-                            }
-                        }));
-                        const volatile uint32_t* fmt_base_ptr =
-                            reinterpret_cast<const volatile uint32_t*>(CTArgs::fmt_cb_l1_addr);
+                        UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
+                        MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
+                        const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
+                            CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
                         uint32_t fmt_meta_offset = 0;
 
                         for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
@@ -565,16 +558,9 @@ struct MatmulExpertCompressedDRAM {
                             cb_push_back(CTArgs::cb_out, CTArgs::subblock_n);
                         }
 
-                        UNPACK(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_0);
-                            *s = 0;
-                        }));
-                        MATH(({
-                            volatile tt_l1_ptr uint32_t* s =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::fmt_sem_addr_1);
-                            *s = 0;
-                        }));
+                        UNPACK((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_0)));
+                        MATH((fmt_sync::consumer_release(CTArgs::fmt_sem_addr_1)));
+                        fmt_slot ^= 1;
                     }
                 }
 

@@ -75,6 +75,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("fmt_per_expert_bytes"),
         get_named_compile_time_arg_val("fmt_per_core_bytes"),
         get_named_compile_time_arg_val("fmt_cb_l1_addr"),
+        get_named_compile_time_arg_val("fmt_cb_page_size"),
         get_named_compile_time_arg_val("fmt_sem_addr_0"),
         get_named_compile_time_arg_val("fmt_sem_addr_1"),
         get_named_compile_time_arg_val("accum_experts"),

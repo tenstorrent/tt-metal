@@ -854,7 +854,8 @@ def create_dram_expert_tensors_multi_device(
     fmt_bytes_per_expert_raw = fmt_words_per_expert * 4
     fmt_bytes_per_expert = _align(fmt_bytes_per_expert_raw, dram_alignment)
     cb_fmt_dram_page_size = _align(fmt_bytes_per_expert, dram_alignment)
-    fmt_region_bytes = cb_fmt_dram_page_size  # single-buffer, sem-protected
+    # Two data slots for pipelined double-buffering (NCRISC can run 1 expert ahead).
+    fmt_region_bytes = 2 * cb_fmt_dram_page_size
 
     total_shard_bytes = in1_region_bytes + fmt_region_bytes
     backing_shard_spec = ttnn.ShardSpec(compute_core_grid, [1, total_shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
@@ -872,8 +873,10 @@ def create_dram_expert_tensors_multi_device(
     cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
     max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
-    # Global semaphore for NCRISC→TRISC fmt sync (address known to all RISCs).
-    # Two global semaphores for double-buffered fmt sync (one per slot).
+    # fmt metadata sync: 2 global sems as atomic counters (0..2).
+    #   sem_0: UNPACK-side counter. NCRISC atomic_add(+1) per expert; UNPACK atomic_sub(-1) after consume.
+    #   sem_1: MATH-side counter.   Same protocol for MATH.
+    # NCRISC waits sem_{0,1} < 2 before writing next fmt, allowing 1-expert-ahead pipelining.
     fmt_sem_0 = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     fmt_sem_1 = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     fmt_sem_addr_0 = ttnn.get_global_semaphore_address(fmt_sem_0)

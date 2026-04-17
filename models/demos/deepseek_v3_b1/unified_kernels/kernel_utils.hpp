@@ -73,6 +73,19 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
 
 #endif
 
+// Atomic L1 semaphore primitives by address — callable from any RISC
+// (BR / NC / TR0 / TR1 / TR2). RELAXED ordering; callers are responsible for
+// pipeline fences (e.g. noc_async_read_barrier on NC; blocking LLK calls on TR).
+FORCE_INLINE uint32_t sem_atomic_load(uint32_t sem_addr) {
+    return __atomic_load_n(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), __ATOMIC_RELAXED);
+}
+FORCE_INLINE void sem_atomic_inc(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_add(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+}
+FORCE_INLINE void sem_atomic_dec(uint32_t sem_addr, uint32_t v = 1) {
+    __atomic_fetch_sub(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v, __ATOMIC_RELAXED);
+}
+
 // ============================================================================
 // Cross-RISC synchronization
 // ============================================================================
