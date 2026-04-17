@@ -7,14 +7,15 @@
 - Target model: Meta-Llama-3.1-8B-Instruct on Tenstorrent Wormhole (N150)
 - Model weights: `HF_HOME=/localdev/proj_sw/user_dev/hf_data`
 
-### Result: same speed, half the KV cache
+### Result: same speed, half the KV cache, scales to 2,213 tok/s on T3K
 
-3-bit TurboQuant with BFP4 paged cache vs baseline BFP8, on Wormhole N150:
+3-bit TurboQuant with BFP4 paged cache vs baseline BFP8:
 
 | | Baseline BFP8 | TurboQuant 3-bit BFP4 |
 |--|--|--|
-| **Latency** | 37.0 ms/tok | **37.1–37.2 ms/tok** (identical) |
-| **E2E overhead** | — | **+0.2 ms/tok (+0.5%)** |
+| **Single device (N150), batch=1** | 37.0 ms/tok | **37.2 ms/tok** (+0.2ms, +0.5%) |
+| **T3K 8-device, batch=1** | 14.0 ms/tok | **14.2 ms/tok** (71 tok/s, 2.6× speedup) |
+| **T3K 8-device, batch=32** | (KV-limited) | **2,213 tok/s** (14.5ms, 31× scaling) |
 | **KV cache memory** | 1× (~1 byte/elem) | **0.5×** (~0.5 byte/elem) |
 | **Quality** | — | Correct output at all seq lengths 128–131072 |
 | **Cosine vs CPU ref** | — | > 0.999 (synthetic SDPA test at all seqlens) |
