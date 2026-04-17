@@ -342,6 +342,7 @@ jobs:
             --master-json-path "$MASTER_JSON_PATH"
             --vectors-root "$VECTORS_ROOT"
             --scope-target "$SCOPE_TARGET"
+            --write-to-file
           )
           if [[ -n "$MANIFEST_PATH" && "$SCOPE_TARGET" != "pinned" ]]; then
             CMD+=(--manifest-path "$MANIFEST_PATH")
