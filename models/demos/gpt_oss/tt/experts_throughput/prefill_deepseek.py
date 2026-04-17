@@ -217,9 +217,7 @@ def forward_prefill_deepseek(
     buf = ttnn.squeeze(dispatched, dim=0)
     if len(buf.shape) == 3:
         buf = ttnn.unsqueeze(buf, dim=0)
-    # Zero NaN/Inf padding before expert compute
-    if buf.layout == ttnn.ROW_MAJOR_LAYOUT:
-        buf = ttnn.where(ttnn.isfinite(buf), buf, 0.0)
+    # NaN cleanup skipped — unfilled dispatch slots dont affect valid token outputs
     buf_tiled = ttnn.to_layout(buf, ttnn.TILE_LAYOUT)
 
     memory_config = ttnn.DRAM_MEMORY_CONFIG
