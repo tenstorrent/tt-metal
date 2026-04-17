@@ -122,7 +122,6 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
         state_dict_prefix="model.vision_tower.vision_model.",
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     profiler.end("weight_transfer_to_device_and_model_initialization")
 

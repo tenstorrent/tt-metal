@@ -1,30 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-from typing import List
-
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.multimodal.llama_vision_model import _stack_images
-
-
-def _stack_images(
-    images: List[List[torch.Tensor]],  # batch of samples, each with list of image embeddings
-) -> List[torch.Tensor]:
-    """
-    Concatenate image embeddings per sample into a single 2D tensor.
-
-    Args:
-        images: List of samples, each being a list of [num_patches, hidden_dim] tensors
-
-    Returns:
-        List of [total_patches, hidden_dim] tensors, one per sample
-    """
-    return [torch.cat(image_list, dim=0) for image_list in images]
 
 
 class TtGemmaModel(Transformer):

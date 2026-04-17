@@ -61,7 +61,6 @@ def test_gemma_vision(
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     test_output = test_gemma_vision(input_tensor)
 
@@ -122,7 +121,6 @@ def test_gemma_vision_piecewise(
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     test_output = test_gemma_vision(input_tensor)
 
