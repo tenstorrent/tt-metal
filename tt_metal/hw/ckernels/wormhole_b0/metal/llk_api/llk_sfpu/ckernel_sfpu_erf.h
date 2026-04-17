@@ -17,8 +17,16 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based erf via piecewise rational P(x)/Q(x)
 //
-// BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
-// FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
+// BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
+//       WH-specific refit: coefficients re-optimized to maximize BF16-byte
+//       match (~97.3 % on Gaussian inputs σ∈{0.5..3}) vs the pre-#41850
+//       5-segment polynomial, while preserving MaxULP=1 vs FP64 truth at
+//       BF16 output precision. Same kernel structure (same FMA count) as
+//       pre-refit — perf neutral. See PR #42540 / plan 0089 for context:
+//       WH SFPU FMA quirks on the 1-Newton-iter reciprocal path caused
+//       CLIP encoder_2 to miss the 0.98 PCC gate; refit aligns output
+//       bytes with the known-good polynomial pattern.
+// FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner).
 // ======================================================================
 
 #ifdef INP_FLOAT32
@@ -38,16 +46,18 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #else
 
-// n8/d8 rational is sufficient for BF16's 7-bit mantissa precision
+// n8/d8 rational (WH refit) — preserves MaxULP=1 vs truth; byte-matches
+// the pre-#41850 5-segment polynomial on 97.3 % of Gaussian samples
+// (baseline #41850 LUT: 94.1 %). Kernel ops and per-tile perf unchanged.
 constexpr uint32_t ERF_NUM_DEGREE = 8;
 constexpr uint32_t ERF_DEN_DEGREE = 8;
 constexpr uint32_t ERF_NUM_SEGMENTS = 1;
 constexpr uint32_t ERF_LUT_SIZE = 20;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
-    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1274247000e+00f, 0.0000000000e+00f,
-     2.8147370800e-01f,  0.0000000000e+00f, 4.6252749800e-02f, 0.0000000000e+00f, 7.2088670200e-04f,
-     0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.7780367500e-01f, 0.0000000000e+00f,
-     1.4150301400e-01f,  0.0000000000e+00f, 8.2026154600e-03f, 0.0000000000e+00f, 2.4571044400e-05f}};
+    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280128928e+00f, 0.0000000000e+00f,
+     2.8960505579e-01f,  0.0000000000e+00f, 4.5152435537e-02f, 0.0000000000e+00f, 7.2198348185e-04f,
+     0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.8679490685e-01f, 0.0000000000e+00f,
+     1.4200975465e-01f,  0.0000000000e+00f, 8.0304508532e-03f, 0.0000000000e+00f, 2.3856162623e-05f}};
 
 #endif
 
