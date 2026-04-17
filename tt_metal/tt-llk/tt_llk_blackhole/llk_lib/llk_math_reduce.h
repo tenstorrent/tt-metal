@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "lltt.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -28,37 +29,80 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
+        // BH Issue #449 W/A: SFPU-staged 2-pass transpose.
+        // Splits fp32 into hi16/lo16 at scratch Dst16b rows far past face footprint,
+        // transposes each half via plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM)
+        // (no dest_32b_lo=1), then SFPU recombines. ZEROACC after use avoids
+        // polluting subsequent reduce iterations that may accumulate onto these rows.
+        // Phase 1: inline (ADDR_MOD_0, no DstRWC advance). Phase 3: replay×8 with
+        // ADDR_MOD_7 dest.incr=+2, starting from DstRWC=0.
+        constexpr std::uint32_t HI16_STAGE = 128;
+        constexpr std::uint32_t LO16_STAGE = 144;
+
+        // ADDR_MOD_7: dest.incr=2 for Phase 3 replay (SFPU DstRWC starts at 0).
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Phase 1: SFPU splits fp32 face into hi16/lo16 raw at scratch rows (inline).
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+#pragma GCC unroll 4
+        for (std::uint32_t g = 0; g < 4; g++)
+        {
+            const std::uint32_t src_row = g * 4;
+            const std::uint32_t hi_row  = HI16_STAGE + g * 4;
+            const std::uint32_t lo_row  = LO16_STAGE + g * 4;
+#pragma GCC unroll 2
+            for (std::uint32_t parity = 0; parity < 4; parity += 2)
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, src_row + parity);
+                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, hi_row + parity);
+                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, lo_row + parity);
+            }
+        }
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+
+        // Phase 2: plain MOVD2B(DEST_NORM)+TRNSPSRCB+MOVB2D(DEST_NORM) for each half.
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
         TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, HI16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, HI16_STAGE + 12);
 
-        // move hi16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
         TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
 
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+
+        // Phase 3: SFPU recombines hi16 + lo16 back to fp32 (replay, DstRWC starts 0).
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        lltt::record<lltt::NoExec>(0, 3);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_0, LO16_STAGE);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, HI16_STAGE);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+#pragma GCC unroll 8
+        for (std::uint32_t i = 0; i < 8; i++)
+        {
+            lltt::replay(0, 3);
+        }
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        // Clear scratch rows so later reduce iterations start from 0.
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 1, 1, ADDR_MOD_0, HI16_STAGE);
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 1, 1, ADDR_MOD_0, LO16_STAGE);
     }
     else
     {
