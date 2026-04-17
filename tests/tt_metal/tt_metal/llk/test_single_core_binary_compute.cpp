@@ -216,11 +216,12 @@ bool single_core_binary(
             defines["FULL_INIT"] = "1";
         }
         if (test_config.acc_to_dest) {
-            defines["DST_ACCUM_MODE"] = "1";
-            defines["ELTWISE_OP_INIT"] = defines["ELTWISE_OP"] + "_init";
-            if (test_config.binary_op == "mul") {
-                defines["MUL_TILES_WITH_DST_ACCUM"] = "1";
-            }
+            defines["LOAD_BUF2_DATA"] = "1";
+            defines["ACC_TO_DEST"] = "1";
+        }
+        defines["ELTWISE_OP_INIT"] = defines["ELTWISE_OP"] + "_init";
+        if (test_config.binary_op == "mul") {
+            defines["MUL_TILES_WITH_DST_ACCUM"] = "1";
         }
     }
 
@@ -248,7 +249,10 @@ bool single_core_binary(
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .fp32_dest_acc_en = test_config.acc_to_dest, .compile_args = compute_cta, .defines = defines});
+                .num_threads_per_cluster = 1,
+                .math_fidelity = test_config.math_fidelity,
+                .compile_args = compute_cta,
+                .defines = defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, inp0_dfb, reader_kernel, binary_kernel);
