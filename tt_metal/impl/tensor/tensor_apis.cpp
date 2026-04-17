@@ -36,6 +36,20 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
         all_coords, [&](const auto& coord) { return host_buffer.shard_coords().contains(coord); });
 }
 
+namespace {
+
+constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;
+
+bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
+    if (size_bytes <= k_pin_write_threshold_bytes) {
+        return false;
+    }
+    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
+    return params.max_pins > 0 && params.can_map_to_noc;
+}
+
+}  // namespace
+
 // ======================================================================================
 //                                Uniform Data movement APIs
 // ======================================================================================
@@ -146,9 +160,51 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         "Host tensor has different page config");
 
     const auto& mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
+    const auto& distributed_host_buffer = host_tensor.buffer();
 
-    // Uniform H2D copy.
-    cq.enqueue_write(mesh_buffer, host_tensor.buffer(), /*blocking=*/false);
+    size_t total_size = 0;
+    for (const auto& coord : distributed_host_buffer.shard_coords()) {
+        auto buf = distributed_host_buffer.get_shard(coord);
+        if (buf) {
+            total_size += buf->view_bytes().size();
+        }
+    }
+
+    const bool use_pinned = should_use_pinned_write_path(*cq.device(), total_size);
+
+    if (use_pinned) {
+        auto* mesh_device = mesh_buffer->device();
+        std::vector<distributed::ShardDataTransfer> transfers;
+        transfers.reserve(distributed_host_buffer.shard_coords().size());
+        bool any_pinned = false;
+
+        for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            auto buf = distributed_host_buffer.get_shard(coord);
+            if (buf) {
+                auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+                HostBuffer pinned_buf(*buf);
+                auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
+                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+
+                auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
+                                .host_data(buf->view_bytes().data())
+                                .region(BufferRegion(0, buf->view_bytes().size()));
+                if (pinned_memory) {
+                    experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
+                    any_pinned = true;
+                }
+                transfers.push_back(std::move(xfer));
+            }
+        }
+        if (any_pinned) {
+            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+        } else {
+            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        }
+    } else {
+        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    }
+
     device_tensor = MeshTensor(
         mesh_buffer,
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
@@ -273,17 +329,6 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
 }
 
 namespace {
-
-constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;
-
-bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
-    if (size_bytes <= k_pin_write_threshold_bytes) {
-        return false;
-    }
-    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
-    return params.max_pins > 0 && params.can_map_to_noc;
-}
-
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 void h2d_as_replicate_tensor_on_1x1_mesh(
