@@ -138,6 +138,40 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    const std::vector<std::string> invalid_names = {
+        "",               // empty
+        "has-dash",       // hyphen
+        "has space",      // whitespace
+        "1starts_digit",  // leading digit
+        "has.dot",        // punctuation
+        "class",          // C++ keyword
+        "namespace",      // C++ keyword
+        "int",            // C++ keyword
+        "_Foo",           // reserved: underscore + uppercase
+        "__foo",          // reserved: leading double underscore
+        "foo__bar",       // reserved: embedded double underscore
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec;
+        spec.program_id = "test_program";
+
+        auto kernel = MakeMinimalDMKernel("kernel", node);
+        auto dfb = MakeMinimalDFB("dfb", node);
+
+        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+
+        spec.kernels = {kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb"})};
+
+        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+    }
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
@@ -745,9 +779,11 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
-// These verify that valid configurations succeed.
-// NOTE: Program creation needs full HAL support.
-// TODO: Enable these tests with a Quasar mock device.
+// These verify that valid ProgramSpec configurations produce a Program without throwing.
+// They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
+//
+// Coverage gaps (JIT compilation, device-side execution) are covered by HW tests.
+// (see test_program_spec_hw.cpp)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
