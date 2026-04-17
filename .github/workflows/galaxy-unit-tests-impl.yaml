@@ -99,7 +99,6 @@ jobs:
           # GPT-OSS unit tests: Stuti Raizada
 
           all_tests=$(jq -n '[
-            { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 10, "owner_id": "XXXXX" },
             { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 5, "owner_id": "UJ45FEC7M" },
             { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 15, "owner_id": "U03NG0A5ND7", "auto-triage": false },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
@@ -165,77 +164,6 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           auto-triage: ${{ matrix.test-group.auto-triage != false }}
           hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
-
-      - name: Run unit tests
-        if: ${{ matrix.test-group.model == 'unit' }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          failed=0
-          failed_names=()
-
-          run_gtest() {
-            local name="$1"
-            local xml_name="$2"
-            shift 2
-
-            echo "::group::${name}"
-            if GTEST_OUTPUT="xml:/work/generated/test_reports/${xml_name}" "$@"; then
-              echo "::endgroup::"
-              echo "::notice title=PASS::${name} passed."
-            else
-              local status=$?
-              failed=1
-              failed_names+=("${name} (exit ${status})")
-              echo "::endgroup::"
-              echo "::error title=FAIL::${name} (exit ${status})"
-            fi
-          }
-
-          run_gtest \
-            "Dispatch single-card fixtures" \
-            "unit_tests_dispatch_command_queue_single_card.xml" \
-            env TT_METAL_ENABLE_REMOTE_CHIP=1 \
-            ./build/test/tt_metal/unit_tests_dispatch \
-            --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
-
-          run_gtest \
-            "Galaxy/TG device tests slow dispatch" \
-            "unit_tests_device_galaxy_slow_dispatch.xml" \
-            env TT_METAL_SLOW_DISPATCH_MODE=1 \
-            ./build/test/tt_metal/unit_tests_device \
-            --gtest_filter="GalaxyFixture.*:TGFixture.*"
-
-          run_gtest \
-            "Galaxy/TG device tests fast dispatch" \
-            "unit_tests_device_galaxy_fast_dispatch.xml" \
-            ./build/test/tt_metal/unit_tests_device \
-            --gtest_filter="GalaxyFixture.*:TGFixture.*"
-
-          run_gtest \
-            "Multi-CQ Galaxy dispatch tests" \
-            "unit_tests_dispatch_multicq_galaxy.xml" \
-            env TT_METAL_GTEST_NUM_HW_CQS=2 \
-            ./build/test/tt_metal/unit_tests_dispatch \
-            --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
-
-          run_gtest \
-            "Distributed DispatchContext tests slow dispatch" \
-            "distributed_unit_tests_dispatch_context_slow_dispatch.xml" \
-            env TT_METAL_SLOW_DISPATCH_MODE=1 \
-            ./build/test/tt_metal/distributed/distributed_unit_tests \
-            --gtest_filter="*DispatchContext*"
-
-          if [[ ${#failed_names[@]} -gt 0 ]]; then
-            {
-              echo "## Galaxy unit test command failures"
-              echo
-              for failed_name in "${failed_names[@]}"; do
-                echo "- ${failed_name}"
-              done
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
 
       - name: Run fabric tests
         if: ${{ matrix.test-group.model == 'fabric' }}

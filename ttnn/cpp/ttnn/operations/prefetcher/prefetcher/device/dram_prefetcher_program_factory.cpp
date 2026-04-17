@@ -81,9 +81,11 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
     uint32_t num_blocks = num_readers * num_receivers_per_reader;
 
-    std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
+    std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
-    std::vector<uint32_t> tensor_tile_sizes(num_tensors);
+    std::vector<uint32_t> tensor_tile_sizes;
+    tensor_block_num_tiles.reserve(num_tensors);
+    tensor_tile_sizes.reserve(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
@@ -91,8 +93,8 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
         tensor_shapes[t][0] = height_in_tiles;
         tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks;
-        tensor_tile_sizes[t] = tensor_tiles[t].get_tile_size(tensor_data_formats[t]);
+        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
+        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
     auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
