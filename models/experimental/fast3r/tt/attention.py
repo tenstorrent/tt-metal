@@ -25,6 +25,12 @@ class TtAttention:
         k_chunk_size=1024,
         exp_approx_mode=True,
     )
+    SDPA_COMPUTE = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
     def __init__(
         self,
@@ -53,6 +59,7 @@ class TtAttention:
         ttnn.deallocate(qkv)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=self.SDPA_PROG,
+            compute_kernel_config=self.SDPA_COMPUTE,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
