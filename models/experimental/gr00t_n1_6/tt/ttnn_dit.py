@@ -52,20 +52,23 @@ class AdaLayerNormTTNN:
             self.proj_weight = preprocess_linear_weight(proj_w, device)
             self.proj_bias = preprocess_linear_bias(proj_b, device) if proj_b is not None else None
 
-    def __call__(self, hidden_states: ttnn.Tensor, silu_temb: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor) -> ttnn.Tensor:
         """Apply AdaLN: (1 + scale) * LN(x) + shift.
 
-        silu_temb is silu(timestep_emb) pre-computed once per forward
-        (hoisted out of the 32-block loop to save 31 redundant silu ops per euler step).
+        Upstream: temb = self.linear(self.silu(temb))
+        temb is [B, inner_dim] (2D), we handle [B, 1, inner_dim] (3D) too.
         """
+        # Apply SiLU THEN linear (matches upstream AdaLayerNorm.forward)
+        temb_activated = ttnn.silu(timestep_emb)
         scale_shift = ttnn.linear(
-            silu_temb,
+            temb_activated,
             self.proj_weight,
             bias=self.proj_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             core_grid=CORE_GRID_BH,
         )
+        ttnn.deallocate(temb_activated)
 
         scale = ttnn.slice(scale_shift, [0, 0, 0], [scale_shift.shape[0], 1, self.hidden_size])
         shift = ttnn.slice(scale_shift, [0, 0, self.hidden_size], [scale_shift.shape[0], 1, 2 * self.hidden_size])
@@ -300,10 +303,10 @@ class DiTBlockTTNN:
         self.ffn = DiTFFNTTNN(weights, f"{prefix}ff.", device)
 
     def __call__(
-        self, hidden_states: ttnn.Tensor, silu_temb: ttnn.Tensor, backbone_features: Optional[ttnn.Tensor] = None
+        self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor, backbone_features: Optional[ttnn.Tensor] = None
     ) -> ttnn.Tensor:
-        # AdaLN -> Attention -> Residual (silu_temb pre-activated by caller)
-        normed = self.adaln(hidden_states, silu_temb)
+        # AdaLN -> Attention -> Residual
+        normed = self.adaln(hidden_states, timestep_emb)
         attn_out = self.attn(normed, encoder_hidden_states=backbone_features)
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
@@ -365,11 +368,8 @@ class AlternateVLDiTTTNN:
         Returns:
             [B, action_seq, 1024]
         """
-        # Pre-activate timestep once for all 32 blocks + output AdaLN (saves 32 redundant silu ops)
-        silu_temb = ttnn.silu(timestep_emb)
-
         for block in self.blocks:
-            hidden_states = block(hidden_states, silu_temb, backbone_features)
+            hidden_states = block(hidden_states, timestep_emb, backbone_features)
 
         # Output processing (AdaLN-style, NOT a gated FFN):
         # conditioning = temb
@@ -377,16 +377,17 @@ class AlternateVLDiTTTNN:
         # hidden_states = norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
         # output = proj_out_2(hidden_states)
 
-        # proj_out_1 projects silu(temb) (NOT hidden_states) to shift+scale
+        # proj_out_1 projects temb (NOT hidden_states) to shift+scale
+        conditioning = ttnn.silu(timestep_emb)
         scale_shift = ttnn.linear(
-            silu_temb,
+            conditioning,
             self.proj_out_1_weight,
             bias=self.proj_out_1_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             core_grid=CORE_GRID_BH,
         )
-        ttnn.deallocate(silu_temb)
+        ttnn.deallocate(conditioning)
 
         half = self.proj_out_1_dim // 2
         shift = ttnn.slice(scale_shift, [0, 0, 0], [scale_shift.shape[0], 1, half])
