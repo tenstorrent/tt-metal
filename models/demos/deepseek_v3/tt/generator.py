@@ -21,6 +21,7 @@ from models.common.sampling.generator import (
 )
 from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.tt.mla.mla1d import get_mla_attention_precision_cache_suffix
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
@@ -417,6 +418,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers"
         if self.enable_mtp:
             cache_subdir_name = f"{cache_subdir_name}_mtp"
+        cache_subdir_name = f"{cache_subdir_name}{get_mla_attention_precision_cache_suffix()}"
 
         self.model_weight_config = get_weight_config(
             ModuleClass=RowBatchedModel,

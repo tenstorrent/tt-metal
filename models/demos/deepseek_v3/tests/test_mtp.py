@@ -22,6 +22,7 @@ from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDe
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator, _build_verify_alias_page_table_host
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
+from models.demos.deepseek_v3.tt.mla.mla1d import get_mla_attention_precision_cache_suffix
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
 from models.demos.deepseek_v3.tt.mtp import MTP2D
@@ -472,7 +473,7 @@ def _load_cached_mtp_weight_config(
     mesh_device: ttnn.MeshDevice,
     force_recalculate: bool,
 ) -> dict[str, Any] | None:
-    cache_subdir_name = f"{hf_config.num_hidden_layers}_layers_mtp"
+    cache_subdir_name = f"{hf_config.num_hidden_layers}_layers_mtp{get_mla_attention_precision_cache_suffix()}"
     weight_cache_path = cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     cached_weight_config = _try_load_cached_config(
         weight_cache_path / "config.json",
@@ -543,7 +544,9 @@ class _MtpModuleRunner:
                     f"Could not find MTP weights under model.layers.{mtp_layer_idx} in {self.model_path}."
                 )
 
-            cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers_mtp_module"
+            cache_subdir_name = (
+                f"{self.hf_config.num_hidden_layers}_layers_mtp_module{get_mla_attention_precision_cache_suffix()}"
+            )
             self.model_weight_config = get_weight_config(
                 ModuleClass=MTP2D,
                 hf_config=self.hf_config,

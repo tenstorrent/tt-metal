@@ -180,6 +180,55 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
+def _dtype_from_env(env_name: str, default: ttnn.DataType | None) -> ttnn.DataType | None:
+    raw = os.getenv(env_name)
+    if raw is None or raw.strip() == "":
+        return default
+
+    normalized = raw.strip().lower()
+    aliases = {
+        "bf16": ttnn.bfloat16,
+        "bfloat16": ttnn.bfloat16,
+        "bfp8": ttnn.bfloat8_b,
+        "bfloat8_b": ttnn.bfloat8_b,
+        "bf8": ttnn.bfloat8_b,
+        "bfp4": ttnn.bfloat4_b,
+        "bfloat4_b": ttnn.bfloat4_b,
+        "bf4": ttnn.bfloat4_b,
+        "none": None,
+    }
+    if normalized not in aliases:
+        valid = ", ".join(sorted(aliases))
+        raise ValueError(f"Unsupported dtype override {raw!r} for {env_name}. Expected one of: {valid}")
+    return aliases[normalized]
+
+
+def _dtype_tag(dtype: ttnn.DataType | None) -> str:
+    mapping = {
+        None: "none",
+        ttnn.bfloat16: "bf16",
+        ttnn.bfloat8_b: "bfp8",
+        ttnn.bfloat4_b: "bfp4",
+    }
+    return mapping.get(dtype, str(dtype).split(".")[-1].lower())
+
+
+def get_mla_attention_weight_dtype() -> ttnn.DataType:
+    dtype = _dtype_from_env("DEEPSEEK_V3_MLA_ATTN_WEIGHT_DTYPE", ttnn.bfloat8_b)
+    if dtype is None:
+        raise ValueError("DEEPSEEK_V3_MLA_ATTN_WEIGHT_DTYPE cannot be 'none'.")
+    return dtype
+
+
+def get_mla_attention_precision_cache_suffix() -> str:
+    default_weight_dtype = ttnn.bfloat8_b
+    weight_dtype = get_mla_attention_weight_dtype()
+    parts: list[str] = []
+    if weight_dtype != default_weight_dtype:
+        parts.append(f"attn_w_{_dtype_tag(weight_dtype)}")
+    return "" if not parts else "_" + "_".join(parts)
+
+
 class MLA1D(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
@@ -409,7 +458,7 @@ class MLA1D(AbstractModule):
             torch_metaweight.transpose(-2, -1).contiguous(),
             shard_dims=dims,
             mesh_device=mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=get_mla_attention_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             memory_config=memory_config,
             padding_needed=padding_needed,
@@ -648,7 +697,6 @@ class MLA1D(AbstractModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-
         # =====================================================================
         # qkv_a (wq_kv_a): m=32, k=896, n=2112 (pads to 2304)
         # in0_core_grid=(7,1), out_core_grid=(8,1), WIDTH sharding
