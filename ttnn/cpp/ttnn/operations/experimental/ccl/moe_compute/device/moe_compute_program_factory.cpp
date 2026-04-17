@@ -1005,6 +1005,16 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const ::detail::MoEActivationFunction activation_type = args.activation_type;
 
+    // Determine config type based on hidden size
+    uint32_t config_type;
+    if (hidden_size == 7168) {
+        config_type = static_cast<uint32_t>(::moe_ring::MoEConfigType::DEEPSEEK);
+    } else if (hidden_size == 2880) {
+        config_type = static_cast<uint32_t>(::moe_ring::MoEConfigType::GPT);
+    } else {
+        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
+    }
+
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
@@ -1025,6 +1035,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"buffer_size_total_tokens", buffer_size_total_tokens},  // Hardware buffer is always sized for 512 tokens
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
+        {"moe_config_type", config_type},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };
