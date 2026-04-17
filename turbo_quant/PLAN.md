@@ -60,6 +60,25 @@ Latency barely grows (14.2 → 14.5ms). TQ's compressed BFP4 cache (0.5 bytes/el
 2× smaller than baseline BFP8) enables these large batch sizes at long seqlens
 without running out of DRAM — this is the key benefit of KV compression for serving.
 
+### T3K Multi-Device + Multi-Batch Quality (2026-04-17)
+
+End-to-end quality verified on T3K with rotation-absorbed model and BF16 migration:
+
+**10 diverse prompts (capitals, currencies, recipes, math, jokes, biology):**
+All outputs factually correct, matches baseline. Spot-checks:
+- Mix yellow + blue → green ✓
+- 2+2 → 4 ✓
+- Capital of USA → Washington D.C. ✓
+- Capital of France → Paris ✓
+- Currency of Brazil → BRL ✓
+
+**Batch consistency check (batch=1 vs batch=4, same prompt):**
+Bit-exact identical token IDs across all 20 generated tokens. No batching artifacts.
+
+**Migration path:** Multi-device KV migration uses `ConcatMesh2dToTensor(dims=(0,1))`
+to read sharded KV heads → full tensor, `ShardTensor2dMesh(dims=(None, 1))` to
+write quantized values back to correct devices.
+
 ### E2E Overhead: TQ BFP4 vs Baseline BFP8 (2026-04-14)
 
 Back-to-back comparison, same machine, same prompt, traced, 10 generated tokens.
