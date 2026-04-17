@@ -270,21 +270,12 @@ def run(pixel_values: torch.Tensor):
                 # Clone so the next block can reassign x_tt without freeing this.
                 intermediate_handles.append(ttnn.clone(x_tt))
 
-        # Concatenate the 4 intermediates into one (1, 4*Npad, 1024) tensor and
-        # download it in a single to_torch call. Cuts chip->CPU sync points
-        # from 4 to 1 without adding CPU work.
-        n_inter = len(intermediate_handles)
-        stacked = ttnn.concat(intermediate_handles, dim=1)
+        intermediates_cpu: List[torch.Tensor] = [
+            ttnn.to_torch(h)[..., :N, :] for h in intermediate_handles
+        ]
         for h in intermediate_handles:
             ttnn.deallocate(h)
-        stacked_cpu = ttnn.to_torch(stacked)
-        ttnn.deallocate(stacked)
         ttnn.deallocate(x_tt)
-
-        intermediates_cpu: List[torch.Tensor] = [
-            stacked_cpu[:, i * N_pad : i * N_pad + N, :]
-            for i in range(n_inter)
-        ]
 
         # DPT head with explicit channels_last activation layout.
         depth = _cpu_head_channels_last(
