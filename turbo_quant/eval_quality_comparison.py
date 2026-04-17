@@ -191,6 +191,7 @@ def generate_turbo_quant(tt_model, model_args, mesh_device, prompt_text, max_new
         seed=seed,
         rotation_absorbed=True,
         cache_dtype=ttnn.bfloat16,
+        cluster_shape=model_args.cluster_shape,
     )
 
     # Attach TQ cache for decode quantize path (not for SDPA — standard SDPA reads BFP4)
@@ -260,8 +261,15 @@ def main():
     for i, p in enumerate(prompts):
         print(f"  [{i}] {p[:80]}{'...' if len(p) > 80 else ''}")
 
-    print("\nOpening mesh device (1×1)...")
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    import os
+
+    num_devices = int(os.environ.get("TT_NUM_DEVICES", 1))
+    if num_devices > 1:
+        print(f"Setting fabric config (FABRIC_1D) for {num_devices} devices...")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, num_devices)
+    print(f"Opening mesh device ({mesh_shape})...")
+    mesh_device = ttnn.open_mesh_device(mesh_shape)
 
     model_args = ModelArgs(
         mesh_device,
