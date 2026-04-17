@@ -85,16 +85,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        # NOTE: bias is applied as a separate ttnn.add instead of via the
-        # ``bias=`` kwarg of ttnn.linear. Passing a bias into ttnn.linear
-        # triggers the FUSE_BIAS code path in the
-        # ``bmm_large_block_zm_fused_bias_activation`` compute kernel, which
-        # (post PR #42427) requires a ``bias_ntiles`` named compile-time arg
-        # that older pre-built libtt_metal.so binaries in mixed-tree dev
-        # setups do not populate, leading to a JIT build failure. Doing the
-        # add outside the matmul avoids the FUSE_BIAS path entirely while
-        # producing identical results. The gelu activation is applied after
-        # the bias add to preserve bias-before-activation semantics.
+        # Bias + activation applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         c_fc_out = ttnn.linear(
             x_in,
             self.c_fc_weight,
