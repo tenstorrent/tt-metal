@@ -132,11 +132,47 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+    uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t num_trids = 4;
+    bool has_scratch_cb =
+        (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
 
+    // For DRAM-dst TILE sharding, the output CB is a staging buffer in L1 (not
+    // globally allocated), so cap it to a bounded L1 budget by processing the
+    // shard in height-chunks. For other paths keep behavior identical (chunk ==
+    // full shard height).
+    uint32_t chunk_height_tiles = num_units_per_shard_height;
     uint32_t num_input_units = num_units_per_shard;
+    if (dst_is_dram && input.layout() == Layout::TILE) {
+        // Budget for staging CBs only. Leave room for kernel binaries, runtime
+        // args, semaphores, allocator alignment, and downstream op CBs.
+        constexpr uint32_t max_cb_bytes = 400 * 1024;
+
+        // Both input and output CBs are sized by num_input_units when
+        // convert_df, so bound the SUM (not the max).
+        uint32_t per_tile_bytes = output_page_size;
+        if (convert_df) {
+            per_tile_bytes += input_page_size;
+        }
+
+        uint32_t scratch_cb_bytes = 0;
+        if (has_scratch_cb) {
+            uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+            scratch_cb_bytes = num_trids * scratch_cb_page_size;
+        }
+        uint32_t effective_budget =
+            (max_cb_bytes > scratch_cb_bytes) ? (max_cb_bytes - scratch_cb_bytes) : per_tile_bytes;
+
+        uint32_t max_tiles = std::max(effective_budget / per_tile_bytes, 1u);
+        uint32_t tiles_per_row = std::max<uint32_t>(num_units_per_shard_width, 1);
+        uint32_t max_rows = std::max(max_tiles / tiles_per_row, 1u);
+        chunk_height_tiles = std::min(num_units_per_shard_height, max_rows);
+        num_input_units = chunk_height_tiles * tiles_per_row;
+    }
+
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(
                 num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
@@ -150,15 +186,10 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
         output_cb_out_config = output_cb_out_config.set_globally_allocated_address(*output.buffer());
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
-    uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
-        uint32_t scratch_cb_page_size;
-        // scratchpad going to be used to align DRAM (64B) to L1 (16B)
-
-        // This is done to mitigate the alignment issues.
+    if (has_scratch_cb) {
+        // scratchpad going to be used to align DRAM (64B) to L1 (16B).
         // See issue #34414.
-        scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+        uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_trids * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
@@ -276,7 +307,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                 num_units_offset,
                 curr_num_units_per_shard,
                 curr_idx_h + curr_idx_w,
-                starting_idx_h};
+                starting_idx_h,
+                chunk_height_tiles};
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
             // Writer run-time args
@@ -291,7 +323,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                     curr_num_units_per_shard,
                     num_units_offset,
                     curr_idx_h + curr_idx_w,
-                    starting_idx_h};
+                    starting_idx_h,
+                    chunk_height_tiles};
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             } else {
                 writer_run_time_args = {curr_num_units_per_shard};
