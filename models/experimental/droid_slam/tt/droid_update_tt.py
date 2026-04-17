@@ -80,20 +80,19 @@ class _TtConvGRU:
         glo_4d = ttnn.reshape(glo_mean, (1, 1, batch_size, self.h_planes))
 
         glo_zrq, _, _ = self.convzrq_glo(glo_4d, device, batch_size, 1, 1)
-        # glo_zrq shape: [1, 1, batch_size, 3*h_planes]. Broadcast it
-        # along h*w so it lines up with per-pixel zr/q tensors of shape
-        # [1, 1, batch_size*h*w, C].
-        n_last = glo_zrq.shape[-2]
-        glo_z_small = ttnn.slice(glo_zrq, [0, 0, 0, 0], [1, 1, n_last, self.h_planes])
-        glo_r_small = ttnn.slice(
-            glo_zrq, [0, 0, 0, self.h_planes], [1, 1, n_last, 2 * self.h_planes]
+        # Broadcast the 3*C context tile across h*w ONCE on all three
+        # channel-groups together (saves 6 ops vs broadcasting each group
+        # separately), then slice into z/r/q pieces.
+        three_c = 3 * self.h_planes
+        glo_big = _broadcast_glo(glo_zrq, batch_size, h, w, three_c)
+        big_rows = glo_big.shape[-2]
+        glo_z = ttnn.slice(glo_big, [0, 0, 0, 0], [1, 1, big_rows, self.h_planes])
+        glo_r = ttnn.slice(
+            glo_big, [0, 0, 0, self.h_planes], [1, 1, big_rows, 2 * self.h_planes]
         )
-        glo_q_small = ttnn.slice(
-            glo_zrq, [0, 0, 0, 2 * self.h_planes], [1, 1, n_last, 3 * self.h_planes]
+        glo_q = ttnn.slice(
+            glo_big, [0, 0, 0, 2 * self.h_planes], [1, 1, big_rows, 3 * self.h_planes]
         )
-        glo_z = _broadcast_glo(glo_z_small, batch_size, h, w, self.h_planes)
-        glo_r = _broadcast_glo(glo_r_small, batch_size, h, w, self.h_planes)
-        glo_q = _broadcast_glo(glo_q_small, batch_size, h, w, self.h_planes)
 
         zr, _, _ = self.convzr(net_inp, device, batch_size, h, w)
         # ttnn.split fails on tile-layout tensors when the spatial dim
