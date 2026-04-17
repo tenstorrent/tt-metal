@@ -676,7 +676,7 @@ class QwenImageEditPipeline:
                     cond_w, cond_h = _calculate_dimensions(CONDITION_IMAGE_SIZE, image_width / image_height)
                     vae_w, vae_h = _calculate_dimensions(VAE_IMAGE_SIZE, image_width / image_height)
                     condition_images.append(self._image_processor.resize(img, cond_h, cond_w))
-                    vae_images.append(self._image_processor.preprocess(img, vae_h, vae_w).unsqueeze(2))
+                    vae_images.append(self._image_processor.preprocess(img, vae_h, vae_w))
                     vae_image_sizes.append((vae_w, vae_h))
 
             logger.info("encoding prompts...")
