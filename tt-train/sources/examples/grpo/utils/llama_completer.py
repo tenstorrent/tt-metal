@@ -81,7 +81,7 @@ def _round_up(x: int) -> int:
     return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
-class LlamaCompleter(GRPOCompleter):
+class LlamaGRPOCompleter(GRPOCompleter):
     """Llama-specific completion engine.
 
     Handles autoregressive generation and forward passes for Llama models.
