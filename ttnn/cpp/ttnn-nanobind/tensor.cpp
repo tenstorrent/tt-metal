@@ -53,7 +53,16 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
-    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity");
+    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity", R"doc(
+        Number of mantissa-bit passes through the 5b×7b multiplier array.
+
+        Higher fidelity consumes more mantissa bits from each operand and therefore produces more
+        accurate results, at the cost of proportionally lower throughput. The matrix engine uses
+        5 bits (1 hidden + 4) from SrcA and 7 bits (1 hidden + 6) from SrcB per pass:
+
+        Note: ``reduce_max`` and elementwise ``add``/``sub`` are unaffected by this setting.
+        Elementwise ``mul`` and ``reduce_average``/``sum`` do respect this setting.
+    )doc");
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     // export_enum<ShardMode>(m_tensor);
