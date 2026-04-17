@@ -400,17 +400,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            // Same compat override for pack_src when dest_acc=Yes.
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                const std::uint32_t compat_src = ckernel::to_underlying(DataFormat::Float16_b);
-                _llk_pack_hw_configure_<is_fp32_dest_acc_en>(compat_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            }
-            else
-            {
-                _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            }
-            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);
+            _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
+            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
@@ -460,7 +451,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4);
+            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4, formats.pack_src);
         }
 
     } // end else (fast tilize path)

@@ -148,6 +148,17 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
 
     if constexpr (is_fp32_dest_acc_en)
     {
+        // Packer borrow for fast-tilize: the caller's pack_src_format may be fp32
+        // (e.g. after mm_init for fp32 matmul output, or infer_pack_in picking fp32
+        // for Bfp4_b+dest_acc). Fast-tilize needs bf16-stride stepping through DEST
+        // (Read_32b=0), but per ISA fp32 src requires Read_32b=1. Reconfigure the
+        // packer to a bf16-compat src — this coherently updates in_data_format
+        // across SEC0/SEC1 REG1/REG8, exp_section_size for BFP dst, TILE_HEADER,
+        // and dest_rd_ctrl. Then force Read_32b=0 (reconfig sets it to 1 when
+        // is_fp32_dest_acc_en). Uninit mirrors by restoring caller's pack_src.
+        constexpr std::uint32_t compat_src = ckernel::to_underlying(DataFormat::Float16_b);
+        const std::uint32_t tile_size      = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
+        reconfig_packer_data_format<is_fp32_dest_acc_en>(compat_src, pack_dst_format, tile_size, FACE_R_DIM, TILE_C_DIM, num_faces, /*partial_face=*/false);
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
     }
@@ -164,10 +175,13 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
 
     // Stride registers are in bytes, divided by pack_src datum size at PACR execution
     // (ttsim: src_addr = byte_offset / src_element_align).
-    // x_stride = datum_bytes(pack_src_format) so element addresses resolve correctly.
-    const std::uint32_t x_stride = (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float32)   ? 4
-                                   : (pack_src_format & 0x3) == ckernel::to_underlying(DataFormat::Float16) ? 2
-                                                                                                            : 1;
+    // x_stride = datum_bytes(effective pack_src). When is_fp32_dest_acc_en we
+    // overrode pack_src cfg to Float16_b above, so use bf16 datum size (2) here
+    // regardless of the caller's original pack_src_format param.
+    const std::uint32_t effective_src = is_fp32_dest_acc_en ? ckernel::to_underlying(DataFormat::Float16_b) : pack_src_format;
+    const std::uint32_t x_stride      = (effective_src & 0x3) == ckernel::to_underlying(DataFormat::Float32)   ? 4
+                                        : (effective_src & 0x3) == ckernel::to_underlying(DataFormat::Float16) ? 2
+                                                                                                               : 1;
     std::uint32_t y_stride       = 64 * FACE_C_DIM * x_stride;
     std::uint32_t z_stride       = FACE_C_DIM * x_stride;
     std::uint32_t w_stride       = 2 * FACE_C_DIM * x_stride;
@@ -214,19 +228,27 @@ inline void _llk_pack_fast_tilize_block_(
 
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
-    const std::uint32_t pack_dst_format, [[maybe_unused]] const std::uint32_t face_r_dim, [[maybe_unused]] const std::uint32_t num_faces)
+    const std::uint32_t pack_dst_format,
+    [[maybe_unused]] const std::uint32_t face_r_dim,
+    [[maybe_unused]] const std::uint32_t num_faces,
+    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     if constexpr (is_fp32_dest_acc_en)
     {
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(1);
+        // Mirror of init: restore caller's pack_src_format via reconfig, which also
+        // sets Read_32b correctly (=1 for fp32/dest_acc per cpack_common logic).
+        const std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
+        reconfig_packer_data_format<is_fp32_dest_acc_en>(
+            pack_src_format, pack_dst_format, tile_size, FACE_R_DIM, TILE_C_DIM, num_faces, /*partial_face=*/false);
     }
     // Clear DEST remap from pack thread too (math thread also clears in its uninit).
     // Both threads must see the cleared state from their own RISC-V core.
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(0);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(0);
-    // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them)
-    set_packer_strides(pack_dst_format, TILE_C_DIM);
+    // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
+    // Note: set_packer_strides's first param is semantically pack_src_format.
+    set_packer_strides(pack_src_format, TILE_C_DIM);
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach)
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     _llk_pack_init_<false, false, false>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4);

@@ -196,7 +196,7 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
 }
 
 inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
