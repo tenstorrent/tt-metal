@@ -9,11 +9,11 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "ssd512", 50.0),
+        (1, "bge_m3", 50.0),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_ssd512(batch_size, model_name, expected_perf):
+def test_perf_device_bare_metal_bge_m3(batch_size, model_name, expected_perf):
     subdir = model_name
     num_iterations = 1
     margin = 0.04
