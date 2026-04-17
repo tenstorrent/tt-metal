@@ -353,8 +353,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // Flattened work distribution (optional): distribute B*NQH*q_num_chunks evenly across cores,
-    // matching ring_joint_sdpa's scheme. When disabled (default), use hierarchical batch -> heads -> q_chunks.
+    // Flat work distribution (optional): treat (batch, head, q_chunk) as one linear space and split
+    // it evenly across cores. When disabled (default), use the hierarchical batch -> heads -> q_chunks
+    // split. Zigzag sub-mode engages automatically for causal + even q_num_chunks to pair light/heavy
+    // q_chunks per core for load balancing.
+    //
+    // Note: at ring iter 0 of a causal + balanced ring SDPA, each device runs plain causal SDPA on
+    // its local Q/K/V with this same flat distribution, so flatten_work=true makes a single-chip SDPA
+    // an equivalent perf proxy for that iteration.
     const bool flatten_work = program_config.has_value() && program_config->flatten_work;
     if (flatten_work) {
         TT_FATAL(is_causal, "SDPAProgramConfig::flatten_work currently requires is_causal=true");
@@ -385,9 +391,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
     // Flat-distribution per-core assignments (only used when flatten_work is true).
-    // Evenly split total_q_chunks across cores. With zigzag balancing (causal + even num_q_chunks),
-    // distribute in pairs so every core ends up with even flat-count, matching ring_joint's scheme —
-    // each core then gets balanced light/heavy work after linear_to_zigzag remap.
+    // Evenly split total_q_chunks across cores. With zigzag sub-mode (causal + even num_q_chunks),
+    // distribute in pairs so every core gets balanced light/heavy work after linear_to_zigzag remap.
     const uint32_t total_q_chunks = B * NQH * q_num_chunks;
     const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
     uint32_t base_chunks_per_core = 0;
@@ -564,6 +569,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via
+    // chunk_start_idx_args.next_compile_time_args_offset()).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
@@ -615,6 +623,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via out_args.next_compile_time_args_offset()).
+    writer_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
 
     const bool uniform_dataformat = check_uniform_dataformat(
         input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
@@ -654,6 +664,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
+        (std::uint32_t)flat_zigzag,            // arg 33: flat-distribution zigzag sub-mode (see SDPA_FLAT_WORK)
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -670,16 +681,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
+    // Flat work distribution gate. The zigzag sub-mode is passed as a compile-time arg
+    // (flat_zigzag) to reader/writer/compute below, mirroring ring_joint_sdpa's pattern.
     if (flatten_work) {
-        defines["FLATTENED_WORK"] = "1";
-    }
-    if (flat_zigzag) {
-        defines["FLATTEN_WORK_ZIGZAG"] = "1";
+        defines["SDPA_FLAT_WORK"] = "1";
     }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
-    log_debug(tt::LogOp, "FLATTENED_WORK: {}", flatten_work);
-    log_debug(tt::LogOp, "FLATTEN_WORK_ZIGZAG: {}", flat_zigzag);
+    log_debug(
+        tt::LogOp,
+        "SDPA_FLAT_WORK: {}",
+        flatten_work ? (flat_zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -1358,7 +1370,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
-        // Flat-mode per-core range (only used when FLATTENED_WORK is compiled in).
+        // Flat-mode per-core range (only used when SDPA_FLAT_WORK is compiled in).
         uint32_t global_q_start = 0;
         uint32_t global_q_count = 0;
         if (flatten_work) {

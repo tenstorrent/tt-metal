@@ -84,6 +84,9 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    // Flat-distribution zigzag sub-mode (tail arg; only meaningful when SDPA_FLAT_WORK is defined).
+    constexpr bool flat_use_zigzag =
+        get_compile_time_arg_val(chunk_start_idx_args.next_compile_time_args_offset()) == 1;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -112,9 +115,10 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
-#ifdef FLATTENED_WORK
-    // Flatten_work: causal only, non-chunked, no attention sink. num_phases is always 1 for this factory,
-    // so these args sit right after read_offset_phase_1 with no intervening args.
+#if defined(SDPA_FLAT_WORK)
+    // Flat work distribution: causal only, non-chunked, no attention sink. num_phases is always 1
+    // for this factory, so these args sit right after read_offset_phase_1 with no intervening args.
+    // Zigzag sub-mode is compile-time arg flat_use_zigzag (declared above).
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
 #endif
@@ -289,23 +293,17 @@ void kernel_main() {
             valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
         }
 
-#ifdef FLATTENED_WORK
+#if defined(SDPA_FLAT_WORK)
         // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Restrictions enforced on host:
         // is_causal=true, !is_chunked, !use_attention_sink, so chunked page_table and attention_sink reads
         // are skipped, and mask_batch_offset is recomputed per (nb) change below.
         uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
         uint32_t mask_batch_offset = 0;
-#ifdef FLATTEN_WORK_ZIGZAG
-        constexpr bool _flat_use_zigzag = true;
-#else
-        constexpr bool _flat_use_zigzag = false;
-#endif
         for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
-            const uint32_t _flat_linear = global_q_start + _gq;
-            const uint32_t _flat = remap_q_index(_flat_linear, q_num_chunks, _flat_use_zigzag);
-            const uint32_t nb = _flat / (NQH * q_num_chunks);
-            const uint32_t nq = (_flat / q_num_chunks) % NQH;
-            const uint32_t q_iter = _gq;  // used only by non-causal chain forwarding (disabled in flatten_work)
+            const auto _decoded = decompose_flat_q_index(global_q_start + _gq, q_num_chunks, NQH, flat_use_zigzag);
+            const uint32_t nb = _decoded.nb;
+            const uint32_t nq = _decoded.nq;
+            const uint32_t q_iter = _gq;  // used only by non-causal chain forwarding (disabled under flat mode)
             if (nb != prev_nb_flat) {
                 prev_nb_flat = nb;
                 if constexpr (!broadcast_provided_mask_batch) {
@@ -318,7 +316,7 @@ void kernel_main() {
             }
             {
                 {
-                    uint32_t q_chunk = _flat % q_num_chunks;
+                    uint32_t q_chunk = _decoded.q_chunk;
 #else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
@@ -688,7 +686,7 @@ void kernel_main() {
                     }  // close k_chunk
                 }  // close q_iter / flatten innermost
             }  // close nq / flatten middle
-#ifndef FLATTENED_WORK
+#if !defined(SDPA_FLAT_WORK)
             if constexpr (is_chunked) {
                 cb_pop_front(cb_id_page_table, 1);
             }

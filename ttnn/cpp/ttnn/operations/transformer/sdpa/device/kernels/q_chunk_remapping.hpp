@@ -57,3 +57,33 @@ FORCE_INLINE uint32_t remap_q_index(uint32_t linear_index, uint32_t num_q_chunks
     }
     return linear_index;
 }
+
+/**
+ * Result of decomposing a flat q-chunk index into (batch, head, q_chunk) coordinates.
+ */
+struct FlatQIndex {
+    uint32_t nb;
+    uint32_t nq;
+    uint32_t q_chunk;
+};
+
+/**
+ * Decompose a linear flat index in [0, B*NQH*num_q_chunks) into (nb, nq, q_chunk).
+ *
+ * Applies the remap (linear or zigzag) first, then splits the remapped flat index as:
+ *   nb      = flat / (NQH * num_q_chunks)
+ *   nq      = (flat / num_q_chunks) % NQH
+ *   q_chunk = flat % num_q_chunks
+ *
+ * Used by SDPA reader/writer kernels under flat work distribution to fetch the right
+ * Q/K/V and write outputs for each (batch, head, q_chunk) triple a core is assigned.
+ */
+FORCE_INLINE FlatQIndex
+decompose_flat_q_index(uint32_t linear_index, uint32_t num_q_chunks, uint32_t NQH, bool use_zigzag) {
+    const uint32_t flat = remap_q_index(linear_index, num_q_chunks, use_zigzag);
+    return {
+        /*nb=*/flat / (NQH * num_q_chunks),
+        /*nq=*/(flat / num_q_chunks) % NQH,
+        /*q_chunk=*/flat % num_q_chunks,
+    };
+}
