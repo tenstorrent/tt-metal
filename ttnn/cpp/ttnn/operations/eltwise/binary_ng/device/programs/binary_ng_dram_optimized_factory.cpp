@@ -235,7 +235,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     auto dram_optimal_cores = CoreRangeSet(core_ranges);
 
     Program program{};
-    // const auto& all_device_cores = worker_grid;dram_optimal_cores
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
 
     /***************   CIRCULAR BUFFERS ***************/
@@ -253,14 +252,19 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
     // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
     // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
-    // num_tiles_per_batch = 4 supposed to macth NOC_MAX_BURST_SIZE (bytes)
+    // num_tiles_per_batch = 4 supposed to match NOC_MAX_BURST_SIZE (bytes)
     const uint32_t num_tiles_per_batch =
         fp32_dest_acc_en or operation_attributes.is_sfpu
             ? 1
-            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) /
-                  (single_tile_size * num_batches);
+            : CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / (single_tile_size);
 
     const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * num_batches;
+    log_info(
+        tt::LogOp,
+        "num_tiles_per_cb: {}, num_tiles_per_batch: {}, num_batches: {}",
+        num_tiles_per_cb,
+        num_tiles_per_batch,
+        num_batches);
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
