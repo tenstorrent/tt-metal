@@ -1,5 +1,5 @@
 ---
-name: bh-orchestrator
+name: issue-solver-orchestrator
 description: "Shared LLK issue-solver orchestrator. Receives TARGET_ARCH and issue context from the top-level orchestrator; coordinates analyze → plan → fix → test across blackhole, quasar, and wormhole."
 model: opus
 tools: Read, Write, Bash, Glob, Grep, Agent
@@ -190,7 +190,7 @@ python codegen/scripts/run_json_writer.py init \
     --start-time "$START_TIME" \
     --first-step "analyzer" \
     --first-message "Analyzing issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
-    --prompt "Fix BH issue #${ISSUE_NUMBER}" \
+    --prompt "Fix ${TARGET_ARCH} issue #${ISSUE_NUMBER}" \
     --batch-id "${CODEGEN_BATCH_ID:-}" \
     --model "${CODEGEN_MODEL:-opus}" \
     --run-type "${CODEGEN_RUN_TYPE:-manual}" \
@@ -208,7 +208,7 @@ Spawn the issue analyzer:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Analyze BH issue #{ISSUE_NUMBER}"
+  description: "Analyze ${TARGET_ARCH} issue #{ISSUE_NUMBER}"
   prompt: |
     Read and follow codegen/agents/issue-solver/issue-analyzer.md to analyze this issue.
 
@@ -232,13 +232,13 @@ Wait for completion. **Verify** that `codegen/artifacts/bh_issue_{ISSUE_NUMBER}_
 
 Append `"issue_analyzer"` to `AGENTS_USED`.
 
-If the analyzer reports the issue is out of scope (not a BH LLK issue), call:
+If the analyzer reports the issue is out of scope (not an LLK issue for ${TARGET_ARCH}), call:
 ```bash
 python codegen/scripts/run_json_writer.py finalize \
     --log-dir "$LOG_DIR" \
     --status "skipped" \
     --final-result "success" \
-    --final-message "Issue out of scope — no BH LLK changes required"
+    --final-message "Issue out of scope — no LLK changes required for ${TARGET_ARCH}"
 ```
 and skip to Step 6 with status `"skipped"`.
 
@@ -258,7 +258,7 @@ From the analyzer's response, note:
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
     --new-step "arch_lookup" \
-    --new-message "Researching BH architecture details needed for the fix" \
+    --new-message "Researching ${TARGET_ARCH} architecture details needed for the fix" \
     --prev-result "success" \
     --prev-message "Issue analysis complete — category: ${ISSUE_CATEGORY}" \
     --agent "analyzer"
@@ -271,7 +271,7 @@ Only spawn if the analysis indicates hardware-level details are needed. Skip for
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "BH arch research for issue #{ISSUE_NUMBER}"
+  description: "${TARGET_ARCH} arch research for issue #{ISSUE_NUMBER}"
   prompt: |
     Read and follow codegen/agents/issue-solver/arch-lookup.md.
 
@@ -313,7 +313,7 @@ Spawn the fix planner:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Plan fix for BH issue #{ISSUE_NUMBER}"
+  description: "Plan fix for ${TARGET_ARCH} issue #{ISSUE_NUMBER}"
   prompt: |
     Read and follow codegen/agents/issue-solver/fix-planner.md.
 
@@ -336,7 +336,7 @@ Append `"fix_planner"` to `AGENTS_USED`.
 
 ## Step 4: Implement the Fix
 
-**LIVE LOG — transition to `writer` (the BH "Fix" node):**
+**LIVE LOG — transition to `writer` (the "Fix" node):**
 ```bash
 python codegen/scripts/run_json_writer.py advance \
     --log-dir "$LOG_DIR" \
@@ -352,7 +352,7 @@ Spawn the fixer:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Fix BH issue #{ISSUE_NUMBER}"
+  description: "Fix ${TARGET_ARCH} issue #{ISSUE_NUMBER}"
   prompt: |
     Read and follow codegen/agents/issue-solver/fixer.md.
 
@@ -398,7 +398,7 @@ Spawn the debugger:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Debug BH issue #{ISSUE_NUMBER} compile error"
+  description: "Debug ${TARGET_ARCH} issue #{ISSUE_NUMBER} compile error"
   prompt: |
     Read and follow codegen/agents/issue-solver/debugger.md.
 
@@ -454,7 +454,7 @@ Spawn the tester:
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Test BH issue #{ISSUE_NUMBER} fix"
+  description: "Test ${TARGET_ARCH} issue #{ISSUE_NUMBER} fix"
   prompt: |
     Read and follow codegen/agents/issue-solver/tester.md.
 
@@ -505,7 +505,7 @@ python codegen/scripts/run_json_writer.py advance \
 ```
 Agent tool:
   subagent_type: "general-purpose"
-  description: "Debug BH issue #{ISSUE_NUMBER} test failure"
+  description: "Debug ${TARGET_ARCH} issue #{ISSUE_NUMBER} test failure"
   prompt: |
     Read and follow codegen/agents/issue-solver/debugger.md.
 
@@ -567,7 +567,7 @@ python codegen/scripts/run_json_writer.py finalize \
     --end-time "$END_TIME" \
     --status "$STATUS" \
     --final-result "$FINAL_RESULT" \
-    --final-message "BH issue #${ISSUE_NUMBER} run complete — ${STATUS}" \
+    --final-message "${TARGET_ARCH} issue #${ISSUE_NUMBER} run complete — ${STATUS}" \
     --patch-json "$(python - <<PY
 import json, os
 patch = {
@@ -671,7 +671,7 @@ If any expected file is missing, write a placeholder noting `"Agent ran but did 
 Report back to the top-level orchestrator:
 
 ```
-BH Orchestrator Result:
+Issue-Solver Orchestrator Result:
   status: {success | compiled | failed | skipped}
   run_id: {RUN_ID}
   log_dir: {LOG_DIR}
