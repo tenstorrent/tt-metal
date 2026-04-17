@@ -74,22 +74,18 @@ class AdaLayerNormTTNN:
         shift = ttnn.slice(scale_shift, [0, 0, self.hidden_size], [scale_shift.shape[0], 1, 2 * self.hidden_size])
         ttnn.deallocate(scale_shift)
 
-        # LayerNorm (no learned weight/bias, eps=1e-5 matching upstream)
-        normed = ttnn.layer_norm(
-            hidden_states,
-            epsilon=1e-5,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        # (1 + scale) * normed + shift — scalar add avoids ones_like allocation (×256 calls/inference)
+        # Fold AdaLN's "(1+scale)*LN(x) + shift" into a single layer_norm with γ=(1+scale), β=shift.
+        # Saves 2 ops per call (mul + add) × 128 calls/inference.
         scale_p1 = ttnn.add(scale, 1.0)
         ttnn.deallocate(scale)
-
-        output = ttnn.mul(normed, scale_p1)
-        ttnn.deallocate(normed)
+        output = ttnn.layer_norm(
+            hidden_states,
+            epsilon=1e-5,
+            weight=scale_p1,
+            bias=shift,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(scale_p1)
-
-        output = ttnn.add(output, shift)
         ttnn.deallocate(shift)
         return output
 
