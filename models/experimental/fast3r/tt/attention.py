@@ -24,6 +24,7 @@ class TtAttention:
         q_chunk_size=64,
         k_chunk_size=1024,
         exp_approx_mode=True,
+        max_cores_per_head_batch=8,
     )
 
     def __init__(
