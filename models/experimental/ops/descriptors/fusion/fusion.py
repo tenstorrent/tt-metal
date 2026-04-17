@@ -421,6 +421,8 @@ def _materialize_chain(items, edges: List[Tuple[int, int, int, int]], ops=None) 
         if op._complete_fn is not None and op.program_cache_key is None:
             if all(not isinstance(t, _DeferredOutput) and t is not None for t in op.input_tensors):
                 op._materialize()
+        elif op._complete_fn is None and any(isinstance(t, _DeferredOutput) for t in op.output_tensors):
+            _ = op.descriptor
 
         # Connect this op's real outputs to downstream deferred inputs
         for consumer_i, inp_j, producer_i, out_j in edges:
@@ -480,9 +482,30 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
 
     entry = _BUILD_CACHE.get(cache_key)
     if entry is not None:
-        # Warm path: parent-style dispatch — reuse output tensors from ops,
-        # no allocation.  Fast for inline (no FusionDispatchState overhead).
-        # For persistent: sets _cached_entry so next call → hot path.
+        # ── Fast warm path: reuse FusionDispatchState if available ──
+        # dispatch_state allocates outputs internally, patches, and dispatches
+        # in a single C++ call — avoids the MeshProgramDescriptor copy and
+        # output-tensor gathering that the 3-arg overload does.
+        if entry.dispatch_state is not None:
+            seen: Set[int] = set()
+            inputs: List = []
+            for op in ops:
+                for t in op.input_tensors:
+                    tid = id(t)
+                    if tid not in seen:
+                        inputs.append(t)
+                        seen.add(tid)
+            outputs = entry.dispatch_state.dispatch(inputs)
+            container._cached_entry = entry
+            if results is None:
+                if surface_prefix == "P":
+                    results = _default_results_parallel_branches(container._items)
+                else:
+                    results = _default_results(container._items)
+            return _filter_results(outputs, container._default_results, results)
+
+        # Warm path (first warm hit — no dispatch_state yet): parent-style
+        # dispatch, reuses output tensors from ops, no allocation.
         seen: Set[int] = set()
         inputs: List = []
         for op in ops:
@@ -827,6 +850,7 @@ class Sequential:
                 cache_device = _extract_device(self._items)
             except ValueError:
                 cache_device = None
+        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         cache_key, ops = _fusion_cache_key_and_ops(self._items, "S", cache_device)
         entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:
@@ -984,6 +1008,7 @@ class Parallel:
                 cache_device = _extract_device(self._items)
             except ValueError:
                 cache_device = None
+        _materialize_chain(self._items, self._internal_edges, self._cached_ops)
         cache_key, ops = _fusion_cache_key_and_ops(self._items, "P", cache_device)
         entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:

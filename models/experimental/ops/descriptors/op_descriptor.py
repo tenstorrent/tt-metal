@@ -261,7 +261,11 @@ class OpDescriptor:
     @property
     def descriptor(self):
         if self._descriptor is None:
-            self._descriptor = self._factory_fn()
+            result = self._factory_fn()
+            if isinstance(result, tuple):
+                self._descriptor, self.output_tensors = result
+            else:
+                self._descriptor = result
             self._factory_fn = None
         return self._descriptor
 
@@ -272,8 +276,9 @@ class OpDescriptor:
 
     def launch(self):
         """Dispatch via ``generic_op`` (materializes ``descriptor`` if needed)."""
+        d = self.descriptor
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
-        ttnn.generic_op(io_tensors, self.descriptor)
+        ttnn.generic_op(io_tensors, d)
         return self.output_tensors
 
     @staticmethod
@@ -322,8 +327,38 @@ class OpDescriptor:
             param_names = list(params.keys())
             required_positions = {t: param_names.index(t) for t in required}
 
+            # Per-factory cache: maps a cheap identity key to a previously
+            # computed (program_cache_key, input_name_map) pair.  Avoids
+            # rebuilding C++ param structs and calling compute_program_hash
+            # on repeated inline calls with equivalent arguments.
+            _program_key_cache: dict = {}
+
             def _is_pending(val):
                 return val is None or isinstance(val, _DeferredOutput)
+
+            _VALUE_TYPES = (int, float, str, bool, type(None))
+
+            def _inline_cache_key(args, kwargs):
+                """Cheap identity key from argument metadata.
+
+                Tensors: ``id()`` — stable for the same object (decode loop).
+                Value types (int, float, str, bool, None): value itself, since
+                Python may create new objects for literals like ``1e-6``.
+                C++ binding objects (configs, etc.): ``id()`` — stable for
+                module-level constants held by the model.
+                """
+                parts = []
+                for i, a in enumerate(args):
+                    if isinstance(a, _VALUE_TYPES):
+                        parts.append((i, a))
+                    else:
+                        parts.append((i, id(a)))
+                for k, v in sorted(kwargs.items()):
+                    if isinstance(v, _VALUE_TYPES):
+                        parts.append((k, v))
+                    else:
+                        parts.append((k, id(v)))
+                return tuple(parts)
 
             @functools.wraps(fn)
             def wrapper(*args, **kwargs):
@@ -340,8 +375,46 @@ class OpDescriptor:
                         break
 
                 if not deferred:
-                    # Inline hot path: call the factory body directly.
-                    return fn(*args, **kwargs)
+                    # ── Program-key cache: skip full factory on inline hit ──
+                    ck = _inline_cache_key(args, kwargs)
+                    hit = _program_key_cache.get(ck)
+                    if hit is not None:
+                        pck, input_name_map = hit
+                        tensors = {}
+                        for pname, src in input_name_map:
+                            if isinstance(src, int):
+                                tensors[pname] = args[src]
+                            else:
+                                tensors[pname] = kwargs[src]
+
+                        def _lazy_factory():
+                            full = fn(*args, **kwargs)
+                            return full.descriptor, full.output_tensors
+
+                        return OpDescriptor(
+                            factory_fn=_lazy_factory,
+                            input_tensors=tensors,
+                            output_tensors=[_DeferredOutput()],
+                            name=name,
+                            program_cache_key=pck,
+                        )
+
+                    # Cache miss — full construction.
+                    desc = fn(*args, **kwargs)
+
+                    # Populate cache for next call.
+                    input_name_map = []
+                    if desc._input_names is not None:
+                        for pname, _idx in desc._input_names.items():
+                            if pname in kwargs:
+                                input_name_map.append((pname, pname))
+                            else:
+                                for pi, p in enumerate(param_names):
+                                    if p == pname and pi < len(args):
+                                        input_name_map.append((pname, pi))
+                                        break
+                    _program_key_cache[ck] = (desc.program_cache_key, input_name_map)
+                    return desc
 
                 # Deferred path: use sig.bind() to resolve all arg values by name.
                 # Fill in None for missing required params so bind() doesn't raise.
