@@ -17,6 +17,9 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_with_bias,
     prepare_w2_tensor_for_moe_compute,
     prepare_w2_tensor_with_bias,
+    DS_W0_W1_SHARD_VALS,
+    DS_W2_SHARD_VALS,
+    get_weight_core_shard_maps,
 )
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
@@ -1278,30 +1281,10 @@ def test_moe_compute(
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    MATMUL_FULL_CORES_A = {0, 1, 8, 9}
-    MATMUL_PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
 
-    MATMUL_FULL_CORES_B = {0, 3, 6, 9}
-    MATMUL_PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES_B else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
+        mesh_device, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS
+    )
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1406,7 +1389,7 @@ def test_moe_compute(
         )
     else:
         torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
         )
 
     expected_w0_w1_shape = (12, num_layers, experts_per_device, 3, K_for_shard, 4 * ttnn.TILE_SIZE)
@@ -1432,7 +1415,7 @@ def test_moe_compute(
         )
     else:
         torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
     expected_w2_shape = (12, num_layers, experts_per_device, 5, w2_N_total, 4 * ttnn.TILE_SIZE)
