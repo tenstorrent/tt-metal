@@ -3,8 +3,9 @@
 Prints `inference_speed`, `accuracy`, `peak_dram` on stdout so the autoresearch loop
 can `grep` for them after a run.
 
-Current stage: full 24-block tt-nn encoder trunk (patch_embed on CPU, blocks+norm on device).
-Compared against the torch reference encoder on a 512x512 RGB image.
+Current stage: end-to-end trunk (CPU patch_embed + tt-nn 24-layer encoder +
+tt-nn 24-layer decoder). PCC is computed against the torch reference trunk.
+DPT head is still a follow-up.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import ttnn
 
 from models.experimental.fast3r.reference.model import Fast3RConfig, PatchEmbed
 from models.experimental.fast3r.reference.weights import load_fast3r
-from models.experimental.fast3r.tt.encoder import TtEncoderBlocks
+from models.experimental.fast3r.tt.model import TtFast3RTrunk
 
 
 WEIGHTS = os.environ.get(
@@ -45,7 +46,6 @@ def _peak_dram_bytes(device) -> int:
 
 
 def _cpu_patch_embed(cfg: Fast3RConfig, img: torch.Tensor) -> torch.Tensor:
-    """Run just the patch_embed step on CPU so the on-device benchmark focuses on the transformer trunk."""
     pe = PatchEmbed(cfg).eval()
     with safe_open(WEIGHTS, framework="pt") as f:
         pe.proj.weight.data.copy_(f.get_tensor("encoder.patch_embed.proj.weight"))
@@ -54,26 +54,23 @@ def _cpu_patch_embed(cfg: Fast3RConfig, img: torch.Tensor) -> torch.Tensor:
         return pe(img)
 
 
-def _torch_encoder_output(cfg: Fast3RConfig, img: torch.Tensor) -> torch.Tensor:
+def _torch_trunk_output(cfg: Fast3RConfig, img: torch.Tensor) -> torch.Tensor:
     model = load_fast3r(device="cpu")
     with torch.inference_mode():
-        return model.encoder(img)
+        return model(img)
 
 
-def test_fast3r_encoder_trunk_pcc_and_speed(device):
+def test_fast3r_trunk_pcc_and_speed(device):
     cfg = Fast3RConfig()
     g = torch.Generator().manual_seed(0)
     img = torch.randn(1, 3, cfg.img_size, cfg.img_size, generator=g)
 
-    # Ground truth from torch reference
-    y_torch = _torch_encoder_output(cfg, img)
+    y_torch = _torch_trunk_output(cfg, img)
 
-    # Pre-compute patch_embed on CPU and move tokens to device
-    tokens = _cpu_patch_embed(cfg, img)  # (1, N, C)
-    trunk = TtEncoderBlocks(device, cfg, WEIGHTS)
+    tokens = _cpu_patch_embed(cfg, img)
+    trunk = TtFast3RTrunk(device, cfg, WEIGHTS)
     x_tt = ttnn.from_torch(tokens.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Warm-up (program cache + kernel JIT)
     y_warm = trunk(x_tt)
     ttnn.synchronize_device(device)
     y_warm.deallocate(True)
@@ -91,7 +88,7 @@ def test_fast3r_encoder_trunk_pcc_and_speed(device):
 
     acc = _pcc(y_torch, y_tt_torch) * 100.0
 
-    print(f"inference_speed: {fps:.4f} encoder_fwd/sec")
+    print(f"inference_speed: {fps:.4f} trunk_fwd/sec")
     print(f"accuracy: {acc:.2f}")
     print(f"peak_dram: {_peak_dram_bytes(device)}")
 
