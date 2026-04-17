@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -333,8 +333,7 @@ def _patch_module_symbiote_device_dtype_placeholder(module, *, cpu_device, dtype
     cls = type(module)
     if getattr(cls, "_tt_symbiote_device_patched", False):
         return
-    # Do not replace ``TTNNModule.device`` — it must stay ``@property`` → mesh ``_device`` from ``set_device``.
-    # Replacing it with ``torch.device("cpu")`` breaks ``module_run`` (``ttnn.to_device(..., cpu)``).
+    # Do not replace ``TTNNModule.device`` — it must stay ``@property`` → mesh ``_device`` from ``set_device``; replacing it with ``torch.device("cpu")`` breaks ``module_run`` (``ttnn.to_device(..., cpu)``).
     if not isinstance(module, TTNNModule):
         dev_attr = getattr(cls, "device", None)
         if dev_attr is None or isinstance(dev_attr, property):
@@ -520,6 +519,7 @@ pytestmark = [
 
 
 def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
+    """Thinker lm_head: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_lm = m.thinker.lm_head
@@ -545,6 +545,7 @@ def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
+    """Thinker self-attention: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.model.layers[0].self_attn
@@ -564,8 +565,7 @@ def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
         torch_out, _ = torch_attn(
             hidden_states, position_embeddings=(cos, sin), attention_mask=None, past_key_values=None
         )
-    # Hidden states: replicate (vision / audio attention PCC). Cos/sin: last-dim shard on multi-device so
-    # ``_maybe_all_gather`` on rotary tensors does not concat replicated rotary width.
+    # Hidden states: replicate (vision / audio attention PCC). Cos/sin:
     _repl = _replicate_mesh_mapper(mesh_device)
     _rot_mapper = _rotary_cos_sin_mesh_mapper(mesh_device, cos)
     tt_hs = ttnn.from_torch(
@@ -592,6 +592,7 @@ def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
+    """Talker self-attention: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.talker.model.layers[0].self_attn
@@ -636,6 +637,7 @@ def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
+    """Vision block attention: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.visual.blocks[0].attn
@@ -705,6 +707,7 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_audio_attention_pcc(mesh_device, full_omni_model_for_pcc):
+    """Audio tower self-attention: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     torch_attn = m.thinker.audio_tower.layers[0].self_attn
@@ -728,6 +731,7 @@ def test_qwen_omni_audio_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
+    """Code2Wav pre_transformer self-attention: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     m = full_omni_model_for_pcc
     code2wav = getattr(m, "code2wav", None)
@@ -761,6 +765,7 @@ def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_thinker_moe_pcc(mesh_device, full_omni_model_for_pcc):
+    """Thinker MoE MLP: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     _force_t3k_runtime_guard_for_pcc(mesh_device)
     m = full_omni_model_for_pcc
@@ -781,6 +786,7 @@ def test_qwen_omni_thinker_moe_pcc(mesh_device, full_omni_model_for_pcc):
 
 
 def test_qwen_omni_talker_moe_pcc(mesh_device, full_omni_model_for_pcc):
+    """Talker MoE MLP: HF vs TTNN PCC."""
     _require_symbiote_run_mode()
     _force_t3k_runtime_guard_for_pcc(mesh_device)
     m = full_omni_model_for_pcc
@@ -816,9 +822,7 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
         i for i, layer in enumerate(model.talker.model.layers) if type(layer.mlp) == talker_moe_class
     ]
 
-    # LM heads are ``nn.Linear``: install :class:`TTNNQwenOmniThinkerLmHead` *before* thinker
-    # ``torch.nn.Linear`` → :class:`TTNNLinear` in ``NN_TO_TTNN_THINKER``, or the op map steals
-    # ``lm_head`` and a single ``ttnn.linear`` allocates full prefill logits (~GB) on device.
+    # LM heads are ``nn.Linear``: install :class:`TTNNQwenOmniThinkerLmHead` *before* thinker ``torch.nn.Linear`` → :class:`TTNNLinear` in ``NN_TO_TTNN_THINKER``, or the op map steals ``lm_head`` and a single ``ttnn.linear`` allocates full prefill logits (~GB) on device.
     replace_thinker_lm_head_with_ttnn(model.thinker)
     register_module_replacement_dict(model.thinker, NN_TO_TTNN_THINKER, model_config=None)
     _upgrade_audio_encoder_conv_out_linear(model.thinker)
@@ -970,9 +974,7 @@ def test_qwen_omni(mesh_device):
 
     # Preprocess and move weights to device
     print("Preprocessing and moving weights to device...")
-    # for k, v in tqdm(modules.items(), desc="Processing modules"):
-    #     v.preprocess_weights()
-    #     v.move_weights_to_device()
+    # for k, v in tqdm(modules.items(), desc="Processing modules"): v.preprocess_weights(); v.move_weights_to_device()
 
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
@@ -996,8 +998,7 @@ def test_qwen_omni(mesh_device):
     prompt_tokens = int(inputs["input_ids"].shape[-1])
 
     print("Running inference...")
-    # Default off: a probe run is a second full thinker forward (vision/audio/text) and often OOMs
-    # on Wormhole before the real generate; enable only with headroom (TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE=1).
+    # Default off: a probe run is a second full thinker forward (vision/audio/text) and often OOMs on Wormhole before the real generate;
     run_ttft_probe = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TTFT_PROBE", "0").lower() in ("1", "true", "yes")
     prefill_proxy_s = None
     if run_ttft_probe:
@@ -1008,10 +1009,7 @@ def test_qwen_omni(mesh_device):
 
     DispatchManager.clear_timings()
 
-    # Inference: Generation of the output text and audio
-    # Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision:
-    # tiny logit differences can make codec_eos_token_id the argmax on the first step,
-    # producing near-empty audio.  Default to sampling (HF default) for robust TTS output.
+    # Inference: generation of output text and audio. Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision:
     talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
     talker_do_sample = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_DO_SAMPLE", "1").lower() in ("1", "true", "yes")
     thinker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_THINKER_MAX_NEW_TOKENS", "32"))
