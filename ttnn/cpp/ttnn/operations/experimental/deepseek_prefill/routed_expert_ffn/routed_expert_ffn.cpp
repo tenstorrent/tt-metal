@@ -310,7 +310,9 @@ ttnn::Tensor routed_expert_ffn_optim_wh(
 
     // Down matmul reads from L1 block-sharded input (not DRAM), so maximize
     // in0_block_w for fewer mcast syncs. Shard width = gate_up_per_core_N tiles.
-    const uint32_t down_in0_bw = gate_up_per_core_N;  // = shard width, max allowed
+    // bfloat16 weights double in1 CB bytes vs bfp8/bfp4, so halve to fit L1.
+    const uint32_t down_in0_bw =
+        (down_proj.dtype() == DataType::BFLOAT16) ? gate_up_per_core_N / 2 : gate_up_per_core_N;
 
     // Block-sharded output requires out_subblock_h == 1
     const uint32_t down_sub_w = largest_divisor(down_per_core_N, 8);
