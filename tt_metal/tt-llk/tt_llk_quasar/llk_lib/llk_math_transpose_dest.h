@@ -185,7 +185,6 @@ inline void _llk_math_transpose_dest_init_()
  */
 inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
 {
-    // TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::CFGEXU);   //??????
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     // Wait condition SRCA_VLD is required as MOVB2A doesn't automatically wait
