@@ -19,7 +19,7 @@ inline void calculate_silu() {
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
 
         sfpi::dst_reg[0] = result;
