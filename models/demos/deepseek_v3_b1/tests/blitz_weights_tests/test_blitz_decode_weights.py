@@ -86,24 +86,30 @@ def _create_output_device_tensor(
     tile=None,
     mesh_mapper=None,
 ):
-    """Allocate a zeroed output tensor on device."""
-    num_cores = core_range_set.num_cores()
-    shard = _shard_shape(height, width, num_cores, sharding)
+    """Allocate an uninitialized output tensor on device.
+
+    Uses ``allocate_tensor_on_device`` (alloc-only) rather than
+    ``from_torch(torch.zeros(...))``. The latter host-materializes zeros
+    and dispatches a tilize program, which allocates a ROW_MAJOR staging
+    buffer the same size as the output plus non-globally-allocated CBs.
+    For BFLOAT16 that combined footprint, on top of the already-live
+    fused overlap tensor, pushes L1 past its waterline and clashes with
+    the statically reserved CB region. The allocated buffer is
+    immediately overwritten by ``CopyToOutput.op``, so its initial
+    contents don't matter.
+    """
+    shard = _shard_shape(height, width, core_range_set.num_cores(), sharding)
     shard_spec = ttnn.ShardSpec(core_range_set, shard, ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(sharding, ttnn.BufferType.L1, shard_spec)
-    kwargs = {}
-    if tile is not None:
-        kwargs["tile"] = tile
-    if mesh_mapper is not None:
-        kwargs["mesh_mapper"] = mesh_mapper
-    return ttnn.from_torch(
-        torch.zeros(height, width, dtype=torch.bfloat16),
+    tensor_spec = ttnn.TensorSpec(
+        ttnn.Shape([height, width]),
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem_config,
-        **kwargs,
+        memory_layout=sharding,
+        shard_spec=shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+        tile=tile,
     )
+    return ttnn.allocate_tensor_on_device(tensor_spec, device)
 
 
 def _get_roundtrip_reference(
