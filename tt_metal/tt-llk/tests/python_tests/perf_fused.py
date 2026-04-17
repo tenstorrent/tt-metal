@@ -10,9 +10,6 @@ yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
 test_names = [f.stem for f in yaml_files]
 
 
-# https://github.com/tenstorrent/tt-llk/issues/1584
-# @skip_for_blackhole
-# @skip_for_wormhole
 @skip_for_quasar
 @pytest.mark.perf
 @pytest.mark.parametrize("test_name", test_names, ids=test_names)
