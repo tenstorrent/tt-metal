@@ -58,6 +58,8 @@ constexpr uint32_t cb_end = cb_base + cb_size;
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
+static bool rt_profiler_enabled = false;
+
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
@@ -167,7 +169,9 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
-        record_realtime_timestamp(realtime_profiler_mailbox, false);
+        if (rt_profiler_enabled) {
+            record_realtime_timestamp(realtime_profiler_mailbox, false);
+        }
     }
 
     WAYPOINT("WCD");
@@ -372,50 +376,50 @@ void kernel_main() {
         }
     }
 
-    // Reset FIFO indices and buffer IDs to discard stale data from a previous
-    // run.  dispatch_d writes program IDs via program_id_fifo_append; dispatch_s
-    // reads via set_program_id.  Without this reset, the first set_program_id
-    // call finds the FIFO empty (dispatch_d hasn't pushed yet) and retains the
-    // stale buffer ID from the prior run, shifting all subsequent IDs by one and
-    // causing the last program's record to be lost.
-    realtime_profiler_mailbox->program_id_fifo_start = 0;
-    realtime_profiler_mailbox->program_id_fifo_end = 0;
-    realtime_profiler_mailbox->kernel_start_a.id = 0;
-    realtime_profiler_mailbox->kernel_end_a.id = 0;
-    realtime_profiler_mailbox->kernel_start_b.id = 0;
-    realtime_profiler_mailbox->kernel_end_b.id = 0;
+    rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
+
+    if (rt_profiler_enabled) {
+        realtime_profiler_mailbox->program_id_fifo_start = 0;
+        realtime_profiler_mailbox->program_id_fifo_end = 0;
+        realtime_profiler_mailbox->kernel_start_a.id = 0;
+        realtime_profiler_mailbox->kernel_end_a.id = 0;
+        realtime_profiler_mailbox->kernel_start_b.id = 0;
+        realtime_profiler_mailbox->kernel_end_b.id = 0;
+    }
 
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        record_realtime_timestamp(realtime_profiler_mailbox, true);
-        uint32_t popped_pid = pop_program_id(realtime_profiler_mailbox);
+        uint32_t popped_pid = 0;
+        if (rt_profiler_enabled) {
+            record_realtime_timestamp(realtime_profiler_mailbox, true);
+            popped_pid = pop_program_id(realtime_profiler_mailbox);
+        }
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
-        uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
-        write_buffer_id(realtime_profiler_mailbox, buffer_id);
+        if (rt_profiler_enabled) {
+            uint32_t buffer_id = (cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL) ? popped_pid : 0;
+            write_buffer_id(realtime_profiler_mailbox, buffer_id);
+        }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE:
-                // Signal the profiler core to push the final buffer before
-                // terminating.  The signal writes PUSH_A/B via NOC; we flush
-                // and busy-wait so the profiler core polls, reads, and
-                // enqueues the data before the TERMINATE write overwrites
-                // the same L1 word.
-                signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
-                noc_async_writes_flushed();
-                for (volatile uint32_t delay = 0; delay < 5000; delay++) {
+                if (rt_profiler_enabled) {
+                    signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
+                    noc_async_writes_flushed();
+                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
+                    }
                 }
 
                 realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
-                if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
+                if (rt_profiler_enabled) {
                     uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
                         realtime_profiler_mailbox->realtime_profiler_core_noc_xy,
                         realtime_profiler_mailbox->realtime_profiler_mailbox_addr);
@@ -440,7 +444,7 @@ void kernel_main() {
         }
         total_pages_acquired++;
 
-        if (!done) {
+        if (!done && rt_profiler_enabled) {
             signal_realtime_profiler_and_switch(realtime_profiler_mailbox);
         }
     }

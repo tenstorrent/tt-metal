@@ -27,18 +27,22 @@ constexpr uint32_t num_streams_to_monitor = NUM_STREAMS_TO_MONITOR;
 void kernel_main() {
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
 
-    // Pointer to real-time profiler config for reading terminate flag
     volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
-    // Clear stale TERMINATE from previous run so the monitor loop actually runs.
-    // dispatch_s will set TERMINATE when this program ends.
+    bool rt_profiler_enabled = (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0);
+
+    if (!rt_profiler_enabled) {
+        // RT profiler disabled: idle until dispatch_s signals terminate
+        while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
+        }
+        return;
+    }
+
     if (realtime_profiler_mailbox->realtime_profiler_state == REALTIME_PROFILER_STATE_TERMINATE) {
         realtime_profiler_mailbox->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
     }
 
-    // Snapshot current stream counts so we don't trigger on stale values
-    // left over from a previous run.
     uint32_t last_counts[num_streams_to_monitor];
     for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
         uint32_t stream_id = first_stream_index + i;
@@ -47,7 +51,6 @@ void kernel_main() {
         last_counts[i] = *stream_reg;
     }
 
-    // Main loop: runs until dispatch_s signals terminate
     while (realtime_profiler_mailbox->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
         for (uint32_t i = 0; i < num_streams_to_monitor; i++) {
             uint32_t stream_id = first_stream_index + i;

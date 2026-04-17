@@ -1296,8 +1296,10 @@ re_run_command:
             // cmd->set_write_offset.offset1,
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
-                invalidate_l1_cache();
+            if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
+                while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
+                    invalidate_l1_cache();
+                }
             }
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
