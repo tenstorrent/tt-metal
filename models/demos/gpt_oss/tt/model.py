@@ -848,21 +848,14 @@ class Model:
             current_pos = current_pos.unsqueeze(0)
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
-        # Pad token buffer to 32 for non-row-sharded b<32 (TTSampling requirement)
-        if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
-            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), "constant", 0)
         if self.users_row_sharded:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         else:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
-            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), constant, 0)
+            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), "constant", 0)
         elif self.users_row_sharded:
-            # Pad tokens to 32 slots per row so the sampling module can write back
-            # 32 sampled tokens into the buffer without buffer overflow.
-            # For users_per_row=1 (B=4 case): tokens=[4] -> pad to [4*32//... wait
-            # Actually: shard [B] to [users_per_row] per row; if users_per_row < 32
-            # pad [B] to [num_rows*32] so each row gets 32 slots.
+            # Pad tokens to num_rows * 32 so each row gets 32 slots for TTSampling.
             num_rows = self.mesh_device.shape[0]
             users_per_row = max(1, B // num_rows)
             sampling_batch = 32  # TTSampling max_batch_size per row
