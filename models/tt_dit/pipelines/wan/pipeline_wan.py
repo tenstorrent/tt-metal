@@ -168,6 +168,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         target_height: int = 0,
         target_width: int = 0,
         t_chunk_size: int = 0,
+        skip_warmup: bool = False,
     ):
         super().__init__()
 
@@ -330,7 +331,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(height=target_height, width=target_width)
+        if not skip_warmup:
+            self.warmup_buffers(height=target_height, width=target_width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)

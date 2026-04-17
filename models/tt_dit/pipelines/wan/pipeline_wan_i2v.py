@@ -6,6 +6,7 @@
 
 from typing import List, NamedTuple, Optional, Union
 
+import numpy as np
 import PIL
 import torch
 from diffusers.schedulers import UniPCMultistepScheduler
@@ -33,7 +34,12 @@ class WanPipelineI2V(WanPipeline):
                 kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
             )
 
-        super().__init__(*args, model_type="i2v", **kwargs)
+        target_height = kwargs.get("target_height", 0)
+        target_width = kwargs.get("target_width", 0)
+
+        # Defer warmup: tt_encoder must be initialised before warmup_buffers runs,
+        # but tt_encoder depends on self.vae which is set up inside super().__init__().
+        super().__init__(*args, model_type="i2v", skip_warmup=True, **kwargs)
 
         self.tt_encoder = WanEncoder(
             base_dim=self.vae.config.base_dim,
@@ -50,6 +56,8 @@ class WanPipelineI2V(WanPipeline):
         )
 
         self.tt_encoder.load_state_dict(self.vae.state_dict())
+
+        self.warmup_buffers(height=target_height, width=target_width)
 
     @staticmethod
     def create_pipeline(*args, **kwargs):
@@ -76,6 +84,17 @@ class WanPipelineI2V(WanPipeline):
         model_input = torch.cat([latents, cond_latents], dim=-1).reshape(U, B, NPad, -1)
         return model_input
 
+    def warmup_buffers(self, height, width):
+        dummy_image = PIL.Image.fromarray(np.zeros((height, width, 3), dtype=np.uint8))
+        self.run_single_prompt(
+            prompt="warmup",
+            image_prompt=[ImagePrompt(image=dummy_image, frame_pos=0)],
+            height=height,
+            width=width,
+            num_frames=81,
+            num_inference_steps=1,
+        )
+
     def prepare_latents(
         self,
         batch_size: int,
@@ -94,6 +113,13 @@ class WanPipelineI2V(WanPipeline):
             image_prompt = [image_prompt]
         elif isinstance(image_prompt, PIL.Image.Image):
             image_prompt = [ImagePrompt(image=image_prompt, frame_pos=0)]
+
+        if not image_prompt:
+            raise ValueError(
+                "WanPipelineI2V requires at least one ImagePrompt. "
+                f"Got: {image_prompt!r}. Pass an ImagePrompt, a PIL.Image.Image, "
+                "or a non-empty list of ImagePrompts."
+            )
 
         latents, _ = super().prepare_latents(
             batch_size=batch_size,
