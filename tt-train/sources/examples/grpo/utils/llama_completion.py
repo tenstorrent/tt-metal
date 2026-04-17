@@ -18,7 +18,7 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
-from ttml.trainers.grpo_trainer import GRPOCompleter, GRPOMeshCtx
+from ttml.trainers.grpo_trainer import GRPOCompleter
 from .llama_overrides import LlamaCompositeKV
 
 
@@ -147,25 +147,25 @@ class LlamaCompleter(GRPOCompleter):
 
         tt_model = LlamaCompositeKV(llama_cfg)
 
-        mesh = GRPOMeshCtx()
+        _dp_mapper = None
+        _dp_composer = None
+        _total_devices = 1
         if dev_config.enable_ddp:
             autograd_ctx = ttml.autograd.AutoContext.get_instance()
             autograd_ctx.initialize_parallelism_context(
                 ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
             )
             device = autograd_ctx.get_device()
-            mesh = GRPOMeshCtx(
-                dp_mapper=ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0),
-                dp_composer=ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0),
-                total_devices=dev_config.total_devices(),
-            )
+            _dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+            _dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+            _total_devices = dev_config.total_devices()
 
         local_safetensors = os.path.isdir(model_source) and any(
             f == "model.safetensors" for f in os.listdir(model_source)
         )
         if local_safetensors:
             logging.info("Loading model from local safetensors: %s", model_source)
-            load_checkpoint(tt_model, model_source, dp_mapper=mesh.dp_mapper)
+            load_checkpoint(tt_model, model_source, dp_mapper=_dp_mapper)
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
             model_repo_path = snapshot_download(
@@ -181,7 +181,9 @@ class LlamaCompleter(GRPOCompleter):
         self._ctx = ctx
         self._model = tt_model
         self.transformer_config = tf_config
-        self._mesh = mesh
+        self._dp_mapper = _dp_mapper
+        self._dp_composer = _dp_composer
+        self._total_devices = _total_devices
 
         self._kv_cache = None
         self._kv_cache_B: int = 0
@@ -191,8 +193,12 @@ class LlamaCompleter(GRPOCompleter):
         return self._ctx._tokenizer
 
     @property
-    def mesh(self):
-        return self._mesh
+    def dp_mapper(self):
+        return self._dp_mapper
+
+    @property
+    def dp_composer(self):
+        return self._dp_composer
 
     @property
     def model(self):
@@ -233,10 +239,9 @@ class LlamaCompleter(GRPOCompleter):
 
         B = len(completions)
         pad_token = self._ctx._pad_token
-        mesh = self._mesh
 
-        assert B % mesh.total_devices == 0
-        B_local = B // mesh.total_devices
+        assert B % self._total_devices == 0
+        B_local = B // self._total_devices
 
         lengths = [len(p) + len(c) for p, c in zip(prompts, completions)]
         T = max(lengths) - 1
@@ -274,7 +279,7 @@ class LlamaCompleter(GRPOCompleter):
         targets_pad[:, :T] = targets_np
 
         targets_tt = ttml.autograd.Tensor.from_numpy(
-            targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mesh.dp_mapper
+            targets_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
 
         nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
@@ -284,7 +289,7 @@ class LlamaCompleter(GRPOCompleter):
         loss_mask_pad[:, :T] = loss_mask_np
 
         loss_mask_tt = ttml.autograd.Tensor.from_numpy(
-            loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, mesh.dp_mapper
+            loss_mask_pad, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper
         )
 
         return nlog, loss_mask_tt
@@ -305,7 +310,7 @@ class LlamaCompleter(GRPOCompleter):
         padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
-            padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._mesh.dp_mapper
+            padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
 
     def _create_causal_mask(
@@ -327,7 +332,7 @@ class LlamaCompleter(GRPOCompleter):
         mask_4d = mask_3d[:, np.newaxis, :, :]
         assert mask_4d.shape == (B, 1, padded_q, padded_w)
 
-        return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._mesh.dp_mapper)
+        return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
     def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
         logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
@@ -372,9 +377,9 @@ class LlamaCompleter(GRPOCompleter):
         ctx = self._ctx
         assert prompt_tokens_np.shape == (B, N)
         assert len(pad_lengths) == B
-        assert B % self._mesh.total_devices == 0
+        assert B % self._total_devices == 0
 
-        B_local = B // self._mesh.total_devices
+        B_local = B // self._total_devices
 
         V = len(ctx._tokenizer)
         padded_V = _round_up(V)
@@ -392,7 +397,7 @@ class LlamaCompleter(GRPOCompleter):
         def to_np(column_list):
             arr = np.empty((B, len(column_list)), dtype=np.int32)
             for j, column in enumerate(column_list):
-                arr[:, j] = column.to_numpy(self._mesh.dp_composer).reshape(B)
+                arr[:, j] = column.to_numpy(self._dp_composer).reshape(B)
             return arr
 
         for i in range(tokens_to_complete):
