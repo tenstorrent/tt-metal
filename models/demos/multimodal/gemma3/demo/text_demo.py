@@ -1110,8 +1110,6 @@ def test_demo_text(
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
 
-            if _verify_demo:
-                logger.info(f"[VERIFY DEMO] iter={iteration} current_pos_after_increment={current_pos.tolist()}")
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = int(out_tok[user, 0].item())
