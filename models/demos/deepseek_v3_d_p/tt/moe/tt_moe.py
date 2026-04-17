@@ -335,9 +335,11 @@ class TtMoe(LightweightModule):
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
         if self.gate_input_mem_config is not None:
+            # TODO: check perf loss for x_for_gate in DRAM vs to_memory_config(gate_input_mem_config)
             x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
-        scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
+        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
+        ttnn.deallocate(x_for_gate)  # x_for_gate is L1 height sharded and no longer needed.
 
         # DEBUG
         # Print full token counts per expert for monitoring
@@ -349,12 +351,12 @@ class TtMoe(LightweightModule):
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
         # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices_raw.dtype != ttnn.int32:
-            indices_raw = ttnn.to_layout(indices_raw, ttnn.TILE_LAYOUT)
-            indices_raw = ttnn.typecast(indices_raw, ttnn.int32)
-            indices_raw = ttnn.to_layout(indices_raw, ttnn.ROW_MAJOR_LAYOUT)
+        if indices.dtype != ttnn.int32:
+            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
+            indices = ttnn.typecast(indices, ttnn.int32)
+            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         else:
-            indices_raw = ttnn.to_layout(indices_raw, ttnn.ROW_MAJOR_LAYOUT)
+            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         #
         # Ensure ROW_MAJOR layout for dispatch compatibility
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
@@ -362,11 +364,11 @@ class TtMoe(LightweightModule):
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
         seq_dim = x.shape[1]
         batch_dim = x.shape[0]
-        weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
-        indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
+        scores = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
+        indices = ttnn.reshape(indices, (batch_dim, seq_dim, indices.shape[-1]))
 
-        logger.debug(f"  weights.shape={weights.shape}")
-        logger.debug(f"  indices.shape={indices.shape}")
+        logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
+        logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
@@ -404,7 +406,7 @@ class TtMoe(LightweightModule):
 
         dispatched_buffer, metadata = self.dispatch_module(
             x_full,
-            weights,
+            scores,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
@@ -457,7 +459,7 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        routed_output = self.reduce_module(combined_output, weights=weights)
+        routed_output = self.reduce_module(combined_output, weights=scores)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
@@ -496,7 +498,7 @@ class TtMoe(LightweightModule):
                 logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
             intermediates = TtMoEIntermediates(
-                gate_scores=weights,
+                gate_scores=scores,
                 gate_indices=indices,
                 gate_logits=gate_logits,
                 dispatched_buffer=dispatched_buffer,
