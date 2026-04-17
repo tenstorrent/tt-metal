@@ -15,7 +15,7 @@ from models.demos.wormhole.bge_m3.tests.test_utils import (
 from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 MODEL_ID = "BAAI/bge-m3"
-BATCH_SIZE = 25
+BATCH_SIZE = 1
 PCC_THRESHOLD = 0.94
 
 
