@@ -170,6 +170,7 @@ if(TARGET benchmark::benchmark)
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
+        benchmark/frobenius_normalize_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
