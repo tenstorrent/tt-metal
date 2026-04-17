@@ -136,6 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_math_eltwise_unary_sfpu_init_();
 
+    // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
+    // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
+    const int in0_base            = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int in1_base            = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
+    const int out_base            = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
@@ -149,13 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
             TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
 
-            // SFPU add inlined for sfpmem_mod control (same rationale as square kernel).
-            // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
-            // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
-            const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
-            const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
+            // SFPU add inlined for sfpmem_mod control
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
