@@ -18,6 +18,7 @@ import ttnn
 RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
 TANH = ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH)
+SOFTPLUS = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS)
 
 
 def _default_compute_config(device):
