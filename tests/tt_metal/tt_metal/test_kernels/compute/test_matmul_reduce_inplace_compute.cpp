@@ -10,10 +10,19 @@
 // column vector tile.
 //
 // CB layout:
-//   c_0  (in_out)     — input/output CB (produced by reader, overwritten in place)
-//   c_1  (col_ident)  — single column-identity tile (all ones)
-//   c_16 (out_copy)   — copy of c_0 after reduce, so the writer can drain it
-//                       via the standard writer_unary path
+//   c_0  (in_out)      — compute-produced in/out CB for the reduce
+//   c_1  (col_ident)   — single column-identity tile (all ones)
+//   c_2  (staging)     — reader-produced input; compute copies to c_0
+//   c_16 (out_copy)    — copy of c_0 after reduce, so the writer can drain it
+//                        via the standard writer_unary path
+//
+// Design note: matmul_reduce_inplace requires in_out_cb to be compute-owned
+// (T2's tiles_received shadow must track the pushes). A reader-produced CB
+// would leave T2's shadow at 0 while L1's counter is already nonzero, so
+// T2's push-back would overwrite L1 with too-low a value and cause the
+// subsequent cb_wait_front to deadlock. The fix is to have the reader write
+// to c_2 (staging) and then have the compute kernel copy c_2 → c_0 before
+// calling matmul_reduce_inplace, so that T2 owns the c_0 production history.
 //
 // Compile-time args:
 //   [0] num_subblocks
@@ -35,22 +44,38 @@ void kernel_main() {
     constexpr uint32_t block_kt = get_compile_time_arg_val(3);
     constexpr uint32_t total_in_tiles = get_compile_time_arg_val(4);
 
-    constexpr uint32_t in_out_cb = tt::CBIndex::c_0;
+    constexpr uint32_t staging_cb = tt::CBIndex::c_2;  // reader-produced staging
+    constexpr uint32_t in_out_cb = tt::CBIndex::c_0;   // compute-owned in/out
     constexpr uint32_t col_ident_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_copy_cb = tt::CBIndex::c_16;
 
-    // The helper calls mm_block_init_short internally, but we still need the
-    // global mm_init once at TU start to set up compute infra. Configure pack
-    // for in_out_cb since the helper packs back to it (no internal reconfig).
+    // Phase 1: copy staging → in_out_cb to establish compute ownership of c_0.
+    // After this, T2's tiles_received shadow for c_0 correctly reflects the
+    // total_in_tiles pushes, so matmul_reduce_inplace's cb_push_back will
+    // write the right value to L1.
     mm_init(in_out_cb, col_ident_cb, in_out_cb);
+    copy_tile_to_dst_init_short(staging_cb);
+    PACK((pack_reconfig_data_format(in_out_cb)));
 
-    // Reduce in place: c_0 becomes the reduced result while its tile count
-    // stays the same (same num_subblocks * subblock_h * subblock_w tiles).
+    cb_wait_front(staging_cb, total_in_tiles);
+    cb_reserve_back(in_out_cb, total_in_tiles);
+    for (uint32_t i = 0; i < total_in_tiles; i++) {
+        tile_regs_acquire();
+        copy_tile(staging_cb, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, in_out_cb);
+        tile_regs_release();
+    }
+    cb_pop_front(staging_cb, total_in_tiles);
+    cb_push_back(in_out_cb, total_in_tiles);
+
+    // Phase 2: in-place reduce — c_0 is now compute-owned, so T2's counter
+    // is in sync with L1. The helper will correctly push-back to c_0 and
+    // T0's subsequent cb_wait_front will see the updated L1 counter.
     compute_kernel_lib::matmul_reduce_inplace(in_out_cb, col_ident_cb, num_subblocks, subblock_h, subblock_w, block_kt);
 
-    // Copy the reduced tiles from in_out_cb into out_copy_cb so the writer
-    // (consumes c_16) can drain them. This also serves as the "in-place"
-    // invariant check: we expect total_in_tiles tiles still fronted.
+    // Phase 3: copy reduced result from c_0 to c_16 for the writer to drain.
     // Helper ended with srcA configured for in_out_cb (via its internal
     // mm_block_init_short). Re-init for copy_tile, reconfigure pack format.
     copy_tile_to_dst_init_short(in_out_cb);
