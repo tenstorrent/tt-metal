@@ -181,7 +181,9 @@ def test_forward_pass(
     total_seq_len = config.sp_dim * n_sp_devices
     torch_input = _try_load_real_gate_input(total_seq_len, config.dim)
     if torch_input is None:
-        torch_input = torch.randn(total_seq_len, config.dim, dtype=torch.bfloat16) + 1
+        torch_input = (
+            torch.randn(total_seq_len, config.dim, dtype=torch.bfloat16) * 0.1147 * (7168 / config.dim)
+        )  # 0.1147 is the std of the real gate input and we need scale it to adjust for smaller dims
 
     # Reference forward pass
     reference_model.eval()

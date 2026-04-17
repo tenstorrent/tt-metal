@@ -337,7 +337,7 @@ def test_ttnn_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
-    if gate_fallback_mode == GateFallbackMode.HOST_ALL:
+    if gate_fallback_mode == GateComputeMode.HOST_ALL:
         # Sparse tensor validation using slot-aware comparisons
         # fmt: off
         sparse_checks = [

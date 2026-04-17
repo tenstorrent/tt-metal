@@ -10,6 +10,7 @@ PyTorch reference implementation when dispatching tokens to experts.
 """
 
 import pytest
+import torch
 from loguru import logger
 from tracy import signpost
 
