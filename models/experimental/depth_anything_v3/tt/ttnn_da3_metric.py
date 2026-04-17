@@ -47,6 +47,17 @@ _TILE = 32
 _state: dict = {}
 
 
+def _hifi4_kernel_config():
+    """Higher matmul fidelity + fp32 accumulation. Closes most of the bf16 PCC
+    gap left by the default LoFi math fidelity used in ttnn.linear/matmul."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def _next_tile(n: int) -> int:
     return ((n + _TILE - 1) // _TILE) * _TILE
 
@@ -87,33 +98,39 @@ def _upload_block(block, device) -> dict:
     }
 
 
-def _ttnn_block(x, p):
+def _ttnn_block(x, p, attention_mask):
     """Run one DinoV2 block on chip. Mirrors openvla's dinov2_attention/feedforward
-    patterns but folds layerscale via ttnn.mul (gamma is already a small constant)."""
+    patterns. Uses fused attention_softmax_ with an additive mask so the 6 padded
+    sequence positions (1370 -> 1376 tile alignment) get -inf attention weight."""
     head_dim = EMBED_DIM // NUM_HEADS
-    scale = head_dim**-0.5
 
     # ----- Attention -----
     h = ttnn.layer_norm(x, weight=p["norm1_w"], bias=p["norm1_b"], epsilon=1e-6,
                         memory_config=ttnn.L1_MEMORY_CONFIG)
     qkv = ttnn.linear(h, p["qkv_w"], bias=p["qkv_b"],
-                      memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                      memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                      compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(h)
     q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv, memory_config=ttnn.L1_MEMORY_CONFIG, num_heads=NUM_HEADS,
     )
     ttnn.deallocate(qkv)
-    q = ttnn.mul_(q, scale)
-    attn_scores = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    attn_scores = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                              compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(q)
     ttnn.deallocate(k)
-    attn_probs = ttnn.softmax_in_place(attn_scores, numeric_stable=True)
-    ctx = ttnn.matmul(attn_probs, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    # Fused: scale by 1/sqrt(head_dim), add additive mask, then softmax.
+    attn_probs = ttnn.transformer.attention_softmax_(
+        attn_scores, attention_mask=attention_mask, head_size=head_dim,
+    )
+    ctx = ttnn.matmul(attn_probs, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                      compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(attn_probs)
     ttnn.deallocate(v)
     ctx = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
     out = ttnn.linear(ctx, p["proj_w"], bias=p["proj_b"],
-                      memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                      memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                      compute_kernel_config=_hifi4_kernel_config())
     ttnn.deallocate(ctx)
     out = ttnn.mul(out, p["ls1_g"])
     x = ttnn.add(x, out)
@@ -124,9 +141,10 @@ def _ttnn_block(x, p):
                         memory_config=ttnn.L1_MEMORY_CONFIG)
     h = ttnn.linear(h, p["fc1_w"], bias=p["fc1_b"],
                     memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
-                    activation="gelu")
+                    activation="gelu", compute_kernel_config=_hifi4_kernel_config())
     h = ttnn.linear(h, p["fc2_w"], bias=p["fc2_b"],
-                    memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                    memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                    compute_kernel_config=_hifi4_kernel_config())
     h = ttnn.mul(h, p["ls2_g"])
     x = ttnn.add(x, h)
     ttnn.deallocate(h)
@@ -145,14 +163,31 @@ def _cpu_embed(pixel_values: torch.Tensor, backbone) -> Tuple[torch.Tensor, int,
     return x, Hp, Wp
 
 
+def _build_attention_mask(seq_len: int, padded_len: int, device):
+    """Additive bias mask: 0 for valid tokens, -1e4 for the padded tail.
+    Shape (1, 1, 1, padded_len) which broadcasts over (B, num_heads, seq_q)."""
+    mask = torch.zeros(1, 1, 1, padded_len, dtype=torch.bfloat16)
+    mask[..., seq_len:] = -1e4
+    return ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+
 def _setup(pixel_values: torch.Tensor):
     """One-time setup: load the model, open the device, upload all weights."""
     if "device" in _state:
         return
-    cpu_model = build_da3_metric(load_weights=True, img_size=pixel_values.shape[-1]).eval()
+    img_size = pixel_values.shape[-1]
+    cpu_model = build_da3_metric(load_weights=True, img_size=img_size).eval()
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
-    _state.update(cpu_model=cpu_model, device=device, blocks=blocks)
+    seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
+    padded = _next_tile(seq_len)
+    attention_mask = _build_attention_mask(seq_len, padded, device)
+    _state.update(
+        cpu_model=cpu_model,
+        device=device,
+        blocks=blocks,
+        attention_mask=attention_mask,
+    )
 
 
 def run(pixel_values: torch.Tensor):
@@ -162,6 +197,7 @@ def run(pixel_values: torch.Tensor):
     cpu_model = _state["cpu_model"]
     device = _state["device"]
     blocks = _state["blocks"]
+    attention_mask = _state["attention_mask"]
 
     with torch.inference_mode():
         emb, Hp, Wp = _cpu_embed(pixel_values, cpu_model.backbone)
@@ -181,7 +217,7 @@ def run(pixel_values: torch.Tensor):
 
         intermediates_cpu: List[torch.Tensor] = []
         for i, p in enumerate(blocks):
-            x_tt = _ttnn_block(x_tt, p)
+            x_tt = _ttnn_block(x_tt, p, attention_mask)
             if i in OUT_LAYERS:
                 t = ttnn.to_torch(x_tt)
                 intermediates_cpu.append(t[..., :N, :].to(torch.float32))
