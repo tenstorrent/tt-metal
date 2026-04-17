@@ -147,6 +147,12 @@ TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
         "has space",      // whitespace
         "1starts_digit",  // leading digit
         "has.dot",        // punctuation
+        "class",          // C++ keyword
+        "namespace",      // C++ keyword
+        "int",            // C++ keyword
+        "_Foo",           // reserved: underscore + uppercase
+        "__foo",          // reserved: leading double underscore
+        "foo__bar",       // reserved: embedded double underscore
     };
 
     for (const auto& bad_name : invalid_names) {

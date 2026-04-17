@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <string_view>
+#include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -175,10 +176,12 @@ void accumulate_nodes(
 
 // Local accessor names for kernel resource bindings must be valid C++ identifiers
 // They are used verbatim in the generated kernel source code.
+// TODO: Move this to ttsl in a follow up PR
 bool IsValidCppIdentifier(std::string_view s) {
     if (s.empty()) {
         return false;
     }
+    // Reject names with non-identifier characters or an empty/leading-digit form.
     const unsigned char c0 = static_cast<unsigned char>(s[0]);
     if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) {
         return false;
@@ -189,6 +192,38 @@ bool IsValidCppIdentifier(std::string_view s) {
             return false;
         }
     }
+
+    // Reject reserved identifier patterns per [lex.name]/3.
+    // Names containing "__", or starting with "_" followed by an uppercase letter.
+    if (s.size() >= 2 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z') {
+        return false;
+    }
+    if (s.find("__") != std::string_view::npos) {
+        return false;
+    }
+
+    // Reject C++ keywords. Anything in this set would produce uncompilable code
+    // when emitted as a variable identifier in kernel_bindings_generated.h.
+    static const std::unordered_set<std::string_view> kCppKeywords = {
+        "alignas",     "alignof",   "and",        "and_eq",    "asm",      "auto",         "bitand",
+        "bitor",       "bool",      "break",      "case",      "catch",    "char",         "char8_t",
+        "char16_t",    "char32_t",  "class",      "compl",     "concept",  "const",        "consteval",
+        "constexpr",   "constinit", "const_cast", "continue",  "co_await", "co_return",    "co_yield",
+        "decltype",    "default",   "delete",     "do",        "double",   "dynamic_cast", "else",
+        "enum",        "explicit",  "export",     "extern",    "false",    "float",        "for",
+        "friend",      "goto",      "if",         "inline",    "int",      "long",         "mutable",
+        "namespace",   "new",       "noexcept",   "not",       "not_eq",   "nullptr",      "operator",
+        "or",          "or_eq",     "private",    "protected", "public",   "register",     "reinterpret_cast",
+        "requires",    "return",    "short",      "signed",    "sizeof",   "static",       "static_assert",
+        "static_cast", "struct",    "switch",     "template",  "this",     "thread_local", "throw",
+        "true",        "try",       "typedef",    "typeid",    "typename", "union",        "unsigned",
+        "using",       "virtual",   "void",       "volatile",  "wchar_t",  "while",        "xor",
+        "xor_eq",
+    };
+    if (kCppKeywords.contains(s)) {
+        return false;
+    }
+
     return true;
 }
 
