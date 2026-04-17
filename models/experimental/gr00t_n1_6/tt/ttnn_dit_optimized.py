@@ -210,7 +210,7 @@ class DiTAttentionOptimizedTTNN:
             v = ttnn.slice(kv, [0, 0, padded_inner], [batch_size, kv_seq, 2 * padded_inner])
             ttnn.deallocate(kv)
         else:
-            # Self-attn: one fused QKV matmul (1 instead of 3)
+            # Self-attn: one fused QKV matmul followed by fused split+heads (9 ops -> 1)
             qkv = ttnn.linear(
                 hidden_states,
                 self.to_qkv_weight,
@@ -219,12 +219,38 @@ class DiTAttentionOptimizedTTNN:
                 dtype=ttnn.bfloat16,
                 core_grid=CORE_GRID_BH,
             )
-            kv_seq = q_seq
-            q = ttnn.slice(qkv, [0, 0, 0], [batch_size, q_seq, padded_inner])
-            k = ttnn.slice(qkv, [0, 0, padded_inner], [batch_size, q_seq, 2 * padded_inner])
-            v = ttnn.slice(qkv, [0, 0, 2 * padded_inner], [batch_size, q_seq, 3 * padded_inner])
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv, num_heads=self.num_heads, transpose_key=False
+            )
             ttnn.deallocate(qkv)
+            # split_query_key_value_and_split_heads returns [B, heads, seq, head_dim] — already done
+            # Skip the cross-attn reshape+permute path below.
+            context = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                scale=1.0 / math.sqrt(self.head_dim),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            context = ttnn.permute(context, (0, 2, 1, 3))
+            attn_3d = ttnn.reshape(context, (batch_size, q_seq, self.num_heads * self.padded_head_dim))
+            ttnn.deallocate(context)
+            output = ttnn.linear(
+                attn_3d,
+                self.to_out_0_weight,
+                bias=self.to_out_0_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=CORE_GRID_BH,
+            )
+            ttnn.deallocate(attn_3d)
+            return output
 
+        # Cross-attn path (q_seq != kv_seq can't use fused split)
         # Reshape to multi-head: [B, seq, num_heads*padded_hd] -> [B, num_heads, seq, padded_hd]
         q = ttnn.reshape(q, (batch_size, q_seq, self.num_heads, self.padded_head_dim))
         q = ttnn.permute(q, (0, 2, 1, 3))
