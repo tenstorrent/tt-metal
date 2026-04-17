@@ -155,19 +155,17 @@ def siglip2_attention(
     v = ttnn.reshape(v, (batch_size, seq_len, num_heads, padded_head_dim))
     v = ttnn.permute(v, (0, 2, 1, 3))
 
-    # Scaled dot-product: Q @ K^T / sqrt(head_dim)
-    scale = 1.0 / math.sqrt(head_dim)  # Use REAL head_dim=72, not padded
-    q = ttnn.mul(q, scale)
-    k = ttnn.permute(k, (0, 1, 3, 2))  # Transpose K
-
-    attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
+    # Fused SDPA (FlashAttention-2) — pass real head_dim=72 for correct scale, not padded.
+    context = ttnn.transformer.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        is_causal=False,
+        scale=1.0 / math.sqrt(head_dim),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     ttnn.deallocate(q)
     ttnn.deallocate(k)
-
-    attn = ttnn.softmax_in_place(attn, numeric_stable=True)
-
-    context = ttnn.matmul(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16, core_grid=CORE_GRID_BH)
-    ttnn.deallocate(attn)
     ttnn.deallocate(v)
 
     # Reshape back: [B, heads, seq, padded_hd] -> [B, seq, heads*padded_hd]
