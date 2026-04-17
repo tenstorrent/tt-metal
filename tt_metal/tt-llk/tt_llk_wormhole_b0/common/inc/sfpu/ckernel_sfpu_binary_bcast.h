@@ -396,11 +396,9 @@ inline void _calculate_sfpu_binary_bcast_col_full_tile_(std::uint32_t dst_index_
 // Public API
 // ============================================================================
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, SfpuBcastDim BCAST_DIM>
+template <BinaryOp BINOP, SfpuBcastDim BCAST_DIM>
 inline void _calculate_sfpu_binary_bcast_full_tile_(std::uint32_t dst_index_data, std::uint32_t dst_index_bcast, std::uint32_t dst_index_out)
 {
-    (void)APPROXIMATION_MODE; // no approximation path differs for ADD/SUB/MUL
-
     if constexpr (BCAST_DIM == SfpuBcastDim::BCAST_COL)
     {
         _calculate_sfpu_binary_bcast_col_full_tile_<BINOP>(dst_index_data, dst_index_bcast, dst_index_out);
@@ -411,10 +409,9 @@ inline void _calculate_sfpu_binary_bcast_full_tile_(std::uint32_t dst_index_data
     }
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, SfpuBcastDim BCAST_DIM>
+template <BinaryOp BINOP, SfpuBcastDim BCAST_DIM>
 inline void _sfpu_binary_bcast_init_()
 {
-    (void)APPROXIMATION_MODE;
     (void)BINOP;
 
     // Zero-stride address modifiers for straight SFPLOAD / SFPSTORE use.
