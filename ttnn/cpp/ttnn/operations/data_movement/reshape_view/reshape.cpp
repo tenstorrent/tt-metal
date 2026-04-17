@@ -42,7 +42,56 @@ MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, 
 
         if (memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             auto core_range = input_shard_spec.grid.bounding_box();
-            auto updated_spec = output_shape.block_sharded(core_range, orientation);
+            auto input_grid_size = core_range.grid_size();
+            auto phys_h = output_shape.physical_shape().height();
+            auto phys_w = output_shape.physical_shape().width();
+            bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
+
+            // Max shard counts along H and W derived from the input grid.
+            uint32_t max_ny = is_rm ? input_grid_size.y : input_grid_size.x;
+            uint32_t max_nx = is_rm ? input_grid_size.x : input_grid_size.y;
+
+            // Alignment reflects tile granularity for the output data type.
+            auto alignment = output_shape.page_config().get_recommended_shard_shape_alignment(output_shape.data_type());
+            uint32_t align_h = alignment.size() >= 2 ? alignment[-2] : 1;
+            uint32_t align_w = alignment.size() >= 1 ? alignment[-1] : 1;
+
+            // Largest ny ≤ max_ny such that phys_h is evenly divisible and shard_h is align_h-aligned.
+            uint32_t ny = max_ny;
+            for (; ny > 0; ny--) {
+                if (phys_h % ny == 0 && (phys_h / ny) % align_h == 0) {
+                    break;
+                }
+            }
+            TT_FATAL(
+                ny > 0,
+                "Could not find a valid shard height for output BLOCK_SHARDED tensor (phys_h={}, align_h={})",
+                phys_h,
+                align_h);
+
+            // Largest nx ≤ max_nx such that phys_w is evenly divisible and shard_w is align_w-aligned.
+            uint32_t nx = max_nx;
+            for (; nx > 0; nx--) {
+                if (phys_w % nx == 0 && (phys_w / nx) % align_w == 0) {
+                    break;
+                }
+            }
+            TT_FATAL(
+                nx > 0,
+                "Could not find a valid shard width for output BLOCK_SHARDED tensor (phys_w={}, align_w={})",
+                phys_w,
+                align_w);
+
+            // CoreRange sized to exactly ny × nx; one shard per core.
+            CoreCoord new_end;
+            if (is_rm) {
+                new_end = CoreCoord{core_range.start_coord.x + nx - 1, core_range.start_coord.y + ny - 1};
+            } else {
+                // COL_MAJOR: x indexes height, y indexes width.
+                new_end = CoreCoord{core_range.start_coord.x + ny - 1, core_range.start_coord.y + nx - 1};
+            }
+            CoreRange new_core_range(core_range.start_coord, new_end);
+            auto updated_spec = output_shape.block_sharded(new_core_range, orientation);
             output_mem_config = updated_spec.memory_config();
         } else if (memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto core_range = input_shard_spec.grid;
@@ -232,8 +281,11 @@ ttnn::Tensor reshape_tiled(
     const auto input_padded_shape_3d = compute_padded_shape(input_tensor_shape_3d);
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
-    // For performance reasons, use s-to-i & i-to-s for width sharded only, and use the new reshape for all other cases
-    if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    // All sharded layouts: s2i → reshape → i2s.
+    // In-place shard-spec patching is unsound when H or W grows; num_shards can exceed the grid.
+    if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         if (tensor.memory_config().is_sharded()) {
             TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
             MemoryConfig working_input_memory_config{
@@ -278,7 +330,7 @@ ttnn::Tensor reshape_tiled(
         return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
     }
 
-    // Use new version for all other cases
+    // Interleaved (DRAM / L1) tensors: call prim::reshape_view directly.
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
