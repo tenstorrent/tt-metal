@@ -12,7 +12,7 @@ def to_device_weight(
     device,
     w: torch.Tensor,
     *,
-    dtype=ttnn.bfloat16,
+    dtype=ttnn.bfloat8_b,
     transpose: bool = True,
 ) -> ttnn.Tensor:
     """Upload a torch weight to device in TILE layout.
