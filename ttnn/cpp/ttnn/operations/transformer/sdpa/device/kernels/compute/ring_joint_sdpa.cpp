@@ -134,6 +134,17 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
+    // Straddle chunk: balanced-zigzag causal places two coarse-chunks-worth of sequence on each
+    // device; local K shard is monotonic in original positions but with a gap at the coarse
+    // boundary (local position coarse_chunk_size_t tiles). When k_chunk_size does not divide the
+    // coarse chunk size, one K chunk straddles early/late content — its late-half columns must be
+    // -inf-masked on rix > rid halved iters where compute would otherwise attend them, and the
+    // K-loop must be extended by one chunk so the early-half is not dropped.
+    constexpr uint32_t coarse_chunk_size_t = local_padded_Nt / 2;
+    constexpr bool has_straddle = (coarse_chunk_size_t % Sk_chunk_t) != 0;
+    constexpr uint32_t straddle_chunk_id = coarse_chunk_size_t / Sk_chunk_t;
+    constexpr uint32_t straddle_num_padded_tiles = has_straddle ? (Sk_chunk_t - (coarse_chunk_size_t % Sk_chunk_t)) : 0;
+
     RingAccumulatorState acc_state = {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
@@ -189,6 +200,11 @@ void kernel_main() {
         lw_mask.joint_l_partial_col = joint_l_partial_col;
         lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
         lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+        // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
+        // the straddle chunk. Must agree with the K-loop extension condition below.
+        const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
+        lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
+        lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
             const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
             const uint32_t valid_tiles =
@@ -261,6 +277,11 @@ void kernel_main() {
             uint32_t iter_num_kv_chunks = num_kv_chunks;
             if (is_causal && is_balanced && ring_index > ring_id) {
                 iter_num_kv_chunks /= 2;
+                // Extend by one chunk to include the straddle chunk; its late-half columns are
+                // -inf-masked via lw_mask.straddle_* above, early-half columns attend normally.
+                if constexpr (has_straddle) {
+                    iter_num_kv_chunks = straddle_chunk_id + 1;
+                }
             }
             bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
 
