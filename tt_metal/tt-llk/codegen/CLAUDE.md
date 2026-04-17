@@ -92,16 +92,18 @@ Pass to the orchestrator:
 
 ### Solve Issue
 
-| Architecture | Task Type | Orchestrator |
-|-------------|-----------|-------------|
-| **blackhole** | issue fix | `codegen/agents/blackhole/bh-orchestrator.md` |
-| **quasar** | new kernel | `codegen/agents/quasar/orchestrator.md` |
-| **quasar** | issue fix | Not yet supported — inform the user |
-| **blackhole** | new kernel | Not yet supported — inform the user |
+| Architecture | Task Type | Orchestrator | TARGET_ARCH |
+|-------------|-----------|-------------|-------------|
+| **blackhole** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `blackhole` |
+| **quasar** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `quasar` |
+| **wormhole** | issue fix | `codegen/agents/issue-solver/orchestrator.md` | `wormhole` |
+| **quasar** | new kernel | `codegen/agents/quasar/orchestrator.md` | — |
+| **blackhole** | new kernel | Not yet supported — inform the user | — |
 
 Pass **all** fetched issue context verbatim to the selected orchestrator: `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_LABELS`, `ISSUE_COMMENTS`. Never summarize or alter any of these fields — agents need the raw content to parse error messages, stack traces, and reproduction steps.
 
-Also pass the worktree context:
+Also pass:
+- `TARGET_ARCH` — the value from the table above (omit for kernel-gen — the quasar orchestrator hardcodes its own arch)
 - `WORKTREE_DIR` — the absolute path to the worktree where agents must make all code changes
 - `WORKTREE_BRANCH` — the branch name for commits and PRs
 
@@ -120,11 +122,11 @@ If the orchestrator succeeded and changes should be preserved, commit and push f
 
 ---
 
-## Architecture-Based Orchestrators
+## Orchestrators
 
-Each target architecture has its own orchestrator and agent playbooks under `codegen/agents/{arch}/`:
+Two flows: kernel generation (arch-specific) and issue solving (shared, arch-parameterized).
 
-| Architecture | Orchestrator | Agents |
-|--------------|-------------|--------|
-| **quasar** | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` |
-| **blackhole** | `codegen/agents/blackhole/bh-orchestrator.md` | `codegen/agents/blackhole/bh-*.md` |
+| Flow | Orchestrator | Agents | Notes |
+|------|--------------|--------|-------|
+| Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today |
+| Issue solver | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Multi-arch via `TARGET_ARCH` — see `codegen/references/arch-profiles.md` |
