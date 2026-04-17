@@ -40,7 +40,7 @@ class TtMlp:
 
     CORE_GRID = ttnn.CoreGrid(y=10, x=11)
     COMPUTE = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
