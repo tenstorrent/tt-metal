@@ -59,7 +59,7 @@ class _TtConvGRU:
         self.h_planes = ref_gru.h_planes
         self.convzr = TtConv2d(ref_gru.convzr, activation=None)
         self.convq = TtConv2d(ref_gru.convq, activation=None)
-        self.w = TtConv2d(ref_gru.w, activation=None)
+        self.w = TtConv2d(ref_gru.w, activation=SIGMOID)
         self.convzrq_glo = TtConv2d(ref_gru.convzrq_glo, activation=None)
 
     def __call__(self, net, inp, corr, flow, device, batch_size, h, w):
@@ -70,8 +70,8 @@ class _TtConvGRU:
         net_inp = ttnn.concat([net, inp_cat], dim=-1)
 
         # glo path: sigmoid(w(net)) * net, then mean over spatial.
-        w_out, _, _ = self.w(net, device, batch_size, h, w)
-        gate = ttnn.sigmoid(w_out)
+        # Sigmoid is fused into the w conv so gate drops from 2 ops to 1.
+        gate, _, _ = self.w(net, device, batch_size, h, w)
         glo_spatial = ttnn.multiply(gate, net)
         # reshape [1,1,N*H*W,C] → [N, H*W, C] for spatial reduction.
         glo_reshaped = ttnn.reshape(glo_spatial, (batch_size, h * w, self.h_planes))
