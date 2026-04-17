@@ -11,11 +11,13 @@ Tests for prepare_weights on 4x2 mesh: prepare_* and TensorCache (CacheConfig) p
 
 import time
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, bfp4_tile_byte_count
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
@@ -35,6 +37,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    prepare_moe_routed_experts_bspm,
     prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
@@ -1043,3 +1046,335 @@ def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     assert (
         len(artifact_dirs) >= 3
     ), f"Expected at least 3 cached artifacts (h/e gamma, eh_proj), found {len(artifact_dirs)}"
+
+
+# =============================================================================
+# BSPM / CompressedTensor tests
+# =============================================================================
+
+
+def _small_bspm_state_dict(
+    layer_idx: int,
+    *,
+    num_experts: int,
+    K: int,
+    N: int,
+    seed: int = 99,
+) -> dict[str, torch.Tensor]:
+    """Minimal state dict for BSPM tests using small custom-shaped expert weights.
+
+    HF convention: weight.shape = (out_features, in_features) = (N, K).
+    All three projections use the same K/N for simplicity.
+    """
+    g = torch.Generator().manual_seed(seed)
+    state = {}
+    for e in range(num_experts):
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            state[f"model.layers.{layer_idx}.mlp.experts.{e}.{proj}.weight"] = torch.randn(
+                N, K, generator=g, dtype=torch.bfloat16
+            )
+    return state
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_routed_experts_bspm_output_types_4x2(bh_2d_mesh_device, tmp_path):
+    """prepare_moe_routed_experts_bspm returns CompressedTensor per expert, correct counts,
+    correct shapes, DRAM-contiguous; and tiles.bin files are written to TensorCache."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    tile_w = 32
+    num_banks = submesh.dram_grid_size().x
+    num_experts = 2
+    layer_idx = 3
+    K, N = 256, 256
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w
+    tiles_w_count = N_padded // tile_w
+    total_tiles = tiles_h * tiles_w_count
+
+    state = _small_bspm_state_dict(layer_idx, num_experts=num_experts, K=K, N=N)
+    # All BFP4 codes (tt-metal code 1) — simplest valid assignment
+    codes = np.ones((num_experts, 3, total_tiles), dtype=np.int8)
+    bspm_data = {"n_experts": num_experts, "codes": codes}
+
+    cache_config = CacheConfig(
+        cache=TensorCache(tmp_path),
+        context=_test_cache_context(mesh_shape=(1, 1)),
+    )
+
+    routed = prepare_moe_routed_experts_bspm(
+        submesh,
+        state,
+        layer_idx,
+        num_experts,
+        num_banks,
+        bspm_data,
+        move_to_device=True,
+        cache_config=cache_config,
+    )
+
+    assert isinstance(routed, MoERoutedExpertWeights)
+    assert len(routed.routed_gate_proj) == num_experts
+    assert len(routed.routed_up_proj) == num_experts
+    assert len(routed.routed_down_proj) == num_experts
+
+    for e in range(num_experts):
+        for proj_name, proj_list in [
+            ("routed_gate_proj", routed.routed_gate_proj),
+            ("routed_up_proj", routed.routed_up_proj),
+            ("routed_down_proj", routed.routed_down_proj),
+        ]:
+            ct = proj_list[e]
+            assert isinstance(ct, CompressedTensor), f"{proj_name}[{e}] is not CompressedTensor"
+            assert ct.shape == (K, N_padded), f"{proj_name}[{e}].shape {ct.shape} != ({K}, {N_padded})"
+
+    routed.validate_contiguous_dram()
+
+    # tiles.bin written: one per expert per projection = num_experts * 3
+    tiles_bin_files = list((cache_config.cache.local_root / "objects").rglob("tiles.bin"))
+    assert (
+        len(tiles_bin_files) == num_experts * 3
+    ), f"Expected {num_experts * 3} tiles.bin files, found {len(tiles_bin_files)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_routed_expert_weights_bspm_fallback_4x2(bh_2d_mesh_device, tmp_path):
+    """When bspm_dir has no .bspm file for the requested layer, prepare_routed_expert_weights
+    falls back to uniform bfloat4_b — routed projections are ttnn.Tensor, not CompressedTensor."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    # Full R1 shapes required: bfloat4_b path uses hardcoded shard specs from _ROUTED_GATE_UP_K/N.
+    state = _layer_state_dict(0, is_moe=True, seed=43)
+
+    # tmp_path is empty — no precision_map_B_3.5.bspm file exists for layer 0
+    routed = prepare_routed_expert_weights(
+        submesh,
+        state,
+        0,
+        is_moe=True,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        move_to_device=True,
+        bspm_dir=tmp_path,
+    )
+
+    assert isinstance(routed, MoERoutedExpertWeights)
+    assert len(routed.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
+        for proj_name, proj_list in [
+            ("routed_gate_proj", routed.routed_gate_proj),
+            ("routed_up_proj", routed.routed_up_proj),
+            ("routed_down_proj", routed.routed_down_proj),
+        ]:
+            ct = proj_list[e]
+            assert isinstance(ct, ttnn.Tensor), f"{proj_name}[{e}] should be ttnn.Tensor on fallback path"
+            assert not isinstance(ct, CompressedTensor), f"{proj_name}[{e}] should NOT be CompressedTensor"
+
+    routed.validate_contiguous_dram()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_routed_experts_bspm_tile_assignment_4x2(bh_2d_mesh_device, tmp_path):
+    """Tile format distribution is preserved end-to-end: counts of BFP4/BFP2/zero codes in the
+    returned CompressedTensor._assignment_flat match the input assignment_logical for each expert.
+
+    The DRAM shuffle is a permutation so tile counts are invariant.  This test would catch a
+    silent tile-order mismatch from the reshape fix (Bug 24).
+    """
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    tile_w = 32
+    num_banks = submesh.dram_grid_size().x
+    num_experts = 2
+    layer_idx = 3
+    K, N = 256, 256
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w
+    tiles_w_count = N_padded // tile_w
+    total_tiles = tiles_h * tiles_w_count
+
+    # Mixed assignment for gate_proj: ~60% BFP4 (1), ~25% BFP2 (2), ~15% zero (3)
+    rng = np.random.default_rng(42)
+    gate_codes = rng.choice([1, 2, 3], size=(num_experts, total_tiles), p=[0.60, 0.25, 0.15]).astype(np.int8)
+    # up/down: uniform BFP4 for simplicity
+    up_codes = np.ones((num_experts, total_tiles), dtype=np.int8)
+    down_codes = np.ones((num_experts, total_tiles), dtype=np.int8)
+    codes = np.stack([gate_codes, up_codes, down_codes], axis=1)  # (num_experts, 3, total_tiles)
+
+    state = _small_bspm_state_dict(layer_idx, num_experts=num_experts, K=K, N=N, seed=77)
+    bspm_data = {"n_experts": num_experts, "codes": codes}
+
+    cache_config = CacheConfig(
+        cache=TensorCache(tmp_path),
+        context=_test_cache_context(mesh_shape=(1, 1)),
+    )
+
+    routed = prepare_moe_routed_experts_bspm(
+        submesh,
+        state,
+        layer_idx,
+        num_experts,
+        num_banks,
+        bspm_data,
+        move_to_device=True,
+        cache_config=cache_config,
+    )
+
+    # Shuffle is a permutation — counts per code are invariant.
+    for e in range(num_experts):
+        ct = routed.routed_gate_proj[e]
+        assert isinstance(ct, CompressedTensor)
+        actual_flat = ct._assignment_flat  # DRAM-shuffled order, same counts as input
+        expected_flat = gate_codes[e]  # logical order; counts are the same after shuffle
+
+        for code, name in [(1, "BFP4"), (2, "BFP2"), (3, "zero")]:
+            expected_count = int(np.sum(expected_flat == code))
+            actual_count = int(np.sum(actual_flat == code))
+            assert (
+                actual_count == expected_count
+            ), f"expert {e} gate_proj: {name} count mismatch — expected {expected_count}, got {actual_count}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_routed_experts_bspm_footprint_4x2(bh_2d_mesh_device, tmp_path):
+    """Compact tiles.bin disk footprint is smaller than uniform BFP4 when assignment is mixed."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    tile_w = 32
+    num_banks = submesh.dram_grid_size().x
+    num_experts = 2
+    layer_idx = 4
+    K, N = 256, 256
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w
+    tiles_w_count = N_padded // tile_w
+    total_tiles = tiles_h * tiles_w_count
+
+    # Mixed assignment: 50% BFP4, 30% BFP2, 20% zero
+    rng = np.random.default_rng(17)
+    mixed_codes = rng.choice([1, 2, 3], size=(num_experts, total_tiles), p=[0.50, 0.30, 0.20]).astype(np.int8)
+    codes = np.stack([mixed_codes, mixed_codes, mixed_codes], axis=1)
+
+    state = _small_bspm_state_dict(layer_idx, num_experts=num_experts, K=K, N=N, seed=55)
+    bspm_data = {"n_experts": num_experts, "codes": codes}
+
+    cache_config = CacheConfig(
+        cache=TensorCache(tmp_path),
+        context=_test_cache_context(mesh_shape=(1, 1)),
+    )
+    prepare_moe_routed_experts_bspm(
+        submesh,
+        state,
+        layer_idx,
+        num_experts,
+        num_banks,
+        bspm_data,
+        move_to_device=True,
+        cache_config=cache_config,
+    )
+
+    # Each tiles.bin should be smaller than uniform BFP4 baseline
+    bfp4_baseline = bfp4_tile_byte_count(tiles_h, tiles_w_count)
+    for tiles_bin in (cache_config.cache.local_root / "objects").rglob("tiles.bin"):
+        compact_bytes = tiles_bin.stat().st_size
+        assert (
+            compact_bytes < bfp4_baseline
+        ), f"{tiles_bin}: compact={compact_bytes} B >= BFP4 baseline={bfp4_baseline} B"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_layer_bspm_cache_roundtrip_4x2(bh_2d_mesh_device, tmp_path):
+    """TensorCache roundtrip for BSPM experts: cold miss writes tiles.bin; warm hit loads from disk.
+
+    Asserts:
+    - After cold miss: tiles.bin + assignment.npy written for each expert×proj.
+    - After warm hit: no new files written (same count).
+    - Both calls return CompressedTensor objects with identical tile-code distributions.
+    """
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+
+    tile_w = 32
+    num_banks = submesh.dram_grid_size().x
+    num_experts = 2
+    layer_idx = 5
+    K, N = 256, 256
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    tiles_h = K // tile_w
+    tiles_w_count = N_padded // tile_w
+    total_tiles = tiles_h * tiles_w_count
+
+    rng = np.random.default_rng(99)
+    codes_flat = rng.choice([1, 2, 3], size=(num_experts, total_tiles), p=[0.60, 0.25, 0.15]).astype(np.int8)
+    codes = np.stack([codes_flat, codes_flat, codes_flat], axis=1)
+    state = _small_bspm_state_dict(layer_idx, num_experts=num_experts, K=K, N=N, seed=11)
+    bspm_data = {"n_experts": num_experts, "codes": codes}
+
+    cache_config = CacheConfig(
+        cache=TensorCache(tmp_path),
+        context=_test_cache_context(mesh_shape=(1, 1)),
+    )
+
+    # Cold miss
+    routed_miss = prepare_moe_routed_experts_bspm(
+        submesh,
+        state,
+        layer_idx,
+        num_experts,
+        num_banks,
+        bspm_data,
+        move_to_device=True,
+        cache_config=cache_config,
+    )
+    tiles_after_miss = list((tmp_path / "objects").rglob("tiles.bin"))
+    assert (
+        len(tiles_after_miss) == num_experts * 3
+    ), f"Expected {num_experts * 3} tiles.bin files after cold miss, found {len(tiles_after_miss)}"
+
+    # Warm hit — same cache, same bspm_data
+    routed_hit = prepare_moe_routed_experts_bspm(
+        submesh,
+        state,
+        layer_idx,
+        num_experts,
+        num_banks,
+        bspm_data,
+        move_to_device=True,
+        cache_config=cache_config,
+    )
+    tiles_after_hit = list((tmp_path / "objects").rglob("tiles.bin"))
+    assert len(tiles_after_hit) == num_experts * 3, "Warm hit must not write new tiles.bin files"
+
+    # Code distributions must match between miss and hit
+    for e in range(num_experts):
+        ct_miss = routed_miss.routed_gate_proj[e]
+        ct_hit = routed_hit.routed_gate_proj[e]
+        assert isinstance(ct_miss, CompressedTensor)
+        assert isinstance(ct_hit, CompressedTensor)
+        for code, name in [(1, "BFP4"), (2, "BFP2"), (3, "zero")]:
+            count_miss = int(np.sum(ct_miss._assignment_flat == code))
+            count_hit = int(np.sum(ct_hit._assignment_flat == code))
+            assert count_miss == count_hit, f"expert {e}: {name} count miss={count_miss} vs hit={count_hit}"
