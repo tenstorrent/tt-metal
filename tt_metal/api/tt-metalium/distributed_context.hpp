@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <optional>
-#include <vector>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
