@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
+MERGED_TP4_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.tp4_merged_fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
@@ -690,30 +691,7 @@ def prepare_attention_weights(
     kv_norm_key = _key(layer_idx, "self_attn.kv_a_layernorm.weight")
     ffn_norm_key = _key(layer_idx, "post_attention_layernorm.weight")
 
-    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        q_a = t[q_a_key].T.contiguous()
-        q_b = deinterleave_q_b_proj(t[q_b_key])
-        kv_a = t[kv_a_key].T.contiguous()
-        if mla_tp == 1 and q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
-            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
-        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
-
-    q_ab_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
-        target=Q_AB_KV_A_SPEC,
-    )
-    q_ab_views = cache_config.cache.get_or_create(
-        q_ab_fp,
-        device,
-        preprocess=_preprocess_q_ab_kv_a,
-        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
-    )
-    if not isinstance(q_ab_views, dict):
-        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
-    q_a_proj = q_ab_views["q_a_proj"]
-    q_b_proj = q_ab_views["q_b_proj"]
-    kv_a_proj = q_ab_views["kv_a_proj"]
-
+    # -- kv_b12: always a separate fusion group --
     def _preprocess_kv_b12(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         kv_b1, kv_b2 = split_kv_b_proj(t[kv_b_key])
         if mla_tp == 1:
@@ -738,6 +716,142 @@ def prepare_attention_weights(
     kv_b1_proj = kv_views["kv_b1_proj"]
     kv_b2_proj = kv_views["kv_b2_proj"]
 
+    # -- mla_tp == 2: merged buffer (o_proj + gate_mm + norms + q_ab + kv_a) --
+    if mla_tp == 2:
+        q_ab_keys = (q_a_key, q_b_key, kv_a_key)
+
+        def _preprocess_merged(t: dict[str, torch.Tensor], *, include_gate: bool) -> dict[str, torch.Tensor]:
+            o_proj = t[o_proj_key].T.contiguous()
+            o_proj = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.pack_o_proj_weights_tp4_shuffled(o_proj)
+            if include_gate:
+                gate_mm = t[gate_key].T.contiguous()
+            else:
+                gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
+            q_a = t[q_a_key].T.contiguous()
+            q_b = deinterleave_q_b_proj(t[q_b_key])
+            kv_a = t[kv_a_key].T.contiguous()
+            q_ab_kv_a = preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+            return {
+                "o_proj": o_proj,
+                "gate_mm": gate_mm,
+                "attn_norm": t[attn_norm_key].unsqueeze(0),
+                "q_norm": t[q_norm_key].unsqueeze(0),
+                "kv_norm": t[kv_norm_key].unsqueeze(0),
+                "ffn_norm": t[ffn_norm_key].unsqueeze(0),
+                **q_ab_kv_a,
+            }
+
+        if is_moe:
+            gate_key = _key(layer_idx, "mlp.gate.weight")
+            merged_src = (o_proj_key, gate_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+            merged_fp = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=merged_src),
+                target=MERGED_TP4_SPEC,
+            )
+            merged_views = cache_config.cache.get_or_create(
+                merged_fp,
+                device,
+                preprocess=lambda t: _preprocess_merged(t, include_gate=True),
+                raw_tensors=lambda: {k: state_dict[k] for k in merged_src},
+            )
+            if not isinstance(merged_views, dict):
+                raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+
+            _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
+            target = _gate_bias_target(layer_idx)
+            fingerprint = cache_config.context.fingerprint(
+                source=SourceTensorSelection(names=(_bias_key,)),
+                target=target,
+            )
+            gate_bias_tt = cache_config.cache.get_or_create(
+                fingerprint,
+                device,
+                preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
+                raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
+            )
+            if not isinstance(gate_bias_tt, ttnn.Tensor):
+                raise TypeError("expected ttnn.Tensor for gate_bias cache entry")
+
+            logger.debug(
+                "Attention fusion groups (MoE, merged) for layer {} in {:.3f}s",
+                layer_idx,
+                time.perf_counter() - t0,
+            )
+            return AttentionWeights(
+                q_a_proj=merged_views["q_a_proj"],
+                q_b_proj=merged_views["q_b_proj"],
+                kv_a_proj=merged_views["kv_a_proj"],
+                o_proj=merged_views["o_proj"],
+                gate_mm=merged_views["gate_mm"],
+                attn_norm=merged_views["attn_norm"],
+                q_norm=merged_views["q_norm"],
+                kv_norm=merged_views["kv_norm"],
+                ffn_norm=merged_views["ffn_norm"],
+                kv_b1_proj=kv_b1_proj,
+                kv_b2_proj=kv_b2_proj,
+                gate_bias=gate_bias_tt,
+            )
+
+        # Dense merged path
+        merged_src_dense = (o_proj_key, attn_norm_key, q_norm_key, kv_norm_key, ffn_norm_key) + q_ab_keys
+        merged_fp_dense = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=merged_src_dense),
+            target=MERGED_TP4_SPEC,
+        )
+        merged_views = cache_config.cache.get_or_create(
+            merged_fp_dense,
+            device,
+            preprocess=lambda t: _preprocess_merged(t, include_gate=False),
+            raw_tensors=lambda: {k: state_dict[k] for k in merged_src_dense},
+        )
+        if not isinstance(merged_views, dict):
+            raise TypeError("expected dict[str, OverlappedTensor] for merged cache entry")
+
+        logger.debug(
+            "Attention fusion groups (dense, merged) for layer {} in {:.3f}s",
+            layer_idx,
+            time.perf_counter() - t0,
+        )
+        return AttentionWeights(
+            q_a_proj=merged_views["q_a_proj"],
+            q_b_proj=merged_views["q_b_proj"],
+            kv_a_proj=merged_views["kv_a_proj"],
+            o_proj=merged_views["o_proj"],
+            gate_mm=None,
+            attn_norm=merged_views["attn_norm"],
+            q_norm=merged_views["q_norm"],
+            kv_norm=merged_views["kv_norm"],
+            ffn_norm=merged_views["ffn_norm"],
+            kv_b1_proj=kv_b1_proj,
+            kv_b2_proj=kv_b2_proj,
+            gate_bias=None,
+        )
+
+    # -- mla_tp == 1: separate q_ab_kv_a and o_proj fusion groups --
+    def _preprocess_q_ab_kv_a(t: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        q_a = t[q_a_key].T.contiguous()
+        q_b = deinterleave_q_b_proj(t[q_b_key])
+        kv_a = t[kv_a_key].T.contiguous()
+        if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
+            q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
+        return preprocess_q_ab_kv_a(q_a, q_b, kv_a, mesh_shape)
+
+    q_ab_fp = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=(q_a_key, q_b_key, kv_a_key)),
+        target=Q_AB_KV_A_SPEC,
+    )
+    q_ab_views = cache_config.cache.get_or_create(
+        q_ab_fp,
+        device,
+        preprocess=_preprocess_q_ab_kv_a,
+        raw_tensors=lambda: {k: state_dict[k] for k in (q_a_key, q_b_key, kv_a_key)},
+    )
+    if not isinstance(q_ab_views, dict):
+        raise TypeError("expected dict[str, OverlappedTensor] for q_ab_kv_a cache entry")
+    q_a_proj = q_ab_views["q_a_proj"]
+    q_b_proj = q_ab_views["q_b_proj"]
+    kv_a_proj = q_ab_views["kv_a_proj"]
+
     if is_moe:
         gate_key = _key(layer_idx, "mlp.gate.weight")
 
@@ -748,9 +862,8 @@ def prepare_attention_weights(
             q_norm = t[q_norm_key].unsqueeze(0)
             kv_norm = t[kv_norm_key].unsqueeze(0)
             ffn_norm = t[ffn_norm_key].unsqueeze(0)
-            if mla_tp == 1:
-                if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
-                    o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
+            if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+                o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
             return {
                 "o_proj": o_proj,
                 "gate_mm": gate_mm,
@@ -773,12 +886,6 @@ def prepare_attention_weights(
         )
         if not isinstance(o_views, dict):
             raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
-        o_proj_ot = o_views["o_proj"]
-        gate_mm_ot = o_views["gate_mm"]
-        attn_norm_ot = o_views["attn_norm"]
-        q_norm_ot = o_views["q_norm"]
-        kv_norm_ot = o_views["kv_norm"]
-        ffn_norm_ot = o_views["ffn_norm"]
 
         _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
         target = _gate_bias_target(layer_idx)
@@ -804,12 +911,12 @@ def prepare_attention_weights(
             q_a_proj=q_a_proj,
             q_b_proj=q_b_proj,
             kv_a_proj=kv_a_proj,
-            o_proj=o_proj_ot,
-            gate_mm=gate_mm_ot,
-            attn_norm=attn_norm_ot,
-            q_norm=q_norm_ot,
-            kv_norm=kv_norm_ot,
-            ffn_norm=ffn_norm_ot,
+            o_proj=o_views["o_proj"],
+            gate_mm=o_views["gate_mm"],
+            attn_norm=o_views["attn_norm"],
+            q_norm=o_views["q_norm"],
+            kv_norm=o_views["kv_norm"],
+            ffn_norm=o_views["ffn_norm"],
             kv_b1_proj=kv_b1_proj,
             kv_b2_proj=kv_b2_proj,
             gate_bias=gate_bias_tt,
@@ -821,7 +928,7 @@ def prepare_attention_weights(
         q_norm = t[q_norm_key].unsqueeze(0)
         kv_norm = t[kv_norm_key].unsqueeze(0)
         ffn_norm = t[ffn_norm_key].unsqueeze(0)
-        if mla_tp == 1 and o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
+        if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
             o_proj = o_proj[:_MLA_TP1_O_PROJ_HEIGHT, :].contiguous()
         gate_mm = torch.zeros(D.HIDDEN_SIZE, D.GATE_NUM_INDICES, dtype=torch.bfloat16, device=o_proj.device)
         return {
@@ -846,11 +953,6 @@ def prepare_attention_weights(
     )
     if not isinstance(o_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for o_proj_gate_mm_norms cache entry")
-    o_proj_ot = o_views["o_proj"]
-    attn_norm_ot = o_views["attn_norm"]
-    q_norm_ot = o_views["q_norm"]
-    kv_norm_ot = o_views["kv_norm"]
-    ffn_norm_ot = o_views["ffn_norm"]
 
     logger.debug(
         "Attention fusion groups (dense) for layer {} in {:.3f}s",
@@ -861,12 +963,12 @@ def prepare_attention_weights(
         q_a_proj=q_a_proj,
         q_b_proj=q_b_proj,
         kv_a_proj=kv_a_proj,
-        o_proj=o_proj_ot,
+        o_proj=o_views["o_proj"],
         gate_mm=None,
-        attn_norm=attn_norm_ot,
-        q_norm=q_norm_ot,
-        kv_norm=kv_norm_ot,
-        ffn_norm=ffn_norm_ot,
+        attn_norm=o_views["attn_norm"],
+        q_norm=o_views["q_norm"],
+        kv_norm=o_views["kv_norm"],
+        ffn_norm=o_views["ffn_norm"],
         kv_b1_proj=kv_b1_proj,
         kv_b2_proj=kv_b2_proj,
         gate_bias=None,
