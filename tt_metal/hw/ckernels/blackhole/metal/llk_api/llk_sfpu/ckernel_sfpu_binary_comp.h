@@ -203,7 +203,7 @@ template <
     int ITERATIONS,
     SfpuType RELATIONAL_OP,
     std::enable_if_t<is_fp32_compare_v<RELATIONAL_OP>, int> = 0>
-inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_binary_comp_float(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
