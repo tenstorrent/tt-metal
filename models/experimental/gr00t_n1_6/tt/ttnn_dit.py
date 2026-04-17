@@ -89,7 +89,8 @@ class AdaLayerNormTTNN:
         ttnn.deallocate(normed)
         ttnn.deallocate(scale_p1)
 
-        output = ttnn.add(output, shift)
+        # Output feeds directly into QKV/KV matmul — bf8 halves the activation bandwidth there.
+        output = ttnn.add(output, shift, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(shift)
         return output
 
