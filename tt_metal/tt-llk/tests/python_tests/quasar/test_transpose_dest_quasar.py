@@ -68,9 +68,8 @@ def generate_qsr_transpose_dest_combinations(
         if in_fmt.is_32_bit():
             return (DestAccumulation.Yes,)
         # Int8/UInt8 in Src regs and Int32 in dest reg is unsupported for MOVB2D
-        if in_fmt == DataFormat.Int8 or in_fmt == DataFormat.UInt8:
-            return (DestAccumulation.No,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
+        # Float16/Float16_b in Src regs and Float32 in dest reg is unsupported for MOVB2D
+        return (DestAccumulation.No,)
 
     def get_transpose_faces_modes(dest_acc):
         """Determine valid math_transpose_faces modes depending on dest_acc."""
@@ -135,6 +134,7 @@ def generate_qsr_transpose_dest_combinations(
 TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
+        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
