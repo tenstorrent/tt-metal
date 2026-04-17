@@ -56,7 +56,8 @@ namespace tt::tt_metal {
 
 namespace {
 
-void build_failure(const string& target_name, const string& op, const string& cmd, const fs::path& log_file) {
+void build_failure(
+    const string& target_name, const string& op, const string& cmd, const std::filesystem::path& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
     if (file.is_open()) {
@@ -68,8 +69,9 @@ void build_failure(const string& target_name, const string& op, const string& cm
 }
 
 void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
-    fs::path out_dir = (settings == nullptr) ? build.get_out_path() / ""
-                                             : build.get_out_path() / settings->get_full_kernel_name() / "";
+    fs::path out_dir =
+        (settings == nullptr) ? build.get_out_path() : build.get_out_path() / settings->get_full_kernel_name();
+
     fs::path marker_path = out_dir / SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
 
     if (tt::filesystem::safe_exists(marker_path).value_or(false)) {
@@ -121,9 +123,9 @@ std::filesystem::path get_default_root_path() {
     const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && tt::filesystem::safe_exists(home_path).value_or(false)) {
-        return std::filesystem::path(home_path) / ".cache" / "tt-metal-cache";
+        return fs::path(home_path) / ".cache" / "tt-metal-cache";
     }
-    return std::filesystem::path("/tmp/tt-metal-cache");
+    return fs::path("/tmp/tt-metal-cache");
 }
 
 JitBuildEnv::JitBuildEnv() = default;
@@ -619,7 +621,7 @@ void JitBuildState::compile_one(
 
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
-    jit_build::utils::FileRenamer log_file(obj_path.concat(".log"));
+    jit_build::utils::FileRenamer log_file(fs::path{obj_path}.concat(".log"));
     tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
@@ -689,9 +691,9 @@ void JitBuildState::link(
     // Elf file has dependencies other than object files:
     // 1. Linker script
     // 2. Weakened firmware elf (for kernels)
-    std::vector<fs::path> link_deps = {this->linker_script_};
+    std::vector<std::string> link_dep_strs = {this->linker_script_.string()};
     if (!this->is_fw_) {
-        link_deps.push_back(this->weakened_firmware_name_);
+        link_dep_strs.push_back(this->weakened_firmware_name_.string());
         if (!this->firmware_is_kernel_object_) {
             cmd += "-Wl,--just-symbols=";
         }
@@ -708,6 +710,7 @@ void JitBuildState::link(
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
+
     fs::path log_path = elf_path;
     log_path.concat(".log");
     jit_build::utils::FileRenamer log_file(log_path);
@@ -715,19 +718,12 @@ void JitBuildState::link(
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
+
     fs::path elf_dephash_path = elf_path;
     elf_dephash_path.concat(".dephash");
     jit_build::utils::FileRenamer dephash_file(elf_dephash_path);
     std::ofstream hash_file(dephash_file.path());
-    {
-        std::vector<std::string> link_dep_strs;
-        link_dep_strs.reserve(link_deps.size());
-        for (const auto& dep : link_deps) {
-            link_dep_strs.push_back(dep.string());
-        }
-        jit_build::write_dependency_hashes(
-            {{elf_path.string(), std::move(link_dep_strs)}}, out_dir, elf_path, hash_file);
-    }
+    jit_build::write_dependency_hashes({{elf_path.string(), std::move(link_dep_strs)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
@@ -747,7 +743,7 @@ void JitBuildState::weaken(const std::filesystem::path& out_dir) const {
 
     // The output directory may differ from out_dir when firmware_binary_root_
     // points to a pre-compiled directory that lacks this target's subdirectory.
-    fs::create_directories(fs::path(out_file.path()).parent_path());
+    fs::create_directories(out_file.path().parent_path());
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in.string());
@@ -848,15 +844,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     if (!link_objs.empty()) {
         // Rename the temporary .o and .dephash files after linking is done.
-        // Use operator/ rather than replace_filename: replace_filename replaces
-        // path.filename(), which is the directory name itself when out_dir has
-        // no trailing separator, silently targeting the wrong parent directory.
         for (size_t i = 0; i < num_objs; ++i) {
             fs::path src_path = out_dir / this->temp_objs_[i];
             fs::path dst_path = out_dir / this->objs_[i];
             if (compiled.test(i)) {
-                const fs::path src_dephash_path = fs::path{src_path} += ".dephash";
-                const fs::path dst_dephash_path = fs::path{dst_path} += ".dephash";
+                const fs::path src_dephash_path = fs::path(src_path).concat(".dephash");
+                const fs::path dst_dephash_path = fs::path(dst_path).concat(".dephash");
                 if (!tt::filesystem::safe_rename(src_path, dst_path)) {
                     tt::filesystem::safe_remove(src_path);
                     tt::filesystem::safe_remove(src_dephash_path);
