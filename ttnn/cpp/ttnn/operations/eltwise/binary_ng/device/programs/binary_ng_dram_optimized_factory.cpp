@@ -145,6 +145,11 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Subtile broadcast type is not supported for DRAM optimized program";
     }
 
+    auto* device = a.device();
+    if (device->get_active_sub_device_manager_id() != device->get_default_sub_device_manager_id()) {
+        return "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id";
+    }
+
     if (!operation_attributes.memory_config.is_dram()) {
         return "Memory config must be DRAM";
     }
