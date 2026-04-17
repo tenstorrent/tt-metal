@@ -168,9 +168,6 @@ class Generator(WarmupForwardMixin):
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
-        # Split sampling: decode trace captures transformer only, sampling runs separately
-        self.enable_split_sampling = True  # Decode trace returns logits, sampling is separate
-        self.model.enable_internal_trace = self.enable_split_sampling  # NEVER trace sampling - causes buffer corruption
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
 
@@ -1149,10 +1146,9 @@ class Generator(WarmupForwardMixin):
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
-            capture_sampling_trace=self.enable_split_sampling,
         )
 
-        if self.enable_split_sampling and not return_logits:
+        if not return_logits:
             return self.model.sampling.sample(
                 logits=tt_tok,
                 tt_out_tok=tt_tokens,
@@ -1202,7 +1198,6 @@ class Generator(WarmupForwardMixin):
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
-            capture_sampling_trace=self.enable_split_sampling,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -1275,7 +1270,7 @@ class Generator(WarmupForwardMixin):
             page_table=page_table,
         )
 
-        if self.enable_split_sampling and not return_logits:
+        if not return_logits:
             return self.model.sampling.sample(
                 logits=trace_tok_rm[0],
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
