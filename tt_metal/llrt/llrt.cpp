@@ -268,11 +268,12 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             // RUN_MSG_INIT is a valid transitional state on the INIT→GO→DONE path.
             // A process killed mid-initialization leaves ETH dispatch cores with mailbox=INIT.
-            // The early-exit recovery path in risc_firmware_initializer.cpp waits for GO — seeing
-            // INIT here is expected; treat it as "not done yet" so the caller's timeout can fire
+            // This can be observed regardless of what run_state we're waiting for:
+            //   - waiting for GO:   predecessor killed before GO was issued
+            //   - waiting for DONE: stale ETH cores never progressed past INIT
+            // In both cases treat it as "not done yet" so the caller's timeout can fire
             // and fall through to force-reset rather than crashing with TT_FATAL.
-            if (run_state == tt_metal::dev_msgs::RUN_MSG_GO &&
-                run == tt_metal::dev_msgs::RUN_MSG_INIT) {
+            if (run == tt_metal::dev_msgs::RUN_MSG_INIT) {
                 return false;
             }
             fprintf(
