@@ -390,7 +390,11 @@ def test_multimodal_demo_text(
 
             prefill_start = time.perf_counter()
             with profiler("inference_prefill", iteration=batch_idx):
-                prefill_first, *_ = generator.prefill_forward(
+                # prefill_forward returns (tokens, log_probs) when sampling on device,
+                # and a logits tensor otherwise. Do NOT spread-unpack with `*_` here:
+                # the tensor path would iterate the batch dim and the tuple path would
+                # strip log_probs into `_`, both of which break the branches below.
+                prefill_out = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
@@ -402,11 +406,11 @@ def test_multimodal_demo_text(
 
             prefill_end = time.perf_counter()
             if device_sampling_params is not None:
-                prefill_toks, _prefill_lp = prefill_first
+                prefill_toks, _prefill_lp = prefill_out
                 next_tokens = prefill_toks.long().squeeze(-1).reshape(-1)[:max_batch_size]
                 next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
             else:
-                next_tokens, next_texts = sampler(prefill_first)
+                next_tokens, next_texts = sampler(prefill_out)
             for i, (next_token, next_text) in enumerate(zip(next_tokens, next_texts)):
                 tokens[i, prefill_lens[i]] = next_token
             print(f"Next tokens: {next_tokens}")
