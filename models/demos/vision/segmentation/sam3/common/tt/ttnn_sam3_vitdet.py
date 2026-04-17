@@ -254,16 +254,13 @@ def tt_vit_block(
 ):
     """Single ViT transformer block — fully on-device.
 
-    Flow: block input (torch B,H,W,C) → from_torch → LN1 → window partition →
-    attention → window unpartition → residual1 → LN2 → MLP → residual2 → to_torch.
-    Two host↔device transfers total; all compute is on-device.
+    Takes/returns ttnn tensor (B, H, W, C). No host transfers inside the block.
     """
-    B, H, W, C = x.shape
+    tt_x = x
+    B, H, W, C = tt_x.shape
     assert window_size == 0 or (H % window_size == 0 and W % window_size == 0), (
         "on-device window partition requires H,W divisible by window_size"
     )
-
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # LN1 on last dim (C)
     tt_normed = ttnn.layer_norm(
@@ -327,8 +324,7 @@ def tt_vit_block(
     )
 
     tt_output = ttnn.add(tt_residual1_flat, tt_mlp_out)
-    output = ttnn.to_torch(tt_output).float().reshape(B, H, W, C)
-    return output
+    return ttnn.reshape(tt_output, [B, H, W, C])
 
 
 # ---------------------------------------------------------------------------
@@ -384,17 +380,20 @@ def tt_vit_backbone(pixel_values, backbone_params, device):
     global_att_blocks = {7, 15, 23, 31}
     last_global = max(global_att_blocks)
 
+    # Move to device once; each block stays on-device. to_torch once after loop.
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
     for i in range(num_blocks):
         block_params = backbone_params["blocks"][i]
-        window_size = block_params["window_size"]
-
-        x = tt_vit_block(
-            x,
+        tt_x = tt_vit_block(
+            tt_x,
             block_params["tt_params"],
             num_heads=16,
-            window_size=window_size,
+            window_size=block_params["window_size"],
             device=device,
         )
+
+    x = ttnn.to_torch(tt_x).float()
 
     # --- Output: convert to NCHW ---
     # x is (B, H, W, C) -> permute to (B, C, H, W)
