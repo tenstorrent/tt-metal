@@ -38,6 +38,12 @@ constexpr uint32_t W2_TILES_PER_TXN = 14;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
+// Let's call this a constant
+constexpr uint32_t W2_TILES_PER_A2A_ITER_W = 4;
+constexpr uint32_t W2_TILES_PER_A2A_ITER_H = (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN) / W2_TILES_PER_A2A_ITER_W;  // 7
+
+static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
+
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables (generated at compile time)
 // Use these if you prefer lookup over runtime computation
@@ -45,13 +51,11 @@ constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
 namespace detail {
 
-constexpr uint32_t compute_a2a_iters(const uint32_t* arr, const uint32_t width_shard_dim) {
-    return (*std::max_element(arr, arr + NUM_CORES) + width_shard_dim - 1) / width_shard_dim;
+constexpr uint32_t compute_a2a_iters(const uint32_t* arr) {
+    return (*std::max_element(arr, arr + NUM_CORES) + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
 };
 
-constexpr uint32_t compute_in2_tiles_per_step(const uint32_t* arr) {
-    return *std::max_element(arr, arr + NUM_CORES, [](uint32_t a, uint32_t b) { return a < b; });
-};
+constexpr uint32_t compute_in2_tiles_per_step(const uint32_t* arr) { return *std::max_element(arr, arr + NUM_CORES); };
 
 constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(const uint32_t* arr) {
     std::array<uint32_t, NUM_CORES> out = {};
@@ -68,8 +72,6 @@ constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(cons
 struct DeepSeekRingConfig {
     static constexpr uint32_t NUM_W0_W1_TILES_H = 224;
     static constexpr uint32_t NUM_W2_TILES_H = 64;
-
-    static constexpr uint32_t W2_BLOCKS_PER_EXPERT = 50;
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 4;
 
     // Evenly distributed: tiles[core_id][step]
@@ -100,6 +102,7 @@ struct DeepSeekRingConfig {
         {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
     };
 
+    // fixed. Let's say hardcoded for now.
     static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {
         18,
         19,
@@ -115,9 +118,18 @@ struct DeepSeekRingConfig {
         19,
     };
 
-    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE);
 
-    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE, OUTPUT_WIDTH_SHARD_DIM);
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = W2_TILES_PER_A2A_ITER_W * NUM_A2A_ITERS;  // 5*4=20
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        W2_TILES_PER_A2A_ITER_H * ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H);  // 70
+
+    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+        W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // 50
+
+    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
 
     static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
 };
@@ -126,17 +138,10 @@ struct DeepSeekRingConfig {
 // Note: This config assumes NUM_W0_W1_TILES_H = NUM_W2_TILES_H = 90
 // For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
 struct GptRingConfig {
-    // GPT-specific tile heights (vs 224/64 in DeepSeek)
-    // static constexpr uint32_t GPT_W0_W1_TILES_H = 90;
-    // static constexpr uint32_t GPT_W2_TILES_H = 90;
-
-    // static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
-    //     (((91 * 8) - 1) / (W2_TILES_PER_TXN * W2_TXNS_PER_BLOCK)) + 1;  // Different calculation for GPT
-
-    static constexpr uint32_t W2_BLOCKS_PER_EXPERT;
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 90;
+    static constexpr uint32_t NUM_W2_TILES_H = 90;
 
     static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 3;  // vs 4 in DeepSeek
-    static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
 
     // Boundary-optimized: tiles[core_id][step] - cores {0,1,4,5,8,9} get 8 tiles
     static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
@@ -171,8 +176,16 @@ struct GptRingConfig {
 
     static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
 
-    // GPT uses a different algorithm with custom comparator
-    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE, OUTPUT_WIDTH_SHARD_DIM);
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE);  // 2
+
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = NUM_A2A_ITERS * W2_TILES_PER_A2A_ITER_W;  // 8
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) * W2_TILES_PER_A2A_ITER_H;  // 91
+
+    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;  // 6
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+        W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // 26
 
     static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
 
