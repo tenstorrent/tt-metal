@@ -78,24 +78,24 @@ models:
 #       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
 #       - "--track_memory"
 
-#   - name: "TinyLlama Shakespeare Muon"
-#     filename: "tinyllama_shakespeare_muon"
-#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
-#     args:
-#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_muon.yaml"
-#       - "--track_memory"
-
-  - name: "Llama 3 Shakespeare Tensor Parallel"
-    filename: "llama3_shakespeare_tensor_parallel"
+  - name: "TinyLlama Shakespeare Muon"
+    filename: "tinyllama_shakespeare_muon"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_llama3_tensor_parallel.yaml"
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_muon.yaml"
       - "--track_memory"
 
-# Linear Regression
-  - name: "Linear Regression"
-    filename: "linear_regression"
-    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
-    args:
-      - "--track_memory"
-      - "--verbose"
+#   - name: "Llama 3 Shakespeare Tensor Parallel"
+#     filename: "llama3_shakespeare_tensor_parallel"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
+#     args:
+#       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_llama3_tensor_parallel.yaml"
+#       - "--track_memory"
+
+# # Linear Regression
+#   - name: "Linear Regression"
+#     filename: "linear_regression"
+#     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
+#     args:
+#       - "--track_memory"
+#       - "--verbose"
