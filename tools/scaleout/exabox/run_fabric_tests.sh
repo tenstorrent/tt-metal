@@ -198,7 +198,7 @@ if [[ "$CONFIG" == "4x8" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -208,22 +208,22 @@ else
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=0 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=1 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=2 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        -x TT_MESH_HOST_RANK=3 "$TEST_BINARY" \
+        "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
 fi
 
