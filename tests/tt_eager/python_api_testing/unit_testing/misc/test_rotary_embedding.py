@@ -31,7 +31,14 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
 
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64]),
+    (
+        [1, 1, 128, 64],
+        [1, 71, 128, 64],
+        [32, 1, 32, 64],
+        [32, 71, 32, 64],
+        [1, 1, 128, 32],
+        [1, 32, 32, 32],
+    ),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True, False])
@@ -103,7 +110,16 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
 
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
+    (
+        [1, 1, 32, 64],
+        [1, 71, 32, 64],
+        [1, 1, 64, 64],
+        [1, 71, 64, 64],
+        [1, 32, 32, 64],
+        [1, 2, 32, 64],
+        [1, 1, 32, 32],
+        [1, 71, 32, 32],
+    ),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128, 129, 1024, 1025])
