@@ -370,9 +370,6 @@ private:
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
-    // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
-    // to the physical channel id
-    std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
     // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
     std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
         intermesh_exit_fabric_node_ids_;

@@ -3011,12 +3011,13 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
-        const FabricNodeId peer_fabric_node_id =
-            this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
-
-        // Try to assign a port_id of the requested Z-ness class. Iterates over all mesh
+        // Propose a port_id of the requested Z-ness class for this cable. Iterates mesh
         // edge ports for this chip, skipping those that don't match the requested direction
         // class (Z vs NESW) or that would violate the same-direction-per-link constraint.
+        // Inter-mesh state (exit_node_directions_, intermesh_chan_to_peer_, intermesh_exit_*)
+        // is intentionally NOT written here — the controller (rank 0) may swap Z↔NESW during
+        // pair_logical_intermesh_ports, so those maps are populated once from the broadcast
+        // in convert_port_descriptors_to_intermesh_connections.
         auto try_assign_port = [&](bool use_z_direction) -> bool {
             for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
                 if (exit_node_chip != port_chip_id) {
@@ -3033,26 +3034,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 RoutingDirection final_direction = use_z_direction ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
 
-                // Enforce: all channels on the same physical link use the same direction
                 bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
                                        curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
-                    logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
-                    intermesh_exit_fabric_node_ids_[my_mesh_id][neighbor_mesh_id].insert(exit_node_fabric_node_id);
-                    intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id][neighbor_mesh_id].emplace_back(
-                        exit_node_fabric_node_id, peer_fabric_node_id);
-                    intermesh_exit_peer_fabric_node_id_pairs_[neighbor_mesh_id][my_mesh_id].emplace_back(
-                        peer_fabric_node_id, exit_node_fabric_node_id);
-                    // Record the per-cable peer endpoint directly from PSD physical info.
-                    // get_connected_mesh_chip_chan_ids consults this map for inter-mesh queries
-                    // so it never has to fall back to the lossy inter_mesh_connectivity_ edge.
-                    // (insert_or_assign is required because std::pair<FabricNodeId, chan_id_t>
-                    // is not default-constructible — FabricNodeId has no default constructor.)
-                    intermesh_chan_to_peer_[exit_node_fabric_node_id].insert_or_assign(
-                        src_eth_chan, std::make_pair(peer_fabric_node_id, exit_node.eth_conn.dst_chan));
                     curr_exit_node_direction[exit_node_hash] = final_direction;
                     return true;
                 }
@@ -3680,10 +3666,11 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 }
 
 // Multi-host intermesh connection establishment: forward port descriptors to the controller
-// (rank 0), receive final paired connections back, then rebuild every piece of local
-// inter-mesh state from PSD keyed by the connection_hash that the controller echoed back.
-// The hash is symmetric across both sides of a cable, so no reconciliation or port_id
-// reverse-lookup is needed.
+// (rank 0), receive the final paired connections back, then populate local inter-mesh state
+// from the broadcast keyed by connection_hash. This is the sole writer of exit_node_directions_,
+// intermesh_chan_to_peer_, and the intermesh_exit_* maps on the multi-host path:
+// assign_logical_ports_to_exit_nodes only proposes port_ids; Z<->NESW may be swapped by
+// pair_logical_intermesh_ports, so final bindings are derived here from the broadcast + PSD.
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
@@ -3722,65 +3709,6 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             cable_lookup[src_fn].insert_or_assign(
                 hash, CableInfo{exit_node.eth_conn.src_chan, peer_fn, exit_node.eth_conn.dst_chan});
         }
-    }
-
-    // Snapshot which physical channels are currently classified as inter-mesh on my mesh,
-    // so we can scrub them out of router_port_directions_to_physical_eth_chan_map_ (keyed
-    // by routing direction, not by inter-vs-intra-mesh).
-    std::unordered_map<FabricNodeId, std::unordered_set<chan_id_t>> old_intermesh_chans;
-    for (const auto& [exit_node, dir_map] : exit_node_directions_) {
-        if (exit_node.mesh_id != my_mesh_id) {
-            continue;
-        }
-        for (const auto& [chan, _] : dir_map) {
-            old_intermesh_chans[exit_node].insert(chan);
-        }
-    }
-
-    // Clear every piece of inter-mesh state owned by my mesh. We rebuild from scratch off
-    // the broadcast — no carry-over from pre-pairing assignments.
-    auto erase_my_mesh = [&](auto& container) {
-        for (auto it = container.begin(); it != container.end();) {
-            if (it->first.mesh_id == my_mesh_id) {
-                it = container.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    };
-    erase_my_mesh(exit_node_directions_);
-    erase_my_mesh(logical_port_to_eth_chan_);
-    erase_my_mesh(intermesh_chan_to_peer_);
-
-    // Strip the old inter-mesh chans out of router_port_directions_to_physical_eth_chan_map_.
-    // Intra-mesh entries (chans not in the snapshot) are left alone.
-    for (const auto& [exit_node, old_chans] : old_intermesh_chans) {
-        auto map_it = router_port_directions_to_physical_eth_chan_map_.find(exit_node);
-        if (map_it == router_port_directions_to_physical_eth_chan_map_.end()) {
-            continue;
-        }
-        auto& dir_map = map_it->second;
-        for (auto& [dir, chans] : dir_map) {
-            chans.erase(
-                std::remove_if(chans.begin(), chans.end(), [&](chan_id_t c) { return old_chans.contains(c); }),
-                chans.end());
-        }
-        for (auto it = dir_map.begin(); it != dir_map.end();) {
-            if (it->second.empty()) {
-                it = dir_map.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    // Wipe my-mesh entries from the exit-node tracking structures so we can rebuild from
-    // the broadcast. Anything keyed by another mesh that points back at my_mesh_id also
-    // needs its my_mesh_id sub-entry cleared (these get repopulated below).
-    intermesh_exit_fabric_node_ids_[my_mesh_id].clear();
-    intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id].clear();
-    for (auto& [src_mesh, inner] : intermesh_exit_peer_fabric_node_id_pairs_) {
-        inner.erase(my_mesh_id);
     }
 
     // Walk the broadcast connections and write authoritative bindings.
@@ -3842,14 +3770,8 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermes
             continue;
         }
 
-        // Write the authoritative bindings. Order matters only insofar as exit_node_directions_
-        // and logical_port_to_eth_chan_ must agree, which they do trivially because we drive
-        // them both from the same (info.my_chan, new_port_id) pair.
         exit_node_directions_[my_fn][info.my_chan] = new_port_id.first;
-        logical_port_to_eth_chan_[my_fn][new_port_id] = info.my_chan;
-        router_port_directions_to_physical_eth_chan_map_[my_fn][new_port_id.first].push_back(info.my_chan);
         intermesh_chan_to_peer_[my_fn].insert_or_assign(info.my_chan, std::make_pair(info.peer_fn, info.peer_chan));
-
         intermesh_exit_fabric_node_ids_[my_mesh_id][peer_mesh_id].insert(my_fn);
         intermesh_exit_peer_fabric_node_id_pairs_[my_mesh_id][peer_mesh_id].emplace_back(my_fn, info.peer_fn);
         intermesh_exit_peer_fabric_node_id_pairs_[peer_mesh_id][my_mesh_id].emplace_back(info.peer_fn, my_fn);
