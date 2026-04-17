@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch
+from conftest import skip_for_blackhole, skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
-    ApproximationMode,
     DestAccumulation,
     MathOperation,
     format_dict,
@@ -20,14 +20,11 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    APPROX_MODE,
     MATH_OP,
     TemplateParameter,
 )
 from helpers.tilize_untilize import tilize, untilize
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole, skip_for_quasar
 
 
 class SfpuBcastDim(Enum):
@@ -160,7 +157,6 @@ def test_sfpu_binary_bcast(
         "sources/sfpu_binary_bcast_test.cpp",
         formats,
         templates=[
-            APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=eltwise_op),
             SFPU_BCAST_DIM(bcast_dim),
             INPUT_TILE_A(tile_index=0),
