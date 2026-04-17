@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<2>();
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -40,6 +40,18 @@ def _artifact_name_for_current_mesh() -> str | None:
     return None
 
 
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _write_demo_artifact(prompts: list[str], results: dict, artifact_name: str) -> None:
     artifact_dir = Path("generated/artifacts")
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +85,7 @@ def _write_demo_artifact(prompts: list[str], results: dict, artifact_name: str) 
     "prompts_file,num_prompts,max_new_tokens",
     [
         pytest.param(
-            Path("models/demos/deepseek_v3/demo/test_prompts.json"),
+            Path("models/demos/deepseek_v3/demo/demo_aime24_gpqa_short.json"),
             2,
             32,
             id="smoke_2_prompts_32_tokens",
@@ -97,15 +109,18 @@ def test_mtp_demp_compare_outputs(
         repeat_batches=1,
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
+        sampling_top_p=1.0,
     )
 
     baseline = run_demo(enable_mtp=False, **common_kwargs)
-    mtp = run_demo(enable_mtp=True, **common_kwargs)
+    mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)
 
     artifact_name = _artifact_name_for_current_mesh()
-    if artifact_name is not None:
+    if artifact_name is not None and _is_primary_artifact_writer():
         _write_demo_artifact(prompts, mtp, artifact_name)
 
     # Prompt-level acceptance varies across real demo prompts. Keep this smoke test focused on

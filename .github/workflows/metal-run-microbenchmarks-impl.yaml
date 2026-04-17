@@ -45,13 +45,12 @@ jobs:
             name: "WH Data Movement Regressions",
             cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
           }, # Ata Tuzuner
-          # Disabled: CI regression on gh05/gh06 (~0.01 GB/s vs 500 GB/s locally). Suspected machine-specific issue. Tracking: https://github.com/tenstorrent/tt-metal/issues/39545. Re-enable this test when issue #39545 is resolved.
-          # {
-          #   arch: blackhole,
-          #   runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
-          #   name: "BH P150 DRAM ubench",
-          #   cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
-          # }, # Yu Gao
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
+            name: "BH P150 DRAM ubench",
+            cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
+          }, # Yu Gao
           {
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "in-service"],
@@ -72,17 +71,13 @@ jobs:
             name: "Fabric Collectives ubench - Point to Point",
             cmd: "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh"
           }, # Tomer Levin
-          # Disabled temporarily for deterministic CI abort in test_tt_fabric on BH.
-          # TODO(#39820): Re-enable this BH matrix entry once sync core setup failure is fixed.
-          # Evidence:
-          # - https://github.com/tenstorrent/tt-metal/actions/runs/23224882499/job/67505851835
-          # - https://github.com/tenstorrent/tt-metal/actions/runs/23124299750/job/67164581483
-          # {
-          #   arch: blackhole,
-          #   runs-on: ["BH", "pipeline-perf", "in-service"],
-          #   name: "BH ubench - Fabric BW & Latency",
-          #   cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
-          # }, # Nolen Zhao
+          {
+            arch: blackhole,
+            # Run on LLMBox to ensure at least 4 devices
+            runs-on: ["BH-LLMBox", "pipeline-perf", "in-service"],
+            name: "BH Quietbox ubench - Fabric BW & Latency",
+            cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
+          }, # Nolen Zhao
         ]
     container:
       image: ${{ inputs.docker-image }}

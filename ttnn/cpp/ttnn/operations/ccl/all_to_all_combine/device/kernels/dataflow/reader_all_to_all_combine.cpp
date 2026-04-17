@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,9 +68,9 @@ void kernel_main() {
     const auto token_start_idx = get_arg_val<uint32_t>(3);
     const auto token_end_idx = get_arg_val<uint32_t>(4);
 
-    const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr, metadata_page_size_bytes);
-    const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr, mapping_page_size_bytes);
-    const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr, data_size_bytes);
+    const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr);
+    const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr);
+    const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr);
 
     // this gets sent to writer
     cb_reserve_back(local_experts_cb_id,1);
@@ -86,7 +86,7 @@ void kernel_main() {
     cb_push_back(local_experts_cb_id,1);
     for (uint32_t token = token_start_idx; token < token_end_idx; ++token) {
         cb_reserve_back(metadata_cb_id,1);
-        const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
+        const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         const uint64_t metadata_noc_addr = get_noc_addr(token, metadata_addrgen);
         noc_async_read(metadata_noc_addr, metadata_l1_addr, metadata_page_size_bytes);
         noc_async_read_barrier();

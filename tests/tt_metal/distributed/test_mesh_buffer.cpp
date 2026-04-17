@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
@@ -17,6 +18,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -44,6 +46,11 @@
 
 namespace tt::tt_metal::distributed::test {
 namespace {
+
+static_assert(!std::is_copy_constructible_v<MeshBuffer>, "MeshBuffer should not be copy constructible");
+static_assert(!std::is_copy_assignable_v<MeshBuffer>, "MeshBuffer should not be copy assignable");
+static_assert(std::is_move_constructible_v<MeshBuffer>, "MeshBuffer should be move constructible");
+static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move assignable");
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
@@ -277,6 +284,62 @@ TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{2, 4}));
 
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{1, 3}));
+}
+
+TEST_F(MeshBufferTestSuite, MoveConstructor) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto original_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto original_address = original_buffer->address();
+    const auto original_size = original_buffer->size();
+    const auto original_device_local_size = original_buffer->device_local_size();
+
+    EXPECT_TRUE(original_buffer->is_allocated());
+
+    MeshBuffer moved_buffer(std::move(*original_buffer));
+
+    EXPECT_TRUE(moved_buffer.is_allocated());
+    EXPECT_EQ(moved_buffer.address(), original_address);
+    EXPECT_EQ(moved_buffer.size(), original_size);
+    EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
+
+    EXPECT_FALSE(original_buffer->is_allocated());
+}
+
+TEST_F(MeshBufferTestSuite, MoveAssignment) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto source_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto source_address = source_buffer->address();
+    const auto source_size = source_buffer->size();
+    const auto source_device_local_size = source_buffer->device_local_size();
+
+    EXPECT_TRUE(source_buffer->is_allocated());
+
+    const ReplicatedBufferConfig target_buffer_config{.size = 8 << 10};
+    auto target_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
+    const auto target_original_address = target_buffer->address();
+
+    EXPECT_TRUE(target_buffer->is_allocated());
+    EXPECT_NE(target_buffer->address(), source_address);
+
+    *target_buffer = std::move(*source_buffer);
+
+    EXPECT_TRUE(target_buffer->is_allocated());
+    EXPECT_EQ(target_buffer->address(), source_address);
+    EXPECT_EQ(target_buffer->size(), source_size);
+    EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
+
+    EXPECT_FALSE(source_buffer->is_allocated());
+
+    auto new_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_EQ(new_buffer->address(), target_original_address);
 }
 
 class DeviceLocalMeshBufferShardingTest
@@ -895,6 +958,59 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     }
 }
 
+TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src->begin(), src->end(), 0);
+    std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>> dst(
+        bytes_per_device / sizeof(uint32_t), 0);
+
+    distributed::MeshCoordinate coord(0, 0);
+    {
+        HostBuffer host_buffer(
+            tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+        auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device_,
+            MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
+            host_buffer,
+            /*map_to_noc=*/true);
+        ASSERT_TRUE(pinned_shared);
+
+        auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+        distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+
+        EXPECT_TRUE(pinned_shared->lock_may_block());
+    }
+
+    auto read_transfer = distributed::ShardDataTransfer{coord}
+                             .host_data(static_cast<void*>(dst.data()))
+                             .region(BufferRegion(0, bytes_per_device));
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    EXPECT_EQ(*src, dst);
+}
+
 TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage) {
     if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
@@ -1100,6 +1216,61 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         ASSERT_EQ(dst_vec.size(), src_vector.size());
         EXPECT_EQ(dst_vec, src_vector);
     }
+}
+
+// On a single host all coords are local, so this test exercises the SD sharded buffer
+// write/read path but does not trigger the remote-coord crash directly. For that,
+// run with TT_MESH_ID=0 TT_MESH_HOST_RANK=0 on T3K with the dual-host mesh descriptor.
+class SDMeshBufferFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE=1";
+        }
+        const auto system_shape = MetalContext::instance().get_system_mesh().shape();
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(system_shape), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{});
+    }
+
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+    }
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+};
+
+TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
+    const uint32_t num_rows = mesh_device_->num_rows();
+    const uint32_t num_cols = mesh_device_->num_cols();
+    const uint32_t shard_w = 1024;
+
+    const Shape2D global_buffer_shape{num_rows, shard_w * num_cols};
+    const uint32_t global_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+
+    const DeviceLocalBufferConfig per_device_config{
+        .page_size = shard_w * sizeof(uint32_t), .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ShardedBufferConfig sharded_config{
+        .global_size = global_size,
+        .global_buffer_shape = global_buffer_shape,
+        .shard_shape = {1, shard_w},
+        .shard_orientation = ShardOrientation::ROW_MAJOR,
+    };
+
+    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_config, mesh_device_.get());
+
+    std::vector<uint32_t> src(global_buffer_shape.height() * global_buffer_shape.width());
+    std::iota(src.begin(), src.end(), 0);
+
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src);
+
+    std::vector<uint32_t> dst;
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
+
+    EXPECT_EQ(dst, src);
 }
 
 }  // namespace

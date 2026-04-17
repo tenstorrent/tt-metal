@@ -1,0 +1,30 @@
+# Dual 4x8 galaxies with Z-only connections between them.
+# NO assign_z_direction - tests Z-direction fallback when NESW runs out
+# (physical topology between c02u08 and c03u02 has only Z links).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 }
+    # assign_z_direction not set - Z fallback when physical links are Z-only
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

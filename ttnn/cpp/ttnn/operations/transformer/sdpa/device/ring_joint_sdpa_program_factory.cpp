@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -194,18 +194,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
+    // Lightweight mask: needed when any K/joint dimension has padding, or when causal masking is active.
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
+    const bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || args.is_causal;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
     const uint32_t partial_mask_tiles = (global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
-    const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
+    const uint32_t causal_diag_tiles = args.is_causal ? 1 : 0;
+    // Single CB holds: 1 neginf tile + optional causal diagonal + up to 2 partial mask tiles
+    const uint32_t total_lightweight_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
@@ -386,6 +388,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // log scale
     log_debug(tt::LogOp, "scale: {}", scale_union.f);
 
+    // Enable per-head zigzag for load balancing in balanced causal mode
+    // Requires even num_q_chunks for symmetric light/heavy work distribution
+    const bool enable_zigzag_balancing = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -409,7 +415,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.ring_size,
         qk_out_subblock_h,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -462,6 +469,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)use_streaming_compute,
         args.is_causal,
         args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing),
+        (std::uint32_t)out_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -474,7 +483,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
     const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
     const bool uniform_dataformat =
         (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
          q_df_early == mask_df_early && q_df_early == im_df_early);
@@ -518,7 +527,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
         args.is_causal,
-        args.is_balanced};
+        args.is_balanced,
+        static_cast<uint32_t>(enable_zigzag_balancing)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -537,10 +547,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
 
-    // This is done only in the non-causal case:
-    // Lightweight mask: both streaming and non-streaming paths use Float16_b
+    // Lightweight mask: both causal and non-causal paths use Float16_b
     // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -579,20 +588,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    if (args.is_causal) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
+    // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
+    // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
+    if (needs_lightweight_mask) {
+        auto c_in3_config =
+            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                .set_page_size(tt::CB::c_in3, mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
-    }
-    else {
-        // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-        if (needs_lightweight_mask) {
-            auto c_in3_config =
-                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                    .set_page_size(tt::CB::c_in3, mask_tile_size);
-            CreateCircularBuffer(program, core_grid, c_in3_config);
-        }
     }
 
     // scale input
@@ -690,6 +692,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
+
+        // Signal CB (c_12): compute signals writer when last K-chunk starts.
+        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+        constexpr uint32_t signal_page_size = 16;
+        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
+                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
+        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -750,8 +759,22 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+
+    uint32_t base_chunks_per_core = 0;
+    uint32_t extra_chunks_per_core = 0;
+    uint32_t cores_doing_extra_work = 0;
+    if (enable_zigzag_balancing) {
+        log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
+        const uint32_t total_pairs = total_q_chunks / 2;
+        cores_doing_extra_work = total_pairs % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        cores_doing_extra_work = total_q_chunks % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
+    }
+
     uint32_t next_global_chunk = 0;
 
     auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
@@ -765,7 +788,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+        uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
         if (next_global_chunk >= total_q_chunks) {
             chunk_count = 0;
         } else if (chunk_count > total_q_chunks - next_global_chunk) {
@@ -814,7 +837,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Injector reselection for DRAM channel spreading is deferred to the
     // mcast eligibility pass below.
     for (auto& segments : head_segments) {
-        if (segments.size() < 2 || args.is_balanced) {
+        if (segments.size() < 2) {
             continue;
         }
 
@@ -839,7 +862,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         for (std::size_t idx = start; idx < segments.size(); ++idx) {
             const auto& seg = segments.at(idx);
             const uint32_t core_idx = seg.core_idx;
-            const auto& hw = core_work.at(core_idx).head_work.at(seg.head_work_index);
+            const auto& work = core_work.at(core_idx);
+            const auto& hw = work.head_work.at(seg.head_work_index);
             auto& chain = core_chain_info.at(core_idx);
 
             chain.participates = true;
@@ -968,9 +992,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
         if (all_eligible && !candidates.empty()) {
             mcast_chains = candidates.size();
-            // Track injector physical X columns for DRAM channel spreading
-            std::vector<uint32_t> injector_phys_x;
-            for (const auto& cand : candidates) {
+            for (uint32_t cand_idx = 0; cand_idx < candidates.size(); ++cand_idx) {
+                const auto& cand = candidates[cand_idx];
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
 
@@ -983,23 +1006,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     }
                 }
 
-                // Reselect injector for DRAM channel spreading: pick the core
-                // whose physical X is furthest from all previously chosen injectors.
+                // Reselect injector for diagonal placement: the n-th chain
+                // picks the core at offset n within its chain, wrapping around.
+                // This places injectors on the diagonal (0,0), (1,1), (2,2)...
                 {
-                    uint32_t best_idx = injector_idx;
-                    uint32_t best_dist = 0;
-                    for (const auto& ci : cand.core_indices) {
-                        const uint32_t phys_x = core_work[ci].physical_core.x;
-                        uint32_t min_dist = UINT32_MAX;
-                        for (uint32_t ix : injector_phys_x) {
-                            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
-                            min_dist = std::min(min_dist, d);
-                        }
-                        if (min_dist > best_dist) {
-                            best_dist = min_dist;
-                            best_idx = ci;
-                        }
-                    }
+                    uint32_t target_offset = cand_idx % chain_size;
+                    uint32_t best_idx = cand.core_indices[target_offset];
                     if (best_idx != injector_idx) {
                         // Clear old injector, set new one
                         core_chain_info[injector_idx].is_injector = false;
@@ -1009,7 +1021,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                         injector_idx = best_idx;
                     }
                 }
-                injector_phys_x.push_back(core_work[injector_idx].physical_core.x);
 
                 uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
                 uint32_t max_x = min_x;
@@ -1022,9 +1033,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 auto& injector_chain = core_chain_info[injector_idx];
                 injector_chain.use_mcast = true;

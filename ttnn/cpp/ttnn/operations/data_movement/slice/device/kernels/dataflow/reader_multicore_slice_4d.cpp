@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 /*
@@ -82,7 +82,7 @@ void kernel_main() {
     uint32_t output_bytes_per_row = output_w * element_size;
 
     // Set up TensorAccessor for input data - use row size as page size
-    const auto s0 = TensorAccessor(src_args, src_addr, input_bytes_per_row);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)

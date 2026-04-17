@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,11 +37,11 @@ void kernel_main() {
     constexpr auto param_in_args = TensorAccessorArgs<1U>();
     constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
 
-    const auto param_in_addr_gen = TensorAccessor(param_in_args, param_in_addr, tile_size_bytes);
-    const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, tile_size_bytes);
+    const auto param_in_addr_gen = TensorAccessor(param_in_args, param_in_addr);
+    const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr);
 #if USE_MOMENTUM
     constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
-    const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_addr, tile_size_bytes);
+    const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_addr);
 #endif
 
     generate_bcast_scalar_bfloat16(cb_bcast_lr_idx, packed_lr);

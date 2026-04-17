@@ -1,8 +1,28 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import struct
+
+import torch
+
+import ttnn
+
+
+def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
+    """Reorder a round-robin interleaved KV cache for ShardTensor2dMesh.
+
+    The global KV cache is written in round-robin device_chunk_size blocks:
+      [dev0_chunk0 | dev1_chunk0 | ... | devN_chunk0 | dev0_chunk1 | ...]
+    ShardTensor2dMesh splits dim-2 contiguously, so each device would
+    receive the wrong data.  This function reorders to:
+      [dev0_chunk0 | dev0_chunk1 | ... | dev1_chunk0 | dev1_chunk1 | ...]
+    so that after the contiguous split each device gets its own chunks.
+    """
+    b, h, seq, d = kv.shape
+    num_chunks = seq // device_chunk_size
+    chunks_per_device = num_chunks // num_devices
+    return kv.reshape(b, h, chunks_per_device, num_devices, device_chunk_size, d).transpose(2, 3).reshape(b, h, seq, d)
 
 
 def float_to_bfloat16_packed(value):
@@ -19,6 +39,74 @@ def float_to_bfloat16_packed(value):
 def float_to_uint32(value):
     """Convert float to uint32"""
     return int.from_bytes(struct.pack("f", value), byteorder="little")
+
+
+def get_worker_noc_hop_distance(mesh_device, logical_src, logical_dst, noc, mesh_coord=None):
+    """
+    Experimental NOC hop distance (``ttnn._ttnn.multi_device.experimental``).
+
+    For meshes with multiple devices, pass ``mesh_coord`` to select the chip; when omitted,
+    ``MeshCoordinate(0, 0)`` is used (homogeneous meshes only).
+    """
+    exp = ttnn._ttnn.multi_device.experimental
+    if mesh_device.get_num_devices() > 1:
+        coord = mesh_coord if mesh_coord is not None else ttnn.MeshCoordinate(0, 0)
+        return exp.get_worker_noc_hop_distance(mesh_device, coord, logical_src, logical_dst, noc)
+    return exp.get_worker_noc_hop_distance(mesh_device, logical_src, logical_dst, noc)
+
+
+def merge_per_core_runtime_args(*groups):
+    """
+    Merge per-core runtime arg groups in-order with core-aware concatenation.
+
+    Each group is a list of tuples: (core_coord, list[int]).
+    If a core appears in multiple groups, args are concatenated in group order.
+    """
+    merged = []
+    core_to_index = {}
+    for group in groups:
+        for core, args in group:
+            key = (core.x, core.y)
+            args_list = list(args)
+            if key in core_to_index:
+                idx = core_to_index[key]
+                merged_core, merged_args = merged[idx]
+                merged[idx] = (merged_core, merged_args + args_list)
+            else:
+                core_to_index[key] = len(merged)
+                merged.append((core, args_list))
+    return merged
+
+
+def merge_kernel_defines(*define_groups):
+    """
+    Merge kernel defines in-order with key-aware deduplication.
+
+    Each input is an iterable of (name, value) tuples. First occurrence preserves
+    ordering; later occurrences override the value for that define name.
+    """
+    merged = {}
+    ordered_names = []
+    for group in define_groups:
+        for name, value in group:
+            if name not in merged:
+                ordered_names.append(name)
+            merged[name] = value
+    return [(name, merged[name]) for name in ordered_names]
+
+
+def fabric_config_enables_torus_x(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
+
+
+def fabric_config_enables_torus_y(fabric_config) -> bool:
+    return fabric_config in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    )
 
 
 def generate_mm_weights(shape, dtype):

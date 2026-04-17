@@ -64,6 +64,9 @@ __cmake_systeminformation/
 **.swp
 **.swo
 **.swn
+**.orig
+**.bak
+
 
 *profile_log*.csv
 **/profiler/output/*
@@ -151,4 +154,8 @@ Testing
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
 
+*.out
+*.err
+
 .claude
+.cursor/.DS_store

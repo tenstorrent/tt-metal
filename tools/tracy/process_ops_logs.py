@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -119,6 +119,7 @@ OPS_CSV_HEADER = [
     "NOC UTIL (%)",
     "MULTICAST NOC UTIL (%)",
     "DRAM BW UTIL (%)",
+    "DRAM BW UTIL PER CTRL (%)",
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
 ]
@@ -322,7 +323,14 @@ def import_tracy_op_logs(
                     opData = {}
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
-                        opData = json.loads(jsonStr)
+                        try:
+                            opData = json.loads(jsonStr)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Skipping op with malformed JSON (likely truncated by Tracy's 64 KiB message limit): "
+                                f"{tmpStrs[0]}"
+                            )
+                            continue
                         opData["metal_trace_id"] = None
                         if "op_hash" in opData:
                             assert "device_id" in opData
@@ -343,8 +351,12 @@ def import_tracy_op_logs(
                         programCacheHitStr = opDataList[3].strip()
                         programCacheHit = programCacheHitStr in ("1", "true", "True")
                         opID = int(opDataList[4])
-                        assert deviceID in cached_ops, "Expected hashed op info is not found"
-                        assert opHash in cached_ops[deviceID], "Expected hashed op info is not found"
+                        if deviceID not in cached_ops or opHash not in cached_ops[deviceID]:
+                            logger.warning(
+                                f"Skipping cached op reference with no prior data "
+                                f"(device_id={deviceID}, op_hash={opHash})"
+                            )
+                            continue
                         opData = cached_ops[deviceID][opHash].copy()
                         opData["global_call_count"] = opID
                         opData["program_cache_hit"] = programCacheHit
@@ -630,14 +642,15 @@ def _enrich_ops_from_device_logs(
                 op_id_host_data_dict[op_id] = copy.deepcopy(device_op)
 
             trace_ops_map = {}
+            unmatched_device_ops = []
             for device_op_time in device_ops_time:
                 if len(device_op_time["timeseries"]) > 0:
                     time_id, ts, stat_data, risc, core = device_op_time["timeseries"][0]
                     assert "run_host_id" in time_id, "Device op ID missing: Device data must provide op ID"
                     device_op_id = time_id["run_host_id"]
-                    assert (
-                        device_op_id in op_id_host_data_dict
-                    ), f"Device op ID not present: Device op ID {device_op_id} not present in host data on device {device}"
+                    if device_op_id not in op_id_host_data_dict:
+                        unmatched_device_ops.append(device_op_id)
+                        continue
 
                     trace_id = op_id_host_data_dict[device_op_id].get("metal_trace_id")
                     if trace_id is not None:
@@ -663,6 +676,18 @@ def _enrich_ops_from_device_logs(
                         )
                     generated_host_data.append(copy.deepcopy(op_id_host_data_dict[device_op_id]))
 
+            if unmatched_device_ops:
+                logger.warning(
+                    f"Skipping {len(unmatched_device_ops)} device op(s) with no matching host data "
+                    f"on device {device} (dispatch-only trace replay entries): {unmatched_device_ops}"
+                )
+                matched_ids = set(op_id_host_data_dict.keys())
+                device_ops_time[:] = [
+                    op
+                    for op in device_ops_time
+                    if op["timeseries"] and op["timeseries"][0][0].get("run_host_id") in matched_ids
+                ]
+
             # Update host_ops_by_device with generated data including trace replays
             host_ops_by_device[device] = generated_host_data
 
@@ -682,7 +707,14 @@ def _enrich_ops_from_device_logs(
                     device_op["analysis"][dispatch_analysis] = dispatch_op_analysis[op_id][dispatch_analysis]
                 del dispatch_op_analysis[op_id]
 
-        assert len(dispatch_op_analysis) == 0, "Unrecognized dispatch OPs are presentent by dispatch cores"
+        if dispatch_op_analysis:
+            if has_trace_runs:
+                logger.debug(
+                    f"Ignoring {len(dispatch_op_analysis)} dispatch op(s) with no matching device op "
+                    f"on device {device} (likely trace replay dispatch entries)"
+                )
+            else:
+                assert False, "Unrecognized dispatch OPs are presented by dispatch cores"
 
         if len(host_ops_by_device[device]) != len(device_ops_time):
             device_op_id_debug = None
@@ -1077,6 +1109,7 @@ def append_device_data(
                     op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
                     op["MULTICAST NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_mcast_write_link_util, 1)
                     op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                    op["DRAM BW UTIL PER CTRL (%)"] = op_npe_stats.result.getDramBwUtilPerControllerStr()
                     op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
                     op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
@@ -1820,6 +1853,8 @@ def generate_reports(
                     csv_row["MULTICAST NOC UTIL (%)"] = active_op_record.get("MULTICAST NOC UTIL (%)")
                 if "DRAM BW UTIL (%)" in active_op_record:
                     csv_row["DRAM BW UTIL (%)"] = active_op_record.get("DRAM BW UTIL (%)")
+                if "DRAM BW UTIL PER CTRL (%)" in active_op_record:
+                    csv_row["DRAM BW UTIL PER CTRL (%)"] = active_op_record.get("DRAM BW UTIL PER CTRL (%)")
                 if "ETH BW UTIL (%)" in active_op_record:
                     csv_row["ETH BW UTIL (%)"] = active_op_record.get("ETH BW UTIL (%)")
                 if "NPE CONG IMPACT (%)" in active_op_record:

@@ -84,7 +84,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
@@ -172,7 +172,11 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests -x --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests -x \
+            --ignore=models/demos/deepseek_v3/tests/unit \
+            --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
+            -m "not t3k_compat" \
+            --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -182,22 +186,7 @@ jobs:
           echo "=============================================="
           echo "Device Performance Tests"
           echo "=============================================="
-          echo "DeepSeek fused-op device perf tests (CI-curated selection)"
-          CI_FUSED_OP_DEVICE_PERF_K_EXPR='
-          (
-            (test_ds_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_all_gather_embedding_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_lm_head_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_rms_norm_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_distributed_norm_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_ff1_3_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_mul_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_reduce_scatter_post_ff2_device_perf and ((decode and 1) or (prefill and 128))) or
-            (test_ds_all_gather_preff1_3_device_perf and ((decode and 1) or (prefill and 128)))
-          )'
-          CI_FUSED_OP_DEVICE_PERF_K_EXPR="$(printf '%s' "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
-          pytest models/demos/deepseek_v3/tests/fused_op_unit_tests -k "$CI_FUSED_OP_DEVICE_PERF_K_EXPR" --timeout 600 --durations=0
+          bash models/demos/deepseek_v3/tests/fused_op_unit_tests/run_ci_device_perf_tracy.sh
 
           echo "=============================================="
           echo "All device perf tests completed!"

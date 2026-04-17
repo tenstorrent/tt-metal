@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,8 +44,9 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be INT32 or UINT32, got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32,
-        "Expert offsets tensor must be INT32, got {}",
+        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
+            tensor_args.expert_offsets_tensor.dtype() == DataType::UINT32,
+        "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
@@ -72,9 +73,6 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
 
     // Get the input tensor's per-device shape (sharded dimension)
     auto input_shape = tensor_args.input_tensor.tensor_spec().logical_shape();
-
-    // Extract per-device batch size from the input's first dimension (sharded on dim 0)
-    uint32_t per_device_batch = input_shape[0];  // This is 1 for input sharded on dim 0
     uint32_t hidden_dim = input_shape[-1];
 
     // Memory config for all output tensors (inherits sharding from input)
@@ -84,11 +82,9 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
     // Define output shapes - these are PER-DEVICE shapes (not global shapes)
-    // When sharded on dim 0, each device should get shape [1, ...]
-    auto dispatch_buffer_shape =
-        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
+    auto dispatch_buffer_shape = ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
     auto dispatch_metadata_shape =
-        ttnn::Shape({per_device_batch, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+        ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -108,10 +104,11 @@ DispatchDeviceOperation::topology_return_value_t DispatchDeviceOperation::comput
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_topology = input_tensor.tensor_topology();
 
-    // Both output tensors use the same topology as the input
-    // (sharded on dimension 0 across the mesh)
+    // Both output tensors use explicit Shard placements across both mesh dimensions
     auto output_topology = tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), input_topology.placements(), input_topology.mesh_coords());
+        input_topology.distribution_shape(),
+        {tt::tt_metal::distributed::MeshMapperConfig::Shard{0}, tt::tt_metal::distributed::MeshMapperConfig::Shard{1}},
+        input_topology.mesh_coords());
 
     return {output_topology, output_topology};
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,7 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
+#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 
@@ -290,15 +291,14 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor tanh_res = ttnn::tanh(input, output_mem_config);
-    tanh_res = ttnn::square(tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(tanh_res, 1.0f, std::nullopt, output_mem_config);
-    ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config, input_grad);
-    grad_tensor.emplace_back(input_grad);
+    DataType output_dtype = input.dtype();
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
+        grad, input, output_dtype, output_memory_config, input_grad);
+    grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
 
@@ -1363,9 +1363,10 @@ std::vector<ComplexTensor> reciprocal_bw(
     ComplexTensor neg_grad =
         ComplexTensor({ttnn::neg(grad.real(), output_mem_config), ttnn::neg(grad.imag(), output_mem_config)});
     ComplexTensor inp_recip = ttnn::reciprocal(input, output_mem_config);
-    ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(
+    ComplexTensor grad_inp = ttnn::operations::complex_binary::multiply(
         neg_grad,
-        ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config),
+        ttnn::conj(
+            ttnn::operations::complex_binary::multiply(inp_recip, inp_recip, output_mem_config), output_mem_config),
         output_mem_config);
     neg_grad.deallocate();
     inp_recip.deallocate();

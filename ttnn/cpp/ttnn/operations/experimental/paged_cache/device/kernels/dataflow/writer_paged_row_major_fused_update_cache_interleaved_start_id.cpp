@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, cache_addr);
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
@@ -118,7 +118,7 @@ void kernel_main() {
         cb_wait_front(untilized_cache_cb_id, Wt);
         cb_reserve_back(untilized_cache2_cb_id, Wt);
 
-        uint32_t cache_l1_write_addr = get_write_ptr(untilized_cache_cb_id) + cache_tile_offset_B;
+        uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + cache_tile_offset_B;
         noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
         noc_async_read_barrier();
         cb_push_back(untilized_cache2_cb_id, Wt);
