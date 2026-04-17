@@ -86,22 +86,28 @@ class _TtConvGRU:
         three_c = 3 * self.h_planes
         glo_big = _broadcast_glo(glo_zrq, batch_size, h, w, three_c)
         big_rows = glo_big.shape[-2]
-        # glo_z and glo_r are sliced later as a single glo_zr halves; q
-        # is taken directly.
+        glo_z = ttnn.slice(glo_big, [0, 0, 0, 0], [1, 1, big_rows, self.h_planes])
+        glo_r = ttnn.slice(
+            glo_big, [0, 0, 0, self.h_planes], [1, 1, big_rows, 2 * self.h_planes]
+        )
         glo_q = ttnn.slice(
             glo_big, [0, 0, 0, 2 * self.h_planes], [1, 1, big_rows, 3 * self.h_planes]
         )
 
         zr, _, _ = self.convzr(net_inp, device, batch_size, h, w)
-        # Slice glo_zr (z+r halves combined) from glo_big and fuse the
-        # add+sigmoid across both halves in one kernel, then split.
-        zr_rows = zr.shape[-2]
-        glo_zr = ttnn.slice(glo_big, [0, 0, 0, 0], [1, 1, zr_rows, 2 * self.h_planes])
-        zr_sig = ttnn.add(zr, glo_zr, activations=[SIGMOID])
-        z = ttnn.slice(zr_sig, [0, 0, 0, 0], [1, 1, zr_rows, self.h_planes])
-        r = ttnn.slice(
-            zr_sig, [0, 0, 0, self.h_planes], [1, 1, zr_rows, 2 * self.h_planes]
+        # ttnn.split fails on tile-layout tensors when the spatial dim
+        # has padding mismatching the logical volume; slice avoids that
+        # by grabbing explicit ranges on the channel axis.
+        zr_z = ttnn.slice(zr, [0, 0, 0, 0], [1, 1, zr.shape[-2], self.h_planes])
+        zr_r = ttnn.slice(
+            zr, [0, 0, 0, self.h_planes], [1, 1, zr.shape[-2], 2 * self.h_planes]
         )
+
+        # Broadcast-add the (batch, 1, 1, C) context onto the per-spatial
+        # tensor, fusing the activation so each (add, sigmoid/tanh) pair
+        # becomes a single kernel.
+        z = ttnn.add(zr_z, glo_z, activations=[SIGMOID])
+        r = ttnn.add(zr_r, glo_r, activations=[SIGMOID])
         r_net = ttnn.multiply(r, net)
         q_input = ttnn.concat([r_net, inp_cat], dim=-1)
         q_conv, _, _ = self.convq(q_input, device, batch_size, h, w)
