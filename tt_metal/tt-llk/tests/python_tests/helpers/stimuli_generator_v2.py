@@ -61,7 +61,11 @@ from typing import Callable, Dict, List, Optional, Set, Union
 import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
-from .format_config import DataFormat
+from .format_config import (
+    MXFP8_E4M3_MAX_NORMAL,
+    MXFP8_E5M2_MAX_NORMAL,
+    DataFormat,
+)
 from .llk_params import MathOperation, format_dict
 from .stimuli_generator import (
     _clamp_mx_tensors,
@@ -1221,6 +1225,52 @@ def _generate_source_tensor_v2(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Legacy-compatible defaults for omitted specs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _v1_default_bfp8b_face(
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
+) -> torch.Tensor:
+    # gen is intentionally unused — v1 used the global RNG for BFP formats.
+    integer_part = torch.randint(0, 3, (size,))
+    fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
+    return integer_part.to(dtype=torch.bfloat16) + fraction
+
+
+def _v1_default_bfp4b_face(
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator]
+) -> torch.Tensor:
+    # gen is intentionally unused — v1 used the global RNG for BFP formats.
+    integer_part = torch.randint(0, 3, (size,))
+    fraction = torch.randint(0, 8, (size,)).to(dtype=torch.bfloat16) / 8.0
+    return integer_part.to(dtype=torch.bfloat16) + fraction
+
+
+def _default_legacy_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
+    """Return a :class:`StimuliSpec` matching legacy :func:`generate_stimuli` defaults.
+
+    Legacy defaults: ``sfpu=True``, ``negative_values=False``,
+    ``const_face=False``.
+    """
+    if stimuli_format == DataFormat.MxFp8R:
+        return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E5M2_MAX_NORMAL)
+    if stimuli_format == DataFormat.MxFp8P:
+        return StimuliSpec.gaussian(mean=0.1, std=0.05 * MXFP8_E4M3_MAX_NORMAL)
+    if stimuli_format == DataFormat.Bfp8_b:
+        return StimuliSpec(distribution=_v1_default_bfp8b_face)
+    if stimuli_format == DataFormat.Bfp4_b:
+        return StimuliSpec(distribution=_v1_default_bfp4b_face)
+    if stimuli_format.is_integer():
+        if stimuli_format == DataFormat.UInt32:
+            return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))
+        dtype = format_dict[stimuli_format]
+        v1_type_max = torch.iinfo(dtype).max // 2
+        return StimuliSpec.uniform(low=0.0, high=float(v1_type_max - 1))
+    return StimuliSpec.uniform(low=0.1, high=1.1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public: top-level stimuli generator
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1261,8 +1311,14 @@ def generate_stimuli_v2(
     input_dimensions_A, input_dimensions_B : list of [int, int]
         ``[height, width]`` in elements.  Defaults to ``[32, 32]``.
     spec_A, spec_B : StimuliSpec, optional
-        Generation spec for each operand.  Defaults to
-        ``StimuliSpec(distribution="uniform", low=0.0, high=1.0)``.
+        Generation spec for each operand.  When omitted, uses
+        legacy-compatible defaults that match :func:`generate_stimuli`
+        with ``sfpu=True, negative_values=False, const_face=False``:
+        standard floats get uniform [0.1, 1.1], MX formats get
+        scaled gaussian + 0.1, BFP formats use their discrete
+        randint distributions, and integer formats use half-range
+        ``[0, iinfo.max // 2 - 1]``.  Pass an explicit
+        :class:`StimuliSpec` to override.
     tile_dimensions : list of [int, int], optional
         ``[rows, cols]`` for the tile size (e.g. ``[8, 32]``).  When provided,
         enables dense mode: tile counts are computed from these dimensions and
@@ -1325,9 +1381,9 @@ def generate_stimuli_v2(
     if input_dimensions_B is None:
         input_dimensions_B = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     if spec_A is None:
-        spec_A = StimuliSpec()
+        spec_A = _default_legacy_spec_for_format(stimuli_format_A)
     if spec_B is None:
-        spec_B = StimuliSpec()
+        spec_B = _default_legacy_spec_for_format(stimuli_format_B)
 
     if tile_dimensions is not None:
         if face_r_dim != MAX_FACE_R_DIM:
