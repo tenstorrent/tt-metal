@@ -83,33 +83,29 @@ ALWI void matmul_block(
 
             pre_k_block(block, num_k_blocks, last_out);
 
-            // in0 wait strategy: full-block for legacy path, progressive for row-major.
-            // Progressive wait accommodates SDPA's streamed Q and costs nothing when the
-            // full block is already resident in the CB.
-            if constexpr (!row_major_output) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-            }
+            // Full-block wait for both modes. Every caller (matmul + SDPA) has the
+            // full in0 block resident before invoking the helper, so progressive
+            // per-subblock waits are pure polling overhead on TRISCs.
+            cb_wait_front(in0_cb, in0_block_num_tiles);
             cb_wait_front(in1_cb, in1_block_num_tiles);
 
             const uint32_t pack_target = pack_last_to_interm ? interm_cb : out_cb;
 
-            // Shared-memory protection (legacy/sequential path only): reserve the full
-            // out_block on the first non-last K-block so interm spills don't overwrite
-            // output data when out_cb and interm_cb share L1 (multicast factory layout).
-            // Single reserve, not per-subblock accumulation — matches main's CB-API
-            // invariant that all wait_front/reserve_back increments are identical.
+            // Legacy/sequential path: reserve the full out_block on the first
+            // non-last K-block so interm spills don't overwrite output data
+            // when out_cb and interm_cb share the same L1 region (multicast
+            // factory layout). Single reserve here keeps all wait_front /
+            // reserve_back increments identical across the K-loop, as the
+            // CB-API contract requires.
             if constexpr (!row_major_output) {
                 if (block == 0 && !last_out) {
                     cb_reserve_back(out_cb, out_block_num_tiles);
                 }
             }
 
-            uint32_t in0_wait_tiles = in0_subblock_num_tiles;
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 if constexpr (row_major_output) {
-                    cb_wait_front(in0_cb, in0_wait_tiles);
-                    in0_wait_tiles += in0_subblock_num_tiles;
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm CBs don't deadlock.
                     if (last_out) {
@@ -181,14 +177,24 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (row_major_output) {
-                            // Absolute-offset pack into row-major positions within the row-group.
-                            uint32_t dst_idx = 0;
-                            uint32_t col_base = in1_subblock * out_subblock_w;
-                            for (uint32_t r = 0; r < out_subblock_h; r++) {
-                                uint32_t row_pos = r * in1_per_core_w;
-                                for (uint32_t c = 0; c < out_subblock_w; c++) {
-                                    pack_tile<true>(dst_idx, pack_target, row_pos + col_base + c);
-                                    dst_idx++;
+                            // Single-row subblock: DST tiles are already contiguous in
+                            // row-major order and consecutive in1_subblock iterations land
+                            // at adjacent CB positions, so pack_tile_block produces the
+                            // correct layout with fewer per-tile LLK calls than the
+                            // absolute-offset path below. Multi-row subblocks need the
+                            // absolute-offset pack because DST tiles are packed column-first
+                            // within a subblock while row-major output wants row-first.
+                            if (out_subblock_h == 1) {
+                                pack_tile_block(0, pack_target, out_subblock_w);
+                            } else {
+                                uint32_t dst_idx = 0;
+                                uint32_t col_base = in1_subblock * out_subblock_w;
+                                for (uint32_t r = 0; r < out_subblock_h; r++) {
+                                    uint32_t row_pos = r * in1_per_core_w;
+                                    for (uint32_t c = 0; c < out_subblock_w; c++) {
+                                        pack_tile<true>(dst_idx, pack_target, row_pos + col_base + c);
+                                        dst_idx++;
+                                    }
                                 }
                             }
                         } else {
