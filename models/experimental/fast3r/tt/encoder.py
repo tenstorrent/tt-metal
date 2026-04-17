@@ -123,3 +123,34 @@ class TtEncoderBlock:
         x = ttnn.add(x, self.attn(self.norm1(x)))
         x = ttnn.add(x, self.norm_mlp(x))
         return x
+
+
+class TtEncoderBlocks:
+    """Full 24-layer encoder trunk (blocks + enc_norm).
+
+    The caller supplies post-patch-embed tokens on device; this keeps patch_embed
+    pluggable so we can port the conv2d separately.
+    """
+
+    def __init__(self, device, cfg: Fast3RConfig, weights_path: str):
+        self.cfg = cfg
+        self.device = device
+        self.cos, self.sin = _build_permuted_rope_cache(device, cfg)
+        with safe_open(weights_path, framework="pt") as f:
+            self.blocks = [
+                TtEncoderBlock(
+                    device, cfg,
+                    {k.split(f".{i}.", 1)[1]: f.get_tensor(k)
+                     for k in f.keys() if k.startswith(f"encoder.enc_blocks.{i}.")},
+                    self.cos, self.sin,
+                )
+                for i in range(cfg.enc_depth)
+            ]
+            norm_w = f.get_tensor("encoder.enc_norm.weight")
+            norm_b = f.get_tensor("encoder.enc_norm.bias")
+        self.norm = TtLayerNorm(device, norm_w, norm_b)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        for blk in self.blocks:
+            x = blk(x)
+        return self.norm(x)
