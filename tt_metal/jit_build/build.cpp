@@ -269,6 +269,10 @@ void JitBuildEnv::init(
     }
 
     const auto& san = rtoptions.get_sanitizer_settings();
+
+    // sanitizer and checkpoint can't both be enabled because they overlap.
+    TT_ASSERT(!san.enabled || !rtoptions.get_checkpoint_enabled());
+
     if (san.enabled) {
         this->defines_ += "-DLLK_SAN_ENABLE ";
 
