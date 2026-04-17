@@ -149,17 +149,28 @@ fi
 # that the hang-detection logic below can check. The outer sim timeout below
 # also writes the same marker on forced termination.
 rm -f "$TRIAGE_LOG"
+MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == true ]]; then
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG > ${TRIAGE_LOG}"
 else
     # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
+    # Defer the missing-tool warning to EXIT via trap — otherwise it gets buried
+    # in pytest / triage output and users never see it.
     if ! python3 -c "import ttexalens" 2>/dev/null; then
-        echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
-        echo "TT_TEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+        MISSING_TTEXALENS=true
     fi
     mkdir -p "${TRIAGE_JSON_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
 fi
+
+emit_missing_ttexalens_warning() {
+    if [[ "$MISSING_TTEXALENS" == true ]]; then
+        echo "" >&2
+        echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
+        echo "TT_TEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+    fi
+}
+trap emit_missing_ttexalens_warning EXIT
 
 if [[ "$DEV_MODE" == true ]]; then
     # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
