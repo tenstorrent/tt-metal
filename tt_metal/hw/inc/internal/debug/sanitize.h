@@ -232,10 +232,10 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
-    if (addr < MEM_DRISC_RESERVED_SIZE) {
+    if (addr < MEM_DRISC_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
-    if (addr + len > MEM_DRISC_L1_SIZE) {
+    if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
@@ -276,7 +276,7 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRISC kernel that puts a remote local NIU into stream mode and then
+// DRISC kernel that puts a local NIU into stream mode and then
 // reads from the Tensix's L1.
 
 #include "api/compile_time_args.h"
