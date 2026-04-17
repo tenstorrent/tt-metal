@@ -18,12 +18,7 @@ from .mlp import TtMlp, to_device_bias, to_device_weight
 
 class TtAttention:
     CORE_GRID = TtMlp.CORE_GRID
-    COMPUTE = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+    COMPUTE = TtMlp.COMPUTE
     SDPA_PROG = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
         q_chunk_size=64,
