@@ -273,8 +273,18 @@ static std::vector<Tensor> pool2d_L1(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(
-        output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
+    // When the last per-shard tile is strictly less than one full face wide (channels % 32 < 16),
+    // round up to TILE_WIDTH so the packer always writes 2 full faces without reconfiguring.
+    // When channels % 32 == FACE_WIDTH the last tile has exactly one face and no extra padding is needed.
+    // Use ceiling division so that for WIDTH/BLOCK sharding, where channels may not divide evenly,
+    // we check the maximum per-shard channel count and avoid false partial-tile detection.
+    // E.g. channels=290, num_cores_c=19: ceil(290/19)=16 = FACE_WIDTH → no tile pad needed.
+    //      channels=290, num_cores_c=1:  ceil(290/1)=290, 290%32=2 → tile pad needed.
+    uint32_t channels_per_shard = tt::div_up(output_c, num_cores_c);
+    uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
+    bool needs_tile_pad = cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH;
+    uint32_t base_alignment = needs_tile_pad ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
+    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * base_alignment);
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,

@@ -58,7 +58,10 @@ void kernel_main() {
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
-    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+    // When the last tile has exactly FACE_WIDTH valid channels (channels % 32 == 16), keep 1-face
+    // packing — the output CB was NOT padded to a full tile for this case.  For a strictly partial
+    // last face (channels % 32 < 16 but > 0) the output is padded to TILE_WIDTH so 2 faces fit.
+    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH == FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
@@ -122,7 +125,7 @@ void kernel_main() {
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
-                (last_tile_is_partial && last_c_block)
+                (last_tile_is_partial && last_c_block && in_c % TILE_WIDTH == FACE_WIDTH)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
             if constexpr (!is_output_tiled) {
