@@ -159,7 +159,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
-    // Interleaved layout: [sender0, idle0_0..idle0_{k0-1}, sender1, idle1_0..idle1_{k1-1}, ...]
+    // Core layout depends on dispatched_buffer layout:
+    //   TILE_LAYOUT: sender in the middle of its idle group to reduce NOC congestion.
+    //     Cores are divided into groups, sender placed at group_size/2:
+    //     [idle0_0..idle0_{m-1}, sender0, idle0_m..idle0_{k0-1}, ..., sender1, ...]
+    //   ROW_MAJOR: first num_cores cores are senders, remaining are idle (for zero-init only).
+    //     [sender0, sender1, idle0, idle1, idle2, ...]
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
     std::vector<CoreCoord> all_row_cores;
@@ -178,27 +183,44 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         total_row_cores,
         num_cores);
 
-    // Divide total_row_cores into num_cores groups: last (total_row_cores % num_cores) groups get +1.
-    // Within each group: first core = sender, remaining = that sender's idle cores.
-    uint32_t base_group_size = total_row_cores / num_cores;
-    uint32_t extra_groups = total_row_cores % num_cores;
-
     std::vector<CoreCoord> sender_cores;
     sender_cores.reserve(num_cores);
     std::vector<std::vector<CoreCoord>> sender_idle_groups(num_cores);
     std::vector<CoreCoord> all_idle_cores;
     std::vector<uint32_t> idle_sender_map;
 
-    {
+    if (is_tile_layout) {
+        // TILE_LAYOUT: divide into groups, sender in the middle of each group
+        uint32_t base_group_size = total_row_cores / num_cores;
+        uint32_t extra_groups = total_row_cores % num_cores;
+
         uint32_t pos = 0;
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t group_size = base_group_size + (s >= num_cores - extra_groups ? 1 : 0);
-            sender_cores.push_back(all_row_cores[pos++]);
-            for (uint32_t j = 1; j < group_size; j++, pos++) {
-                sender_idle_groups[s].push_back(all_row_cores[pos]);
-                all_idle_cores.push_back(all_row_cores[pos]);
-                idle_sender_map.push_back(s);
+            uint32_t sender_offset = group_size / 2;
+
+            for (uint32_t j = 0; j < group_size; j++) {
+                if (j == sender_offset) {
+                    sender_cores.push_back(all_row_cores[pos]);
+                } else {
+                    sender_idle_groups[s].push_back(all_row_cores[pos]);
+                    all_idle_cores.push_back(all_row_cores[pos]);
+                    idle_sender_map.push_back(s);
+                }
+                pos++;
             }
+        }
+    } else {
+        // ROW_MAJOR: first num_cores cores are senders, all remaining are idle
+        for (uint32_t s = 0; s < num_cores; s++) {
+            sender_cores.push_back(all_row_cores[s]);
+        }
+        for (uint32_t i = num_cores; i < total_row_cores; i++) {
+            // Distribute idle cores round-robin across senders (for zero-init)
+            uint32_t s = (i - num_cores) % num_cores;
+            sender_idle_groups[s].push_back(all_row_cores[i]);
+            all_idle_cores.push_back(all_row_cores[i]);
+            idle_sender_map.push_back(s);
         }
     }
 
