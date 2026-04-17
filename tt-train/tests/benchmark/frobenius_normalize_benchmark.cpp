@@ -27,7 +27,7 @@ struct TestConfig {
     int num_measurement_iterations = 20;
 };
 
-const TestConfig test_config;
+constexpr TestConfig test_config;
 
 const std::vector<FrobeniusShape> frobenius_shapes = {
     {{1, 1, 2048, 5632}, "2048x5632"},
@@ -37,10 +37,10 @@ const std::vector<FrobeniusShape> frobenius_shapes = {
 constexpr float kEps = 1e-7f;
 
 ttnn::Tensor composite_frobenius_normalize(const ttnn::Tensor& input, float eps) {
-    auto squares = ttnn::square(input);
-    auto sum_squares = ttnn::sum(squares, ttsl::SmallVector<int>{-2, -1}, true);
-    auto norm_tensor = ttnn::sqrt(sum_squares);
-    auto norm_plus_eps = ttnn::add(norm_tensor, eps);
+    const auto squares = ttnn::square(input);
+    const auto sum_squares = ttnn::sum(squares, ttsl::SmallVector<int>{-2, -1}, true);
+    const auto norm_tensor = ttnn::sqrt(sum_squares);
+    const auto norm_plus_eps = ttnn::add(norm_tensor, eps);
     return ttnn::divide(input, norm_plus_eps);
 }
 
@@ -55,7 +55,7 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
 
-    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
+    const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
@@ -68,10 +68,10 @@ void BM_FrobeniusNormalize_Fused(benchmark::State& state) {
         auto total_time = std::chrono::duration<double>::zero();
 
         for (int iter = 0; iter < test_config.num_measurement_iterations; ++iter) {
-            auto start = std::chrono::high_resolution_clock::now();
+            const auto start = std::chrono::high_resolution_clock::now();
             auto result = ttml::metal::frobenius_normalize(input, kEps);
             tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
-            auto end = std::chrono::high_resolution_clock::now();
+            const auto end = std::chrono::high_resolution_clock::now();
             total_time += end - start;
             result.deallocate();
         }
@@ -97,7 +97,7 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
     const ttnn::Shape shape(frobenius_shape.shape);
     const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(frobenius_shape.name));
 
-    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
+    const auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0f, 1.0f, seed);
     auto input = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device.get());
 
     for (int i = 0; i < test_config.num_warmup_iterations; ++i) {
@@ -110,10 +110,10 @@ void BM_FrobeniusNormalize_Composite(benchmark::State& state) {
         auto total_time = std::chrono::duration<double>::zero();
 
         for (int iter = 0; iter < test_config.num_measurement_iterations; ++iter) {
-            auto start = std::chrono::high_resolution_clock::now();
+            const auto start = std::chrono::high_resolution_clock::now();
             auto result = composite_frobenius_normalize(input, kEps);
             tt::tt_metal::distributed::Synchronize(device.get(), std::nullopt);
-            auto end = std::chrono::high_resolution_clock::now();
+            const auto end = std::chrono::high_resolution_clock::now();
             total_time += end - start;
             result.deallocate();
         }

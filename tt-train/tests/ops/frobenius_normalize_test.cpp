@@ -18,9 +18,9 @@ struct FrobeniusCase {
 };
 
 xt::xarray<float> frobenius_normalize_ref(const xt::xarray<float>& X, float eps) {
-    auto squares = X * X;
-    float sum_sq = xt::sum(squares)();
-    float norm = std::sqrt(sum_sq) + eps;
+    const auto squares = X * X;
+    const float sum_sq = xt::sum(squares)();
+    const float norm = std::sqrt(sum_sq) + eps;
     return X / norm;
 }
 
@@ -44,14 +44,14 @@ TEST_P(FrobeniusNormalizeTest, MatchesCpuReference) {
     const auto& c = GetParam();
     constexpr float kEps = 1e-7f;
 
-    xt::xarray<float> data = xt::random::randn<float>(c.shape, 0.0f, 1.0f);
-    auto input_tensor = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &autograd::ctx().get_device());
+    const xt::xarray<float> data = xt::random::randn<float>(c.shape, 0.0f, 1.0f);
+    const auto input_tensor = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &autograd::ctx().get_device());
 
-    auto bf16_data = core::to_xtensor(input_tensor);
-    auto expected = frobenius_normalize_ref(bf16_data, kEps);
+    const auto bf16_data = core::to_xtensor(input_tensor);
+    const auto expected = frobenius_normalize_ref(bf16_data, kEps);
 
-    auto result_tensor = metal::frobenius_normalize(input_tensor, kEps);
-    auto result = core::to_xtensor(result_tensor);
+    const auto result_tensor = metal::frobenius_normalize(input_tensor, kEps);
+    const auto result = core::to_xtensor(result_tensor);
 
     EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/1e-2f, /*atol=*/1e-2f));
 }
