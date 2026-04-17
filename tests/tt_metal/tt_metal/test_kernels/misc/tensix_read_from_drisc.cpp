@@ -17,10 +17,11 @@ void kernel_main() {
     constexpr uint32_t drisc_noc_x = get_compile_time_arg_val(2);
     constexpr uint32_t drisc_noc_y = get_compile_time_arg_val(3);
 
-    // Reuse tensix_dst_addr as scratch for NIU_CFG_0 readback. Safe because
-    // every remote API call finishes (via barrier) before the next one
-    // clobbers the slot, and the final noc_async_read overwrites it with
-    // the DRISC L1 value we actually care about.
+    // Reuse tensix_dst_addr as the scratch for the NIU_CFG_0 readback.
+    // Safe: the remote API call completes before returning, and the
+    // subsequent noc.async_read overwrites the slot with the DRISC L1
+    // value we actually care about.
+    drisc_remote_set_stream_mode(drisc_noc_x, drisc_noc_y, tensix_dst_addr);
     experimental::Noc noc;
     experimental::CoreLocalMem<uint32_t> dst(tensix_dst_addr);
     experimental::UnicastEndpoint src;

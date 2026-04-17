@@ -58,7 +58,7 @@ int main() {
 
     risc_init();
 
-    // NIU_CFG_0 persists across program runs (only cleared on cold reset).
+    // NIU_CFG_0 persists across program runs (only cleared on chip reset: tt-smi -r).
     // Force NOC2AXI on every boot so the starting mode is deterministic
     // regardless of what prior runs left in the register.
     drisc_set_noc2axi_mode_all();
