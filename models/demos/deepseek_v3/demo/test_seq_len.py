@@ -27,10 +27,14 @@ def create_prompt_of_length(target_token_length: int, tokenizer) -> str:
     Uses a repeating pattern to reach the desired length.
     """
     # Base text that will be repeated
+    # IMPORTANT: space in the beginning and no space in the end is crutial for repeating:
+    # "The" and " The" are different tokens leading to different tokenization
+    # 1. [".", " "] for single
+    # 2. ["The", ..., ".", " ", ..., ".", " The"] for repeatition
     base_text = (
-        "The quick brown fox jumps over the lazy dog. "
+        " The quick brown fox jumps over the lazy dog. "
         "This is a test of long context sequences. "
-        "We need to test how the model handles increasingly longer input prompts. "
+        "We need to test how the model handles increasingly longer input prompts."
     )
 
     # First, measure the chat template overhead by tokenizing an empty prompt
@@ -63,17 +67,6 @@ def create_prompt_of_length(target_token_length: int, tokenizer) -> str:
 
     # If we're still too short, add more text word by word
     logger.debug(f"{actual_length}, {target_token_length}")
-    import time
-
-    # time.sleep(30)
-
-    prompt = base_text * (num_repetitions + 124)
-    actual_tokens = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
-    )
-    actual_length = len(actual_tokens)
-    logger.debug(f"{actual_length}, {target_token_length}")
-    time.sleep(30)
 
     if actual_length < target_token_length:
         words = base_text.split()
@@ -93,11 +86,14 @@ def create_prompt_of_length(target_token_length: int, tokenizer) -> str:
     return prompt
 
 
+# @pytest.mark.parametrize("target_prompt_tokens", [128])
+# @pytest.mark.parametrize("target_prompt_tokens", [8192])
+# @pytest.mark.parametrize("target_prompt_tokens", [8192])
 # @pytest.mark.parametrize("target_prompt_tokens", [16384])
 # @pytest.mark.parametrize("target_prompt_tokens", [32768])
 # @pytest.mark.parametrize("target_prompt_tokens", [49152])
 # @pytest.mark.parametrize("target_prompt_tokens", [65536-0])
-@pytest.mark.parametrize("target_prompt_tokens", [131072 - 0])
+@pytest.mark.parametrize("target_prompt_tokens", [131072 - 1024])
 def test_long_context_input_sequences(target_prompt_tokens):
     """
     Test with varying input prompt lengths to test long context sequence handling.
