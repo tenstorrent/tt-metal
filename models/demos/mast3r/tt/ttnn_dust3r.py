@@ -20,20 +20,25 @@ _PATCH_EMBED_CACHE: dict = {}
 
 
 def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device):
-    """Patch embedding via im2col + matmul (equivalent to stride=kernel Conv2d).
+    """Host-returning patch_embed (used by per-layer tests).
 
-    img: (B, 3, H, W)      weight: (1024, 3, 16, 16)      bias: (1024,)
-    returns (B, N, 1024) on host, where N = (H/16) * (W/16).
+    Wraps the on-device version and downloads to host.
+    """
+    tt_out = patch_embed_device(img, weight, bias, device)
+    out_torch = ttnn.to_torch(tt_out).reshape(1, -1, weight.shape[0])
+    return out_torch
+
+
+def patch_embed_device(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, device):
+    """Patch embedding on device via host im2col + ttnn.linear.
+
+    img: (B, 3, H, W) host. weight: (1024, 3, 16, 16). bias: (1024,).
+    Returns ttnn tensor of shape (B, N, 1024) on device.
     """
     B, C, H, W = img.shape
-    p = 16
+    p = weight.shape[2]
     hp, wp = H // p, W // p
     N = hp * wp
-
-    # im2col on host: (B, C, H, W) -> (B, N, C*p*p)
-    patches = img.unfold(2, p, p).unfold(3, p, p)  # (B, C, hp, wp, p, p)
-    patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()  # (B, hp, wp, C, p, p)
-    patches = patches.reshape(B, N, C * p * p)
 
     cache_key = (id(weight), id(device))
     cached = _PATCH_EMBED_CACHE.get(cache_key)
@@ -45,10 +50,12 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
     else:
         tt_w, tt_b = cached
 
+    # im2col on host (cheap), upload to device, matmul on device — output stays on device.
+    patches = img.unfold(2, p, p).unfold(3, p, p)
+    patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().reshape(B, N, C * p * p)
     tt_patches = ttnn.from_torch(patches, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.linear(tt_patches, tt_w, bias=tt_b)
-    out_torch = ttnn.to_torch(out)  # (B, N, E)
-    return out_torch
+    tt_out = ttnn.linear(tt_patches, tt_w, bias=tt_b)
+    return tt_out
 
 
 # ---------- RoPE (host-side, identical to reference) ----------
@@ -374,10 +381,10 @@ def full_encoder(
     device tensor when ``return_device=True`` (used by dust3r_forward to feed
     the decoder without a round-trip).
     """
-    # Patch embed on device.
-    x = patch_embed(img, state["patch_embed.proj.weight"], state["patch_embed.proj.bias"], device)
+    # Patch embed on device, output stays device-resident.
     B, C, H, W = img.shape
     hp, wp = H // 16, W // 16
+    tt_x = patch_embed_device(img, state["patch_embed.proj.weight"], state["patch_embed.proj.bias"], device)
     # Make positions matching reference (row-major y then x).
     ys = torch.arange(hp)
     xs = torch.arange(wp)
@@ -392,7 +399,6 @@ def full_encoder(
         full_encoder._enc_norm_b = _t2d(state["enc_norm.bias"].reshape(1, 1, -1), device)
         full_encoder._cache_key = cache_key
 
-    tt_x = _t2d(x, device)
     for i in range(depth):
         tt_x = encoder_block_device_pre(tt_x, pos, full_encoder._cache[i], device)
 
