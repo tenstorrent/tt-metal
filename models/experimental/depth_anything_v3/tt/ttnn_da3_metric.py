@@ -173,7 +173,6 @@ def _cpu_head_channels_last(head, intermediates, img_hw):
     feats = []
     for i, x in enumerate(intermediates):
         x = x[:, 1:, :].transpose(1, 2).reshape(x.shape[0], -1, Hp, Wp)
-        x = x.contiguous(memory_format=torch.channels_last)
         x = head.projects[i](x)
         x = head.resize_layers[i](x)
         feats.append(x)
