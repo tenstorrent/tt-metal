@@ -108,15 +108,26 @@ class TtGemmaConv2dPatch(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # NOTE: bias is applied as a separate ttnn.add instead of via the
+        # ``bias=`` kwarg of ttnn.linear. Passing a bias into ttnn.linear
+        # triggers the FUSE_BIAS code path in the
+        # ``bmm_large_block_zm_fused_bias_activation`` compute kernel, which
+        # (post PR #42427) requires a ``bias_ntiles`` named compile-time arg
+        # that older pre-built libtt_metal.so binaries in mixed-tree dev
+        # setups do not populate, leading to a JIT build failure. Doing the
+        # add outside the matmul avoids the FUSE_BIAS path entirely while
+        # producing identical results.
         out = ttnn.linear(
             x,
             self._linear_weight,
-            bias=self.bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
+
+        if self.bias is not None:
+            out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.deallocate(x)
 
