@@ -1,11 +1,10 @@
 """Fast3R benchmark harness.
 
-Prints `inference_speed`, `accuracy`, `peak_dram` keywords on stdout so the
-autoresearch loop can `grep` for them after a run.
+Prints `inference_speed`, `accuracy`, `peak_dram` on stdout so the autoresearch loop
+can `grep` for them after a run.
 
-Initial iteration: encoder+decoder CPU reference only (no tt-nn), used to
-establish a working baseline. Subsequent iterations will swap components over
-to tt-nn one at a time.
+Current stage: tt-nn MLP forward isolated — the smallest component of the encoder/decoder
+block. Once we have end-to-end tt-nn, the same file will benchmark the full model.
 """
 from __future__ import annotations
 
@@ -14,13 +13,19 @@ import time
 
 import pytest
 import torch
+from safetensors import safe_open
 
-from models.experimental.fast3r.reference.weights import load_fast3r
+import ttnn
+
+from models.experimental.fast3r.reference.model import Fast3RConfig, Mlp
+from models.experimental.fast3r.tt.mlp import TtMlp
 
 
-def _make_input(batch: int, img_size: int, seed: int = 0) -> torch.Tensor:
-    g = torch.Generator().manual_seed(seed)
-    return torch.randn(batch, 3, img_size, img_size, generator=g)
+WEIGHTS = os.environ.get(
+    "FAST3R_WEIGHTS",
+    "/home/ttuser/.cache/huggingface/hub/models--jedyang97--Fast3R_ViT_Large_512/"
+    "snapshots/a2c770b768ceb3a53c36c4f7a3619db0413dc3a1/model.safetensors",
+)
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -28,39 +33,65 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     b = b.flatten().float()
     a = a - a.mean()
     b = b - b.mean()
-    num = (a * b).sum()
-    den = (a.norm() * b.norm()).clamp_min(1e-12)
-    return float((num / den).item())
+    return float(((a * b).sum() / (a.norm() * b.norm()).clamp_min(1e-12)).item())
 
 
-def _peak_dram_bytes() -> int:
-    # No ttnn device in this iteration; placeholder for future tt-nn runs.
-    return 0
+def _load_mlp_weights(block_idx: int = 0, branch: str = "encoder.enc_blocks"):
+    with safe_open(WEIGHTS, framework="pt") as f:
+        prefix = f"{branch}.{block_idx}.mlp."
+        return {k: f.get_tensor(prefix + k) for k in ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"]}
 
 
-@pytest.mark.parametrize("n_views", [1])
-@pytest.mark.parametrize("img_size", [512])
-def test_fast3r_baseline(n_views: int, img_size: int):
-    torch.set_num_threads(int(os.environ.get("FAST3R_TORCH_THREADS", "16")))
-    model = load_fast3r(device="cpu")
-    x = _make_input(n_views, img_size)
+def _peak_dram_bytes(device) -> int:
+    try:
+        return int(device.get_memory_statistics(ttnn.BufferType.DRAM)["peak_usage_bytes"])
+    except Exception:
+        return 0
 
-    # Warm-up
+
+def test_fast3r_mlp_pcc_and_speed(device):
+    cfg = Fast3RConfig()
+    sd = _load_mlp_weights(0)
+
+    torch_mlp = Mlp(cfg).eval()
+    torch_mlp.fc1.weight.data.copy_(sd["fc1.weight"])
+    torch_mlp.fc1.bias.data.copy_(sd["fc1.bias"])
+    torch_mlp.fc2.weight.data.copy_(sd["fc2.weight"])
+    torch_mlp.fc2.bias.data.copy_(sd["fc2.bias"])
+
+    # Activation input for one encoder's full token grid
+    N = (cfg.img_size // cfg.patch_size) ** 2  # 1024
+    g = torch.Generator().manual_seed(0)
+    x_torch = torch.randn(1, N, cfg.embed_dim, generator=g)
+
     with torch.inference_mode():
-        ref_out = model(x)
+        y_torch = torch_mlp(x_torch)
 
-    # Timed run — average over a few iters
-    iters = int(os.environ.get("FAST3R_BENCH_ITERS", "3"))
+    tt_mlp = TtMlp(device, sd["fc1.weight"], sd["fc1.bias"], sd["fc2.weight"], sd["fc2.bias"])
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )  # (1, 1, N, C)
+
+    # Warm-up (program cache + kernel JIT)
+    y_tt_warm = tt_mlp(x_tt)
+    ttnn.synchronize_device(device)
+    y_tt_warm.deallocate(True)
+
+    iters = int(os.environ.get("FAST3R_BENCH_ITERS", "20"))
     t0 = time.perf_counter()
-    with torch.inference_mode():
-        for _ in range(iters):
-            out = model(x)
+    for _ in range(iters):
+        y_tt = tt_mlp(x_tt)
+    ttnn.synchronize_device(device)
     dt = (time.perf_counter() - t0) / iters
-    fps = n_views / dt if dt > 0 else 0.0
+    fps = 1.0 / dt if dt > 0 else 0.0
 
-    # Self-PCC as a placeholder until the tt-nn port produces an output to compare against.
-    acc = _pcc(out, ref_out) * 100.0
+    y_tt_torch = ttnn.to_torch(y_tt).squeeze(0)  # back to (1, N, C)
+    y_tt.deallocate(True)
 
-    print(f"inference_speed: {fps:.4f} views/sec")
+    acc = _pcc(y_torch, y_tt_torch) * 100.0
+
+    print(f"inference_speed: {fps:.4f} mlp_fwd/sec")
     print(f"accuracy: {acc:.2f}")
-    print(f"peak_dram: {_peak_dram_bytes()}")
+    print(f"peak_dram: {_peak_dram_bytes(device)}")
+
+    assert acc > 99.0, f"PCC too low: {acc:.3f}%"
