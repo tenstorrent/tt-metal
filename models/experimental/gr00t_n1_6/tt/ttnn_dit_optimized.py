@@ -187,8 +187,6 @@ class DiTAttentionOptimizedTTNN:
         q_seq = hidden_states.shape[1]
         padded_inner = self.padded_inner
 
-        # QKV matmul outputs in bfloat8_b — halves the bandwidth for the subsequent
-        # slice/reshape/permute + SDPA pipeline (SDPA supports bf8 input per ttnn docs).
         if self.is_cross_attention and encoder_hidden_states is not None:
             # Q: single matmul; K/V: fused matmul (2 matmuls instead of 3)
             q = ttnn.linear(
@@ -196,7 +194,7 @@ class DiTAttentionOptimizedTTNN:
                 self.to_q_weight,
                 bias=self.to_q_bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 core_grid=CORE_GRID_BH,
             )
             kv = ttnn.linear(
@@ -204,7 +202,7 @@ class DiTAttentionOptimizedTTNN:
                 self.to_kv_weight,
                 bias=self.to_kv_bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 core_grid=CORE_GRID_BH,
             )
             kv_seq = encoder_hidden_states.shape[1]
@@ -218,7 +216,7 @@ class DiTAttentionOptimizedTTNN:
                 self.to_qkv_weight,
                 bias=self.to_qkv_bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 core_grid=CORE_GRID_BH,
             )
             kv_seq = q_seq
