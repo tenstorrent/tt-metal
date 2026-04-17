@@ -256,14 +256,22 @@ def run(pixel_values: torch.Tensor):
             device=device,
         )
 
-        intermediates_cpu: List[torch.Tensor] = []
+        # Save the ttnn handles for the intermediate stages without syncing,
+        # so chip can pipeline all 24 blocks back-to-back. We sync them once
+        # at the end via a single batched download loop.
+        intermediate_handles: List = []
+        out_layer_set = set(OUT_LAYERS)
         for i, p in enumerate(blocks):
             x_tt = _ttnn_block(x_tt, p, attention_mask)
-            if i in OUT_LAYERS:
-                t = ttnn.to_torch(x_tt)
-                # Keep as bfloat16 — the head was cast to bfloat16 in setup.
-                intermediates_cpu.append(t[..., :N, :])
+            if i in out_layer_set:
+                # Clone so the next block can reassign x_tt without freeing this.
+                intermediate_handles.append(ttnn.clone(x_tt))
 
+        intermediates_cpu: List[torch.Tensor] = [
+            ttnn.to_torch(h)[..., :N, :] for h in intermediate_handles
+        ]
+        for h in intermediate_handles:
+            ttnn.deallocate(h)
         ttnn.deallocate(x_tt)
 
         # DPT head with explicit channels_last activation layout.
