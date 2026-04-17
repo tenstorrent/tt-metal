@@ -429,8 +429,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 hidden_for_mtp.append(hidden_for_mtp_chunk)
         logits_chunks = logits
         logits = ttnn.concat(logits_chunks, dim=2)
-        for logits_chunk in logits_chunks:
-            ttnn.deallocate(logits_chunk)
+        if len(logits_chunks) > 1:
+            for logits_chunk in logits_chunks:
+                ttnn.deallocate(logits_chunk)
         if len(hidden_for_mtp) == 0:
             return logits
         hidden_for_mtp = ttnn.concat(hidden_for_mtp, dim=2)
