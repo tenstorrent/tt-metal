@@ -33,20 +33,37 @@ import ttnn
 
 
 class MeshWrapper:
-    def __init__(self, mesh_device=None, mesh_id=None):
+    """Wraps a local MeshDevice or identifies a remote endpoint by rank.
+
+    For local endpoints, pass ``mesh_device``.  The rank defaults to the
+    current MPI rank and mesh_id is read from the device.
+
+    For remote endpoints, pass ``rank`` (the MPI rank that owns the remote
+    mesh).  Optionally pass ``mesh_id`` for backwards compatibility with the
+    old multi-mesh code path; when omitted it defaults to 0.
+    """
+
+    def __init__(self, mesh_device=None, mesh_id=None, rank=None):
         self.mesh_device = mesh_device
 
         if self.mesh_device is not None:
             self.mesh_id = self.mesh_device.get_system_mesh_id()
+            self._rank = rank if rank is not None else int(ttnn.distributed_context_get_rank())
         else:
-            assert mesh_id is not None
             self.mesh_id = mesh_id
+            assert (
+                rank is not None or mesh_id is not None
+            ), "MeshWrapper requires at least one of mesh_device, mesh_id, or rank"
+            self._rank = rank if rank is not None else mesh_id
 
     def get_mesh_device(self):
         return self.mesh_device
 
     def get_mesh_id(self):
         return self.mesh_id
+
+    def get_rank(self):
+        return self._rank
 
 
 def _build_exchange_program(
@@ -267,19 +284,26 @@ class SocketInterface:
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         if self.local_socket:
-            # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
             self.internal_socket_pair = ttnn.create_socket_pair(
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
-            # If running across multiple hosts/processes create a single socket interface
-            socket_config = ttnn.SocketConfig(
-                connections=[socket_connection],
-                memory_config=socket_memory_config,
-                sender_mesh_id=sender_mesh.get_mesh_id(),
-                receiver_mesh_id=receiver_mesh.get_mesh_id(),
-            )
+            same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+            if same_mesh:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_rank=sender_mesh.get_rank(),
+                    receiver_rank=receiver_mesh.get_rank(),
+                )
+            else:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_mesh_id=sender_mesh.get_mesh_id(),
+                    receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                )
             self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:

@@ -157,7 +157,12 @@ public:
 
     // Translation functions for chip_id and coordinate using RM-convention
     MeshCoordinate chip_to_coordinate(MeshId mesh_id, ChipId chip_id) const;
-    ChipId coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
+
+    // Convert a coordinate to a chip id.
+    // When host_rank is provided, coordinate is treated as submesh-local and is
+    // offset by that rank's origin within the parent mesh before the conversion.
+    ChipId coordinate_to_chip(
+        MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
