@@ -42,11 +42,7 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
-        return (
-            f"_perf_unpack_loop_set_valid<false, true>(1);\n"
-            f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
-        )
+        return f"_perf_unpack_loop_set_valid<true, true>({num_faces});\n"
 
     def perf_clear_valid(
         self,
@@ -56,11 +52,7 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         num_faces = operation.num_faces
-        face_r_dim = operation.face_r_dim
-        return (
-            f"_perf_math_loop_clear_valid<false, true>(1);\n"
-            f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
-        )
+        return f"_perf_math_loop_clear_valid<true, true>({num_faces});\n"
 
     def init(
         self,
