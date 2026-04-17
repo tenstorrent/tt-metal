@@ -123,6 +123,11 @@ def cmd_init(args: argparse.Namespace) -> None:
         "model": args.model,
         "run_type": args.run_type,
         "git_commit": args.git_commit,
+        "git_branch": args.git_branch,
+        "num_turns": 0,
+        "solver_state": None,
+        "cost_usd": 0,
+        "duration_seconds": 0,
         "log_dir": args.log_dir,
         "phases_total": args.phases_total,
         "phases_completed": 0,
@@ -140,7 +145,14 @@ def cmd_init(args: argparse.Namespace) -> None:
         "formats_excluded": {},
         "failures": [],
         "per_phase": [],
-        "tokens": {"input": 0, "output": 0, "cache_read": 0, "total": 0, "cost_usd": 0},
+        "tokens": {
+            "input": 0,
+            "output": 0,
+            "cache_read": 0,
+            "cache_creation": 0,
+            "total": 0,
+            "cost_usd": 0,
+        },
         "agents": [],
         # Activity Monitor live-state fields.
         "current_step": args.first_step,
@@ -424,6 +436,7 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--model", default="")
     init.add_argument("--run-type", default="manual")
     init.add_argument("--git-commit", default="unknown")
+    init.add_argument("--git-branch", default="")
     init.add_argument("--phases-total", type=int, default=0)
     init.add_argument(
         "--pipeline-steps", default=None, help="JSON array of {id,name,desc} objects"
