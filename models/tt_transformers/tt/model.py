@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import inspect
 
 import torch
 from tqdm import tqdm
@@ -71,11 +70,10 @@ class Transformer(LightweightModule):
             "rope_scaling": args.rope_scaling,
             "use_qk_fused": args.use_qk_fused,
             "prefetcher": prefetcher,
+            "rotary_dim": args.rotary_dim,
         }
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
-        if "rotary_dim" in inspect.signature(ActualRopeSetupClass.__init__).parameters:
-            rope_setup_kwargs["rotary_dim"] = args.rotary_dim
         self.rope_setup = ActualRopeSetupClass(**rope_setup_kwargs)
 
         if args.rope_theta_local:
@@ -87,9 +85,8 @@ class Transformer(LightweightModule):
                 "rope_theta": args.rope_theta_local,
                 "use_qk_fused": args.use_qk_fused,
                 "prefetcher": None,
+                "rotary_dim": args.rotary_dim,
             }
-            if "rotary_dim" in inspect.signature(DefaultRopeSetup.__init__).parameters:
-                local_rope_setup_kwargs["rotary_dim"] = args.rotary_dim
             self.rope_local_setup = DefaultRopeSetup(**local_rope_setup_kwargs)
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
