@@ -18,7 +18,7 @@ from models.experimental.fast3r.reference.model import Fast3RConfig
 from models.experimental.fast3r.reference.rope import build_rope2d_cos_sin
 from models.experimental.fast3r.tt.attention import TtAttention
 from models.experimental.fast3r.tt.block import TtLayerNorm, TtNormMlp
-from models.experimental.fast3r.tt.mlp import to_device_bias, to_device_weight
+from models.experimental.fast3r.tt.mlp import TtMlp, to_device_bias, to_device_weight
 
 
 def _head_dim_perm(head_dim: int) -> torch.Tensor:
@@ -88,7 +88,11 @@ class TtEncoderAttention:
         self.sin = sin_cache
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        qkv = ttnn.linear(x, self.qkv_w, bias=self.qkv_b)
+        qkv = ttnn.linear(
+            x, self.qkv_w, bias=self.qkv_b,
+            core_grid=TtMlp.CORE_GRID, compute_kernel_config=TtMlp.COMPUTE,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.num_heads, transpose_k_heads=False
         )
@@ -100,7 +104,11 @@ class TtEncoderAttention:
         ttnn.deallocate(q_rot); ttnn.deallocate(k_rot); ttnn.deallocate(v)
         out = ttnn.experimental.nlp_concat_heads(attn)
         ttnn.deallocate(attn)
-        return ttnn.linear(out, self.proj_w, bias=self.proj_b)
+        return ttnn.linear(
+            out, self.proj_w, bias=self.proj_b,
+            core_grid=TtMlp.CORE_GRID, compute_kernel_config=TtMlp.COMPUTE,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
 
 class TtEncoderBlock:

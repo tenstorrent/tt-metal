@@ -13,10 +13,13 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from .mlp import to_device_bias, to_device_weight
+from .mlp import TtMlp, to_device_bias, to_device_weight
 
 
 class TtAttention:
+    CORE_GRID = TtMlp.CORE_GRID
+    COMPUTE = TtMlp.COMPUTE
+
     def __init__(
         self,
         device,
@@ -33,7 +36,11 @@ class TtAttention:
         self.proj_b = to_device_bias(device, proj_b)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        qkv = ttnn.linear(x, self.qkv_w, bias=self.qkv_b)
+        qkv = ttnn.linear(
+            x, self.qkv_w, bias=self.qkv_b,
+            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.num_heads, transpose_k_heads=False
         )
@@ -44,4 +51,8 @@ class TtAttention:
         ttnn.deallocate(v)
         out = ttnn.experimental.nlp_concat_heads(attn)
         ttnn.deallocate(attn)
-        return ttnn.linear(out, self.proj_w, bias=self.proj_b)
+        return ttnn.linear(
+            out, self.proj_w, bias=self.proj_b,
+            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
