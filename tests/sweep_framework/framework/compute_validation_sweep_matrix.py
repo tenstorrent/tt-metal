@@ -30,6 +30,29 @@ from matrix_runner_config import (
 )
 
 
+def _get_mesh_device_shape(hardware_group) -> str:
+    """Return the natural mesh device shape for a hardware group.
+
+    Format: ``NxM`` — consumed by ``get_mesh_shape()`` in ``mesh_tensor_utils.py``
+    which parses ``MESH_DEVICE_SHAPE`` env var.  This ensures sweep tests open the
+    same mesh topology as the original model trace.
+    """
+    if hardware_group is None:
+        return "1x1"
+
+    _board_type, device_series, card_count = hardware_group
+
+    if device_series == "tt_galaxy_wh":
+        return "4x8"
+    if device_series == "n300" and card_count == 4:
+        return "2x4"
+    if device_series == "n300" and card_count == 1:
+        return "1x2"
+    if device_series == "p150b":
+        return "1x1"
+    return "1x1"
+
+
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/validation_matrix.json"
 
 
@@ -184,6 +207,8 @@ def compute_validation_matrix(
         total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
+        mesh_shape = _get_mesh_device_shape(hardware_group)
+
         for index, batch in enumerate(runner_batches, start=1):
             include.append(
                 {
@@ -197,6 +222,7 @@ def compute_validation_matrix(
                     "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                     "trace_ids": trace_id_list,
                     "hardware_group": hardware_label,
+                    "mesh_device_shape": mesh_shape,
                 }
             )
 
