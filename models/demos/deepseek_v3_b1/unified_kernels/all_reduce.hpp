@@ -209,7 +209,8 @@ private:
 
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
         connection.open_finish();
-        connection.setup_stateful_send_cmd_bufs();
+        constexpr bool use_posted_transport_writes = true;
+        connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
         constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         uint32_t offset = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
@@ -235,7 +236,7 @@ private:
             }
             {
                 DeviceZoneScopedN("CCL_WRITER_SEND_PAYLOAD_TRANSPORT");
-                connection.send_current_slot_stateful_non_blocking(
+                connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
                     src_base_addr + chunk_offset, payload_bytes, reinterpret_cast<uint32_t>(header));
             }
         };
@@ -249,7 +250,11 @@ private:
                 {
                     DeviceZoneScopedN("CCL_WRITER_SEND_FLUSH");
                     offset += stride_bytes;
-                    noc_async_writes_flushed();
+                    if constexpr (use_posted_transport_writes) {
+                        noc_async_posted_writes_flushed();
+                    } else {
+                        noc_async_writes_flushed();
+                    }
                 }
                 chunk_idx += CTArgs::num_links;
             }
@@ -267,6 +272,12 @@ private:
 
         {
             DeviceZoneScopedN("CCL_WRITER_CLOSE");
+            if constexpr (use_posted_transport_writes) {
+                // The last transport packet does not go through a later non-posted drain. For the non-posted path,
+                // close_finish()'s noc_async_write_barrier() drains that final payload/header send for us. Posted
+                // writes are not covered by that barrier, so flush them here before starting teardown.
+                noc_async_posted_writes_flushed();
+            }
             connection.close_start();
 
             if constexpr (CTArgs::signal_local_ready) {
