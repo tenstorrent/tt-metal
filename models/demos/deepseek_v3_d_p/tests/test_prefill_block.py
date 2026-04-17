@@ -38,7 +38,7 @@ SEQ_LEN_100_K = 100 * 1024
         ("random", True, SEQ_LEN_25_K),
         ("random", True, SEQ_LEN_100_K),
     ],
-    ids=["random_input"],
+    ids=["seq_25k", "seq_100k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -70,7 +70,7 @@ SEQ_LEN_100_K = 100 * 1024
             },
             2,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(32, 4), topology="mesh-32x4"),
             id="mesh-32x4",
         ),
     ],
