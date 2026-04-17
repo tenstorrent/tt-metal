@@ -36,6 +36,9 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_device.hpp>
