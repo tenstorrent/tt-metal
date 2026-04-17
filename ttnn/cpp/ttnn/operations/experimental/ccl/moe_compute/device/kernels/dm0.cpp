@@ -71,8 +71,8 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
+    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
+    constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
 
     const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
     const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
