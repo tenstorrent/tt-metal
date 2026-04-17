@@ -19,6 +19,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -304,6 +305,23 @@ void py_module(nb::module_& mod) {
 
             Limitations:
                 -  Host and Device tensors must be the same shape, have the same datatype, and have the same data layout (ROW_MAJOR or TILE).
+        )doc");
+
+    mod.def(
+        "copy_host_to_device_tensor_partial",
+        [](const ttnn::Tensor& host_tensor,
+           ttnn::Tensor& device_tensor,
+           const tt::tt_metal::CoreRangeSet& logical_core_filter,
+           const std::optional<QueueId>& cq_id) {
+            tt::tt_metal::copy_to_device_filtered(host_tensor, device_tensor, logical_core_filter, cq_id);
+        },
+        nb::arg("host_tensor"),
+        nb::arg("device_tensor"),
+        nb::arg("logical_core_filter"),
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies host tensor data to the pre-allocated device tensor, writing only shards mapped to cores in
+        ``logical_core_filter`` (for sharded device buffers). Interleaved buffers are not supported with a non-empty filter.
         )doc");
 
     mod.def(

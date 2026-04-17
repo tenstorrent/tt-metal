@@ -1129,7 +1129,8 @@ bool write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
+    const CoreRangeSet* logical_core_filter) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
@@ -1289,6 +1290,9 @@ bool write_to_device_buffer(
 
         //  Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
+            if (logical_core_filter != nullptr && !logical_core_filter->contains(cores[core_id])) {
+                continue;
+            }
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 write_sharded_buffer_to_core(

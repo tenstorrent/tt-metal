@@ -73,7 +73,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
+    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
+    const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
     }
@@ -95,7 +96,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
 
     tt::tt_metal::detail::WriteToBuffer(
         *shard_view,
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size),
+        logical_core_filter);
     return false;  // Slow dispatch doesn't support pinned memory
 }
 
