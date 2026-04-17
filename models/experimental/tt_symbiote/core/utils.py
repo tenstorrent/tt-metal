@@ -157,7 +157,6 @@ def optimized_tree_map_with_only_dict_list(*args, **kwargs):
             for key in keys
         }
         # HuggingFace ``ModelOutput`` subclasses ``OrderedDict`` (``Mapping``). Returning a bare ``dict``
-        # breaks callers that expect ``.last_hidden_state`` (e.g. thinker ``get_audio_features``).
         try:
             from transformers.utils.generic import ModelOutput as _HFModelOutput
         except ImportError:

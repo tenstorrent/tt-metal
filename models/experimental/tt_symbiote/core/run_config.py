@@ -46,7 +46,6 @@ class DistributedTensorConfig:
     mesh_composer: Any
     logical_shape_fn: Optional[Any] = None
     # Replicated mesh + ``ConcatMeshToTensor(dim=0)`` stacks one copy per device on dim 0; set True to
-    # take ``result[: ttnn_tensor.shape[0]]`` after readback so logical batch matches a single replica.
     replicate_compose_slice_dim0_to_leading: bool = False
 
     def get_logical_shape(self, sharded_shape):
@@ -56,14 +55,7 @@ class DistributedTensorConfig:
 
 
 def distributed_config_col_sharded_last_dim(mesh_device) -> DistributedTensorConfig:
-    """Build metadata for last-dim column-sharded activations on ``mesh_device``.
-
-    Maps ``ShardTensorToMesh(dim=-1)`` + ``ConcatMeshToTensor(dim=-1)`` with a logical shape that
-    multiplies the last dimension by ``mesh_device.get_num_devices()``. Call **once per output
-    tensor** (each call returns a new config); do not attach one instance to every leaf in a tree.
-
-    Used by codec predictor embedding and decoder norms so host readback matches HF layouts.
-    """
+    """Build metadata for last-dim column-sharded activations on ``mesh_device``."""
 
     def logical_shape_for_col_sharded(sharded_shape):
         shape_list = list(sharded_shape)
@@ -116,7 +108,6 @@ class DistributedConfig:
                     f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                 )
                 # Replicated mesh: compose with dim=0 only. Do not use MeshComposerConfig([0, len(shape)]);
-                # the second entry is a dimension index, so rank 3 yields [0, 3] which is invalid (dims 0..2).
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),

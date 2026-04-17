@@ -4,13 +4,7 @@
 
 
 def handle_view(func, args, kwargs):
-    """Handle view operation (CPU fallback when TTNN view is not used).
-
-    Mesh-col-sharded activations are often concatenated to full hidden width on host while a
-    preceding op still requests a 2D shape with the per-device shard width (e.g. 2048 vs 256).
-    If the requested 2D product does not match numel but the leading dimension does divide numel,
-    infer the trailing dimension (same idea as a single ``-1`` in ``reshape``).
-    """
+    """Handle view operation (CPU fallback when TTNN view is not used)."""
     inp = args[0]
     shape = args[1]
     if isinstance(shape, (list, tuple)) and len(shape) == 2:
