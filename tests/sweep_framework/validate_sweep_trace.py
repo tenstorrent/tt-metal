@@ -429,9 +429,7 @@ def render_report(report: ValidationReport) -> str:
                     f"| `{d.path}` | `{d.category}` | {_trunc(d.master_value, 40)} | {_trunc(d.sweep_value, 40)} |"
                 )
             if len(r.diffs) > max_diffs_per_entry:
-                lines.append(
-                    f"| ... | | {len(r.diffs) - max_diffs_per_entry} more diffs omitted | |"
-                )
+                lines.append(f"| ... | | {len(r.diffs) - max_diffs_per_entry} more diffs omitted | |")
             lines.append("")
 
     return "\n".join(lines)

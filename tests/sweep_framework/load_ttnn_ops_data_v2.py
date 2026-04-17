@@ -1703,7 +1703,9 @@ def _resolve_manifest_with_models(manifest_path=None, scope=None, model_filter=N
     return trace_model_map
 
 
-def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA, model_filter=None):
+def reconstruct_from_manifest(
+    manifest_path=None, output_path=None, scope=None, schema=DEFAULT_SCHEMA, model_filter=None
+):
     """Reconstruct merged JSON from manifest targets.
 
     Resolves targets to (trace_run_id, model_names) pairs, reconstructs each
