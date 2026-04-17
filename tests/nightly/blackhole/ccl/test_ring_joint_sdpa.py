@@ -213,6 +213,25 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
 
     configs.append(
         ModelConfig(
+            name="mla_causal_v2",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],
+            k_chunk_sizes=[256],
+            seq_len=3200,
+        )
+    )
+
+    configs.append(
+        ModelConfig(
             name="mla_128k",
             nhq=mla_nhq,
             nhk=1,
@@ -452,7 +471,9 @@ def run_ring_joint_sdpa(
 
     # Open mesh device based on calculated configuration
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    # worker_l1_size empirically tuned to give +5 KiB kernel config buffer headroom for
+    # the ring_joint_sdpa straddle-mask branch on Sk_chunk_t=8 shapes (e.g. mla_causal_v2).
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, worker_l1_size=1456640)
     num_links = 2
 
     try:
