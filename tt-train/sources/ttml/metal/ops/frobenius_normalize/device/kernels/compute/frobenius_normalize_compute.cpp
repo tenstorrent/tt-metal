@@ -50,7 +50,6 @@ void kernel_main() {
     // =========================================================================
     {
         if (num_tiles_per_core > 0) {
-            cb_reserve_back(cb_sq_acc, 1);
             tile_regs_acquire();
             for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
                 cb_wait_front(cb_input, 1);
@@ -66,11 +65,7 @@ void kernel_main() {
                 cb_pop_front(cb_input, 1);
             }
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_sq_acc);
-            pack_tile(accum_reg, cb_sq_acc);
-            tile_regs_release();
-            cb_push_back(cb_sq_acc, 1);
+            pack_and_push(accum_reg, cb_sq_acc);
         }
     }
 
@@ -88,7 +83,6 @@ void kernel_main() {
     // =========================================================================
     {
         cb_wait_front(cb_sq_acc, 1);
-        cb_reserve_back(cb_sq_partial, 1);
 
         init_sfpu(cb_sq_acc, cb_sq_partial);
 
@@ -102,26 +96,19 @@ void kernel_main() {
         sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
 
         tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sq_partial);
-        pack_tile(0, cb_sq_partial);
-        tile_regs_release();
-        cb_push_back(cb_sq_partial, 1);
+        pack_and_push(0, cb_sq_partial);
     }
 
     // =========================================================================
     // Phase 3 (origin only): sfpu_reduce the reduction tile (all partials summed
-    // into one FP32 tile by reader), then sqrt + eps + recip → cb_norm.
+    // into one FP32 tile by reader), then sqrt + eps + recip → cb_norm
     // =========================================================================
     {
 #ifdef IS_ORIGIN
         {
             // cb_recv has one tile with all partials at positions 0, 4, 8, ...
-            // (16-byte spacing, zeros elsewhere). sfpu_reduce sums all 1024 elements.
+            // sfpu_reduce sums all the partials
             cb_wait_front(cb_recv, 1);
-            cb_reserve_back(cb_norm, 1);
-
-            init_sfpu(cb_recv, cb_norm);
 
             tile_regs_acquire();
             copy_tile_init(cb_recv);
@@ -142,17 +129,13 @@ void kernel_main() {
             recip_tile(0);
 
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_norm);
-            pack_tile(0, cb_norm);
-            tile_regs_release();
-            cb_push_back(cb_norm, 1);
+            pack_and_push(0, cb_norm);
         }
-#endif  // IS_ORIGIN
+#endif
     }
 
     // =========================================================================
-    // Phase 4: Multiply each tile by 1/norm (block of 4)
+    // Phase 4: Multiply each tile by 1/norm
     // =========================================================================
     {
         cb_wait_front(cb_norm, 1);
@@ -161,35 +144,20 @@ void kernel_main() {
 
         init_sfpu(cb_input, cb_output);
 
-        constexpr uint32_t num_blocks = num_tiles_per_core / block_size;
-        constexpr uint32_t remainder = num_tiles_per_core % block_size;
+        copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
+        binop_with_scalar_tile_init();
 
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
-            binop_with_scalar_tile_init();
+        for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
+            const uint32_t current = std::min(block_size, num_tiles_per_core - tile_idx);
+            cb_wait_front(cb_input, current);
             tile_regs_acquire();
-            for (uint32_t j = 0; j < block_size; ++j) {
-                cb_wait_front(cb_input, 1);
-                copy_tile(cb_input, 0, j);
-                cb_pop_front(cb_input, 1);
+            for (uint32_t j = 0; j < current; ++j) {
+                copy_tile(cb_input, j, j);
                 mul_unary_tile(j, norm_u32);
             }
             tile_regs_commit();
-            pack_and_push_block(cb_output, block_size);
-        }
-
-        if (remainder > 0) {
-            copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
-            binop_with_scalar_tile_init();
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < remainder; ++j) {
-                cb_wait_front(cb_input, 1);
-                copy_tile(cb_input, 0, j);
-                cb_pop_front(cb_input, 1);
-                mul_unary_tile(j, norm_u32);
-            }
-            tile_regs_commit();
-            pack_and_push_block(cb_output, remainder);
+            cb_pop_front(cb_input, current);
+            pack_and_push_block(cb_output, current);
         }
         // Drain Pass 2 padding tiles
         constexpr uint32_t padding = (block_size - num_tiles_per_core % block_size) % block_size;
