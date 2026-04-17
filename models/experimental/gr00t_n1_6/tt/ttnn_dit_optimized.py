@@ -252,13 +252,14 @@ class DiTAttentionOptimizedTTNN:
         attn_3d = ttnn.reshape(context, (batch_size, q_seq, self.num_heads * self.padded_head_dim))
         ttnn.deallocate(context)
 
-        # Output projection (weight already padded for input)
+        # Output projection (weight already padded for input). Output in bfloat8_b:
+        # next op is residual add (mixed-precision ok) then LN or AdaLN which re-normalizes.
         output = ttnn.linear(
             attn_3d,
             self.to_out_0_weight,
             bias=self.to_out_0_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(attn_3d)
