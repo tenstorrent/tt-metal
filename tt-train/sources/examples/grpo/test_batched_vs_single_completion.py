@@ -4,8 +4,8 @@
 
 import pytest
 
-from utils.llama_completion import LlamaCompletionCtx
-from utils.llama_completion import LlamaCompleter
+from utils.llama_completer import LlamaCompletionCtx
+from utils.llama_completer import LlamaGRPOCompleter
 
 HF_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TEMPERATURE = 0.0
@@ -58,7 +58,7 @@ def to_chat_prompt(tokenizer, user_text: str) -> str:
 
 @pytest.mark.slow
 def test_capitals_one_by_one_equals_single_batch():
-    llama = LlamaCompleter(
+    llama = LlamaGRPOCompleter(
         ctx=LlamaCompletionCtx(
             max_tokens_to_complete=MAX_COMPLETION_LENGTH,
             temperature=TEMPERATURE,

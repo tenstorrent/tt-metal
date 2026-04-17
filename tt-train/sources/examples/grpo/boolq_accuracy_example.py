@@ -12,8 +12,8 @@ from typing import Sequence, Iterator
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.llama_completion import LlamaCompletionCtx
-from utils.llama_completion import LlamaCompleter
+from utils.llama_completer import LlamaCompletionCtx
+from utils.llama_completer import LlamaGRPOCompleter
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."
@@ -51,7 +51,7 @@ DEVICE_CONFIG = {
 
 
 def iter_generated_completions(
-    llama: LlamaCompleter,
+    llama: LlamaGRPOCompleter,
     prompts: Sequence[str],
     batch_size: int = 32,
     num_generations: int = 1,
@@ -114,7 +114,7 @@ if __name__ == "__main__":
         )
         csv_writer.writeheader()
 
-        llama = LlamaCompleter(
+        llama = LlamaGRPOCompleter(
             ctx=LlamaCompletionCtx(
                 max_tokens_to_complete=MAX_COMPLETION_LENGTH,
                 temperature=TEMPERATURE,
