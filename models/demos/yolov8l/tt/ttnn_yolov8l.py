@@ -575,11 +575,12 @@ class TtDetectCv2:
         path,
         input_params,
         block_shard=False,
-        conv0_num_slices=1,
-        conv1_num_slices=1,
-        conv2_num_slices=1,
+        num_slices=32,
         packer_l1_acc=False,
     ):
+        # BUG FIX: forcing num_slices=1 + Conv2dL1FullSliceConfig on these detect convs silently corrupts
+        # bbox regression outputs near shard boundaries at 1280 res (extra phantom boxes at the image top).
+        # Restore DRAM-height slicing matching the uniform num_slices behavior from bd8674144.
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -591,9 +592,7 @@ class TtDetectCv2:
             input_params=input_params[0],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv0_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv0_num_slices),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
             packer_l1_acc=packer_l1_acc,
         )
         self.conv1 = TtConv(
@@ -603,9 +602,7 @@ class TtDetectCv2:
             input_params=input_params[1],
             bfloat8=True,
             block_shard=block_shard,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv1_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv1_num_slices),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
             packer_l1_acc=packer_l1_acc,
         )
         self.conv2 = TtConv(
@@ -618,9 +615,7 @@ class TtDetectCv2:
             change_shard=True,
             block_shard=block_shard,
             is_detect_cv2=True,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if conv2_num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=conv2_num_slices),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
             packer_l1_acc=packer_l1_acc,
         )
 
@@ -638,6 +633,7 @@ class TtDetectCv2:
 
 class TtDFL:
     def __init__(self, device, parameters, path, input_params, num_slices=1):
+        # BUG FIX: keep DRAM height-slicing consistent with detect head to avoid phantom detections.
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -650,9 +646,7 @@ class TtDFL:
             bfloat8=True,
             is_fused=False,
             change_shard=False,
-            slice_config=ttnn.Conv2dL1FullSliceConfig
-            if num_slices == 1
-            else ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=num_slices),
         )
 
     def __call__(self, x, c1=16):
@@ -692,9 +686,7 @@ class TtDetect:
                     f"{path}.cv2.{i}",
                     input_params=cv2_params,
                     block_shard=block_shard,
-                    conv0_num_slices=4 if i in [0, 1] else 1,
-                    conv1_num_slices=1,
-                    conv2_num_slices=1,
+                    num_slices=num_slices,
                     packer_l1_acc=(i == 2),
                 )
             )
@@ -705,9 +697,7 @@ class TtDetect:
                     f"{path}.cv3.{i}",
                     input_params=cv3_params,
                     block_shard=block_shard,
-                    conv0_num_slices=4 if i in [0, 1] else 1,
-                    conv1_num_slices=4 if i == 0 else 1,
-                    conv2_num_slices=1,
+                    num_slices=num_slices,
                     packer_l1_acc=(i == 2),
                 )
             )
@@ -765,6 +755,7 @@ class TtDetectionModel:
         self.res = res
         self.reg_max = reg_max
         self.batch_size = batch_size
+        detect_num_slices = 16 if min(self.res) <= 640 else 32
 
         self.conv_0 = TtConv(
             device,
@@ -927,7 +918,7 @@ class TtDetectionModel:
             slice_config=ttnn.Conv2dL1FullSliceConfig,
             cv2_slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
-        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config, num_slices=1)
+        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config, num_slices=detect_num_slices)
 
     def __call__(self, x):
         if x.shape[1] != x.shape[2]:
