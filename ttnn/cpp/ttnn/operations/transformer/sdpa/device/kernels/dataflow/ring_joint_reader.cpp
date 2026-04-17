@@ -32,8 +32,9 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<24>();
+    constexpr auto q_args = TensorAccessorArgs<25>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -167,6 +168,9 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
+
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -217,8 +221,11 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
-            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
-                continue;
+            const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+            const bool is_last_active = (ring_iter == last_active_ring_iter);
+
+            if (balanced_skip_q && !is_last_active) {
+                continue;  // Full skip on non-last ring iters
             }
 
             Slice q_slice;
@@ -243,6 +250,39 @@ void kernel_main() {
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
+
+            // Balanced causal, last ring iter (v2 only): read Q for normalize-only path, skip K/V.
+            // v1 skips entirely (its LSE-based normalization doesn't need this).
+            if (balanced_skip_q) {
+                if constexpr (!use_streaming_compute) {
+                    continue;  // v1: skip on last ring iter too
+                }
+                if (need_q_read) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                is_joint_q ? joint_q_generator : q_generator,
+                                q_sub_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/);
+                        }
+                    } else {
+                        read_block(
+                            is_joint_q ? joint_q_generator : q_generator,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/);
+                    }
+                }
+                continue;  // Skip K/V loop — no KV for normalize-only Q chunks
+            }
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**

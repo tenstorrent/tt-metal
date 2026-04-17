@@ -250,6 +250,26 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # Causal MLA v2 config: Sq=5/Sk=8 is v2-eligible with unconstrained solver.
+    configs.append(
+        ModelConfig(
+            name="mla_causal_v2",
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],  # Sq_chunk_t=5
+            k_chunk_sizes=[256],  # Sk_chunk_t=8
+            seq_len=3200,
+        )
+    )
+
     return {config.name: config for config in configs}
 
 
