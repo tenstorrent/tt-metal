@@ -465,8 +465,6 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 )
 def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
     """layer_norm_post_all_gather with gamma and no bias; PCC vs torch reference."""
-    if use_pre_all_gather:
-        pytest.skip("Skipping test with use_pre_all_gather=True due to implicit padding issue #42135")
     run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather)
 
 
@@ -476,8 +474,6 @@ def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
 )
 def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
-    if inp_shape == (1, 1, 24, 38):
-        pytest.skip("Skipping shape (1,1,24,38) due to implicit padding issue #42148")
     run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
 
 
