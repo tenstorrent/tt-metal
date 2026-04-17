@@ -40,7 +40,7 @@ TEST_EXIT=$?
 You will receive:
 - **Issue number** (e.g., 1153)
 - **Changed files** — list of files modified by the fixer
-- **Fix plan**: `codegen/artifacts/bh_issue_{number}_fix_plan.md` (contains test strategy)
+- **Fix plan**: `codegen/artifacts/issue_{number}_fix_plan.md` (contains test strategy)
 
 ## Output
 
@@ -55,7 +55,7 @@ A clear test report with:
 
 ### Step 1: Read the Fix Plan's Test Strategy
 
-Read `codegen/artifacts/bh_issue_{number}_fix_plan.md` and find the "Test Strategy" section:
+Read `codegen/artifacts/issue_{number}_fix_plan.md` and find the "Test Strategy" section:
 - What reproduction test to run
 - What regression tests to run
 - What compile checks to run

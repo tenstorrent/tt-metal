@@ -223,7 +223,7 @@ Agent tool:
     Issue comments:
     {ISSUE_COMMENTS}
 
-    Output your analysis to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
+    Output your analysis to: codegen/artifacts/issue_{ISSUE_NUMBER}_analysis.md
 
     WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
@@ -231,7 +231,7 @@ Agent tool:
 
 **Note to orchestrator as reminder:** The `{ISSUE_TITLE}`, `{ISSUE_BODY}`, and `{ISSUE_COMMENTS}` placeholders above must be substituted with the raw GitHub content verbatim — no summarizing, paraphrasing, or truncating. The agent depends on exact error messages and code snippets to do its work.
 
-Wait for completion. **Verify** that `codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md` exists.
+Wait for completion. **Verify** that `codegen/artifacts/issue_{ISSUE_NUMBER}_analysis.md` exists.
 
 Append `"issue_analyzer"` to `AGENTS_USED`.
 
@@ -281,13 +281,13 @@ Agent tool:
 
     We are fixing issue #{ISSUE_NUMBER} ({TARGET_ARCH}): {ISSUE_TITLE}
 
-    The issue analysis is at: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
+    The issue analysis is at: codegen/artifacts/issue_{ISSUE_NUMBER}_analysis.md
     Read it to understand what hardware details are needed.
 
     Specifically, we need to understand:
     {describe what arch details the analysis flagged as needed}
 
-    Write your findings to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_arch_research.md
+    Write your findings to: codegen/artifacts/issue_{ISSUE_NUMBER}_arch_research.md
 
     WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
@@ -322,17 +322,17 @@ Agent tool:
     Read and follow codegen/agents/issue-solver/fix-planner.md.
 
     Issue number: {ISSUE_NUMBER}
-    Analysis: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
-    Architecture research: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_arch_research.md
+    Analysis: codegen/artifacts/issue_{ISSUE_NUMBER}_analysis.md
+    Architecture research: codegen/artifacts/issue_{ISSUE_NUMBER}_arch_research.md
     (architecture research may not exist if the analysis didn't require it)
 
-    Output your fix plan to: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
+    Output your fix plan to: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     WORKTREE_DIR: {WORKTREE_DIR}
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for completion. **Verify** that `codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md` exists.
+Wait for completion. **Verify** that `codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md` exists.
 
 Append `"fix_planner"` to `AGENTS_USED`.
 
@@ -347,7 +347,7 @@ python codegen/scripts/run_json_writer.py advance \
     --new-step "writer" \
     --new-message "Applying fix per plan — modifying code in WORKTREE_DIR" \
     --prev-result "success" \
-    --prev-message "Fix plan at codegen/artifacts/bh_issue_${ISSUE_NUMBER}_fix_plan.md" \
+    --prev-message "Fix plan at codegen/artifacts/issue_${ISSUE_NUMBER}_fix_plan.md" \
     --agent "fixer"
 ```
 
@@ -361,7 +361,7 @@ Agent tool:
     Read and follow codegen/agents/issue-solver/fixer.md.
 
     Issue number: {ISSUE_NUMBER}
-    Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
+    Fix plan: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     Apply all changes described in the fix plan and run compilation checks.
 
@@ -408,7 +408,7 @@ Agent tool:
 
     Issue number: {ISSUE_NUMBER}
     Error type: compilation
-    Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
+    Fix plan: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     Error details from the fixer:
     {paste the compilation error output}
@@ -464,7 +464,7 @@ Agent tool:
     Read and follow codegen/agents/issue-solver/tester.md.
 
     Issue number: {ISSUE_NUMBER}
-    Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
+    Fix plan: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     Changed files:
     {list of files modified by the fixer}
@@ -516,7 +516,7 @@ Agent tool:
 
     Issue number: {ISSUE_NUMBER}
     Error type: runtime
-    Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
+    Fix plan: codegen/artifacts/issue_{ISSUE_NUMBER}_fix_plan.md
 
     Test failure details:
     {paste the test output from the tester}
@@ -661,7 +661,12 @@ The expected schema (matches the run.json that finalize wrote):
 ### 6d: Copy Artifacts to LOG_DIR
 
 ```bash
-cp codegen/artifacts/bh_issue_{ISSUE_NUMBER}_*.md $LOG_DIR/ 2>/dev/null || true
+cp codegen/artifacts/issue_{ISSUE_NUMBER}_*.md $LOG_DIR/ 2>/dev/null || true
+
+# If the run was launched via `claude -p "..." --output-format json > cli_output.json`,
+# the batch runner is expected to drop that file into $LOG_DIR. The dashboard's
+# `_enrich_run()` (dashboard/core/runs.py) reads it to backfill tokens and cost.
+# If the file is absent, tokens stay zeros — not fatal, but the dashboard shows "—".
 ```
 
 `${LOG_DIR}/run.json` is already on disk (written by `run_json_writer.py finalize`
@@ -702,9 +707,9 @@ The top-level can use this to decide next steps (commit, PR, move to next issue,
 
 | From → To | Artifact | Required Contents |
 |-----------|----------|-------------------|
-| Analyzer → Planner | `bh_issue_{N}_analysis.md` | category, affected files/functions, root cause hypothesis, scope |
-| Arch Lookup → Planner | `bh_issue_{N}_arch_research.md` | instruction details, register layout, hardware constraints |
-| Planner → Fixer | `bh_issue_{N}_fix_plan.md` | precise changes (file, function, what, why), order, test strategy |
+| Analyzer → Planner | `issue_{N}_analysis.md` | category, affected files/functions, root cause hypothesis, scope |
+| Arch Lookup → Planner | `issue_{N}_arch_research.md` | instruction details, register layout, hardware constraints |
+| Planner → Fixer | `issue_{N}_fix_plan.md` | precise changes (file, function, what, why), order, test strategy |
 | Fixer → Debugger | modified files + error output | Full compiler stderr in prompt |
 | Fixer → Tester | modified files (compiling) | Files must compile successfully |
 | Tester → Debugger | test output | Full test stderr/stdout in prompt |

@@ -24,7 +24,7 @@ You will receive:
 - **Error type**: `compilation` or `runtime`
 - **Error description** from `fixer` or `tester`
 - **File path(s)** of the affected code
-- **Fix plan** (optional): `codegen/artifacts/bh_issue_{number}_fix_plan.md`
+- **Fix plan** (optional): `codegen/artifacts/issue_{number}_fix_plan.md`
 
 ## Output
 

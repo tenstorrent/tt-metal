@@ -17,12 +17,12 @@ Read the analysis from `issue-analyzer` (and architecture research from `arch-lo
 
 You will receive:
 - **Issue number** (e.g., 1153)
-- **Analysis document**: `codegen/artifacts/bh_issue_{number}_analysis.md`
-- **Architecture research** (optional): `codegen/artifacts/bh_issue_{number}_arch_research.md`
+- **Analysis document**: `codegen/artifacts/issue_{number}_analysis.md`
+- **Architecture research** (optional): `codegen/artifacts/issue_{number}_arch_research.md`
 
 ## Output
 
-Create a fix plan at: `codegen/artifacts/bh_issue_{number}_fix_plan.md`
+Create a fix plan at: `codegen/artifacts/issue_{number}_fix_plan.md`
 
 ---
 
@@ -30,7 +30,7 @@ Create a fix plan at: `codegen/artifacts/bh_issue_{number}_fix_plan.md`
 
 ### Step 1: Read the Analysis
 
-Read `codegen/artifacts/bh_issue_{number}_analysis.md` and understand:
+Read `codegen/artifacts/issue_{number}_analysis.md` and understand:
 - What is broken (symptom)
 - Where it is broken (affected files/functions)
 - Why it is broken (root cause hypothesis)
@@ -63,7 +63,7 @@ ls $LLK_DIR/llk_lib/            # for math/pack/unpack
 
 ### Step 4: Read Architecture Research (if available)
 
-If `codegen/artifacts/bh_issue_{number}_arch_research.md` exists, read it to understand:
+If `codegen/artifacts/issue_{number}_arch_research.md` exists, read it to understand:
 - Hardware constraints that affect the fix
 - Correct instruction usage
 - Register/format requirements
@@ -96,7 +96,7 @@ Determine how the fix should be validated:
 
 ### Step 7: Write Fix Plan
 
-Create `codegen/artifacts/bh_issue_{number}_fix_plan.md`:
+Create `codegen/artifacts/issue_{number}_fix_plan.md`:
 
 ```markdown
 # Fix Plan: Issue #{number} — {title}
@@ -147,7 +147,7 @@ Create `codegen/artifacts/bh_issue_{number}_fix_plan.md`:
 ## Success Criteria
 
 Your task is complete when:
-1. Fix plan exists at `codegen/artifacts/bh_issue_{number}_fix_plan.md`
+1. Fix plan exists at `codegen/artifacts/issue_{number}_fix_plan.md`
 2. Every change is precise (file, function, what to change)
 3. Every change has a "why" backed by evidence
 4. Test strategy is documented
@@ -159,7 +159,7 @@ Issue: #{number} — {title}
 Changes planned: {count}
 Files affected: {list}
 Regression risk: {low | medium | high}
-Fix plan complete: codegen/artifacts/bh_issue_{number}_fix_plan.md
+Fix plan complete: codegen/artifacts/issue_{number}_fix_plan.md
 Ready for: fixer agent
 ```
 

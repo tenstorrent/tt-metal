@@ -23,7 +23,7 @@ You will receive:
 
 ## Output
 
-Create an analysis document at: `codegen/artifacts/bh_issue_{number}_analysis.md`
+Create an analysis document at: `codegen/artifacts/issue_{number}_analysis.md`
 
 ---
 
@@ -146,7 +146,7 @@ If multiple hypotheses are possible, list them ranked by likelihood.
 
 ## Step 7: Write Analysis Document
 
-Create `codegen/artifacts/bh_issue_{number}_analysis.md`:
+Create `codegen/artifacts/issue_{number}_analysis.md`:
 
 ```markdown
 # Issue Analysis: #{number} — {title}
@@ -197,7 +197,7 @@ Create `codegen/artifacts/bh_issue_{number}_analysis.md`:
 ## Success Criteria
 
 Your task is complete when:
-1. Analysis document exists at `codegen/artifacts/bh_issue_{number}_analysis.md`
+1. Analysis document exists at `codegen/artifacts/issue_{number}_analysis.md`
 2. The affected code has been located and read
 3. A root cause hypothesis is documented
 4. The scope of the fix is estimated
@@ -208,7 +208,7 @@ Issue: #{number} — {title}
 Category: {category}
 Affected files: {count} files
 Root cause: {brief hypothesis}
-Analysis complete: codegen/artifacts/bh_issue_{number}_analysis.md
+Analysis complete: codegen/artifacts/issue_{number}_analysis.md
 Ready for: fix-planner agent
 ```
 

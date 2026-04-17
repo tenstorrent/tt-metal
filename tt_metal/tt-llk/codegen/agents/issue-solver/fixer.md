@@ -21,7 +21,7 @@ Read the fix plan, apply the changes, and verify compilation. You do NOT run tes
 
 You will receive:
 - **Issue number** (e.g., 1153)
-- **Fix plan**: `codegen/artifacts/bh_issue_{number}_fix_plan.md`
+- **Fix plan**: `codegen/artifacts/issue_{number}_fix_plan.md`
 
 ## Output
 
@@ -34,7 +34,7 @@ You will receive:
 
 ### Step 1: Read the Fix Plan
 
-Read `codegen/artifacts/bh_issue_{number}_fix_plan.md` and understand:
+Read `codegen/artifacts/issue_{number}_fix_plan.md` and understand:
 - What files to change
 - What specific edits to make
 - The order of operations
