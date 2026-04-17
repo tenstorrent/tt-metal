@@ -739,7 +739,7 @@ class TestConfig:
 
         self.runtime_format = "@III"  # tile size types for formatter
 
-        if not self.compile_time_formats:
+        if not self.compile_time_formats and self.formats_config is not None:
             # Append struct.pack format for each FormatConfig to L1. Each "I" encodes one
             # uint32_t DataFormat enum. Twelve I's = twelve fields appended in
             # write_runtimes_to_L1 (same order as argument_data). struct.pack encodes
@@ -777,7 +777,7 @@ class TestConfig:
             self.unpack_size_b,  # uint32_t TILE_SIZE_UNPACK_B;
         ]
 
-        if not self.compile_time_formats:
+        if not self.compile_time_formats and self.formats_config is not None:
             for format_tuple in self.formats_config:
                 argument_data.extend(
                     [
@@ -1130,7 +1130,7 @@ class TestConfig:
 
         if self.formats_config is None:
             header_content.append(
-                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.value};"
+                f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
         else:
             header_content.append(
