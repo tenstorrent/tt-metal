@@ -78,25 +78,6 @@ def apply_official_mrope(q, cos, sin, mrope_section=(24, 20, 20), interleaved=Tr
     return q_rotated
 
 
-def convert_hf_to_llama_rope_format(cos_hf, sin_hf):
-    """
-    Convert HuggingFace style cos/sin to Meta/Llama style that TTNN expects.
-
-    HF format: [c0, c1, ..., c63, c0, c1, ..., c63] (duplicated halves)
-    Llama format: [c0, c0, c1, c1, ..., c63, c63] (interleaved pairs)
-    """
-    head_dim = cos_hf.shape[-1]
-    half_dim = head_dim // 2
-
-    cos_unique = cos_hf[..., :half_dim]
-    sin_unique = sin_hf[..., :half_dim]
-
-    cos_llama = torch.repeat_interleave(cos_unique, repeats=2, dim=-1)
-    sin_llama = torch.repeat_interleave(sin_unique, repeats=2, dim=-1)
-
-    return cos_llama, sin_llama
-
-
 def run_test(device):
     """Test TTNN RoPE against official."""
     print("=" * 80)
@@ -141,30 +122,11 @@ def run_test(device):
     print("Step 2: Convert MROPE to TTNN format")
     print("=" * 80)
 
-    # After MROPE interleaving, we get cos/sin in HF format [c0, c1, ..., c63, c0, ...]
-    # Then convert to Llama format [c0, c0, c1, c1, ...]
+    from models.demos.qwen3_tts.tt.rope import compute_mrope_cos_sin_for_ttnn
 
-    def apply_interleaved_rope(x, modality_num, mrope_section):
-        x_t = x[0].clone()
-        for i, n in enumerate(mrope_section[1:], 1):
-            beg_idx = i
-            end_idx = n * modality_num
-            x_t[..., beg_idx:end_idx:modality_num] = x[beg_idx, ..., beg_idx:end_idx:modality_num]
-        return x_t
-
-    mrope_section = [24, 20, 20]
-    modality_num = 3
-    dim = cos_official.shape[-1]
-
-    # Get HF format (after MROPE processing)
-    cos_hf = torch.cat([apply_interleaved_rope(cos_official[..., : dim // 2], modality_num, mrope_section)] * 2, dim=-1)
-    sin_hf = torch.cat([apply_interleaved_rope(sin_official[..., : dim // 2], modality_num, mrope_section)] * 2, dim=-1)
-
-    print(f"  cos_hf shape: {cos_hf.shape}")  # [1, 111, 128]
-
-    # Convert HF to Llama format
-    cos_llama, sin_llama = convert_hf_to_llama_rope_format(cos_hf, sin_hf)
-    print(f"  cos_llama shape: {cos_llama.shape}")
+    cos_ttnn_format, sin_ttnn_format = compute_mrope_cos_sin_for_ttnn(cos_official, sin_official)
+    print(f"  cos_ttnn_format shape: {cos_ttnn_format.shape}")  # [1, seq, head_dim]
+    print(f"  sin_ttnn_format shape: {sin_ttnn_format.shape}")
 
     # Step 3: Test TTNN rotary_embedding_llama
     print("\n" + "=" * 80)
@@ -176,14 +138,18 @@ def run_test(device):
     padding = pad_seq - seq_len
 
     # Prepare cos/sin for TTNN: [1, 1, seq, head_dim]
-    cos_padded = F.pad(cos_llama.unsqueeze(0), (0, 0, 0, padding))
-    sin_padded = F.pad(sin_llama.unsqueeze(0), (0, 0, 0, padding))
+    cos_padded = F.pad(cos_ttnn_format.unsqueeze(0), (0, 0, 0, padding))
+    sin_padded = F.pad(sin_ttnn_format.unsqueeze(0), (0, 0, 0, padding))
 
     cos_tt = ttnn.from_torch(cos_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     sin_tt = ttnn.from_torch(sin_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Get transformation matrix
-    from models.demos.qwen3_tts.tt.rope import get_transformation_mat
+    # Get transformation matrix and rearrange helpers (matches tt/attention.py path)
+    from models.demos.qwen3_tts.tt.rope import (
+        get_transformation_mat,
+        ttnn_rearrange_to_interleaved,
+        ttnn_rearrange_to_noninterleaved,
+    )
 
     trans_mat = get_transformation_mat(head_dim, device)
 
@@ -191,8 +157,12 @@ def run_test(device):
     q_padded = F.pad(q_before, (0, 0, 0, padding))
     q_tt = ttnn.from_torch(q_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Apply TTNN RoPE
-    q_rotated_tt = ttnn.experimental.rotary_embedding_llama(q_tt, cos_tt, sin_tt, trans_mat, is_decode_mode=False)
+    # Apply TTNN RoPE using the same layout conversions as Attention.forward.
+    q_interleaved = ttnn_rearrange_to_interleaved(q_tt)
+    q_rotated_interleaved = ttnn.experimental.rotary_embedding_llama(
+        q_interleaved, cos_tt, sin_tt, trans_mat, is_decode_mode=False
+    )
+    q_rotated_tt = ttnn_rearrange_to_noninterleaved(q_rotated_interleaved)
     q_rotated_ttnn = ttnn.to_torch(q_rotated_tt)[:, :, :seq_len, :]
 
     # Compare
@@ -212,27 +182,17 @@ def run_test(device):
     else:
         print(f"\n*** MISMATCH: PCC={pcc_ttnn:.4f}, need >0.99 ***")
 
-        # Debug: try without conversion to see raw difference
-        print("\n  Debug: Testing without HF->Llama conversion")
-        cos_raw = F.pad(cos_hf.unsqueeze(0), (0, 0, 0, padding))
-        sin_raw = F.pad(sin_hf.unsqueeze(0), (0, 0, 0, padding))
-        cos_raw_tt = ttnn.from_torch(
-            cos_raw.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        sin_raw_tt = ttnn.from_torch(
-            sin_raw.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-
-        q_tt2 = ttnn.from_torch(
+        # Debug: show the old direct path mismatch (no rearrange around llama op).
+        print("\n  Debug: Testing direct llama-op path (without Q layout conversion)")
+        q_tt_direct = ttnn.from_torch(
             q_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        q_rotated_raw = ttnn.experimental.rotary_embedding_llama(
-            q_tt2, cos_raw_tt, sin_raw_tt, trans_mat, is_decode_mode=False
+        q_rotated_direct = ttnn.experimental.rotary_embedding_llama(
+            q_tt_direct, cos_tt, sin_tt, trans_mat, is_decode_mode=False
         )
-        q_rotated_raw_torch = ttnn.to_torch(q_rotated_raw)[:, :, :seq_len, :]
-
-        pcc_raw = compute_pcc(q_after_official, q_rotated_raw_torch)
-        print(f"    PCC without conversion: {pcc_raw:.6f}")
+        q_rotated_direct_torch = ttnn.to_torch(q_rotated_direct)[:, :, :seq_len, :]
+        pcc_direct = compute_pcc(q_after_official, q_rotated_direct_torch)
+        print(f"    PCC direct path: {pcc_direct:.6f}")
 
 
 def main():
