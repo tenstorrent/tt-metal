@@ -95,7 +95,6 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         """Create shared model state containing tensors that are constant across all instances.
 
@@ -105,7 +104,6 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         Returns:
             ModelState containing shared tensors
         """
-        _assert_quad_ring(fabric_config, mesh_device)
 
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
@@ -187,6 +185,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         mode: str,
+        batch_size_per_row: int,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
@@ -211,7 +210,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
             per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
             input_output_memory_config = ttnn.create_sharded_memory_config(
                 shape=(
-                    ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                    ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                     ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
                 ),
                 core_grid=shard_core_grid,
@@ -248,7 +247,7 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
                     memory_config=input_output_memory_config,
                 ),
                 "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
-                    USERS_PER_ROW, HIDDEN_SIZE, TP_SIZE
+                    batch_size_per_row, HIDDEN_SIZE, TP_SIZE
                 ),
                 "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
@@ -362,9 +361,17 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "decode",
+            batch_size_per_row=batch_size_per_row,
+            topk_fallback=topk_fallback,
+        )
 
     @classmethod
     def prefill_model_config(
@@ -374,7 +381,14 @@ class MoEQuad(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "prefill",
+            batch_size_per_row=USERS_PER_ROW,
+            topk_fallback=topk_fallback,
+        )
 
     @classmethod
     def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:

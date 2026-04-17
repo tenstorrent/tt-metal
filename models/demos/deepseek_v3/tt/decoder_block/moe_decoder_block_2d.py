@@ -12,7 +12,13 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import is_ring_fabric, sub_state_dict
+from models.demos.deepseek_v3.tt.moe_quad import MoEQuad
+from models.demos.deepseek_v3.utils.config_helpers import (
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -21,6 +27,17 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+def _moe_cls(
+    fabric_config: ttnn.FabricConfig | None = None,
+    mesh_device: ttnn.MeshDevice | None = None,
+):
+    """Use optimized MoE when quad mesh (16x8), ring fabric"""
+    fc = fabric_config if fabric_config is not None else get_fabric_config()
+    if is_quad_mesh(mesh_device) and is_ring_fabric(fc):
+        return MoEQuad
+    return MoE
 
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
@@ -33,6 +50,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
+        moe_cls = _moe_cls(mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.convert_weights(
                 hf_config,
@@ -40,7 +58,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 output_path / "shared_experts",
                 mesh_device,
             ),
-            "moe": MoE.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
+            "moe": moe_cls.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
 
     @classmethod
@@ -51,9 +69,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device, fabric_config),
-            "moe": MoE.prefill_model_config(hf_config, mesh_device, fabric_config),
+            "moe": moe_cls.prefill_model_config(hf_config, mesh_device, fabric_config),
         }
 
     @classmethod
@@ -65,6 +84,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
     ) -> ModelDecodeConfig:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.decode_model_config(
                 hf_config,
@@ -72,7 +92,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 fabric_config,
                 batch_size_per_row=batch_size_per_row,
             ),
-            "moe": MoE.decode_model_config(
+            "moe": moe_cls.decode_model_config(
                 hf_config,
                 mesh_device,
                 fabric_config,
@@ -88,9 +108,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
     ) -> ModelState:
+        moe_cls = _moe_cls(mesh_device=mesh_device)
         return {
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "moe": MoE.create_state(hf_config, mesh_device, ccl),
+            "moe": moe_cls.create_state(hf_config, mesh_device, ccl),
         }
 
     @classmethod
@@ -101,9 +122,10 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
+        moe_cls = _moe_cls(fabric_config=fabric_config, mesh_device=mesh_device)
         return {
             "shared_expert": {},
-            "moe": MoE.create_shared_state(hf_config, mesh_device),
+            "moe": moe_cls.create_shared_state(hf_config, mesh_device),
         }
 
     @classmethod
@@ -131,7 +153,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             x_gathered = ttnn.reshape(x_gathered, (x_gathered.shape[0], 1, batch_size * seq_len, x_gathered.shape[3]))
 
         # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
+        moe_cls = _moe_cls(
+            fabric_config=cfg["moe"]["fabric_config"],
+            num_dispatch_devices=cfg["moe"]["num_dispatch_devices"],
+        )
+        mlp_out = moe_cls.forward_prefill(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
@@ -181,7 +207,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
         # Run both MoE and SharedExpert with the same gathered input
-        mlp_out = MoE.forward_decode(x_gathered, cfg["moe"])
+        moe_cls = _moe_cls(
+            fabric_config=cfg["moe"]["fabric_config"],
+            num_dispatch_devices=cfg["moe"]["num_dispatch_devices"],
+        )
+        mlp_out = moe_cls.forward_decode(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
 

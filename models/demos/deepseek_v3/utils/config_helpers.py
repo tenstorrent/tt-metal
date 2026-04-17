@@ -38,6 +38,11 @@ def is_quad_mesh() -> bool:
     return os.getenv("MESH_DEVICE") == "QUAD"
 
 
+def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
+    """Check whether the given mesh device has a QUAD configuration (16x8)"""
+    return mesh_device.shape[0] == 16 and mesh_device.shape[1] == 8
+
+
 OPTIMIZED_MOE_BLOCK_USERS_PER_ROW = 32
 USERS_PER_ROW = 32
 DEFAULT_MAX_SEQ_LEN = 2048
