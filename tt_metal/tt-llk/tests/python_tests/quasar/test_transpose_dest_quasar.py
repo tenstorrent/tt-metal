@@ -21,6 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -45,7 +46,7 @@ def generate_qsr_transpose_dest_combinations(
     formats_list: List[FormatConfig],
 ):
     """
-    Generate pack combinations for Quasar pack tests.
+    Generate transpose dest combinations for Quasar tests.
 
     Args:
         formats_list: List of input/output format pairs
@@ -95,6 +96,14 @@ def generate_qsr_transpose_dest_combinations(
             return False
         return True
 
+    dimensions_cache = {
+        (dest_acc, dest_sync): tuple(
+            generate_unary_input_dimensions(dest_acc, dest_sync)
+        )
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        for dest_sync in (DestSync.Half, DestSync.Full)
+    }
+
     dest_sync_modes = (DestSync.Half, DestSync.Full)
 
     combinations = []
@@ -108,9 +117,16 @@ def generate_qsr_transpose_dest_combinations(
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in get_transpose_faces_modes(dest_acc):
-                        combinations.append(
-                            (fmt, dest_acc, dest_sync, math_transpose_faces)
-                        )
+                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    dest_sync,
+                                    math_transpose_faces,
+                                    dimensions,
+                                )
+                            )
 
     return combinations
 
@@ -128,21 +144,20 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose=generate_qsr_transpose_dest_combinations(
+    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
     implied_math_format=[ImpliedMathFormat.No],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose,
+    formats_dest_acc_sync_transpose_dims,
     implied_math_format,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces) = (
-        formats_dest_acc_sync_transpose
+    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
+        formats_dest_acc_sync_transpose_dims
     )
 
     data_copy_type = DataCopyType.A2D
-    input_dimensions = [64, 64]
     num_faces = 4
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -192,7 +207,11 @@ def test_transpose_dest_quasar(
             input_dimensions=input_dimensions,
         )
 
-    unpack_to_dest = True
+    unpack_to_dest = (
+        True
+        if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        else False
+    )
     configuration = TestConfig(
         "sources/quasar/transpose_dest_quasar_test.cpp",
         formats,

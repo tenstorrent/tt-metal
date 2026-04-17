@@ -70,7 +70,7 @@ inline void _llk_math_transpose_dest_mop_config_()
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16
 
-                    // --- Instructions[10..23]: F1+F2 within face transpose and swap: read both faces, write back swapped ---
+                    // --- Instructions[8..23]: F1+F2 within face transpose and swap: read both faces, write back swapped ---
 
                     // Read F1 hi16 → SrcB[0:15] (transposed)
                     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_1, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
@@ -98,7 +98,7 @@ inline void _llk_math_transpose_dest_mop_config_()
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
                     TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8); // dst += 16 → F3
                 });
-            ckernel_template temp(1, 1, TT_OP_REPLAY(8, replay_buf_len, 0, 0, 0, 0));
+            ckernel_template temp(1, 1, TT_OP_REPLAY(8, replay_buf_len - 8, 0, 0, 0, 0));
             temp.set_start_op(TT_OP_REPLAY(0, 8, 0, 0, 0, 0));
             temp.set_end_ops(TT_OP_REPLAY(0, 8, 0, 0, 0, 0), TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCAB_VLD, 0, 0, 0, 0, 0));
             temp.program_bank0_sw_cntl(instrn_buffer);
