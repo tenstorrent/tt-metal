@@ -425,23 +425,19 @@ class Gr00tN16ModelTTNN:
         state_features = self.state_encoder(state_tt, embodiment_id)
         ttnn.deallocate(state_tt)
 
-        # Initialize noisy actions from Gaussian noise
-        actions = torch.randn(batch_size, H, action_dim)
+        # Initialize noisy actions from Gaussian noise, upload once — kept on device across Euler steps
+        actions_tt = to_tt_tensor(torch.randn(batch_size, H, action_dim), self.device)
 
         # Euler integration loop
         for step in range(K):
             t_cont = torch.tensor([step / K] * batch_size)
 
-            # Transfer noisy actions to device
-            actions_tt = to_tt_tensor(actions, self.device)
-
-            # Encode actions with timestep
+            # Encode actions with timestep — reuses the on-device actions_tt (no per-step upload)
             action_features = self.action_encoder(
                 actions_tt,
                 t_cont,
                 embodiment_id,
             )
-            ttnn.deallocate(actions_tt)
 
             # Concatenate state + action features: [batch, 1+H, embedding_dim]
             dit_input = ttnn.concat([state_features, action_features], dim=1)
@@ -483,13 +479,17 @@ class Gr00tN16ModelTTNN:
             velocity = self.action_decoder(action_out, embodiment_id)
             ttnn.deallocate(action_out)
 
-            # Transfer velocity to CPU for Euler step
-            velocity_cpu = ttnn.to_torch(velocity).to(torch.float32)
+            # On-device Euler step: actions_tt += dt * velocity (no host round trip)
+            scaled_velocity = ttnn.mul(velocity, dt)
             ttnn.deallocate(velocity)
+            actions_tt = ttnn.add(actions_tt, scaled_velocity)
+            ttnn.deallocate(scaled_velocity)
 
-            # Euler step: actions = actions + dt * velocity
-            actions = actions + dt * velocity_cpu.squeeze(0) if batch_size == 1 else actions + dt * velocity_cpu
-
+        # Single device->host transfer after all K steps
+        actions = ttnn.to_torch(actions_tt).to(torch.float32)
+        ttnn.deallocate(actions_tt)
+        if batch_size == 1 and actions.dim() == 3 and actions.shape[0] == 1:
+            pass
         return actions
 
     def forward(
