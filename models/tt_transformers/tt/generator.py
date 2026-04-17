@@ -42,6 +42,11 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
+# Defaults to 131,072 set by
+# vllm.worker.tt_worker::get_num_available_blocks_tt (#409b1cd).
+# NOTE: includes number of vision tokens for multi-modal models.
+MAX_TOKENS_ALL_USERS = 131_072
+
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
@@ -52,6 +57,17 @@ def _deepseek_kvdbg_enabled() -> bool:
 
 
 class Generator(WarmupForwardMixin):
+    @classmethod
+    def get_max_tokens_all_users(cls, *args, **kwargs) -> int:
+        """Returns default `max_tokens_all_users`.
+
+        Should be reimplemented in model- and device-specific cases.
+        See subclasses such as ``QwenForCausalLM``.
+
+        See also https://github.com/tenstorrent/vllm/issues/315
+        """
+        return MAX_TOKENS_ALL_USERS
+
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
