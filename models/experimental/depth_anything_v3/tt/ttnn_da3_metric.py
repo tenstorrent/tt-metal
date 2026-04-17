@@ -215,9 +215,20 @@ def _setup(pixel_values: torch.Tensor):
     img_size = pixel_values.shape[-1]
     cpu_model = build_da3_metric(load_weights=True, img_size=img_size).eval()
     # Backbone stays fp32 on CPU (only used for the cheap patch_embed). The DPT
-    # head is the dominant CPU cost (~283ms vs ~112ms chip backbone), so cast
-    # it to bfloat16 — same AVX512_BF16 win as iter 1 on conv2d.
+    # head is the dominant CPU cost (~170ms) — cast to bf16 + channels_last for
+    # AVX512_BF16 NHWC conv2d, then JIT-trace it to drop Python interpreter
+    # overhead from the per-op nn.Module dispatch.
     cpu_model.head = cpu_model.head.to(torch.bfloat16).to(memory_format=torch.channels_last)
+    sample_intermediates = [
+        torch.zeros(1, (img_size // PATCH_SIZE) ** 2 + 1, EMBED_DIM, dtype=torch.bfloat16)
+        for _ in OUT_LAYERS
+    ]
+    with torch.inference_mode():
+        cpu_model.head_traced = torch.jit.trace(
+            lambda *ints: _cpu_head_channels_last(cpu_model.head, list(ints), (img_size, img_size)),
+            tuple(sample_intermediates),
+            check_trace=False,
+        )
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
@@ -274,9 +285,7 @@ def run(pixel_values: torch.Tensor):
             ttnn.deallocate(h)
         ttnn.deallocate(x_tt)
 
-        # DPT head with explicit channels_last activation layout.
-        depth = _cpu_head_channels_last(
-            cpu_model.head, intermediates_cpu, img_hw=pixel_values.shape[-2:]
-        )
+        # JIT-traced head (channels_last bf16 path).
+        depth = cpu_model.head_traced(*intermediates_cpu)
 
     return depth, 0.0
