@@ -157,11 +157,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        // Reader auto-detects chunk_size via DEST_AUTO_LIMIT (row_chunk parameter removed)
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits};
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/0};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-        // Pass DEST config and reduce defines so reader can compute DEST_AUTO_LIMIT and scaler format
+        // Pass DEST config so reader can compute DEST_AUTO_LIMIT
         std::map<std::string, std::string> reader_defines;
         reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
         reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
