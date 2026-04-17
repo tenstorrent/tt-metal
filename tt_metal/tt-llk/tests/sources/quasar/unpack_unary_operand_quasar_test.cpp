@@ -39,6 +39,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     buffer_descriptor_u bd_val = {0};
 
+    TileShape tile_shape_A = {
+        .num_faces   = params.num_faces,
+        .face_r_dim  = params.TEST_FACE_R_DIM,
+        .face_c_dim  = params.TEST_FACE_C_DIM,
+        .narrow_tile = ((params.num_faces_c_dim_A < params.num_faces_r_dim_A) || (params.num_faces == 1))};
+
     // Qsr has one transpose argument, if set it does both transpose faces and within face
     // The py test will set transpose faces and transpose within face to the same value
     constexpr bool TRANSPOSE_EN = UNPACK_TRANSPOSE_FACES && UNPACK_TRANSPOSE_WITHIN_FACE;
@@ -57,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
+    bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
@@ -74,8 +80,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(buf_desc_id, tile_shape_A, num_tiles_per_unpack);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, tile_shape_A);
 
     if (unpack_to_dest)
     {
@@ -146,6 +152,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
 
+    TileShape tile_shape_A = {
+        .num_faces   = params.num_faces,
+        .face_r_dim  = params.TEST_FACE_R_DIM,
+        .face_c_dim  = params.TEST_FACE_C_DIM,
+        .narrow_tile = ((params.num_faces_c_dim_A < params.num_faces_r_dim_A) || (params.num_faces == 1))};
+
     buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
 
@@ -153,7 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
+    bd_val.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
@@ -161,8 +173,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
-    _llk_pack_(0, 0);
+    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, tile_shape_A, num_tiles_per_pack);
+    _llk_pack_<p_pacr::PACK0>(0, 0, tile_shape_A);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif

@@ -7,6 +7,7 @@ from itertools import product
 from typing import Iterator, List, Tuple
 
 import pytest
+from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
 from .data_format_inference import is_format_combination_outlier
@@ -434,7 +435,7 @@ def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) ->
     return max(max_tiles - result_tiles, 0)
 
 
-def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
+def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
     """Generate all possible input dimensions for unary operations.
     These dimensions are determined by the number of tiles that can fit into dest, which is determined by dest_sync and dest_acc.
     The generated input dimensions should ensure that all of the data fits into dest without any overflow when running unary operations.
@@ -454,8 +455,11 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half):
     capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
     max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
-    num_tile_rows = 32
-    num_tile_cols = 32
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
 
     return [
         [row * num_tile_rows, column * num_tile_cols]
