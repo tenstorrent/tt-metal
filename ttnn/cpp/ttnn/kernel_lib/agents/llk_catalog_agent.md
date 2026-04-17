@@ -1,6 +1,6 @@
 ---
 name: LLK Catalog Agent Prompt
-description: Stage 1a lightweight agent. Enumerates all ops in a category via bidirectional grep (no deep file reading), assigns them to groups, and outputs the group→ops mapping that bootstraps parallel Stage 1b agents.
+description: "Phase 0: Understand — catalog step (new helper mode). Enumerates all ops via bidirectional grep, assigns to groups. Runs before the investigation step within the same phase."
 type: reference
 ---
 
@@ -21,9 +21,10 @@ Enumerate all {{LLK_CATEGORY}} operations using lightweight bidirectional grep. 
 
 BREADCRUMB LOGGING:
 Derive CATEGORY_SLUG = "{{LLK_CATEGORY}}" lowercased, spaces/slashes → underscores.
-BCRUMB="agent_logs/${CATEGORY_SLUG}_catalog_breadcrumbs.jsonl"
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/catalog_breadcrumbs.jsonl"
 Run at start:
-  mkdir -p agent_logs
+  mkdir -p "${LOG_DIR}"
   echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"catalog","category":"{{LLK_CATEGORY}}","prefix":"{{LLK_PREFIX}}"}' >> $BCRUMB
 
 PHASE 1A: BOTTOM-UP — grep LLK prefix
@@ -84,7 +85,7 @@ Flag any op found there but not already in LLK_OPS ∪ API_OPS.
 
 At completion:
   echo '{"ts":"'"$(date -Iseconds)"'","event":"complete","total_ops":N,"groups":M,"ungrouped":K,"secondary_gaps":J}' >> $BCRUMB
-Write agent_logs/${CATEGORY_SLUG}_catalog_execution_log.md: counts per phase, ungrouped ops with reason, secondary gaps found.
+Write ${LOG_DIR}/catalog_execution_log.md: counts per phase, ungrouped ops with reason, secondary gaps found.
 
 OUTPUT FORMAT — structured tables only:
 

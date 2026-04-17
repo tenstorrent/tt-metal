@@ -1,68 +1,90 @@
 # Kernel Helper Pipeline
 
-End-to-end workflow for creating or updating `compute_kernel_lib` helpers. Orchestrates investigation, design, validation, and implementation through a linear phase sequence.
+End-to-end workflow for creating or updating `compute_kernel_lib` helpers. Orchestrates investigation, design, validation, and implementation through four phases with explicit feedback loops.
 
 ## Overview
 
 ```
-Phase 0: Catalog ─> Phase 1: Investigation ─> Phase 2: Verification
-                    (parallel per group)
-
-─> Phase 3: Proposal ─> Phase 4: Validation ─> Phase 5: Implementation
-                         (TDD sub-stages)
-
-─> Phase 6: Report
+Phase 0: Understand ──> Phase 1: Design [checkpoint] ──> Phase 2: Validate ──> Phase 3: Implement
+                               ^                                  ^                      |
+                               └──────────── L1: validate fail ──┘                      |
+                               ^                                  ^                      |
+                               └──────── L3: scope gap ──────────┘                      |
+                                                                  ^                     |
+                                                                  └──── L2: regression ─┘
 ```
+
+Two modes, selected automatically based on whether `.hpp`/`.inl` exist:
+
+| Mode | Trigger | Phase 0 behavior | Phase 3 behavior |
+|------|---------|-----------------|-----------------|
+| **New helper** | No `.hpp`/`.inl` found | Full catalog + investigation | Create files |
+| **Update** | `.hpp`/`.inl` exist | Read existing files, scope the change | Edit files, diff-verify scope |
 
 ---
 
 ## Prior Work Detection
 
-Before starting, check if outputs from previous runs exist:
+Before starting, the orchestrator checks state in this order:
 
-1. `agent_logs/{category_slug}/catalog_*.md` → skip Phase 0
-2. `{category}_investigation.md` → skip Phase 1
-3. `{category}_helper_proposal.md` → skip Phase 3
-4. Existing `.hpp`/`.inl` → start at Phase 4 (validation only)
+1. **Mode selection** (first — determines everything else):
+   - Existing `.hpp`/`.inl` for this category → **Update mode**
+   - Otherwise → **New helper mode**
 
-If prior outputs exist, resume from the earliest phase with missing outputs. Never ask the human to choose a path — the pipeline decides based on what exists.
+2. **Phase skipping** (within the selected mode):
+   - Update mode: `{category}_delta_scope.md` exists → skip Phase 0
+   - New mode: `{category}_investigation.md` exists → skip Phase 0
+   - Either mode: `{category}_helper_proposal.md` exists and no L1 trigger pending → skip Phase 1, enter Phase 2
+
+Never ask the human to choose a path — the pipeline decides based on what exists.
+
+**L1/L3 re-entry overrides Phase skipping**: if a validation failure (L1) or scope gap (L3) is pending, always run Phase 1 with the failure/gap context, regardless of whether a proposal already exists.
 
 ---
 
 ## Logging
 
-All agents log breadcrumbs to `agent_logs/{category_slug}/`. See `tt_metal/third_party/tt-agents/scripts/logging/` for format. Breadcrumbs are always enabled.
+All agents log to a per-category subdirectory `agent_logs/{category_slug}/`. Conventions:
+
+| File | Purpose |
+|------|---------|
+| `agent_logs/{category_slug}/{phase}_breadcrumbs.jsonl` | Per-phase breadcrumb stream (JSONL) |
+| `agent_logs/{category_slug}/{phase}_execution_log.md` | Per-phase execution log (Markdown summary) |
+| `agent_logs/{category_slug}/{group_slug}_investigation.md` | Per-group investigation output (Phase 0 step 2) |
+
+Top-level consolidated outputs live at the repo root (or workspace cwd), not under `agent_logs/`:
+`{category}_investigation.md`, `{category}_delta_scope.md`, `{category}_helper_proposal.md`, `{category}_validation.md`, `{category}_report.md`.
+
+See `tt_metal/third_party/tt-agents/scripts/logging/` for the JSONL event schema.
 
 ---
 
-## Phase 0: Catalog
+## Phase 0: Understand
 
-**Goal**: Enumerate all ops in the category, group them, locate source files.
+**Goal**: Build a complete picture of what exists and what needs to change.
 
-**Agent**: `llk_catalog_agent.md` (subagent_type: Explore)
+**Agents** (see per-step breakdown below):
+- Catalog step: `llk_catalog_agent.md` (subagent_type: Explore) — new mode only
+- Investigation step: `llk_investigation_agent.md` (subagent_type: Explore) — one per group, parallel — new mode only
+- Update scope step: orchestrator handles directly (no subagent) — update mode only
 
-**What it does**:
+### New helper mode
+
+**Step 1 — Catalog** (one `llk_catalog_agent.md` invocation):
 1. Bidirectional grep: bottom-up (LLK prefix functions) + top-down (compute API headers)
 2. Cross-reference gaps between directions
 3. Assign ops to functional groups
 4. Locate all source files per op (wrapper header, LLK file, codegen entry, program factory, custom kernels)
 
-**Output**: `{category}_catalog.md` containing:
-- Full op list with gap analysis
-- Group-to-ops assignment table
-- Locator results table (op -> file paths)
+Output: group→ops table + locator results (consumed by Step 2).
 
-**Skip if**: Op list, groups, and file locations are already known.
+**Step 2 — Investigation** (one `llk_investigation_agent.md` per group, in parallel):
+5. Deep analysis per group covering all focus areas (device behavior, host parameter flow, usage patterns, encapsulation, CB management, existing helper patterns) — mark each claim **CONFIRMED** (file:line cited) or **UNCERTAIN** (what would confirm) inline
+6. Identify parameter independence, init mutual exclusion, disruptive inits, compile-time feature matrix, cross-iteration state
 
----
+The orchestrator consolidates per-group outputs into `{category}_investigation.md`.
 
-## Phase 1: Investigation
-
-**Goal**: Deep analysis of each op group's device behavior, host parameter flow, usage patterns, **encapsulation requirements**, and **parameter independence**.
-
-**Agent**: `llk_investigation_agent.md` (subagent_type: Explore)
-
-Launch ONE investigation agent per functional group, all in parallel. Each agent receives a **role-based focus directive** scoping its analysis:
+**Focus areas** (all covered in a single agent per group):
 
 | Focus | What to produce |
 |-------|----------------|
@@ -70,182 +92,224 @@ Launch ONE investigation agent per functional group, all in parallel. Each agent
 | **Host** | Code generation table, program factory layout, parameter encoding reference (user API value -> host transform -> kernel receives) |
 | **Usage** | All kernel call sites, init/exec pairing rules, init mutual exclusion, chaining patterns, parameter usage matrix per LLK |
 | **Encapsulation** | Compile-time feature matrix, cross-iteration state analysis, side-effect operations, parameter independence analysis |
-| **CB Management** | Every `cb_reserve_back`/`cb_push_back`/`cb_wait_front`/`cb_pop_front` in the production kernel with purpose annotation. Flag reserves that don't pair with an obvious push (shared memory protection), reserves used for flow control, and any CB overlap assumptions (e.g., out_cb and interm_cb sharing L1). Document which CBs share memory and what ordering constraints that creates. |
-| **Existing Helpers** | Grep all `.inl` files in `ttnn/cpp/ttnn/kernel_lib/` for `ASSERT`, `static_assert`, CB validation, DEST limit checks, and policy enum patterns. Produce a table of mandatory validation patterns that the new helper must include. Also note any reusable infrastructure (e.g., `get_cb_num_pages` from `cb_helpers.hpp`, `DEST_AUTO_LIMIT` from `dest_helpers.hpp`). |
+| **CB Management** | Every `cb_reserve_back`/`cb_push_back`/`cb_wait_front`/`cb_pop_front` in production kernels with purpose annotation. Flag reserves without obvious paired push, reserves used for flow control, CB overlap assumptions. Document which CBs share memory and ordering constraints. |
+| **Existing Helpers** | Grep all `.inl` files in `ttnn/cpp/ttnn/kernel_lib/` for `ASSERT`, `static_assert`, CB validation, DEST limit checks, policy enum patterns. Produce mandatory validation pattern table. Note reusable infrastructure. |
 
-All six focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
+**Output**: `{category}_investigation.md` — full op list, group-to-ops table, file locator results, per-group analysis with inline CONFIRMED/UNCERTAIN flags
 
-**Output**: `{category}_investigation.md` (orchestrator consolidates per-group outputs)
+### Update mode
 
----
+**Triggered when**: existing `.hpp`/`.inl` found for this category (or user specifies a change to an existing helper).
 
-## Phase 2: Verification
+**Handled by the orchestrator directly** — no subagent is invoked because this work is narrow and file-local. The catalog and investigation agents are optimized for unfamiliar territory; for update mode the target files are already known.
 
-**Goal**: Check investigation claims against actual code.
+1. Read existing `.hpp` and `.inl` fully
+2. Identify the requested change (new op, API change, bug fix, perf improvement)
+3. Trace which LLK sequences, parameter paths, and call sites are affected by the change
+4. Identify any files shared with other helpers or ops outside the change scope
+5. Flag any dependencies that could cause scope bleed (shared inits, shared CBs, shared LLK functions)
 
-**Agent**: `llk_verification_agent.md` (subagent_type: Explore)
-
-**Input**: `{category}_investigation.md`
-
-**What it does**: Takes each claim from investigation, checks against actual code. Returns CONFIRMED / INCORRECT / UNVERIFIABLE per claim.
-
-**Output**: `{category}_verification.md`
-
-INCORRECT verdicts are high-value — they directly change the helper design.
+**Output**: `{category}_delta_scope.md` — change description, affected LLK sequences, affected call sites, dependency flags
 
 ---
 
-## Phase 3: Proposal
+## Phase 1: Design
 
-**Goal**: Design the helper API, op structs, and migration plan.
+**Goal**: Produce a concrete, implementable design. Human reviews before proceeding.
 
 **Agent**: `llk_helper_proposal_agent.md` (subagent_type: general-purpose)
 
-**Input**: Investigation + verification outputs, locator results
+**Orchestrator-supplied placeholders**:
+- `{{INVESTIGATION_FILE}}` → `{category}_investigation.md` (new mode) or `{category}_delta_scope.md` (update mode)
+- `{{MODE}}` → `new` or `update`
+- `{{L1_FAILURE_CONTEXT}}` → contents of the `L1_TRIGGER_START`…`L1_TRIGGER_END` block from the last Phase 2 run, or empty string if no pending L1
+- `{{LOCATOR_RESULTS}}` → locator table from Phase 0 catalog step (new mode) or empty (update mode — delta scope already lists affected files)
 
-**What it does**: Proposes helper API (signatures, enums, dispatch), designs CRTP-based op structs, creates before/after examples, assigns migration tiers. Uses upstream data directly:
-- DEST batching limits -> chunking logic
-- Parameter encoding reference -> op struct field design
-- Init mutual exclusion -> validates grouping decisions
-- Chaining patterns -> multi-op helper design
-- Compile-time feature matrix -> template bool parameters
-- Cross-iteration state analysis -> loop ownership decisions
-- Parameter independence analysis -> minimal API surface
-- Side-effect operations -> correctness requirements to preserve
-- CB compile-time analysis -> template vs runtime param decisions
+**Input**: `{category}_investigation.md` (new mode) or `{category}_delta_scope.md` (update mode)
 
-**Output**: `{category}_helper_proposal.md`
+### New helper mode
 
-**Checkpoint**: Review proposal before proceeding. Check LLK sequence validation table, before/after examples, tier assignments, loop ownership justification, parameter independence analysis.
+Full proposal: helper API (signatures, enums, dispatch), CRTP-based op structs, before/after examples, migration tiers. Uses upstream data directly:
+
+- DEST batching limits → chunking logic
+- Parameter encoding reference → op struct field design
+- Init mutual exclusion → validates grouping decisions
+- Chaining patterns → multi-op helper design
+- Compile-time feature matrix → template bool parameters
+- Cross-iteration state analysis → loop ownership decisions
+- Parameter independence analysis → minimal API surface
+- Side-effect operations → correctness requirements to preserve
+- CB compile-time analysis → template vs runtime param decisions
+
+### Update mode
+
+Delta proposal: what changes, which LLK sequences are affected, what the new/modified API looks like, which call sites need updating. Scope is strictly limited to the change — do not redesign unrelated parts of the helper.
+
+### L1 re-entry (validation failure)
+
+Receive failure context from Phase 2: which op, which sub-stage, which LLK sequence or param combo failed. Amend the proposal to fix the specific failure. Do not redesign unrelated ops. Output amended proposal with a changelog section noting what changed and why.
+
+**Checkpoint**: human reviews proposal (or delta proposal) before Phase 2 starts. Check LLK sequence validation table, before/after examples (new mode) or delta diff (update mode), tier assignments, parameter independence analysis.
+
+**Output**: `{category}_helper_proposal.md` or amendment to existing proposal
 
 ---
 
-## Phase 4: Validation
+## Phase 2: Validate
 
-**Goal**: Prove the proposal is correct on device, then prove the helper implementation works.
+**Goal**: Prove the design is correct on device before writing final files.
 
 **Agent**: `llk_validation_agent.md` (subagent_type: general-purpose)
 
-Runs 4 sub-stages sequentially. Each gates the next.
+Runs 4 sub-stages sequentially. Each gates the next. Internal review/fix loop handles `.hpp`/`.inl` bugs without escalating.
 
-### 4a: Raw LLK Validation
+### 2a: Raw LLK Validation
 
 Generate test kernels using raw LLK calls (not the helper) that exercise the EXACT proposed LLK sequences. Run on device against golden references.
 
-- Pass -> proceed to 4b
-- Fail/hang -> BLOCKER, fix proposal, re-run
+- Pass → proceed to 2b
+- **Fail/hang → L1 trigger**: pass failure details (op, sequence, error) to Phase 1
 
-### 4b: Parameter Coverage
+### 2b: Parameter Coverage
 
-Use the parameter usage matrix from Phase 1 to test each LLK across its full parameter space: data formats, template arguments, runtime arguments.
+Use the parameter usage matrix from Phase 0 to test each LLK across its full parameter space.
 
 Three mandatory dimensions:
 1. **Data format**: Float16_b, BFloat16, Float32, mixed I/O
 2. **Template args**: Every value of Approx, Legacy, RoundingMode, etc.
 3. **Runtime args**: Typical + edge + negative values
 
-- Observed combo fails -> BLOCKER, fix proposal
-- Unobserved combo fails -> record as UNSUPPORTED
+- Observed combo fails → **L1 trigger**: pass failing combo to Phase 1
+- Unobserved combo fails → record as UNSUPPORTED, continue
 
-### 4c: Helper Integration
+### 2c: Helper Integration
 
-Write test kernels using the ACTUAL helper API (.hpp). Test:
+Write test kernels using the ACTUAL helper API (`.hpp`). Test:
 1. Default path (default dtype, default args)
 2. Dtype variation (at least 2 formats)
 3. Template arg variation (non-default values)
 4. Runtime arg variation (at least 2 values)
 5. Policy variation (at least 2 input policies)
 6. Chain composition (combine new op with another in a chain)
-7. Feature flag matrix — for every template bool from the compile-time feature matrix,
-   test both true and false. Combinatorial testing is required when flags interact
-   (e.g., PACKER_L1_ACC × PACK_RELU × FUSE_BIAS). Use the investigation's
-   compile-time feature matrix to enumerate the combinations.
+7. Feature flag matrix — for every template bool from the compile-time feature matrix, test both true and false; combinatorial testing required when flags interact
 
-- Helper fails but raw passed -> bug in .hpp/.inl, fix and re-run 4c only
+- Helper fails but raw passed → **internal fix**: fix `.hpp`/`.inl`, re-run 2c only. If the fix requires an API change → L1 trigger.
 
-### 4d: Performance
+### 2d: Performance
 
-Benchmark helper vs raw LLK. Reuse raw kernels from 4a as baseline.
+Benchmark helper vs raw LLK. Reuse raw kernels from 2a as baseline.
 
 - Test across tile count range (powers of 2, 8 to 32K)
 - Test full complexity spectrum (single op, chains, multi-slot loads)
 - Use min of trimmed runs
 - Report results table
 
-Thresholds: <2% OK, 2-5% REVIEW, >5% BLOCKER
+Thresholds: <2% OK, 2-5% REVIEW, >5% → **internal fix**: optimize `.hpp`/`.inl`, re-run 2c + 2d. If fix requires API change → L1 trigger.
 
-**Output**: `{category}_validation.md` with per-sub-stage results, parameter support matrix, performance table, generated test files.
+**L1 trigger conditions summary**:
+- 2a fails (raw LLK sequence invalid)
+- 2b observed combo fails (proposed param combo is unsupported)
+- 2c fix requires API change
+- 2d fix requires API change
+
+**L1 trigger payload**: sub-stage, op name, LLK sequence or param combo, error details, what specifically needs to change in the proposal.
+
+**Output**: `{category}_validation.md` — per-sub-stage results, parameter support matrix, performance table, generated test files
 
 ---
 
-## Phase 5: Implementation
+## Phase 3: Implement
 
-**Goal**: Write the helper files and migrate easy call sites.
+**Goal**: Write or update the helper files, verify scope, then confirm the implementation works on device.
 
-**Agent**: general-purpose
+**Agent**: orchestrator directly, with `llk_review_fix_agent.md` invoked for the L2 loop (subagent_type: general-purpose)
 
-**Input**: Validated proposal + validation outputs
+Why no dedicated Phase 3 agent: writing files is a mechanical translation of the validated proposal. L2 (post-write validation) re-uses the Phase 2 validation agent. Scope-gap detection (L3) is a judgement call the orchestrator makes while editing — not delegable to a subagent that lacks the full context.
 
-Steps:
+**Input**: validated proposal + validation outputs
+
+### New helper mode
+
 1. Read validated proposal (signatures, op structs, LLK sequences, parameter support)
 2. Create `{name}_helpers.hpp` + `{name}_helpers.inl`
 3. Migrate Tier 1 call sites
-4. Run Phase 4c/4d tests against final implementation
-5. Commit
+4. → L2 (always)
 
-**Output**: `.hpp`, `.inl`, migrated kernel files
+### Update mode
 
----
+1. Read delta proposal + delta scope
+2. Edit existing `{name}_helpers.hpp` and `{name}_helpers.inl`
+3. Diff the changes against the original — confirm only intended files and symbols were touched
+4. If diff contains unexpected changes (unrelated ops, unrelated files, removed defines) → stop, investigate, revert unintended changes
+5. Update affected call sites
+6. → L2 (always)
 
-## Phase 6: Report
+### L2: Post-implementation validation (always runs)
 
-**Goal**: Summarize the pipeline run.
+After writing or editing files, re-run Phase 2 sub-stages 2c + 2d against the actual implementation (not the test-only kernels from 2a/2b).
 
-Generate `{category}_report.md` containing:
-1. Summary: what was created, overall result
-2. Pipeline phases: table with agents, outputs, status
+- 2c pass + 2d pass → proceed to report
+- 2c fail → fix inline, re-run 2c. If fix is non-trivial → loop L2 from 2c start
+- 2d fail → fix inline, re-run 2c + 2d. If fix is non-trivial → loop L2 from 2c start
+- Max 3 inline fix attempts; if still failing → L1 trigger with full context
+
+### L3: Scope gap trigger
+
+Trigger when, during implementation (file edits or call site migration), you discover:
+- A shared file also controls ops outside the current change scope
+- A CB layout or init assumption affects another helper
+- A LLK function change alters behavior for ops not in the proposal
+- Existing call sites depend on behavior the change would break, and those sites are not in Tier 1
+
+**L3 payload**: newly discovered file paths, op names, or symbols outside the current proposal scope; description of why they're affected.
+
+**L3 action**: suspend implementation (do not commit partial changes), send payload to Phase 1. Phase 1 amends the design to cover the expanded scope. Phase 2 then validates the new/changed parts before implementation resumes. Do not skip Phase 2 for the expanded scope — that is how the gap was missed in the first place.
+
+### Report
+
+After L2 passes, generate `{category}_report.md` inline:
+1. Summary: what was created or changed, overall result
+2. Pipeline phases: table with agents, outputs, status, loop iterations
 3. Validation results: per-op pass/fail, parameter support matrix, performance table
 4. Migration status: which call sites were updated
 5. Open items: Tier 2/3 sites, unsupported parameter combos
 
-Commit the report.
+---
+
+## Feedback Loop Reference
+
+| Loop | From | To | Trigger | Payload |
+|------|------|----|---------|---------|
+| **L1** | Phase 2 (2a/2b fail, or 2c/2d fix needs API change) | Phase 1 | Raw LLK sequence invalid; observed param combo unsupported; API change required | Sub-stage, op, sequence/combo, error details |
+| **L2** | Phase 3 (always, post-write) | Phase 2 (2c + 2d only) | Files written or edited | Actual `.hpp`/`.inl` paths |
+| **L3** | Phase 3 (scope gap discovered) | Phase 1 → Phase 2 → Phase 3 | Shared file / CB / LLK dependency outside proposal scope | Newly discovered file paths, op names, symbols, why they're affected |
 
 ---
 
 ## Agent Reference
 
-| Agent | File | Phase | Purpose |
-|-------|------|-------|---------|
-| Catalog | `llk_catalog_agent.md` | 0 | Enumerate ops, group, locate files |
-| Investigation | `llk_investigation_agent.md` | 1 | Device + host + usage analysis (per group, parallel) |
-| Verification | `llk_verification_agent.md` | 2 | Confirm/deny claims against code |
-| Proposal | `llk_helper_proposal_agent.md` | 3 | Design helper API + op structs |
-| Validation | `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration -> perf (TDD loop) |
-| Implementation | (general-purpose) | 5 | Write .hpp/.inl, migrate sites |
+| Agent | File | Phase | Mode |
+|-------|------|-------|------|
+| Catalog | `llk_catalog_agent.md` | 0 step 1 | New only |
+| Investigation | `llk_investigation_agent.md` | 0 step 2 | New only (one per group, parallel) |
+| Update scope | (orchestrator) | 0 | Update only |
+| Design | `llk_helper_proposal_agent.md` | 1 | Both; supports L1 re-entry via `{{L1_FAILURE_CONTEXT}}` |
+| Validate | `llk_validation_agent.md` | 2 | Both; emits `L1_TRIGGER_START`…`L1_TRIGGER_END` on failure |
+| Implement | (orchestrator) + `llk_review_fix_agent.md` for L2 | 3 | Both |
+
+Deprecated (do not invoke): `llk_verification_agent.md` — inline CONFIRMED/UNCERTAIN flags in investigation output replace it. `llk_device_validation_agent.md` is reference material for sub-stage 2a, not a standalone agent.
 
 ### Dependency Graph
 
 ```
-catalog ──> investigation (parallel per group)
-                │
-                v
-         verification ──> proposal ──> validation (4a->4b->4c->4d)
-                                            │
-                                            v
-                                     implementation ──> report
+Understand ──> Design [checkpoint] ──> Validate ──> Implement
+                    ^                      ^              |
+                    └──── L1 (fail) ───────┘              |
+                    ^                      ^              |
+                    └── L3 (scope gap) ────┘              |
+                                           ^              |
+                                           └── L2 (always)┘
 ```
-
----
-
-## Feedback Loops
-
-Validation sub-stages can loop back:
-
-- **4a fails** (raw LLK invalid) -> fix proposal, re-enter Phase 3
-- **4b fails** (observed param combo) -> fix proposal, re-enter Phase 3
-- **4c fails** (helper bug, raw passed) -> fix .hpp/.inl, re-run 4c
-- **4d fails** (>5% overhead) -> fix .hpp/.inl, re-run 4c + 4d
-- **Phase 1 incomplete** (discovered during Phase 3) -> re-run Phase 1 for missing groups
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: LLK Validation Agent
-description: "Phase 4 agent. Runs 4 sequential sub-stages: raw LLK validation, parameter coverage, helper integration, performance comparison. Each gates the next."
+description: "Phase 2: Validate. Runs 4 sequential sub-stages: raw LLK validation (2a), parameter coverage (2b), helper integration (2c), performance comparison (2d). Each gates the next. Issues L1 trigger back to Phase 1 (Design) when a sub-stage fails on something the proposal must fix."
 type: reference
 ---
 
@@ -11,7 +11,7 @@ Invoke with `subagent_type: general-purpose`. Single agent handles all 4 sub-sta
 Replace placeholders:
 - `{{LLK_CATEGORY}}` — operation category
 - `{{PROPOSAL_PATH}}` — path to the helper proposal document
-- `{{HELPER_HPP}}` — path to the helper .hpp file (for sub-stages 4c/4d)
+- `{{HELPER_HPP}}` — path to the helper .hpp file (for sub-stages 2c/2d)
 - `{{OPS_LIST}}` — operations to validate
 
 ## Prompt Template
@@ -23,11 +23,27 @@ Proposal: {{PROPOSAL_PATH}}
 Helper: {{HELPER_HPP}}
 Operations: {{OPS_LIST}}
 
-Log breadcrumbs to agent_logs/. See tt_metal/third_party/tt-agents/scripts/logging/ for format.
+BREADCRUMB LOGGING — do this first:
+Derive CATEGORY_SLUG from {{LLK_CATEGORY}} (lowercase, spaces/slashes → underscores).
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/validation_breadcrumbs.jsonl"
+Run at start:
+  mkdir -p "${LOG_DIR}"
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"validation","category":"{{LLK_CATEGORY}}"}' >> $BCRUMB
+
+Log one breadcrumb per sub-stage entry, per test run, per L1 trigger:
+  echo '{"ts":"...","event":"substage","stage":"2a|2b|2c|2d","status":"start|pass|fail"}' >> $BCRUMB
+  echo '{"ts":"...","event":"test","stage":"2a","op":"OP","tiles":N,"result":"PASS|FAIL|HANG"}' >> $BCRUMB
+  echo '{"ts":"...","event":"l1_trigger","stage":"2a","op":"OP","error":"..."}' >> $BCRUMB
+
+At completion, write ${LOG_DIR}/validation_execution_log.md: per-sub-stage summary, failures with
+diagnosis, L1 triggers emitted, generated test file paths.
+
+See tt_metal/third_party/tt-agents/scripts/logging/ for the JSONL event schema.
 
 Run 4 sub-stages sequentially. Each MUST pass before proceeding to the next.
 
-═══ SUB-STAGE 4a: RAW LLK VALIDATION ═══
+═══ SUB-STAGE 2a: RAW LLK VALIDATION ═══
 
 Generate test kernels using RAW LLK calls (not the helper) that exercise the
 EXACT LLK sequences from the proposal's sequence validation table.
@@ -39,10 +55,10 @@ For each proposed sequence:
 
 Results: PASS / FAIL / HANG per sequence.
 
-FAIL or HANG -> BLOCKER. Report the failure and stop.
-Keep all raw LLK test kernels — they become the performance baseline in 4d.
+FAIL or HANG -> L1 TRIGGER (see below). Report the failure and stop.
+Keep all raw LLK test kernels — they become the performance baseline in 2d.
 
-═══ SUB-STAGE 4b: PARAMETER COVERAGE ═══
+═══ SUB-STAGE 2b: PARAMETER COVERAGE ═══
 
 Using the parameter usage matrix from the investigation, test each LLK across
 its parameter space.
@@ -61,10 +77,10 @@ Covering-array strategy (not full cross-product):
 Per-LLK output: Parameter Support Matrix classifying each combo as
 SUPPORTED / UNSUPPORTED / UNTESTED with test evidence.
 
-Observed combo fails -> BLOCKER, stop.
+Observed combo fails -> L1 TRIGGER (see below). Stop.
 Unobserved combo fails -> record as UNSUPPORTED, continue.
 
-═══ SUB-STAGE 4c: HELPER INTEGRATION ═══
+═══ SUB-STAGE 2c: HELPER INTEGRATION ═══
 
 Write test kernels using the ACTUAL helper API from {{HELPER_HPP}}.
 
@@ -76,11 +92,12 @@ Mandatory coverage per op:
 5. Policy variation (at least 2 input policies)
 6. Chain composition (combine with another op in a chain)
 
-Helper fails but raw passed -> fix .hpp/.inl, re-run 4c only.
+Helper fails but raw passed -> fix .hpp/.inl internally, re-run 2c only.
+If fix requires an API change -> L1 TRIGGER (see below).
 
-═══ SUB-STAGE 4d: PERFORMANCE ═══
+═══ SUB-STAGE 2d: PERFORMANCE ═══
 
-Compare helper vs raw LLK using the kernels from 4a (baseline) and 4c (helper).
+Compare helper vs raw LLK using the kernels from 2a (baseline) and 2c (helper).
 
 Requirements:
 - Tile counts: powers of 2 from 8 to 32768
@@ -96,7 +113,28 @@ Output: Performance table with columns:
 Thresholds: <2% OK, 2-5% REVIEW, >5% BLOCKER.
 When overhead is ambiguous, disassemble the trisc2 ELF and compare instruction counts.
 
->5% overhead -> BLOCKER, fix .hpp/.inl, re-run 4c + 4d.
+>5% overhead -> fix .hpp/.inl internally, re-run 2c + 2d.
+If fix requires an API change -> L1 TRIGGER (see below).
+
+═══ L1 TRIGGER ═══
+
+When a sub-stage failure requires the proposal to be fixed (not just .hpp/.inl):
+
+Print this block so the orchestrator routes back to Phase 1 (Design):
+
+```
+L1_TRIGGER_START
+SUB_STAGE: <2a | 2b | 2c | 2d>
+OP: <op name>
+SEQUENCE_OR_COMBO: <the exact LLK sequence or parameter combo that failed>
+ERROR: <what happened — hang, wrong output, compile failure, etc.>
+REQUIRED_PROPOSAL_CHANGE: <what specifically needs to change in the proposal>
+L1_TRIGGER_END
+```
+
+Stop after printing the L1 trigger. Do not continue to the next sub-stage.
+The orchestrator sends this payload to Phase 1 (Design) as `{{L1_FAILURE_CONTEXT}}`.
+After Phase 1 outputs an amended proposal, Phase 2 re-enters from 2a.
 
 ═══ OUTPUT ═══
 
@@ -105,5 +143,5 @@ Save to: {{CATEGORY_SLUG}}_validation.md containing:
 - Parameter support matrix
 - Performance table
 - List of generated test files
-- Any upstream feedback (proposal issues found)
+- L1 trigger payload if issued
 ```

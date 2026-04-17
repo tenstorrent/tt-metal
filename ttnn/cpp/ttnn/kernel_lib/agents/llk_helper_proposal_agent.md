@@ -1,16 +1,17 @@
 ---
 name: LLK Helper Proposal + Op Struct Agent Prompt
-description: Stage 4 combined agent. Takes verified investigation results, proposes a compute_kernel_lib helper API design (Part 1), then designs the op-type-trait structs that implement it (Part 2). Produces both a design document and compilable C++ struct definitions.
+description: "Phase 1: Design. Takes investigation results (Phase 0 output), proposes a compute_kernel_lib helper API (Part 1), then designs op-type-trait structs (Part 2). Two modes: full proposal (new helper) or delta proposal (update existing helper). Also handles L1 re-entry: amend an existing proposal when Phase 2 validation fails."
 type: reference
 ---
 
 ## Usage
 
-Invoke with `subagent_type: Explore`. Replace placeholders:
+Invoke with `subagent_type: general-purpose`. Replace placeholders:
 - `{{LLK_CATEGORY}}` — the operation category (e.g. elementwise unary, binary eltwise)
-- `{{INVESTIGATION_FILE}}` — path to the investigation report from Stage 2
-- `{{VERIFICATION_FILE}}` — path to the verified claims from Stage 3
-- `{{LOCATOR_RESULTS}}` — the Locator Results table from Stage 1 (Phase 4 output)
+- `{{INVESTIGATION_FILE}}` — path to the investigation report (Phase 0 output); for update mode, path to `{category}_delta_scope.md`
+- `{{LOCATOR_RESULTS}}` — the Locator Results table from Phase 0 catalog step
+- `{{MODE}}` — `new` or `update`
+- `{{L1_FAILURE_CONTEXT}}` — (L1 re-entry only) sub-stage, op, sequence/combo, error; empty string otherwise
 
 ## Prompt Template
 
@@ -19,16 +20,17 @@ Propose a compute_kernel_lib helper API for {{LLK_CATEGORY}} operations.
 
 BREADCRUMB LOGGING — do this first:
 Derive CATEGORY_SLUG from {{LLK_CATEGORY}} (lowercase, spaces → underscores).
-BCRUMB="agent_logs/${CATEGORY_SLUG}_proposal_breadcrumbs.jsonl"
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/proposal_breadcrumbs.jsonl"
 Run at start:
-  mkdir -p agent_logs
+  mkdir -p "${LOG_DIR}"
   echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"proposal","category":"{{LLK_CATEGORY}}"}' >> $BCRUMB
 After prerequisite check:
-  echo '{"ts":"'"$(date -Iseconds)"'","event":"finding","check":"prerequisites","investigation_exists":true/false,"verification_exists":true/false}' >> $BCRUMB
-After reading investigation file (log what pain points you extracted):
-  echo '{"ts":"'"$(date -Iseconds)"'","event":"read","file":"{{INVESTIGATION_FILE}}","boilerplate_pattern":"cb_wait/copy/compute/pack","hw_constraints_found":N,"derived_param_opportunities":M}' >> $BCRUMB
-After reading verification file (log what changed your understanding):
-  echo '{"ts":"'"$(date -Iseconds)"'","event":"read","file":"{{VERIFICATION_FILE}}","corrections_found":N,"confirmed_claims":M}' >> $BCRUMB
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"finding","check":"prerequisites","investigation_exists":true/false,"mode":"new/update","l1_reentry":true/false}' >> $BCRUMB
+After reading investigation / delta scope file (log what pain points you extracted):
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"read","file":"{{INVESTIGATION_FILE}}","mode":"{{MODE}}","confirmed_claims":N,"uncertain_claims":M,"boilerplate_pattern":"cb_wait/copy/compute/pack","hw_constraints_found":K}' >> $BCRUMB
+If L1 re-entry (non-empty L1_FAILURE_CONTEXT), log what is being amended:
+  echo '{"ts":"'"$(date -Iseconds)"'","event":"l1_reentry","sub_stage":"...","op":"...","required_change":"..."}' >> $BCRUMB
 For each grouping decision (WHY these ops belong together):
   echo '{"ts":"'"$(date -Iseconds)"'","event":"decision","what":"group","ops":["OP1","OP2"],"helper":"eltwise_unary","shared_pattern":"same CB/DEST batching/copy pattern","key_differentiator":"only tile() call differs"}' >> $BCRUMB
 For each op excluded from a helper:
@@ -39,19 +41,35 @@ For each anti-pattern deliberately avoided:
   echo '{"ts":"'"$(date -Iseconds)"'","event":"decision","what":"anti_pattern_avoided","pattern":"mega_enum/caller_init/opaque_params","alternative":"op_type_trait_structs"}' >> $BCRUMB
 At completion:
   echo '{"ts":"'"$(date -Iseconds)"'","event":"complete","helpers_proposed":N,"ops_covered":M,"ops_excluded":K,"open_questions":Q}' >> $BCRUMB
-Write agent_logs/${CATEGORY_SLUG}_proposal_execution_log.md: helpers proposed with op counts, grouping rationale, exclusions with reasons, design iterations that needed rework, open questions.
+Write ${LOG_DIR}/proposal_execution_log.md: helpers proposed with op counts, grouping rationale, exclusions with reasons, design iterations that needed rework, open questions.
 
-PREREQUISITE CHECK — verify these files exist before proceeding:
-- Investigation results: {{INVESTIGATION_FILE}}
-- Verification results: {{VERIFICATION_FILE}}
+PREREQUISITE CHECK — verify this file exists before proceeding:
+- Investigation / delta scope: {{INVESTIGATION_FILE}}
 
-If EITHER file does not exist or is empty:
-  OUTPUT EXACTLY: "STAGE_INCOMPLETE: Required input file(s) missing. {{INVESTIGATION_FILE}} exists: {yes/no}. {{VERIFICATION_FILE}} exists: {yes/no}. Cannot produce proposal without completed investigation and verification stages."
+If the file does not exist or is empty:
+  OUTPUT EXACTLY: "PHASE_INCOMPLETE: Required input file missing. {{INVESTIGATION_FILE}} exists: {yes/no}. Cannot produce proposal without Phase 0 output."
   Then STOP. Do NOT attempt to investigate or propose without the prerequisite data.
 
-If both files exist, read them:
-- Read the investigation results: {{INVESTIGATION_FILE}}
-- Read the verification results: {{VERIFICATION_FILE}}
+If the file exists, read it:
+- Read {{INVESTIGATION_FILE}}
+
+Note: there is no separate verification file. The investigation document includes inline
+CONFIRMED/UNCERTAIN flags per claim. Treat CONFIRMED claims as design constraints and
+UNCERTAIN claims as open questions (list them in the proposal's Open Questions section).
+
+MODE: {{MODE}}
+- If `new`: produce a full proposal (all sections below apply)
+- If `update`: produce a delta proposal — only the sections covering what changes.
+  Scope is strictly limited to the change. Do not redesign unrelated parts of the helper.
+  Structure the delta proposal as: (1) change description, (2) affected API surface,
+  (3) affected LLK sequences, (4) before/after for changed call sites only,
+  (5) which validation sub-stages need re-running (typically 2c + 2d minimum).
+
+L1 RE-ENTRY: {{L1_FAILURE_CONTEXT}}
+- If non-empty: a Phase 2 validation sub-stage has failed and sent you this context.
+  Amend the proposal (or delta proposal) to fix the specific failure described.
+  Do NOT redesign unrelated ops or helpers.
+  Add a "## Changelog" section at the top of the proposal listing what changed and why.
 
 Read these existing helpers to understand what GOOD helpers look like:
 - `/localdev/astancov/tt-metal/ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`

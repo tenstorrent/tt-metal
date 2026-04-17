@@ -1,8 +1,13 @@
 ---
 name: LLK Verification Agent Prompt
-description: Claim-specific verification agent. Takes individual claims from the orchestrator and verifies each against actual code. Returns structured verdicts. Does NOT verify entire groups at once.
+description: "DEPRECATED — no longer part of the pipeline. Investigation agents (llk_investigation_agent.md) now include inline CONFIRMED/UNCERTAIN flags on all claims. Do not invoke this agent. See llk_helpers_pipeline.md Phase 0."
 type: reference
 ---
+
+> **DEPRECATED**: This agent is not used in the current pipeline. The investigation agent
+> (Phase 0: Understand) now marks every claim as CONFIRMED or UNCERTAIN inline,
+> with a file:line citation for CONFIRMED claims. There is no separate verification phase.
+> This file is retained for historical reference only.
 
 ## Usage
 
@@ -43,9 +48,10 @@ Verify these specific claims about LLK operations by checking actual source code
 
 BREADCRUMB LOGGING — do this first:
 Derive CATEGORY_SLUG from the ops in the claims (or ask orchestrator if unclear).
-BCRUMB="agent_logs/${CATEGORY_SLUG}_verification_breadcrumbs.jsonl"
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/verification_breadcrumbs.jsonl"
 Run at start:
-  mkdir -p agent_logs
+  mkdir -p "${LOG_DIR}"
   echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"verification","claim_count":N}' >> $BCRUMB
 
 Log the verification process in detail — one breadcrumb per file read, one per intermediate finding, one for the final verdict.
@@ -67,7 +73,7 @@ If INCORRECT, log what the correct fact is:
 
 At completion:
   echo '{"ts":"'"$(date -Iseconds)"'","event":"complete","confirmed":N,"incorrect":M,"unverifiable":K}' >> $BCRUMB
-Write agent_logs/${CATEGORY_SLUG}_verification_execution_log.md: per-claim file trail (what was read, what was seen), reasoning chain from evidence to verdict, corrections for INCORRECT claims.
+Write ${LOG_DIR}/verification_execution_log.md: per-claim file trail (what was read, what was seen), reasoning chain from evidence to verdict, corrections for INCORRECT claims.
 
 Claims to verify:
 {{CLAIMS}}

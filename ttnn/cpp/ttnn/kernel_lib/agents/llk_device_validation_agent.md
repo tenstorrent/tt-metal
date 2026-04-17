@@ -1,10 +1,10 @@
 ---
 name: LLK Device Validation Reference
 description: >
-  Reference document for Phase B of Stage 5 (Review-Fix + Device Validation Loop).
+  Reference material for Phase 2: Validate (sub-stage 2a — raw LLK validation).
   Describes how to generate and run device-side LLK sequence validation tests.
-  This is NOT a standalone agent — it is reference material used by the review-fix
-  agent (llk_review_fix_agent.md) during its Phase B execution.
+  This is NOT a standalone agent — it is reference material used by the validation
+  agent (llk_validation_agent.md) during sub-stage 2a execution.
 type: reference
 ---
 
@@ -25,9 +25,10 @@ You are generating and running device-side LLK sequence validation tests for pro
 
 BREADCRUMB LOGGING — do this first:
 Derive CATEGORY_SLUG from {{LLK_CATEGORY}} (lowercase, spaces → underscores).
-BCRUMB="agent_logs/${CATEGORY_SLUG}_device_validation_breadcrumbs.jsonl"
+LOG_DIR="agent_logs/${CATEGORY_SLUG}"
+BCRUMB="${LOG_DIR}/device_validation_breadcrumbs.jsonl"
 Run at start:
-  mkdir -p agent_logs
+  mkdir -p "${LOG_DIR}"
   echo '{"ts":"'"$(date -Iseconds)"'","event":"start","agent":"device_validation","category":"{{LLK_CATEGORY}}"}' >> $BCRUMB
 
 ## Purpose
@@ -327,7 +328,7 @@ For ops that need multiple input tensors (e.g., binary ops):
 
 At completion:
   echo '{"ts":"'"$(date -Iseconds)"'","event":"complete","total_ops":N,"passed":P,"failed":F,"hangs":H}' >> $BCRUMB
-  Write agent_logs/${CATEGORY_SLUG}_device_validation_execution_log.md: per-op test trail, failures with diagnosis, generated file paths.
+  Write ${LOG_DIR}/device_validation_execution_log.md: per-op test trail, failures with diagnosis, generated file paths.
 ```
 
 ## Retention for Phase E Performance Comparison

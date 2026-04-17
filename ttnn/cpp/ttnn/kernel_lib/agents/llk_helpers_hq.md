@@ -15,20 +15,29 @@ Entry point for creating and maintaining `compute_kernel_lib` helpers — unifie
 |---|---|
 | Adding ops to an existing helper | Read [conventions](llk_helpers_conventions.md) section 5 (op structs). Add CRTP struct + init/call. |
 | Creating a new helper (known ops, known LLK calls) | Read [conventions](llk_helpers_conventions.md), write .hpp/.inl directly, add perf tests. |
-| Creating a new helper (unknown territory) | Run the [pipeline](llk_helpers_pipeline.md) from Phase 0. |
-| Updating/improving an existing helper | Run [pipeline](llk_helpers_pipeline.md) from Phase 4 (validation only). |
+| Creating a new helper (unknown territory) | Run the [pipeline](llk_helpers_pipeline.md) — new helper mode, starts at Phase 0. |
+| Updating/improving an existing helper | Run the [pipeline](llk_helpers_pipeline.md) — update mode, starts at Phase 0 (reads existing files). |
 
 ## Agent Files
 
 | Agent | Pipeline Phase | Purpose |
 |-------|---------------|---------|
-| `llk_catalog_agent.md` | 0 | Enumerate ops, group, locate source files |
-| `llk_investigation_agent.md` | 1 | Device + host + usage analysis (per group) |
-| `llk_verification_agent.md` | 2 | Confirm/deny investigation claims |
-| `llk_helper_proposal_agent.md` | 3 | Design helper API + op structs |
-| `llk_validation_agent.md` | 4 | Raw LLK -> params -> integration -> perf |
-| `llk_review_fix_agent.md` | 4 | Document review and fix loop (within validation) |
-| `llk_device_validation_agent.md` | 4 | Device-side test generation (within validation) |
+| `llk_catalog_agent.md` | 0: Understand (new mode, step 1) | Catalog ops via bidirectional grep; produces group→ops + locator |
+| `llk_investigation_agent.md` | 0: Understand (new mode, step 2) | Deep analysis per group (parallel); inline CONFIRMED/UNCERTAIN flags |
+| (orchestrator) | 0: Understand (update mode) | Read existing `.hpp`/`.inl`, scope the change |
+| `llk_helper_proposal_agent.md` | 1: Design | Full proposal (new) or delta proposal (update); handles L1 re-entry |
+| `llk_validation_agent.md` | 2: Validate | Raw LLK → params → integration → perf; emits L1 trigger on failure |
+| (orchestrator) + `llk_review_fix_agent.md` | 3: Implement | Write/edit files, L2 post-write validation, L3 scope gap detection, report |
+
+**Deprecated**: `llk_verification_agent.md` (inline flags in investigation output replace it). `llk_device_validation_agent.md` is reference material for sub-stage 2a, not an agent.
+
+## Feedback Loops
+
+| Loop | Trigger | Path |
+|------|---------|------|
+| **L1** | Validation sub-stage 2a/2b fails, or 2c/2d fix needs API change | Phase 2 → Phase 1 (amend proposal) |
+| **L2** | Files written or edited (always) | Phase 3 → Phase 2 (re-run 2c + 2d only) |
+| **L3** | Scope gap found during implementation | Phase 3 → Phase 1 (amend design) → Phase 2 (validate new scope) → Phase 3 (resume) |
 
 ## Helpers Location
 
