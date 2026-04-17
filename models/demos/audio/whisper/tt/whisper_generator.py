@@ -260,14 +260,10 @@ class WhisperGenerator:
 
         # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
         self.trace_id_decode = defaultdict(lambda: None)
-        # Track whether decode kernels have been compiled (JIT warmup done) per batch size
+        # One-time JIT warmup per trace_key before ``begin_trace_capture`` (persistent decode trace).
         self._decode_kernels_compiled = defaultdict(bool)
 
-        # 2CQ event tracking (initialized during trace capture)
-        self.op_event = None
-        self.write_event = None
-
-        # Per-batch-size host and device staging tensors for 2CQ token ID transfer
+        # Host/device staging for token IDs (enlarged decode trace and non-traced decode steps).
         self.token_id_host = defaultdict(lambda: None)
         self.token_id_device = defaultdict(lambda: None)
 
@@ -311,7 +307,7 @@ class WhisperGenerator:
             )
             self.decode_pos_embed[batch_size] = pos_host.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Pre-allocated DRAM staging tensors for 2CQ token ID transfer (Q1 copy target)
+        # Pre-allocated DRAM staging tensors for token ID transfer (on-device sampling path)
         for batch_size in [1, WHISPER_BATCH_SIZE]:
             global_batch = batch_size * mesh_device.get_num_devices()
             dummy_ids = torch.zeros((global_batch, 1), dtype=torch.long)
@@ -370,8 +366,6 @@ class WhisperGenerator:
                 released_any = True
 
         if released_any:
-            self.op_event = None
-            self.write_event = None
             ttnn.synchronize_device(self.mesh_device)
 
     def _run_encoder_traced_or_eager(self, trace_key, input_embeds):
@@ -414,15 +408,13 @@ class WhisperGenerator:
             ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
 
     def _release_all_traces(self):
-        """Release captured encoder and decode traces, and reset decode-side staging (2CQ, token buffers)."""
+        """Release captured encoder and decode traces, and reset decode-side staging (token buffers)."""
         self.encoder_trace_state.release_all(self.mesh_device)
         for trace_key in list(self.trace_id_decode.keys()):
             if self.trace_id_decode[trace_key] is not None:
                 ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
                 self.trace_id_decode[trace_key] = None
                 logger.debug(f"Released decode trace for batch size per device {trace_key}")
-        self.op_event = None
-        self.write_event = None
         self.token_id_host.clear()
         self.token_id_device.clear()
         self.decode_pos_embed.clear()
