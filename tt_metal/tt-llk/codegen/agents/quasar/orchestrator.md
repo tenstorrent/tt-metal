@@ -51,6 +51,66 @@ GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 mkdir -p $LOG_DIR/instructions
 ```
 
+### Live run.json writing — MANDATORY
+
+Every step transition in this orchestrator MUST update `$LOG_DIR/run.json` via
+`codegen/scripts/run_json_writer.py`. The Activity Monitor tab on the dashboard
+reads this file while the run is in progress (status: "running") and relies on
+`current_step`, `current_step_started`, `current_step_message`, `steps_completed`,
+and `step_history` staying current. The fields and writing cadence are specified
+by `/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` and
+`/proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md`.
+
+**Rules (do NOT skip any):**
+
+1. Call `run_json_writer.py init` once, immediately after creating `$LOG_DIR` (below).
+2. Call `run_json_writer.py advance` at every pipeline step boundary (see per-step
+   instructions further down). Use the default pipeline step IDs:
+   `arch_lookup → analyzer → planner → writer → fix_compile → test_writer →
+   tester → fix_tests → optimizer → prettifier`. Reusing the same ID across phases
+   is required and expected — the dashboard renders retries correctly when the same
+   step appears multiple times in `step_history`.
+3. Call `run_json_writer.py phase-start / phase-test / phase-end` at the start, during
+   simulator execution, and at the end of every phase in Step 3.
+4. Call `run_json_writer.py failure` whenever a failure is recorded (same content as
+   the `FAILURES` bash list — write both).
+5. Call `run_json_writer.py finalize` at the very end of Step 10 to flip `status` to
+   its terminal value (`success`, `compiled`, or `failed`) and close the last
+   `step_history` entry. **Never leave a run in status="running"**; even on early
+   exit, run `finalize --status failed --final-result ...` before returning.
+
+All writes are atomic (write-to-temp + rename) and safe to interleave with the
+dashboard's reads.
+
+### Step 0a: Write the initial run.json
+
+Right after `mkdir -p $LOG_DIR/instructions`, write the initial run.json so the
+dashboard immediately picks up this run as "running":
+
+```bash
+python codegen/scripts/run_json_writer.py init \
+    --log-dir "$LOG_DIR" \
+    --run-id "$RUN_ID" \
+    --kernel "{op}" \
+    --kernel-type "{kernel_type}" \
+    --arch "{target_arch}" \
+    --reference-arch "{ref_arch}" \
+    --reference-file "tt_llk_{ref_arch}/{kernel_path}" \
+    --generated-file "tt_llk_{target_arch}/{kernel_path}" \
+    --start-time "$START_TIME" \
+    --first-step "arch_lookup" \
+    --first-message "Researching {target_arch} {kernel_type} architecture for {op}" \
+    --prompt "$PROMPT" \
+    --batch-id "${CODEGEN_BATCH_ID:-}" \
+    --model "$MODEL" \
+    --run-type "$RUN_TYPE" \
+    --git-commit "$GIT_COMMIT"
+```
+
+Note: `--phases-total` is unknown at this point — patch it later with the `metric`
+subcommand after Step 2 (analyzer) reports the phase plan.
+
+
 Track these variables throughout the run for metrics:
 - `START_TIME` — captured above
 - `PROMPT` — the original user prompt verbatim (e.g., "Generate gelu for Quasar")
@@ -176,6 +236,21 @@ Agent tool:
 
 Wait for completion. **Verify** that `codegen/artifacts/{op}_arch_research.md` exists.
 
+**LIVE LOG — transition to `analyzer`:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "analyzer" \
+    --new-message "Analyzing {ref_arch} reference and extracting phase plan" \
+    --prev-result "success" \
+    --prev-message "Architecture research complete — brief at codegen/artifacts/{op}_arch_research.md" \
+    --agent "arch_lookup"
+```
+
+If the arch-lookup agent failed to produce the research brief, use
+`--prev-result compile_error` and also record a failure entry via
+`run_json_writer.py failure ...` before aborting.
+
 ### Step 2: Analyze Reference Implementation
 
 Spawn an agent:
@@ -218,9 +293,37 @@ From the analyzer's output, extract the ordered list of phases. Each phase has:
 
 If the analysis identifies only a single sub-kernel (e.g., simple SFPU ops), there is one phase and the workflow is identical to a single-pass generation.
 
+**LIVE LOG — record phase count now that it is known:**
+```bash
+python codegen/scripts/run_json_writer.py metric \
+    --log-dir "$LOG_DIR" \
+    --patch-json "{\"phases_total\": ${PHASES_TOTAL}}"
+```
+(where `$PHASES_TOTAL` is the number of phases extracted above).
+
 ### Step 3: Loop Over Phases
 
 For each phase **in order**, run Steps 3a–3e. Only proceed to the next phase when the current phase passes tests (or has no applicable test).
+
+**LIVE LOG — mark this phase as started (once, at the top of the phase body, before Step 3a):**
+```bash
+python codegen/scripts/run_json_writer.py phase-start \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --name "{phase_name}"
+```
+
+**LIVE LOG — transition to `planner` for this phase:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "planner" \
+    --new-message "Planning phase ${N} ({phase_name}) — designing sub-kernel spec" \
+    --prev-result "success" \
+    --prev-message "Analysis complete — ${PHASES_TOTAL} phase(s) identified" \
+    --agent "planner"
+```
+(After the first phase, `--prev-message` should instead reference "phase ${N-1} tests passed".)
 
 #### Step 3a: Plan Phase
 
@@ -255,6 +358,17 @@ Agent tool:
 ```
 
 Wait for completion. **Verify** that `codegen/artifacts/{op}_phase{N}_spec.md` exists.
+
+**LIVE LOG — transition to `writer` for this phase:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "writer" \
+    --new-message "Writing phase ${N} ({phase_name}) — generating kernel code" \
+    --prev-result "success" \
+    --prev-message "Phase ${N} spec at codegen/artifacts/{op}_phase${N}_spec.md" \
+    --agent "writer"
+```
 
 #### Step 3b: Generate Phase Code
 
@@ -298,7 +412,28 @@ Wait for completion. Agent returns compilation result (PASSED or FAILED).
 
 #### Step 3c: Debug Phase (if needed)
 
-If Step 3b reports compilation failure, spawn debugger:
+If Step 3b reports compilation failure, **first** log the failure and advance
+the live step before spawning the debugger:
+
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "compile_phase_${N}" \
+    --agent "writer" \
+    --type "compile_error" \
+    --message "${FIRST_COMPILE_ERROR_LINE}" \
+    --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "fix_compile" \
+    --new-message "Fixing compile error in phase ${N} ({phase_name}) — attempt 1" \
+    --prev-result "compile_error" \
+    --prev-message "Phase ${N} writer output failed to compile — ${FIRST_COMPILE_ERROR_LINE}" \
+    --agent "debugger"
+```
+
+Spawn debugger:
 ```
 Agent tool:
   subagent_type: "general-purpose"
@@ -324,6 +459,24 @@ Agent tool:
 
 **If debugger reports STUCK** after 5 attempts: **stop and report to the user** with the blocking error details. Do NOT proceed to the next phase.
 
+Before aborting in the STUCK case, you MUST finalize run.json so the run does
+not stay in `status="running"` forever:
+```bash
+python codegen/scripts/run_json_writer.py finalize \
+    --log-dir "$LOG_DIR" \
+    --status "failed" \
+    --final-result "compile_error" \
+    --final-message "Debugger stuck after 5 attempts on phase ${N} ({phase_name})"
+```
+
+**LIVE LOG — compile passed, close out fix_compile:**
+(Only run this block if Step 3c actually ran. Skip if the writer compiled on first try.)
+```bash
+python codegen/scripts/run_json_writer.py message \
+    --log-dir "$LOG_DIR" \
+    --message "Phase ${N} compile fixed — checking whether tests need to be created"
+```
+
 #### Step 3d: Create Tests (if needed)
 
 After compilation passes, check if a test exists for this kernel:
@@ -333,6 +486,17 @@ ls tests/python_tests/{target_arch}/test_sfpu_*{op}*_{target_arch}.py 2>/dev/nul
 ```
 
 If a test file exists, skip to Step 3e.
+
+If NO test exists, **first** advance the live step, then spawn the test-writer:
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "test_writer" \
+    --new-message "Creating test suite for {op} phase ${N} ({phase_name})" \
+    --prev-result "success" \
+    --prev-message "Phase ${N} compiles — no existing test found, generating one" \
+    --agent "test_writer"
+```
 
 If NO test exists, spawn the test-writer agent:
 ```
@@ -357,6 +521,22 @@ Wait for completion. The agent will create:
 If the agent reports BLOCKED, record `test_result: "skipped"` for this phase and continue.
 
 #### Step 3e: Test Phase
+
+**LIVE LOG — transition to `tester` for this phase:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "tester" \
+    --new-message "Running functional tests for phase ${N} ({phase_name}) on simulator" \
+    --prev-result "success" \
+    --prev-message "Tests ready for phase ${N}" \
+    --agent "tester"
+
+python codegen/scripts/run_json_writer.py phase-test \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --state "running"
+```
 
 After compilation passes (and tests exist), spawn the tester:
 ```
@@ -386,6 +566,45 @@ Agent tool:
 ```
 
 Wait for test results. If PASSED, mark this phase complete and continue to the next phase.
+
+**LIVE LOG — phase passed:**
+```bash
+python codegen/scripts/run_json_writer.py phase-end \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --test-result "passed" \
+    --compilation-attempts "${PHASE_COMPILES}" \
+    --debug-cycles "${PHASE_DEBUGS}" \
+    --test-details "${PHASE_TEST_DETAILS}" \
+    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
+```
+(`$PHASE_COMPILE_ERRORS_JSON` must be a JSON array — use `'[]'` if there were no compile errors.)
+
+If FAILED, **first** advance to fix_tests and flip the per-phase state to "fixing",
+then spawn the debugger:
+
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "test_phase_${N}" \
+    --agent "tester" \
+    --type "test_failure" \
+    --message "${FIRST_TEST_FAILURE_LINE}" \
+    --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "fix_tests" \
+    --new-message "Debugging phase ${N} test failures — attempt 1" \
+    --prev-result "test_failure" \
+    --prev-message "Phase ${N} tests failed — ${FIRST_TEST_FAILURE_LINE}" \
+    --agent "debugger"
+
+python codegen/scripts/run_json_writer.py phase-test \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --state "fixing"
+```
 
 If FAILED, spawn the debugger again but this time with test failure details instead of compilation errors:
 ```
@@ -423,6 +642,35 @@ Agent tool:
 After the debugger fixes the code, return to Step 3e (test) to verify.
 Max 2 debug→test cycles per phase before escalating to the user.
 
+**LIVE LOG — after each debugger cycle, before re-testing:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "tester" \
+    --new-message "Re-running phase ${N} tests after fix attempt ${CYCLE}" \
+    --prev-result "success" \
+    --prev-message "Debugger applied fix for phase ${N}" \
+    --agent "tester"
+
+python codegen/scripts/run_json_writer.py phase-test \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --state "running"
+```
+
+If the phase is escalated/abandoned after 2 cycles, finalize the per-phase entry
+as failed before stopping the run:
+```bash
+python codegen/scripts/run_json_writer.py phase-end \
+    --log-dir "$LOG_DIR" \
+    --phase "${N}" \
+    --test-result "failed" \
+    --test-details "${PHASE_TEST_DETAILS}" \
+    --compilation-attempts "${PHASE_COMPILES}" \
+    --debug-cycles "${PHASE_DEBUGS}" \
+    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
+```
+
 **Metrics**: When a phase completes (pass or fail), record its per-phase result:
 ```
 {
@@ -451,6 +699,17 @@ rm -f tests/python_tests/test_{op}_phase*.py
 
 ### Step 4: Final Regression
 
+**LIVE LOG — transition to `tester` for the final whole-kernel regression:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "tester" \
+    --new-message "Running final regression — end-to-end {op} tests on the complete kernel" \
+    --prev-result "success" \
+    --prev-message "All ${PHASES_TOTAL} phases passed; phase tests cleaned up" \
+    --agent "tester"
+```
+
 After all phases complete and phase tests are cleaned up, run the existing repo tests that exercise this kernel to confirm the complete kernel works end-to-end:
 
 ```bash
@@ -475,6 +734,20 @@ If no existing test covers this kernel, report NOT_AVAILABLE and move to Step 10
 If tests FAIL, return to the debug→test loop (Step 3c/3e) for the failing phase.
 
 ### Step 5: Optimize (SFPU kernels only)
+
+**LIVE LOG — transition to `optimizer` (only if the optimizer will actually be
+spawned — i.e. the Blackhole reference uses replay buffers). Skip this advance
+if the optimizer step is skipped; the run will stay on `tester` and finalize
+from there.**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "optimizer" \
+    --new-message "Applying replay-buffer optimization to {op}" \
+    --prev-result "success" \
+    --prev-message "Final regression passed — entering optimization step" \
+    --agent "optimizer"
+```
 
 After the final regression passes, check if the Blackhole reference uses replay buffers:
 
@@ -570,7 +843,50 @@ END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 LINES_GENERATED=$(wc -l < tt_llk_{target_arch}/{kernel_path})
 ```
 
-3. **Append a run entry** to `/proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl`:
+3. **Finalize the live `run.json`** — this is mandatory. Choose `--status`
+   from `success | compiled | failed | skipped` using the rules below, and
+   `--final-result` from `success | compile_error | test_failure` matching
+   the outcome of the last step.
+
+```bash
+python codegen/scripts/run_json_writer.py finalize \
+    --log-dir "$LOG_DIR" \
+    --end-time "$END_TIME" \
+    --status "$STATUS" \
+    --final-result "$FINAL_RESULT" \
+    --final-message "Run complete — {op} on {target_arch}" \
+    --patch-json "$(python - <<'PY'
+import json, os
+patch = {
+    "phases_total": int(os.environ["PHASES_TOTAL"]),
+    "phases_completed": int(os.environ["PHASES_COMPLETED"]),
+    "compilation_attempts": int(os.environ["COMPILATION_ATTEMPTS"]),
+    "debug_cycles": int(os.environ["DEBUG_CYCLES"]),
+    "tests_total": int(os.environ["TESTS_TOTAL"]),
+    "tests_passed": int(os.environ["TESTS_PASSED"]),
+    "lines_generated": int(os.environ["LINES_GENERATED"]),
+    "tests_generated": os.environ["TESTS_GENERATED"].lower() == "true",
+    "prettified": False,
+    "formatted": True,
+    "optimized": os.environ.get("OPTIMIZED", "false").lower() == "true",
+    "optimization_type": os.environ.get("OPTIMIZATION_TYPE", "none"),
+    "formats_tested": json.loads(os.environ.get("FORMATS_TESTED_JSON", "[]")),
+    "formats_excluded": json.loads(os.environ.get("FORMATS_EXCLUDED_JSON", "{}")),
+    "obstacle": os.environ.get("OBSTACLE") or None,
+    "agents": json.loads(os.environ["AGENTS_JSON"]),
+    "tokens": json.loads(os.environ.get("TOKENS_JSON", "{\"input\":0,\"output\":0,\"cache_read\":0,\"total\":0}")),
+}
+print(json.dumps(patch))
+PY
+)"
+```
+
+The finalize call closes the last `step_history` entry, flips `status` from
+`"running"` to its terminal value, sets `end_time`, and merges the summary
+fields. The run.json on disk is now the authoritative record — read it back
+to produce the runs.jsonl entry below.
+
+4. **Append a run entry** to `/proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl`:
 ```json
 {
   "kernel": "{op}",
@@ -727,7 +1043,16 @@ cp tests/python_tests/{target_arch}/emu_*_.log {LOG_DIR}/ 2>/dev/null || true
 cp tests/python_tests/{target_arch}/tt-exalens.log {LOG_DIR}/ 2>/dev/null || true
 # Copy the runs.jsonl entry as a standalone run.json for this run
 ```
-Also write `{LOG_DIR}/run.json` containing **just this run's** JSONL entry (same content appended to runs.jsonl, but pretty-printed JSON). This makes each LOG_DIR a complete, self-contained record.
+`{LOG_DIR}/run.json` is already on disk (finalized by `run_json_writer.py` in
+step 3 above), so the runs.jsonl entry must be **derived from that file** —
+read it and append it as a single JSONL line so the two artifacts stay in
+sync:
+```bash
+python -c "import json,sys; d=json.load(open('$LOG_DIR/run.json')); print(json.dumps(d))" \
+    >> /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
+```
+Do not rebuild the entry from shell variables — that would let run.json and
+runs.jsonl drift.
 
 6. **Verify all agent logs exist** in LOG_DIR. The following files MUST be present:
    - `agent_analyzer.md`

@@ -43,6 +43,45 @@ Each codegen run creates a unique log directory:
 
 The `LOG_DIR` is passed to every agent prompt. Agents write their reasoning to `{LOG_DIR}/agent_{name}.md`.
 
+### Live run.json (Activity Monitor)
+
+`run.json` is written **at run start** (not only at run end) so the dashboard's
+Activity Monitor tab can render a run's live pipeline state. The orchestrators
+call `codegen/scripts/run_json_writer.py` at every step transition; the dashboard
+scans `run.json` files for `status: "running"` and displays `current_step`,
+`step_history`, and `per_phase[]` timing.
+
+The full field specification is maintained in:
+- `/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` — the new
+  live-state fields (`status: "running"`, `current_step`, `current_step_started`,
+  `current_step_message`, `steps_completed`, `step_history[]`, `per_phase[]
+  .start_time/end_time/duration_seconds`, `per_phase[].test_result: "running"`,
+  `per_phase[].test_result: "fixing"`, optional `pipeline_steps[]`).
+- `/proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md` — the full run.json
+  schema including both completed-run fields and Activity Monitor fields.
+
+Writing cadence (orchestrators must hit every transition):
+1. **Run start** — `run_json_writer.py init` writes the initial file with
+   `status: "running"` and a first `step_history` entry in `result: "in_progress"`.
+2. **Each step boundary** — `run_json_writer.py advance` closes the in-flight
+   entry (sets `ended`, `duration_seconds`, `result`), appends a new entry,
+   updates `current_step*`, and appends to `steps_completed`.
+3. **Mid-step progress** *(optional)* — `run_json_writer.py message` updates
+   `current_step_message` without transitioning.
+4. **Per-phase timing** — `phase-start` / `phase-test` / `phase-end` write
+   `per_phase[].start_time`, `test_result: "running"|"fixing"`, and
+   `end_time`/`duration_seconds`.
+5. **Run end** — `run_json_writer.py finalize` flips `status` to a terminal
+   value, sets `end_time`, closes the last `step_history` entry, and merges
+   any remaining summary fields (`tokens`, `tests_total`, etc.). Never leave a
+   run in `status: "running"`.
+
+All writes are atomic (write-to-temp-file + rename).
+
+The Blackhole issue-solver pipeline uses a **custom `pipeline_steps`** list
+(`analyzer → arch_lookup → planner → writer → fix_compile → tester → fix_tests`)
+passed to `init`; the Quasar orchestrator uses the default 10-step pipeline.
+
 ---
 
 ## runs.jsonl: Cumulative Run Metrics

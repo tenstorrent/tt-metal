@@ -60,6 +60,78 @@ cp codegen/agents/blackhole/bh-*.md $LOG_DIR/instructions/
 
 Pass `LOG_DIR` and `WORKTREE_DIR` to every agent prompt so they can self-log their reasoning and operate in the correct working directory.
 
+### Live run.json writing — MANDATORY
+
+Every pipeline step in this orchestrator MUST update `$LOG_DIR/run.json` via
+`codegen/scripts/run_json_writer.py`. The dashboard's Activity Monitor tab scans
+for `run.json` files with `status: "running"` and reads `current_step`,
+`current_step_started`, `current_step_message`, `steps_completed`, and
+`step_history` to render live state. Field definitions and cadence are in
+`/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` and
+`/proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md`.
+
+The Blackhole issue-solver pipeline does NOT match the default 10-step codegen
+pipeline, so a **custom `pipeline_steps`** list is passed at init so the
+dashboard renders the BH-specific nodes:
+
+```
+analyzer → arch_lookup (optional) → planner → writer → fix_compile (optional)
+         → tester → fix_tests (optional)
+```
+
+**Rules (do NOT skip any):**
+
+1. `run_json_writer.py init` — once, immediately after `mkdir -p $LOG_DIR/instructions`.
+2. `run_json_writer.py advance` — at every step transition. Use the IDs in the
+   `pipeline_steps` list below; reusing IDs is fine (e.g. going back to `tester`
+   after `fix_tests`).
+3. `run_json_writer.py failure` — whenever a failure is appended to `FAILURES`.
+4. `run_json_writer.py finalize` — at the very end of Step 6. Never leave a run
+   in `status: "running"`, even on early exit.
+
+All writes are atomic (write-to-temp + rename).
+
+### Step 0a: Write the initial run.json
+
+```bash
+PIPELINE_STEPS='[
+  {"id":"analyzer",   "name":"Analyze",      "desc":"Analyze the GitHub issue"},
+  {"id":"arch_lookup","name":"Research",     "desc":"Gather architecture details"},
+  {"id":"planner",    "name":"Plan",         "desc":"Plan the fix"},
+  {"id":"writer",     "name":"Fix",          "desc":"Implement the fix"},
+  {"id":"fix_compile","name":"Fix Compile",  "desc":"Resolve compile errors"},
+  {"id":"tester",     "name":"Test",         "desc":"Run compile + functional tests"},
+  {"id":"fix_tests",  "name":"Fix Tests",    "desc":"Resolve test failures"}
+]'
+
+ISSUE_JSON=$(python - <<PY
+import json, os
+print(json.dumps({
+  "number": int(os.environ["ISSUE_NUMBER"]),
+  "title":  os.environ["ISSUE_TITLE"],
+  "labels": os.environ.get("ISSUE_LABELS","").split(",") if os.environ.get("ISSUE_LABELS") else [],
+}))
+PY
+)
+
+python codegen/scripts/run_json_writer.py init \
+    --log-dir "$LOG_DIR" \
+    --run-id "$RUN_ID" \
+    --kernel "issue_${ISSUE_NUMBER}" \
+    --kernel-type "issue_solver" \
+    --arch "blackhole" \
+    --start-time "$START_TIME" \
+    --first-step "analyzer" \
+    --first-message "Analyzing issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
+    --prompt "Fix BH issue #${ISSUE_NUMBER}" \
+    --batch-id "${CODEGEN_BATCH_ID:-}" \
+    --model "${CODEGEN_MODEL:-opus}" \
+    --run-type "${CODEGEN_RUN_TYPE:-manual}" \
+    --git-commit "$GIT_COMMIT" \
+    --pipeline-steps "$PIPELINE_STEPS" \
+    --issue "$ISSUE_JSON"
+```
+
 ---
 
 ## Step 1: Analyze the Issue
@@ -93,7 +165,15 @@ Wait for completion. **Verify** that `codegen/artifacts/bh_issue_{ISSUE_NUMBER}_
 
 Append `"issue_analyzer"` to `AGENTS_USED`.
 
-If the analyzer reports the issue is out of scope (not a BH LLK issue), skip to Step 6 with status `"skipped"`.
+If the analyzer reports the issue is out of scope (not a BH LLK issue), call:
+```bash
+python codegen/scripts/run_json_writer.py finalize \
+    --log-dir "$LOG_DIR" \
+    --status "skipped" \
+    --final-result "success" \
+    --final-message "Issue out of scope — no BH LLK changes required"
+```
+and skip to Step 6 with status `"skipped"`.
 
 ### Extract Analysis Summary
 
@@ -105,6 +185,19 @@ From the analyzer's response, note:
 ---
 
 ## Step 2: Architecture Research (if needed)
+
+**LIVE LOG — if spawning arch_lookup, transition first:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "arch_lookup" \
+    --new-message "Researching BH architecture details needed for the fix" \
+    --prev-result "success" \
+    --prev-message "Issue analysis complete — category: ${ISSUE_CATEGORY}" \
+    --agent "analyzer"
+```
+If arch research is skipped, advance directly from `analyzer` → `planner` at
+the top of Step 3 instead.
 
 Only spawn if the analysis indicates hardware-level details are needed. Skip for simple bugs like typos, wrong variable names, or missing includes.
 
@@ -135,6 +228,19 @@ Wait for completion. Append `"arch_lookup"` to `AGENTS_USED`.
 
 ## Step 3: Plan the Fix
 
+**LIVE LOG — transition to `planner`:**
+```bash
+# If arch_lookup ran, --prev-message references the arch brief; otherwise
+# --prev-message references the analysis summary.
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "planner" \
+    --new-message "Planning the fix for issue #${ISSUE_NUMBER}" \
+    --prev-result "success" \
+    --prev-message "${PREV_STEP_MESSAGE}" \
+    --agent "fix_planner"
+```
+
 Spawn the fix planner:
 
 ```
@@ -163,6 +269,17 @@ Append `"fix_planner"` to `AGENTS_USED`.
 
 ## Step 4: Implement the Fix
 
+**LIVE LOG — transition to `writer` (the BH "Fix" node):**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "writer" \
+    --new-message "Applying fix per plan — modifying code in WORKTREE_DIR" \
+    --prev-result "success" \
+    --prev-message "Fix plan at codegen/artifacts/bh_issue_${ISSUE_NUMBER}_fix_plan.md" \
+    --agent "fixer"
+```
+
 Spawn the fixer:
 
 ```
@@ -189,6 +306,25 @@ Append `"fixer"` to `AGENTS_USED`.
 Increment `COMPILATION_ATTEMPTS` by 1.
 
 ### Step 4b: Debug Compilation (if needed)
+
+**LIVE LOG — record the compile failure and transition to `fix_compile`:**
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "compile_after_fix" \
+    --agent "fixer" \
+    --type "compile_error" \
+    --message "${FIRST_COMPILE_ERROR_LINE}" \
+    --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "fix_compile" \
+    --new-message "Debugging compile error after initial fix — attempt 1" \
+    --prev-result "compile_error" \
+    --prev-message "Fixer applied changes but compilation failed — ${FIRST_COMPILE_ERROR_LINE}" \
+    --agent "debugger"
+```
 
 Spawn the debugger:
 
@@ -218,13 +354,33 @@ Agent tool:
 Increment `COMPILATION_ATTEMPTS` by the debugger's compile attempts. Increment `DEBUG_CYCLES` by 1.
 Append `"debugger"` to `AGENTS_USED` (if not already present).
 
-If **STUCK** after 5 attempts: append failure with `"resolved": false`, skip to Step 6 with status `"failed"`.
+If **STUCK** after 5 attempts: append failure with `"resolved": false` (both to
+`FAILURES` and via `run_json_writer.py failure`) and finalize the run before
+skipping to Step 6:
+```bash
+python codegen/scripts/run_json_writer.py finalize \
+    --log-dir "$LOG_DIR" \
+    --status "failed" \
+    --final-result "compile_error" \
+    --final-message "Debugger stuck after 5 attempts — ${FIRST_COMPILE_ERROR_LINE}"
+```
 
 If fixed → proceed to Step 5.
 
 ---
 
 ## Step 5: Test the Fix
+
+**LIVE LOG — transition to `tester`:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "tester" \
+    --new-message "Running compilation and functional tests for the fix" \
+    --prev-result "success" \
+    --prev-message "Code compiles — running tests" \
+    --agent "tester"
+```
 
 Spawn the tester:
 
@@ -259,6 +415,24 @@ Append `"tester"` to `AGENTS_USED`.
 - Proceed to Step 6 with `STATUS = "compiled"`
 
 **TESTS_FAILED** (compile pass, tests fail):
+- **LIVE LOG — record the test failure and transition to `fix_tests`:**
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "test_after_fix" \
+    --agent "tester" \
+    --type "test_failure" \
+    --message "${FIRST_TEST_FAILURE_LINE}" \
+    --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "fix_tests" \
+    --new-message "Debugging runtime test failure — attempt 1" \
+    --prev-result "test_failure" \
+    --prev-message "Tests failed — ${FIRST_TEST_FAILURE_LINE}" \
+    --agent "debugger"
+```
 - Spawn debugger for runtime fix:
 
 ```
@@ -286,6 +460,17 @@ Agent tool:
 
 After debug → re-run Step 5 (test). Max 2 debug→test cycles before proceeding to Step 6 with status `"failed"`.
 
+**LIVE LOG — after each `fix_tests` cycle, transition back to `tester` before re-running:**
+```bash
+python codegen/scripts/run_json_writer.py advance \
+    --log-dir "$LOG_DIR" \
+    --new-step "tester" \
+    --new-message "Re-running tests after fix attempt ${CYCLE}" \
+    --prev-result "success" \
+    --prev-message "Debugger applied runtime fix" \
+    --agent "tester"
+```
+
 **COMPILE_FAILED**: Return to Step 4b.
 
 ---
@@ -297,11 +482,52 @@ After debug → re-run Step 5 (test). Max 2 debug→test cycles before proceedin
 ```bash
 END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))" | tr -d '\n')
 ```
 
-### 6b: Append to runs.jsonl
+### 6b: Finalize run.json
 
-Append a single JSONL line to `${LOGS_BASE}/runs.jsonl`:
+Close out the live `run.json` — mandatory, even on failed/skipped runs. Choose
+`--status` from `success | compiled | failed | skipped` using the rules listed
+under 6c, and `--final-result` from `success | compile_error | test_failure`.
+
+```bash
+python codegen/scripts/run_json_writer.py finalize \
+    --log-dir "$LOG_DIR" \
+    --end-time "$END_TIME" \
+    --status "$STATUS" \
+    --final-result "$FINAL_RESULT" \
+    --final-message "BH issue #${ISSUE_NUMBER} run complete — ${STATUS}" \
+    --patch-json "$(python - <<PY
+import json, os
+patch = {
+    "compilation_attempts": int(os.environ["COMPILATION_ATTEMPTS"]),
+    "debug_cycles": int(os.environ["DEBUG_CYCLES"]),
+    "tests_total": int(os.environ["TESTS_TOTAL"]),
+    "tests_passed": int(os.environ["TESTS_PASSED"]),
+    "agents": json.loads(os.environ["AGENTS_USED_JSON"]),
+    "changed_files": json.loads(os.environ["CHANGED_FILES_JSON"]),
+    "tokens": json.loads(os.environ.get("TOKENS_JSON", '{"input":0,"output":0,"cache_read":0,"total":0}')),
+    "obstacle": os.environ.get("OBSTACLE") or None,
+}
+print(json.dumps(patch))
+PY
+)"
+```
+
+After finalize, `$LOG_DIR/run.json` is the authoritative record of the run.
+
+### 6c: Append to runs.jsonl
+
+Append a single JSONL line to `${LOGS_BASE}/runs.jsonl` **derived from
+`$LOG_DIR/run.json`** — do not rebuild it from shell variables, that would let
+run.json and runs.jsonl drift:
+```bash
+python -c "import json,sys; d=json.load(open('$LOG_DIR/run.json')); print(json.dumps(d))" \
+    >> ${LOGS_BASE}/runs.jsonl
+```
+
+The expected schema (matches the run.json that finalize wrote):
 
 ```json
 {
@@ -347,15 +573,18 @@ Append a single JSONL line to `${LOGS_BASE}/runs.jsonl`:
 
 **Token capture**: Use env vars `$CODEGEN_TOKENS_INPUT`, `$CODEGEN_TOKENS_OUTPUT`, `$CODEGEN_TOKENS_CACHE_READ` if set by the batch runner. Otherwise 0.
 
-### 6c: Copy Artifacts to LOG_DIR
+### 6d: Copy Artifacts to LOG_DIR
 
 ```bash
 cp codegen/artifacts/bh_issue_{ISSUE_NUMBER}_*.md $LOG_DIR/ 2>/dev/null || true
 ```
 
-Write `${LOG_DIR}/run.json` — same content as the runs.jsonl entry but pretty-printed.
+`${LOG_DIR}/run.json` is already on disk (written by `run_json_writer.py finalize`
+in 6b) — do not overwrite it with a hand-built version, which would lose the
+`step_history`, `current_step*`, `steps_completed`, and other Activity-Monitor
+fields.
 
-### 6d: Verify Agent Logs
+### 6e: Verify Agent Logs
 
 Check that expected agent logs exist in `LOG_DIR`:
 - `agent_issue_analyzer.md` — always expected
@@ -367,7 +596,7 @@ Check that expected agent logs exist in `LOG_DIR`:
 
 If any expected file is missing, write a placeholder noting `"Agent ran but did not produce a log"`.
 
-### 6e: Return Result to Top-Level
+### 6f: Return Result to Top-Level
 
 Report back to the top-level orchestrator:
 
