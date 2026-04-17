@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
-from helpers.llk_params import DataFormat, format_dict
+from helpers.llk_params import DataFormat, PartialFace, format_dict
 from helpers.stimuli_generator import generate_random_face
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tile_shape import TileShape, construct_tile_shape
@@ -38,6 +38,15 @@ class Operand:
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
         self.tile_count_y = self.dimensions[0] // self.tile_shape.total_row_dim()
         self.tile_count = self.tile_count_x * self.tile_count_y
+
+        self.partial_face = (
+            PartialFace.Yes
+            if (
+                self.tile_shape.total_row_dim() < 16
+                or self.tile_shape.total_col_dim() < 16
+            )
+            else PartialFace.No
+        )
 
     def is_input(self) -> bool:
         return not self.is_output
