@@ -517,7 +517,7 @@ def main() -> int:
 
     if failing_diffs:
         print(
-            f"FAIL: {len(failing_diffs)} config(s) have argument diffs " f"(ignoring categories: {ignore or 'none'})",
+            f"FAIL: {len(failing_diffs)} config(s) have argument diffs (ignoring categories: {ignore or 'none'})",
             file=sys.stderr,
         )
         return 1
