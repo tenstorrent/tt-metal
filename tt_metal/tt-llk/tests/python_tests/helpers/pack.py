@@ -471,11 +471,16 @@ def pack_mxfp8p(
 
 
 def pack_mxfp4(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
 ):
     """
     Pack tensor into MXFP4 format (E2M1 variant).
-    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
+    Function is implemented based on the OCP MX specification and Tensix hardware documentation.
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
     - 1 shared E8M0 scale (8 bits)
@@ -500,6 +505,8 @@ def pack_mxfp4(
         use_srcs: If True, split into SrcS slices (per-slice blocks in L1).
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
+        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -537,7 +544,7 @@ def pack_mxfp4(
     blocks_raw = blocks
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
-    # Scale selection aligned to storage.py verification model:
+    # Scale selection aligned to ws-tensix storage.py verification model:
     # shared_exp = floor(log2(amax))
     # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
     # E8M0 = shared_exp_adj + 127
@@ -566,6 +573,15 @@ def pack_mxfp4(
 
     scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
     scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+
+    if exp_rnd_en:
+        # Match mx_block_exp_rnd_to_inf: increment only for non-zero, non-special exponents.
+        can_inc = (
+            (scales_e8m0_array != 0)
+            & (scales_e8m0_array != 254)
+            & (scales_e8m0_array != 255)
+        )
+        scales_e8m0_array = np.where(can_inc, scales_e8m0_array + 1, scales_e8m0_array)
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 

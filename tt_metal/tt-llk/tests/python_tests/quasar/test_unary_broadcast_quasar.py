@@ -60,6 +60,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
             # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
         ],
         same=True,
     ),
@@ -69,7 +70,11 @@ def get_valid_dest_acc_unary_broadcast(formats):
         BroadcastType.Column,
         BroadcastType.Row,
     ],
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    implied_math_format=lambda formats: (
+        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )

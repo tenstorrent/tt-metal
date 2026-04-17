@@ -364,7 +364,7 @@ def unpack_mxfp4(
 ):
     """
     Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
-    Function is implemented based on the OCP MX specification and ws_tensix quantization model.
+    Function is implemented based on the OCP MX specification and Tensix hardware documentation.
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
       - 1 shared E8M0 scale (8 bits)
