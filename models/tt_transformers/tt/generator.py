@@ -517,22 +517,10 @@ class Generator(WarmupForwardMixin):
                 )
                 use_batched_prefill = False
 
-        # For row-sharded models, batched prefill handles num_rows users per call.
-        _rs_num_rows = None
-        _prefill_groups = None
-        if use_batched_prefill and getattr(self.model[0], "users_row_sharded", False):
-            _rs_num_rows = self.model[0].mesh_device.shape[0]
-            if len(empty_slots) > _rs_num_rows:
-                _prefill_groups = [empty_slots[i : i + _rs_num_rows] for i in range(0, len(empty_slots), _rs_num_rows)]
-            padded_batch = _rs_num_rows
-
         if not use_batched_prefill:
             padded_batch = self.model_args[0].max_batch_size
 
-        if _prefill_groups is not None:
-            all_users = list(range(len(_prefill_groups)))
-        else:
-            all_users = [0] if use_batched_prefill else empty_slots
+        all_users = [0] if use_batched_prefill else empty_slots
 
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
@@ -543,19 +531,10 @@ class Generator(WarmupForwardMixin):
             group_user_id = user_id % local_batch_size if page_table is None else 0
 
             if use_batched_prefill:
-                if _prefill_groups is not None:
-                    _cur_slots = _prefill_groups[idx]
-                    _cur_indices = [empty_slots.index(s) for s in _cur_slots]
-                    batch_user_ids = list(_cur_slots)
-                    last_token_idx = [int(prompt_lens[i]) - 1 for i in _cur_indices]
-                    prefill_seq_len = prefill_seq_lens[0]
-                    seq_len = [prompt_lens[i] for i in _cur_indices]
-                else:
-                    _cur_slots = empty_slots
-                    batch_user_ids = empty_slots
-                    last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
-                    prefill_seq_len = prefill_seq_lens[0]
-                    seq_len = prompt_lens
+                batch_user_ids = empty_slots
+                last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
+                prefill_seq_len = prefill_seq_lens[0]
+                seq_len = prompt_lens
             else:
                 batch_user_ids = None
                 seq_len = int(prompt_lens[idx])
@@ -573,27 +552,21 @@ class Generator(WarmupForwardMixin):
             )
 
             if use_batched_prefill:
+                # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
+                # Each request is placed at its corresponding slot index
                 prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
-                padded_last_token_idx = [0] * padded_batch
-                if _prefill_groups is not None:
-                    # Row-sharded: place this group's tokens at local positions 0..num_rows-1
-                    for local_i, global_i in enumerate(_cur_indices):
-                        slen = int(seq_len[local_i])
-                        prefill_ids[local_i, :slen] = tokens[global_i, :slen]
-                        padded_last_token_idx[local_i] = last_token_idx[local_i]
-                else:
-                    # Galaxy 70B slot-based: place each user at their slot index
-                    for local_idx, slot in enumerate(empty_slots):
-                        seq_len_local = int(seq_len[local_idx])
-                        padded_tokens = torch.cat(
-                            [
-                                tokens[local_idx : local_idx + 1, :seq_len_local],
-                                torch.zeros(1, prefill_seq_len - seq_len_local, dtype=torch.long, device=tokens.device),
-                            ],
-                            dim=-1,
-                        )
-                        prefill_ids[slot : slot + 1] = padded_tokens
-                        padded_last_token_idx[slot] = last_token_idx[local_idx]
+                padded_last_token_idx = [0] * padded_batch  # dummy idx for padded slots
+                for local_idx, slot in enumerate(empty_slots):
+                    seq_len_local = int(seq_len[local_idx])
+                    padded_tokens = torch.cat(
+                        [
+                            tokens[local_idx : local_idx + 1, :seq_len_local],
+                            torch.zeros(1, prefill_seq_len - seq_len_local, dtype=torch.long, device=tokens.device),
+                        ],
+                        dim=-1,
+                    )
+                    prefill_ids[slot : slot + 1] = padded_tokens
+                    padded_last_token_idx[slot] = last_token_idx[local_idx]
                 last_token_idx = padded_last_token_idx
             else:
                 num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
@@ -616,12 +589,7 @@ class Generator(WarmupForwardMixin):
             if page_table is not None:
                 # For batched prefill: pass full page_table (function handles slot placement)
                 # For non-batched prefill: pass sliced page_table for current user (like original code)
-                if use_batched_prefill and _prefill_groups is not None:
-                    page_table_for_user = page_table[_cur_indices]
-                elif use_batched_prefill:
-                    page_table_for_user = page_table
-                else:
-                    page_table_for_user = page_table[idx : idx + 1]
+                page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
                 page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
                     kv_cache[model_id],
@@ -706,21 +674,6 @@ class Generator(WarmupForwardMixin):
                 if sampling_enabled:
                     sampling_executed = True
 
-                    # Models with non-tile-aligned batch sizes (< 32) can provide
-                    # sample_batched_prefill to bypass the on-device sampling module.
-                    if hasattr(self.model[model_id], "sample_batched_prefill"):
-                        tokens_host, log_probs_host = self.model[model_id].sample_batched_prefill(
-                            logits, last_token_idx, padded_batch, prefill_seq_len, sampling_params
-                        )
-                        _cur_slots = _prefill_groups[user_id] if _prefill_groups else empty_slots
-                        for local_i, slot in enumerate(_cur_slots):
-                            output_tokens[slot] = tokens_host[local_i]
-                            if log_probs_host is not None:
-                                output_log_probs[slot] = log_probs_host[local_i]
-                        if _prefill_groups is None:
-                            break
-                        continue
-
                     sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
                     assert sampling_module is not None
                     assert sampling_batch is not None
@@ -783,22 +736,21 @@ class Generator(WarmupForwardMixin):
                         if tt_log_probs is not None
                         else None
                     )
-                    for local_i, slot in enumerate(_cur_slots):
-                        output_tokens[slot] = tokens_host[local_i]
+                    for local_idx, slot in enumerate(empty_slots):
+                        output_tokens[slot] = tokens_host[slot]
                         if log_probs_host is not None:
-                            output_log_probs[slot] = log_probs_host[local_i]
+                            output_log_probs[slot] = log_probs_host[slot]
                 else:
-                    for local_i, slot in enumerate(_cur_slots):
-                        user_logits = logits[local_i : local_i + 1, :, :, :]
+                    for local_idx, slot in enumerate(empty_slots):
+                        user_logits = logits[slot : slot + 1, :, :, :]
                         _logits = self.model[model_id].process_logits_after_prefill_trace(
-                            user_logits, last_token_idx[local_i]
+                            user_logits, last_token_idx[slot]
                         )
                         _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                         output_tensor[slot] = self.model[model_id].process_output_prefill(
-                            _logits.cpu(), last_token_idx=(last_token_idx[local_i] % 32)
+                            _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                         )
-                if _prefill_groups is None:
-                    break
+                break
 
             # Non-batched prefill path
             if enable_trace_current_prompt:
