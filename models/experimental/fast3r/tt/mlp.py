@@ -38,7 +38,7 @@ class TtMlp:
         self.fc2_w = to_device_weight(device, fc2_w)
         self.fc2_b = to_device_bias(device, fc2_b)
 
-    CORE_GRID = ttnn.CoreGrid(y=10, x=10)
+    CORE_GRID = ttnn.CoreGrid(y=10, x=11)
     COMPUTE = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
