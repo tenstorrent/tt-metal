@@ -2,33 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""HuggingFace compatibility shims for Qwen3-Omni-MoE generation.
-
-`transformers` GenerationMixin.prepare_inputs_for_generation gained a
-``next_sequence_length`` parameter (2nd positional). Qwen3OmniMoeTalkerForConditionalGeneration
-still passes ``past_key_values`` as the 2nd positional argument, so ``next_sequence_length``
-is bound incorrectly and the same name can also appear in ``**kwargs``, causing::
-
-    TypeError: prepare_inputs_for_generation() got multiple values for argument 'next_sequence_length'
-
-This module patches the talker to call the mixin with explicit keyword arguments.
-
-This file does **not** implement PyTorch fallback for TTNN attention. Silent PyTorch fallback
-(``torch_layer``) is controlled by symbiote ``TT_SYMBIOTE_RUN_MODE=NORMAL_WITH_FALLBACK`` in
-``run_config.py``; Qwen3-Omni tests allow only ``NORMAL`` or ``CPU`` so code-predictor
-``TTNNQwen3Attention`` is not masked by that path.
-
-The class-level ``device`` / ``dtype`` placeholders on
-``Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration`` satisfy HuggingFace
-``GenerationMixin`` (``self.device`` during ``generate``); they are not an attention fallback.
-
-**Audio vs text:** Thinker text uses greedy or sampling from ``generate`` as configured.
-The talker honors ``talker_do_sample``, but Hugging Face still calls ``code_predictor.generate``
-with hard-coded ``do_sample=True`` on each decode step. That keeps **speech-code** decoding
-stochastic while the outer talker loop is greedy, which often sounds like wrong or random words
-in TTS even when thinker **text** is correct. We set ``talker._symbiote_code_predictor_do_sample``
-from ``talker_do_sample`` for the duration of ``Qwen3OmniMoeForConditionalGeneration.generate``.
-"""
+"""Qwen3-Omni-MoE generation fixes: patch talker prepare_inputs (next_sequence_length vs past_key_values), code_predictor device/dtype, and align code_predictor do_sample with talker_do_sample during generate."""
 
 import functools
 
@@ -36,15 +10,7 @@ import torch
 
 
 def _patch_talkers_code_predictor_class_device_dtype() -> None:
-    """Ensure ``talker.code_predictor`` exposes ``.device`` / ``.dtype`` for HF ``GenerationMixin``.
-
-    ``code_predictor.generate()`` calls ``self.device`` (e.g. when building default ``input_ids``). The nested
-    ``Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration`` is not the same module as ``talker``; tests
-    that only patched ``thinker``/``talker``/``code2wav`` left ``code_predictor`` without the symbiote placeholders,
-    which can surface as ``AttributeError: ... has no attribute 'device'``.
-
-    Unrelated to symbiote's ``NORMAL_WITH_FALLBACK`` (that path is not enabled by this module).
-    """
+    """Add device/dtype properties on code_predictor class for HF GenerationMixin (nested model lacks parent placeholders)."""
     from transformers.models.qwen3_omni_moe import modeling_qwen3_omni_moe as omni_mod
 
     cls = omni_mod.Qwen3OmniMoeTalkerCodePredictorModelForConditionalGeneration

@@ -2,18 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN-backed rotary embeddings for Qwen3-Omni-MoE (replaces HF ``nn.Module`` RoPE layers).
-
-Frequency layout matches Hugging Face ``modeling_qwen3_omni_moe`` (MRoPE / 1D / vision freqs).
-``inv_freq`` matmuls and MRoPE interleaving run in **PyTorch** (same numerics as HF).
-Embedding ``cos`` / ``sin`` are computed with ``ttnn.cos`` / ``ttnn.sin``. On a multi-device mesh,
-unaries may leave ``[B, S, H]`` **sequence-sharded** (``S/num_devices`` per chip); we then
-``ttnn.all_gather`` along whichever dim shards ``S`` (often dim 1 on ``[B,S,H]``; mesh
-unaries can shard another axis) so host readback matches full ``S`` before wrapping for attention.
-
-For ``rope_type != "default"`` (dynamic / longrope / etc.), forwards delegate to the original
-HF layer stored in ``_fallback_torch_layer``.
-"""
+"""Qwen3-Omni-MoE RoPE on TTNN: HF-compatible freqs; inv_freq/MRoPE interleave in torch; cos/sin via ttnn; mesh may need AG for full S. Non-default rope_type delegates to _fallback_torch_layer."""
 
 from __future__ import annotations
 

@@ -61,9 +61,7 @@ def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torc
     shards = ttnn.get_device_tensors(tt_tensor)
     if shards:
         return ttnn.to_torch(shards[0]).contiguous()
-    # Replicated mesh layouts often yield no per-device shards here; plain ``to_torch`` can then
-    # compose 8 replicas along the wrong axis (e.g. T×8 → 5464 vs 683). Match
-    # ``TorchTTNNTensor.to_torch``: concat on batch dim then keep leading batch only.
+    # Replicated mesh: plain to_torch may stack replicas on the wrong axis; match TorchTTNNTensor.to_torch (concat batch, then [:lead]).
     composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     result = ttnn.to_torch(tt_tensor, mesh_composer=composer)
     lead = int(tt_tensor.shape[0])
@@ -139,9 +137,7 @@ class TTNNSnakeBeta(TTNNModule):
         tl = self.torch_layer
         if tl is None:
             return
-        # Keep alpha/beta in float32: sin(x * exp(alpha)) is extremely sensitive to
-        # argument precision — bfloat16 can't resolve the correct phase for |arg| > ~10,
-        # producing audio-destroying noise.
+        # Keep alpha/beta FP32: sin(x*exp(alpha)) needs precision; bf16 phase error ruins code2wav audio.
         w_alpha = tl.alpha.detach().float().contiguous()
         w_beta = tl.beta.detach().float().contiguous()
         mesh_mapper = None
@@ -165,12 +161,7 @@ class TTNNSnakeBeta(TTNNModule):
         )
 
     def set_output_tensors_config_impl(self, output_tensors):
-        """code2wav ``[B, C, T]``: avoid grid ``ConcatMesh2d`` on the last dim (breaks ``+ residual``).
-
-        Do **not** use ``MeshComposerConfig([0, len(shape)])`` for rank-3 tensors: TTNN treats entries as
-        dimension indices, so ``[0, 3]`` is invalid for 3D (dims are 0..2). Same pattern as
-        ``TTNNQwenLayerNorm`` gather path: ``ConcatMeshToTensor(dim=0)`` + keep one batch replica.
-        """
+        """code2wav [B,C,T]: materialize one replica; avoid last-dim mesh concat (breaks residual). Use dim=0 concat like TTNNQwenLayerNorm gather."""
         if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
             return super().set_output_tensors_config_impl(output_tensors)
 
@@ -261,8 +252,7 @@ class TTNNSnakeBeta(TTNNModule):
                         ttnn.deallocate(input_fp32)
                     except Exception:
                         pass
-                # Do not deallocate ``result`` before/after typecast: some TTNN paths may alias buffers;
-                # freeing FP32 activations here corrupted long code2wav outputs (truncated / bad audio).
+                # Do not free result around typecast: TTNN may alias buffers; dealloc corrupted long code2wav audio.
                 result = ttnn.typecast(result, out_dtype)
             try:
                 ttnn.deallocate(alpha_exp)
@@ -271,11 +261,7 @@ class TTNNSnakeBeta(TTNNModule):
                 pass
             return result
 
-        # Long sequences: chunk along T, then stitch. Device-side ``ttnn.concat`` over many chunks keeps
-        # every chunk tensor alive until concat completes and allocates a full-length output — peak DRAM
-        # can OOM on long code2wav streams (e.g. T~5e5). Stitch on host with ``torch.cat`` (same dtypes as
-        # the per-chunk TTNN outputs), deallocate each chunk TTNN tensor, then one ``from_torch`` upload —
-        # numerically identical to a single device concat, lower peak device memory.
+        # Long T: host torch.cat of chunk outputs avoids device ttnn.concat peak DRAM on code2wav (e.g. T~5e5); then one from_torch upload.
         out_chunks = []
         for t0 in range(0, t_len, chunk_t):
             t1 = min(t0 + chunk_t, t_len)
@@ -290,8 +276,7 @@ class TTNNSnakeBeta(TTNNModule):
             else:
                 out_chunks.append(res_fp32)
 
-        # Do **not** deallocate ``input_tensor`` here: TTNN may still complete slice/view work asynchronously;
-        # freeing the parent tensor has corrupted long code2wav audio (bad samples at start / mid-stream).
+        # Do not free input_tensor here: async slice/view; parent dealloc corrupted long code2wav audio.
 
         torch_parts = []
         mesh_dev = self.device
@@ -311,14 +296,7 @@ class TTNNSnakeBeta(TTNNModule):
 
 
 def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
-    """Stitch width-sharded BCT conv output and re-upload as replicated.
-
-    TTNN conv2d on a mesh can distribute spatial width across devices even for replicated
-    input, producing ``[B, C, T_local]`` where ``T_local * nd == T_full``.  When
-    ``shard_t == expected_t`` (replicated, each device already has full T) this is a no-op.
-    Otherwise reads all device shards, cats on time, and re-uploads with
-    ``ReplicateTensorToMesh``.
-    """
+    """Stitch width-sharded BCT conv shards on time and re-upload with ReplicateTensorToMesh; no-op if each device already has full T."""
     if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
         return out
     nd = int(mesh_device.get_num_devices())
@@ -370,12 +348,7 @@ def _upload_bct_replicated(x_t: torch.Tensor, mesh_device):
 
 
 def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
-    """One logical ``[B, C, T]`` on host.
-
-    ``ConcatMeshToTensor(dim=0)`` + ``[:batch]`` can truncate the **time** dimension when mesh
-    layout/shape metadata does not match a pure batch stack (symptom: shortened / corrupted wav).
-    Reading ``get_device_tensors(...)[0]`` matches other models' replicated-activation readback.
-    """
+    """One logical [B,C,T] on host; prefer one replica readback (dim=0 compose can truncate T on mismatched mesh metadata)."""
     return _ttnn_mesh_to_torch_one_replica(tt_tensor, mesh_device)
 
 
@@ -418,12 +391,7 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
 
     @staticmethod
     def _causal_conv_host_time_threshold() -> int:
-        """If padded time length exceeds this, run HF ``nn.Conv1d`` on host (same math as HF forward).
-
-        Very long code2wav streams (hundreds of k samples after upsampling) make a full-width TTNN
-        conv2d/reshape exceed device DRAM; host ``conv1d`` matches ``Qwen3OmniMoeCausalConvNet`` exactly.
-        Override with env ``TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T`` (default ``8192``).
-        """
+        """Above this padded T, run HF nn.Conv1d on host (TTNN conv OOMs on very long code2wav). Env: TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T (default 8192)."""
         raw = os.environ.get("TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T", "8192")
         try:
             v = int(raw)
@@ -449,8 +417,7 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
         expected_t = (t_padded - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
         x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
         t_pad = int(x_t.shape[-1])
-        # Long streams: TTNN conv uploads full [B,C,T] and can OOM in conv2d/DRAM slice (e.g. T~5e5).
-        # HF reference uses this same padded tensor → same nn.Conv1d weights as ``_fallback_torch_layer.conv``.
+        # Long streams: TTNN conv can OOM (e.g. T~5e5); host path uses same padded tensor and weights as _fallback_torch_layer.conv.
         if t_pad > self._causal_conv_host_time_threshold():
             hf = self._fallback_torch_layer
             with torch.no_grad():
@@ -483,21 +450,7 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
 
     @staticmethod
     def _causal_trans_conv_host_time_threshold():
-        """If BCT time length exceeds this, run HF ``Qwen3OmniMoeCausalTransConvNet`` on host (same as HF).
-
-        TTNN ``conv_transpose2d`` allocates large DRAM and can fragment memory (``TT_FATAL`` on ~10² MiB
-        allocs); it can also disagree slightly with HF ``nn.ConvTranspose1d`` in bf16/tile layout, which
-        shows up as clicks at the start of the waveform and brief glitches mid-utterance (e.g. around
-        digit-heavy words).
-
-        **Default ``1``:** host transpose when ``T > th`` (i.e. ``T > 1``), so single-frame ``T == 1`` steps
-        still use TTNN.  Forcing host for ``T == 1`` (``t_in >= th``) matched HF but changed effective
-        chain length vs the TTNN path in some builds and **truncated** final waveforms; keep ``>`` unless
-        you opt in via a future env.  Set ``TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T`` to ``0`` for TTNN-only
-        (faster; may OOM or sound wrong on mesh).
-
-        Threshold uses ``max(1, v)`` so small positive env values apply as written.
-        """
+        """If T exceeds threshold, run HF transposed conv on host (DRAM/clicks vs TTNN). Env TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T (default 1; 0 = TTNN-only)."""
         raw = os.environ.get("TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T", "1")
         try:
             v = int(raw)
@@ -551,13 +504,7 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
 
 
 class TTNNQwen3OmniMoeConvNeXtBlock(TTNNModule):
-    """Qwen3-Omni ConvNeXtBlock: TTNN depthwise conv, host norm/linear/residual.
-
-    ``dwconv`` (depthwise conv) runs on TTNN via :class:`TTNNQwen3OmniMoeCausalConvNet` which
-    stitches width-sharded output back to full ``T``.  LayerNorm, pointwise linears, GELU, and
-    the residual add execute on host torch (cheap element-wise / small matmul) so that the
-    shortcut and branch always match in time dimension.
-    """
+    """ConvNeXtBlock: TTNN depthwise (TTNNQwen3OmniMoeCausalConvNet) + host LayerNorm/pwconv/GELU/residual so branch and shortcut match T."""
 
     def __init__(self):
         super().__init__()
@@ -605,11 +552,7 @@ class TTNNQwen3OmniMoeConvNeXtBlock(TTNNModule):
 
 
 class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
-    """code2wav residual block: TTNN SnakeBeta + CausalConvNet, host-side residual add.
-
-    :class:`TTNNQwen3OmniMoeCausalConvNet` stitches width-sharded conv output to full ``T``
-    so the branch and shortcut match when added on host.
-    """
+    """code2wav residual unit: TTNN SnakeBeta + CausalConvNet; host add (conv stitches T for branch vs shortcut)."""
 
     def __init__(self):
         super().__init__()

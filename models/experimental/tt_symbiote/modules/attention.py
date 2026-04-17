@@ -3090,9 +3090,7 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
 
 
 class TTNNQwen3OmniAttention(TTNNModule):
-    """
-    TTNN implementation of Qwen3 Omni Attention (without sliding window).
-    """
+    """Qwen3-Omni thinker attention (no sliding window) on TTNN."""
 
     def __init__(self):
         super().__init__()
@@ -3167,11 +3165,7 @@ class TTNNQwen3OmniAttention(TTNNModule):
         )
 
     def _is_symbiote_replicated(self, tensor) -> bool:
-        """True when ``TorchTTNNTensor`` uses ``ReplicateTensorToMesh`` (e.g. thinker MRoPE cos/sin).
-
-        ``all_gather`` on dim=-1 for replicated tensors concatenates device copies into the last dim
-        (e.g. head_dim 128 → 1024 on 1×8 mesh), which breaks RoPE.
-        """
+        """True if TorchTTNNTensor uses ReplicateTensorToMesh (skip dim=-1 AG on cos/sin or RoPE breaks)."""
         if isinstance(tensor, TorchTTNNTensor):
             cfg = tensor.ttnn_distributed_tensor_config
             if cfg is not None and cfg.mesh_mapper is not None:

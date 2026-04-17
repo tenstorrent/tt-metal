@@ -1576,16 +1576,7 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
 
 
 def _qwen_omni_conv2d_mesh_output_config(mesh_device):
-    """Mesh readback for Qwen Omni audio/vision conv outputs.
-
-    Default ``DistributedConfig`` uses ``ConcatMesh2dToTensor`` + ``logical_shape_for_batch_channel_sharding``,
-    which does **not** match full spatial NHWC conv outputs and can inflate a dimension (e.g. time/freq
-    13 → 104 on an 8-device mesh), breaking ``padded_embed[mask]`` in the HF audio encoder.
-
-    Uses replicate mapper + ``ConcatMeshToTensor(dim=0)`` + batch slice for **replicated** activations.
-    When TTNN conv2d width-shards across the mesh (e.g. 48×8 = 384), :meth:`TTNNQwenOmniConv2dNHWC.forward`
-    runs ``all_gather`` on NHWC width (dim 2) so activations are full-width before LayerNorm/residual.
-    """
+    """Replicated conv readback: Replicate + ConcatMesh(dim=0) slice (avoid ConcatMesh2d inflation on audio). TTNNQwenOmniConv2dNHWC AGs width when sharded."""
     if mesh_device is None or mesh_device.get_num_devices() <= 1:
         return None
     return DistributedTensorConfig(
@@ -1662,17 +1653,7 @@ def _maybe_all_gather_nhwc_width_across_mesh(
 
 @trace_enabled
 class TTNNQwenOmniConv2dNHWC(TTNNConv2dNHWC):
-    """Qwen3-Omni ``nn.Conv2d`` for thinker vision (NHWC) and audio tower (NCHW).
-
-    Audio encoder feeds **NCHW** ``[B, C, F, T]`` into ``conv2d*``; base :class:`TTNNConv2dNHWC`
-    assumes **NHWC** ``[B, H, W, C]``, which mis-sized the conv and caused reshape errors in
-    ``ttnn.conv2d``. This class permutes using the **logical** ``conv.in_channels`` (before any
-    width pad), pads activations when :class:`TTNNConv2dNHWCInputMultipleOf16` widened channels,
-    then restores NCHW for the next HF layer when the input was NCHW.
-
-    ``from_torch`` always returns this type (never a bare :class:`TTNNConv2dNHWC`) so this
-    ``forward`` always runs.
-    """
+    """Qwen3-Omni Conv2d: permute audio NCHW [B,C,F,T] vs vision NHWC for TTNN conv2d; restore layout for HF. from_torch always returns this subclass."""
 
     def _logical_in_channels(self) -> int:
         tl = self.torch_layer

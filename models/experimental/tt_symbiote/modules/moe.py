@@ -1782,13 +1782,7 @@ class TTNNBailingMoE(TTNNMoE):
 
 
 class TTNNQwen3MoE(TTNNMoE):
-    """
-    TTNN MoE for Qwen3-Coder-Next / Qwen3-Omni: softmax routing + gated shared expert.
-
-    Expects torch_moe with .gate (weight + optional bias), .experts (gate_up_proj, down_proj, config),
-    .shared_expert (MLP), .shared_expert_gate (Linear). Use from_torch for Coder-Next block;
-    use TTNNQwen3TalkerMoE.from_torch for Qwen3-Omni Talker block (adapts ModuleList experts).
-    """
+    """Qwen3 Coder-Next / Qwen3-Omni MoE: softmax route + gated shared expert. Talker: use TTNNQwen3TalkerMoE.from_torch (consolidates experts)."""
 
     @classmethod
     def from_torch(cls, torch_moe):
@@ -1993,12 +1987,7 @@ class TTNNQwen3MoE(TTNNMoE):
 
 
 def _consolidate_talker_experts_from_module_list(experts_module_list, config):
-    """Build gate_up_proj and down_proj from HF talker experts.
-
-    Older HF: ``experts`` is a ``ModuleList`` of per-expert ``Qwen3OmniMoeTalkerTextMLP``.
-    Newer HF: ``experts`` is ``Qwen3OmniMoeTalkerTextExperts`` with stacked
-    ``gate_up_proj`` / ``down_proj`` parameters (no ``len()`` / no per-expert modules).
-    """
+    """Stack HF talker experts into gate_up_proj/down_proj (ModuleList of MLPs or Qwen3OmniMoeTalkerTextExperts tensors)."""
     if hasattr(experts_module_list, "gate_up_proj") and hasattr(experts_module_list, "down_proj"):
         consolidated = type("ConsolidatedExperts", (), {})()
         gu = experts_module_list.gate_up_proj
@@ -2026,10 +2015,7 @@ def _consolidate_talker_experts_from_module_list(experts_module_list, config):
 
 
 class Qwen3OmniMoeTalkerTextExpertsTTNN(TTNNExperts):
-    """
-    TTNN experts for Qwen3-Omni talker MoE using sparse_matmul +
-    all-to-all dispatch/combine (inherits TTNNExperts infrastructure).
-    """
+    """Qwen3-Omni talker experts: sparse_matmul + TTNNExperts dispatch/combine."""
 
     @classmethod
     def from_torch(cls, torch_experts, config):
@@ -2103,12 +2089,7 @@ class Qwen3OmniMoeTalkerTextExpertsTTNN(TTNNExperts):
 
 
 class Qwen3OmniMoeTalkerTextMLPTTNN(TTNNModule):
-    """
-    TTNN SwiGLU MLP for Qwen3 shared expert: silu(gate(x)) * up(x) -> down.
-
-    Uses TTNNLinearSilu for gate_proj and TTNNLinearIColShardedWRowSharded
-    for up_proj / down_proj so the entire MLP runs on device.
-    """
+    """Talker shared-expert SwiGLU on TTNN (TTNNLinearSilu + col-shard linears)."""
 
     @classmethod
     def from_torch(cls, torch_mlp, config=None):
@@ -2147,17 +2128,11 @@ class Qwen3OmniMoeTalkerTextMLPTTNN(TTNNModule):
 
 
 class TTNNQwen3TalkerMoE(TTNNQwen3MoE):
-    """
-    TTNN MoE for Qwen3-Omni talker text sparse MoE.
-
-    Reuses TTNNQwen3MoE (softmax routing + gated shared expert). from_torch adapts
-    Qwen3OmniMoeTalkerTextSparseMoeBlock: consolidates ModuleList experts into
-    gate_up_proj/down_proj and builds the interface TTNNQwen3MoE.from_torch expects.
-    """
+    """Qwen3-Omni talker sparse MoE: TTNNQwen3MoE + consolidated experts (from_torch wraps TalkerTextSparseMoeBlock)."""
 
     @classmethod
     def from_torch(cls, talker_block):
-        """Create from a PyTorch Qwen3OmniMoeTalkerTextSparseMoeBlock."""
+        """From HF Qwen3OmniMoeTalkerTextSparseMoeBlock."""
         qwen_config = getattr(talker_block.shared_expert, "config", None)
 
         class _Cfg:
@@ -2240,17 +2215,11 @@ def _thinker_experts_adapter(thinker_mlp):
 
 
 class TTNNQwen3OmniMoeThinkerTextSparseMoeBlock(TTNNModule):
-    """
-    TTNN MoE for Qwen3-Omni thinker text sparse MoE block.
-
-    Wraps thinker.model.layers[i].mlp: gate (routing) stays on torch; experts run via
-    TT implementation Glm4MoeNaiveMoe (TTNNGlm4MoeNaiveMoe). Compatible with
-    Qwen3OmniMoeThinkerTextSparseMoeBlock from HuggingFace.
-    """
+    """Thinker sparse MoE: torch gate + TTNNExperts (HF-compatible wrapper)."""
 
     @classmethod
     def from_torch(cls, thinker_mlp):
-        """Create from a PyTorch thinker mlp (Qwen3OmniMoeThinkerTextSparseMoeBlock)."""
+        """From Qwen3OmniMoeThinkerTextSparseMoeBlock."""
         module = cls()
         module._fallback_torch_layer = thinker_mlp
         module.gate = thinker_mlp.gate
@@ -2334,18 +2303,7 @@ class TTNNQwen3OmniMoeThinkerTextSparseMoeBlock(TTNNModule):
 
 
 class TTNNQwen3OmniThinkerMoE(TTNNModule):
-    """
-    Qwen3-Omni thinker sparse MoE with routing and expert pipeline on TTNN.
-
-    Router matches HuggingFace ``Qwen3OmniMoeThinkerTextTopKRouter``: ``F.linear`` → softmax
-    over experts → top-``k``, optional normalization of the selected weights.
-
-    Experts use ``TTNNExperts`` (``ttnn.all_to_all_dispatch``, sparse expert matmuls,
-    ``ttnn.all_to_all_combine``), same path as DeepSeek-style MoE in this file.
-
-    Returns a **PyTorch** tensor (same shape/dtype as input activations) so PyTorch
-    decoder blocks can follow without extra symbiote glue.
-    """
+    """Thinker MoE: HF-style linear→softmax→top-k router on device; TTNNExperts dispatch/combine. Returns torch tensor for decoder."""
 
     @classmethod
     def from_torch(cls, thinker_mlp):

@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3-Omni vision patch stem: HF ``Conv3d`` patch embed and ``Qwen3OmniMoeVisionPatchMerger`` on TTNN.
-
-``Qwen3OmniMoeVisionPatchEmbed`` uses a strided ``Conv3d`` whose kernel equals the patch volume; it is
-numerically equivalent to ``Linear(in_channels * T * H * W, embed_dim)`` on flattened patches.
-"""
+"""Qwen3-Omni vision stem: HF Conv3d patch embed + VisionPatchMerger on TTNN (patch conv ≡ linear on flattened patches)."""
 
 from __future__ import annotations
 

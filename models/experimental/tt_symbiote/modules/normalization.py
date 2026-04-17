@@ -420,7 +420,7 @@ class TTNNQwenLayerNorm(TTNNModule):
         """Col-sharded last dim on mesh, or replicated full hidden when using gather + full ``layer_norm``."""
 
         def set_gather_output_config(e):
-            """Replicated activations on mesh; ConcatMeshToTensor(dim=0) for host unwrap (no MeshComposerConfig([0, rank]))."""
+            """Replicated mesh: ConcatMeshToTensor(dim=0) for host unwrap."""
             if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
                 e.set_distributed_tensor_config(
                     DistributedTensorConfig(
@@ -431,7 +431,7 @@ class TTNNQwenLayerNorm(TTNNModule):
             return e
 
         def materialize_merger_ln_q_one_replica(e):
-            """Vision merger ``ln_q`` then HF ``.view``: avoid mesh compose; match ``TTNNQwen3OmniVisionMLP`` slice-after-concat."""
+            """Merger ln_q: one replica torch elem for HF view (same slice-after-concat idea as TTNNQwen3OmniVisionMLP)."""
             if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
                 return e
             t = e.ttnn_tensor
@@ -472,7 +472,7 @@ class TTNNQwenLayerNorm(TTNNModule):
             self, "_force_replicated_input_layernorm", False
         ):
             name = self.module_name or ""
-            # Do not dim-0-shard LN output: vision rotary cos/sin stay full seq length; sharding breaks q*cos broadcast.
+            # Do not dim-0-shard LN out: vision rotary needs full seq; sharding breaks q*cos broadcast.
             if "merger" in name and "ln_q" in name:
                 return tree_map(materialize_merger_ln_q_one_replica, output_tensors)
             return tree_map(set_gather_output_config, output_tensors)
@@ -509,12 +509,10 @@ class TTNNQwenLayerNorm(TTNNModule):
         if self.device is not None and self.device.get_num_devices() > 1:
             ncol = int(list(self.device.shape)[-1])
             ntiles = self.embedding_dim // 32
-            # Audio tower (etc.): activations are replicated on the mesh, not width-sharded — avoid
-            # ``layer_norm_post_all_gather`` + per-shard gamma (expects local last dim = embed/num_devices).
+            # Audio tower: replicated activations — avoid layer_norm_post_all_gather + per-shard gamma (wrong local dim).
             if getattr(self, "_force_replicated_input_layernorm", False) or ntiles % ncol != 0:
                 self._distributed_gather_layernorm = True
-                # Host TT tensors without mesh placement; ``move_weights_to_device_impl`` uses
-                # ``from_torch(..., device=..., mesh_mapper=...)`` (``to_device`` has no mesh_mapper).
+                # Host TT tensors; move_weights uses from_torch(..., mesh_mapper=...) (to_device has no mesh_mapper).
                 self.tt_weight = None
                 self.tt_bias = None
                 self.weight_distributed = None
