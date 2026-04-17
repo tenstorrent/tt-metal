@@ -112,10 +112,9 @@ class TtBasicEncoder:
     batch as ttnn `batch_size`.
     """
 
-    def __init__(self, ref_encoder, device, skip_conv2=False):
+    def __init__(self, ref_encoder, device):
         self.device = device
         self.norm_fn = ref_encoder.norm_fn
-        self.skip_conv2 = skip_conv2
         self.conv1 = TtConv2d(
             ref_encoder.conv1,
             activation=RELU if self.norm_fn == "none" else None,
@@ -137,9 +136,7 @@ class TtBasicEncoder:
             _TtResidualBlock(ref_encoder.layer3[0], self.norm_fn, device),
             _TtResidualBlock(ref_encoder.layer3[1], self.norm_fn, device),
         ]
-        self.conv2 = (
-            None if skip_conv2 else TtConv2d(ref_encoder.conv2, activation=None)
-        )
+        self.conv2 = TtConv2d(ref_encoder.conv2, activation=None)
         self.out_channels = ref_encoder.conv2.out_channels
 
     def __call__(self, x_tile, batch_size, h, w):
@@ -154,7 +151,5 @@ class TtBasicEncoder:
             x, h, w = block(x, self.device, batch_size, h, w)
         for block in self.layer3:
             x, h, w = block(x, self.device, batch_size, h, w)
-        if self.conv2 is None:
-            return x, h, w
         x, h, w = self.conv2(x, self.device, batch_size, h, w)
         return x, h, w
