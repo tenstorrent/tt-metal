@@ -136,7 +136,6 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
 
 FORCE_INLINE
 void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
-    DeviceZoneScopedN("signal_realtime_profiler_and_switch");
     RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(mailbox->realtime_profiler_state);
     bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
 
@@ -163,7 +162,6 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     WAYPOINT("WCW");
-    DeviceZoneScopedN("WAIT-record-end-ts");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
@@ -227,7 +225,6 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
-    DeviceZoneScopedN("GO");
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
