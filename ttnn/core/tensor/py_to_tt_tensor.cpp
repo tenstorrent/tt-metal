@@ -9,7 +9,6 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_stl/unreachable.hpp>
 
 #include <tracy/Tracy.hpp>
@@ -67,8 +66,8 @@ bool can_construct_on_device(
     bool preserve_nan_values) {
     bool res = device != nullptr && !device->is_remote_only() &&
                (device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id()) &&
-               !device->mesh_command_queue().trace_id().has_value() && tensor_shape.volume() > 0 &&
-               can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) && enable_device_typecast &&
+               tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
+               enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
                // https://github.com/tenstorrent/tt-metal/issues/31406
                !preserve_nan_values;
@@ -235,6 +234,7 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool construct_on_device = can_construct_on_device(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
+        log_info(tt::LogAlways, "construct_on_device: {}", construct_on_device);
 
         if (mesh_mapper != nullptr) {
             const auto device_shard_shape =
@@ -253,6 +253,18 @@ Tensor create_tt_tensor_from_host_data(
                                                                              memory_config,
                                                                              optional_tile);
 
+            log_info(
+                tt::LogAlways,
+                "construct_on_mesh_device: {}, src_tensor_layout: {}, shard_shape: {}, src_dtype: {}, dst_dtype: {}, "
+                "layout: {}, memory_config: {}, optional_tile: {}",
+                construct_on_mesh_device,
+                src_tensor_layout,
+                device_shard_shape,
+                src_dtype,
+                dst_dtype,
+                layout,
+                memory_config,
+                optional_tile);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
