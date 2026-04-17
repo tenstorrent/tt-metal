@@ -264,12 +264,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass: matmul + all_reduce.
-
-        The input is column-sharded across devices. After matmul each device
-        holds a partial sum.  all_reduce sums the partials so every device
-        gets the full output (replicated).
-        """
+        """Forward pass: matmul + all_reduce."""
 
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -284,9 +279,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
 
         # Matmul: partial sum on each device
         tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
-        # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
-        # is incompatible with TTNN trace capture (requires stable buffer addresses).
+
         tt_output = ttnn.reduce_scatter(
             tt_output,
             dim=3,
@@ -500,10 +493,7 @@ class TTNNViTIntermediate(TTNNLinearGelu):
 
 
 def _normalize_qwen_omni_vision_act(torch_mlp) -> str:
-    """Match HF `ACT2FN[config.hidden_act]` (vision default is often gelu_pytorch_tanh -> GELUTanh).
-
-    `getattr(act_fn, "__name__")` is wrong for `nn.Module` activations and previously forced SiLU.
-    """
+    """Map HF ACT2FN to gelu vs silu (use class name for nn.Module; __name__ alone was wrong for GELUTanh)."""
     act_fn = getattr(torch_mlp, "act_fn", None)
     if act_fn is None:
         return "silu"
@@ -543,9 +533,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
         module.hidden_size = torch_mlp.hidden_size
         module.intermediate_size = torch_mlp.intermediate_size
 
-        # Use tensor-parallel MLP linears to reduce DRAM pressure on mesh:
-        # fc1: replicated input + column-sharded weight (sharded intermediate)
-        # fc2: column-sharded input + row-sharded weight + all-reduce (replicated output)
+        # TP MLP: fc1 col-shard intermediate; fc2 all-reduce to replicated output.
         module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
         module.linear_fc2 = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
 
@@ -566,11 +554,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
         self.linear_fc2.deallocate_weights()
 
     def set_output_tensors_config_impl(self, output_tensors):
-        """After FC2 all_reduce, default mesh layout uses dim=-1 concat → 8× hidden (9216) at torch.add.
-
-        Materialize one logical [N, hidden] CPU tensor on elem and drop ttnn so unwrap matches
-        residual width — without editing run_config.py (see post_process_ttnn_module_output).
-        """
+        """After FC2: materialize one [N,hidden] replica on elem (avoid dim=-1 concat vs residual); see post_process_ttnn_module_output."""
         if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
             return super().set_output_tensors_config_impl(output_tensors)
 
@@ -604,9 +588,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
                 hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
             )
 
-        # Vision MLP expects full hidden width. In distributed runs we may see either:
-        # - width-sharded input (e.g. 144), which must be gathered, or
-        # - concatenated width (e.g. 9216), which must be clamped.
+        # Full hidden width: AG if sharded; slice if concat width > hidden (mesh artifacts).
         in_width = int(hidden_states.shape[-1])
         if in_width > int(self.hidden_size):
             rank = len(hidden_states.shape)
@@ -628,7 +610,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
 
         hidden_states = self.linear_fc1(hidden_states)
 
-        # HF Qwen3OmniMoeVisionMLP: ACT2FN[config.hidden_act]; vision config defaults to gelu_pytorch_tanh (GELUTanh).
+        # HF vision ACT2FN (often GELUTanh).
         if self.act_fn == "gelu":
             hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -636,7 +618,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
 
         hidden_states = self.linear_fc2(hidden_states)
 
-        # If FC2 still reports a width larger than hidden (e.g. concat semantics), slice to hidden size.
+        # Slice FC2 output if width > hidden (concat semantics).
         out_width = int(hidden_states.shape[-1])
         if out_width > int(self.hidden_size):
             rank = len(hidden_states.shape)
@@ -649,11 +631,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
 
 
 class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
-    """TTNN implementation of ``Qwen3OmniMoeTalkerResizeMLP`` (thinker hidden → text hidden).
-
-    Same TP pattern as ``TTNNQwen3OmniVisionMLP``: fc1 column-sharded intermediate, fc2 all-reduced
-    output. Input last dim is ``thinker_hidden_size``; output last dim is ``text_config.hidden_size``.
-    """
+    """TalkerResizeMLP: same TP as TTNNQwen3OmniVisionMLP (fc1 col-shard, fc2 all-reduce); thinker_hidden → text hidden."""
 
     def __init__(self):
         super().__init__()

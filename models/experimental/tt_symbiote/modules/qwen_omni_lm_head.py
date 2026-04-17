@@ -32,17 +32,7 @@ def _lm_head_logits_dtensor_config(mesh_device):
 
 
 class TTNNQwenOmniThinkerLmHead(TTNNModule):
-    """
-    Final logits projection for the thinker.
-
-    Final RMSNorm output may be **width-sharded** on a multi-device mesh; this layer
-    all-gathers the hidden width when needed (same CCL pattern as ``TTNNQwen3OmniAttention``),
-    then runs ``ttnn.linear`` with replicated weights. Readback uses a replicated mesh config that
-    slices dim 0 after compose so ``torch.argmax`` / generation see ``[batch, seq, vocab]``.
-
-    Long prefill uses **chunked** matmul when estimated logits/activations exceed
-    ``TT_SYMBIOTE_LM_HEAD_MAX_OUTPUT_BYTES`` / ``TT_SYMBIOTE_LM_HEAD_MAX_INPUT_BYTES`` (see ``forward``).
-    """
+    """Thinker logits: all-gather hidden if sharded (like TTNNQwen3OmniAttention), linear, replicated readback with dim0 slice for generate. Chunked matmul when env byte caps hit."""
 
     @classmethod
     def from_torch(cls, linear: nn.Linear):

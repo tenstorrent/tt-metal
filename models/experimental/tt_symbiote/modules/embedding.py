@@ -11,6 +11,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devic
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
+    distributed_config_col_sharded_last_dim,
     trace_enabled,
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
@@ -79,9 +80,7 @@ class TTNNEmbedding(TTNNModule):
     dimension** (``ShardTensor2dMesh``), so each device holds a slice of the embedding table—appropriate
     when downstream layers consume column-sharded activations.
 
-    :class:`TTNNQwen3OmniMoeCodecPredictorEmbedding` extends this with UINT32 index handling and
-    optional ``padding_idx`` for ``codec_embedding``; weights stay **hidden-sharded** like here so
-    downstream column-parallel layers match.
+
     """
 
     @classmethod
@@ -128,19 +127,7 @@ class TTNNEmbedding(TTNNModule):
 
 @trace_enabled
 class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
-    """``nn.Embedding`` slots in ``Qwen3OmniMoeTalkerCodePredictorModel.codec_embedding`` (``ModuleList``).
-
-    HF builds ``nn.ModuleList([nn.Embedding(vocab_size, hidden_size), ...])`` for
-    ``num_code_groups - 1`` groups. Weights use the same **hidden-dim sharding** as
-    :class:`TTNNEmbedding` so activations align with :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm`
-    and the rest of the talker decoder on mesh. This class adds ``ttnn.embedding``-compatible index
-    prep (UINT32 / sequence padding) and optional ``padding_idx``.
-
-    On a mesh, outputs must declare **column-sharded** last-dim metadata (``ShardTensorToMesh`` /
-    ``ConcatMeshToTensor(dim=-1)``) like decoder norms and attention. The default
-    ``DistributedConfig`` uses 2-D mesh compose; without this override, host readback can mis-compose
-    shards and corrupt codec hidden states (audible TTS glitches that worsen on longer generations).
-    """
+    """Codec predictor ModuleList embeddings: UINT32/padding_idx prep; hidden-sharded like TTNNEmbedding; mesh outputs col-sharded to match talker norms/attn."""
 
     @property
     def weight(self):
@@ -151,26 +138,12 @@ class TTNNQwen3OmniMoeCodecPredictorEmbedding(TTNNEmbedding):
         return self.torch_layer.padding_idx
 
     def set_output_tensors_config_impl(self, output_tensors):
-        """Match :class:`~models.experimental.tt_symbiote.modules.normalization.TTNNDistributedRMSNorm` col-shard layout."""
+        """Col-shard last dim like decoder norms; fresh DistributedTensorConfig per leaf (reuse truncated long TTS)."""
 
         def set_col_sharded_config(e):
-            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
-                if self.device.get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
-                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
-
-                    def logical_shape_for_col_sharded(shape):
-                        shape_list = list(shape)
-                        shape_list[-1] = shape_list[-1] * self.device.get_num_devices()
-                        return tuple(shape_list)
-
-                    e.set_distributed_tensor_config(
-                        DistributedTensorConfig(
-                            mesh_mapper=mesh_mapper,
-                            mesh_composer=mesh_composer,
-                            logical_shape_fn=logical_shape_for_col_sharded,
-                        )
-                    )
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self.device is not None and self.device.get_num_devices() > 1:
+                    e.set_distributed_tensor_config(distributed_config_col_sharded_last_dim(self.device))
             return e
 
         if self.device is None or self.device.get_num_devices() <= 1:

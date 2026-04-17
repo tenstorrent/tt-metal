@@ -55,6 +55,29 @@ class DistributedTensorConfig:
         return sharded_shape
 
 
+def distributed_config_col_sharded_last_dim(mesh_device) -> DistributedTensorConfig:
+    """Build metadata for last-dim column-sharded activations on ``mesh_device``.
+
+    Maps ``ShardTensorToMesh(dim=-1)`` + ``ConcatMeshToTensor(dim=-1)`` with a logical shape that
+    multiplies the last dimension by ``mesh_device.get_num_devices()``. Call **once per output
+    tensor** (each call returns a new config); do not attach one instance to every leaf in a tree.
+
+    Used by codec predictor embedding and decoder norms so host readback matches HF layouts.
+    """
+
+    def logical_shape_for_col_sharded(sharded_shape):
+        shape_list = list(sharded_shape)
+        n = int(mesh_device.get_num_devices())
+        shape_list[-1] = int(shape_list[-1]) * n
+        return tuple(shape_list)
+
+    return DistributedTensorConfig(
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+        logical_shape_fn=logical_shape_for_col_sharded,
+    )
+
+
 def logical_shape_for_batch_channel_sharding(mesh_shape):
     def _logical_shape(shape):
         shape = list(shape)
