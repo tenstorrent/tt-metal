@@ -879,7 +879,8 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunk_width_in_mm_blocks,
         std::nullopt,   // fused_ternary_scalar
         std::nullopt,   // addcmul_input_tensor1
-        std::nullopt);  // addcmul_input_tensor2
+        std::nullopt,   // addcmul_input_tensor2
+        std::nullopt);  // reduce_math_fidelity (use default HiFi4)
 
     return {std::move(program), std::move(shared_vars)};
 }
