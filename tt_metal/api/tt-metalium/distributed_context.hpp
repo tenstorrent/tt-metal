@@ -160,6 +160,7 @@ public:
     static ContextPtr get_world_context();
     static void set_current_world(const ContextPtr& ctx);
 
+    // Returns true if the distributed context has already been initialized.
     static bool is_initialized();
 
     DistributedContextId id() const;
