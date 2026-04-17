@@ -56,6 +56,8 @@ def migrate_prefill_kv_to_turbo_quant(
     rotation_absorbed: bool = False,
     cache_dtype=None,
     cluster_shape=None,
+    paged: bool = False,
+    block_size: int = 32,
 ):
     """Migrate prefill KV from layer_past into TurboQuant pre-rescaled format.
 
@@ -98,17 +100,32 @@ def migrate_prefill_kv_to_turbo_quant(
         mesh_composer = None
         mesh_mapper = None
 
-    print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ {dtype_label} pre-rescaled ...")
+    print(
+        f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ {dtype_label} pre-rescaled (paged={paged}) ..."
+    )
     for layer in tt_model.layers:
         # Read BFP8 KV → CPU float32.
+        # Paged layout:  [max_num_blocks, n_kv_heads, block_size, head_dim]  (block-major)
+        # Flat layout:   [batch, n_kv_heads, max_seq, head_dim]
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
         v_bf16 = ttnn.typecast(layer.attention.layer_past[1], ttnn.bfloat16)
-        k_cpu = ttnn.to_torch(k_bf16, mesh_composer=mesh_composer).float()  # [1, n_kv_heads, max_seq, head_dim]
+        k_cpu = ttnn.to_torch(k_bf16, mesh_composer=mesh_composer).float()
         v_cpu = ttnn.to_torch(v_bf16, mesh_composer=mesh_composer).float()
         ttnn.deallocate(k_bf16)
         ttnn.deallocate(v_bf16)
 
-        max_seq = k_cpu.shape[2]
+        orig_shape = list(k_cpu.shape)
+        if paged:
+            # [max_num_blocks, n_kv_heads, block_size, head_dim]
+            #   → [n_kv_heads, max_num_blocks * block_size, head_dim]
+            #   → [1, n_kv_heads, max_seq, head_dim]
+            max_num_blocks, n_kv_heads, blk, _ = orig_shape
+            max_seq = max_num_blocks * blk
+            k_cpu = k_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
+            v_cpu = v_cpu.permute(1, 0, 2, 3).reshape(n_kv_heads, max_seq, head_dim).unsqueeze(0)
+        else:
+            max_seq = k_cpu.shape[2]
+
         k_prefix = k_cpu[:, :, :prompt_len, :]
         v_prefix = v_cpu[:, :, :prompt_len, :]
 
@@ -125,15 +142,23 @@ def migrate_prefill_kv_to_turbo_quant(
         v_centroids = cpu_quantizer.codebook.centroids[v_idx.long()]
         v_rescaled = (v_centroids * v_norms).to(torch.bfloat16)
 
-        # Write pre-rescaled values back into layer_past (pad to full max_seq).
-        k_full = torch.zeros(1, k_cpu.shape[1], max_seq, head_dim, dtype=torch.bfloat16)
-        v_full = torch.zeros(1, v_cpu.shape[1], max_seq, head_dim, dtype=torch.bfloat16)
+        # Build flat tensor [1, n_kv_heads, max_seq, head_dim] with quantized prefix.
+        n_kv_heads = k_prefix.shape[1]
+        k_full = torch.zeros(1, n_kv_heads, max_seq, head_dim, dtype=torch.bfloat16)
+        v_full = torch.zeros(1, n_kv_heads, max_seq, head_dim, dtype=torch.bfloat16)
         k_full[:, :, :prompt_len, :] = k_rescaled
         v_full[:, :, :prompt_len, :] = v_rescaled
 
-        # Write pre-rescaled values back into layer_past.
-        # BFP4: 0.5 bytes/elem, hardware converts BF16→BFP4 on write.
-        # BF16: 2 bytes/elem, preserves full precision.
+        if paged:
+            # Reshape back to paged: [max_num_blocks, n_kv_heads, block_size, head_dim]
+            k_full = (
+                k_full.squeeze(0).reshape(n_kv_heads, max_num_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
+            )
+            v_full = (
+                v_full.squeeze(0).reshape(n_kv_heads, max_num_blocks, blk, head_dim).permute(1, 0, 2, 3).contiguous()
+            )
+
+        # Write back. Hardware handles BF16 → target dtype conversion (BFP4 etc).
         ttnn.deallocate(layer.attention.layer_past[0])
         ttnn.deallocate(layer.attention.layer_past[1])
         layer.attention.layer_past[0] = ttnn.from_torch(
@@ -160,8 +185,15 @@ def main():
     # ------------------------------------------------------------------ #
     # Device + model setup                                                 #
     # ------------------------------------------------------------------ #
-    print("Opening mesh device (1×1)...")
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    import os
+
+    num_devices = int(os.environ.get("TT_NUM_DEVICES", 1))
+    if num_devices > 1:
+        print(f"Setting fabric config (FABRIC_1D) for {num_devices} devices...")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, num_devices)
+    print(f"Opening mesh device ({mesh_shape})...")
+    mesh_device = ttnn.open_mesh_device(mesh_shape)
 
     print("Creating ModelArgs...")
     model_args = ModelArgs(
@@ -208,18 +240,29 @@ def main():
     from pathlib import Path
     import tempfile
 
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
     dtype = ttnn.bfloat8_b
     wcache = Path(tempfile.mkdtemp(prefix="tq_prefill_weights_"))
-    print("Loading TT model (non-paged, rotation-absorbed)...")
+
+    # Paged attention for both prefill and decode on device (no teacher-forcing).
+    paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
+    print("Loading TT model (paged attention, rotation-absorbed)...")
     tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=wcache,
-        paged_attention_config=None,
+        paged_attention_config=paged_attention_config,
     )
     del state_dict
+
+    # kv_cache list for prefill_forward (one [K,V] pair per layer).
+    kv_cache_list = [layer.attention.layer_past for layer in tt_model.layers]
+
+    # Page table: identity mapping (block i → page i), shape [batch=1, max_num_blocks].
+    page_table_cpu = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
 
     # ------------------------------------------------------------------ #
     # Prefill                                                              #
@@ -244,15 +287,18 @@ def main():
         rot_mats_local,
         tt_page_table,
         tt_chunk_page_table,
-    ) = tt_model.prepare_inputs_prefill(tokens_2d)
+    ) = tt_model.prepare_inputs_prefill(tokens_2d, page_table=page_table_cpu, batch_size=1, user_id=0)
 
     t0 = time.perf_counter()
     tt_prefill_out = tt_model.ttnn_prefill_forward(
         prefill_input,
         rot_mats_global=rot_mats_global,
         rot_mats_local=rot_mats_local,
+        user_id=0,
         page_table=tt_page_table,
         get_last_token=get_last_token,
+        kv_cache=kv_cache_list,
+        batch_size=1,
     )
     prefill_ms = (time.perf_counter() - t0) * 1000
     print(f"  Prefill complete in {prefill_ms:.0f} ms (includes first-run compile)")
@@ -286,6 +332,9 @@ def main():
         seed=args.seed,
         rotation_absorbed=True,
         cache_dtype=cache_dtype,
+        cluster_shape=model_args.cluster_shape,
+        paged=True,
+        block_size=paged_attention_config.block_size,
     )
 
     # ------------------------------------------------------------------ #
@@ -327,6 +376,7 @@ def main():
     host_inputs_0 = tt_model.prepare_decode_inputs_host(
         torch.tensor([first_new_tok_id], dtype=torch.int64),
         torch.tensor([prompt_len], dtype=torch.int64),
+        page_table=page_table_cpu,
     )
     device_inputs_w = copy_host_to_device(host_inputs_0, mesh_device=mesh_device)
     tt_out_w, _ = tt_model.ttnn_decode_forward(*device_inputs_w)
@@ -352,6 +402,7 @@ def main():
         host_inputs_step = tt_model.prepare_decode_inputs_host(
             torch.tensor([current_tok_id], dtype=torch.int64),
             torch.tensor([pos], dtype=torch.int64),
+            page_table=page_table_cpu,
         )
         copy_host_to_device(host_inputs_step, device_tensors=trace_inputs)
 
