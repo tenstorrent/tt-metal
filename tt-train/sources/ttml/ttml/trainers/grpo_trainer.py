@@ -18,7 +18,6 @@ import ttml
 import ttnn
 from safetensors.numpy import save_file
 from ttml.common.utils import create_optimizer, no_grad
-from .callback import TrainerCallback
 
 
 class GRPOCompleter(ABC):
