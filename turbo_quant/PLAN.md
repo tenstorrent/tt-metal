@@ -26,6 +26,22 @@ from seq=128 to seq=131072. Pre-rescaled centroid×norm values stored as BFP4 in
 `layer_past`, fed directly to `scaled_dot_product_attention_decode` which natively
 accepts BFP4 inputs. No custom SDPA kernel needed for this path.
 
+### T3K Multi-Device Result (2026-04-17)
+
+Running on T3K (8× Wormhole) with `TT_NUM_DEVICES=8` and `FABRIC_1D` config:
+
+| | Single device (N150) | T3K (8 devices) | Speedup |
+|--|---------------------|-----------------|---------|
+| **Baseline BFP8** | 37.0 ms/tok | **14.0 ms/tok** | 2.6× |
+| **TQ BFP4 paged** | 37.2 ms/tok | **14.2 ms/tok** | 2.6× |
+| **TQ overhead** | +0.2ms (+0.5%) | +0.2ms (+1.4%) | constant |
+
+**70.6 tok/s on T3K, flat across 128 → 131072 seqlens.** Change was 4 lines:
+call `ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)` before opening the
+mesh when `num_devices > 1`. TQ's `from_torch` calls replicate constants across
+devices automatically. KV heads shard across devices: Llama-3.1-8B has 8 KV heads
+→ 1 head/device on T3K.
+
 ### E2E Overhead: TQ BFP4 vs Baseline BFP8 (2026-04-14)
 
 Back-to-back comparison, same machine, same prompt, traced, 10 generated tokens.
@@ -559,9 +575,12 @@ block_size mismatch — model-level issue, not TQ-specific.
 **Fused SDPA kernel chunking (development track):**
 Add Flash Attention-style online softmax to the custom TQ kernel for comparison.
 
-**Multi-batch / Multi-device:**
-- Batch > 1: TQ's compressed cache enables more concurrent sequences
-- Galaxy (8+ devices): already has `TT_NUM_DEVICES` support, needs testing
+**Multi-batch:**
+- Batch > 1: TQ's compressed cache enables more concurrent sequences. Untested.
+
+**~~Multi-device~~ DONE (2026-04-17):**
+- T3K (8× Wormhole) verified: 14.2 ms/tok, 2.6× speedup vs single device
+- TG (32 devices / Galaxy): untested but should work with same fabric config
 
 **True 3-bit packing:**
 Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
