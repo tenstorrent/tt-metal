@@ -260,13 +260,13 @@ class DiTFFNTTNN:
             activation="gelu",
         )
 
-        # Down projection: 6144 -> 1536
+        # Down projection: 6144 -> 1536. Output in bf8 since next op is residual add + LN.
         output = ttnn.linear(
             h,
             self.down_weight,
             bias=self.down_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             core_grid=CORE_GRID_BH,
         )
         ttnn.deallocate(h)
