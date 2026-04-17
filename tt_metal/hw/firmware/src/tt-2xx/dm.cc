@@ -196,8 +196,8 @@ extern "C" uint32_t _start1() {
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-    DPRINT << "DM0-FW: initialized" << ENDL();
-    DEVICE_PRINT("DM0-FW: initialized\n");
+    // DPRINT << "DM0-FW: initialized" << ENDL();
+    // DEVICE_PRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -214,8 +214,8 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
-        DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
-        DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
+        // DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
+        // DEVICE_PRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -230,8 +230,8 @@ extern "C" uint32_t _start1() {
             // written in order, so it will arrive in order. We also have a barrier
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
-            DPRINT << "DM0-FW: waiting for GO message" << ENDL();
-            DEVICE_PRINT("DM0-FW: waiting for GO message\n");
+            // DPRINT << "DM0-FW: waiting for GO message" << ENDL();
+            // DEVICE_PRINT("DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {

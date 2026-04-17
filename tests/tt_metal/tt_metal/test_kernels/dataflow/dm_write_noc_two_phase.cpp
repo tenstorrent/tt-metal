@@ -57,20 +57,25 @@ void kernel_main() {
     constexpr uint32_t results_l1_addr = get_compile_time_arg_val(8);
     constexpr uint32_t update_noc_addr = get_compile_time_arg_val(9);
 
-    constexpr uint32_t kPacketSizeBytes = 3 * 64;
+    // One 24-byte DMA descriptor: [req_word0(4B)][SrcAddr(8B)][DestAddr(8B)][req_word1(4B)]
+    // kDescriptorBytes is both the descriptor size and the DMA TransferSize field.
+    constexpr uint32_t kDescriptorBytes = 3 * sizeof(uint64_t);  // 24
     constexpr uint32_t kDmaTypeWrite = 1;
     constexpr uint32_t kEnDataInDescWriteToDst = 0;
     constexpr uint32_t kPacketTarget3b = 3;
     constexpr uint32_t kCompletionSw2b = 1;
     constexpr uint64_t kPacketDummySrcAddrBase = 0x100000000ULL;
     constexpr uint64_t kPacketDummyDstAddrBase = 0x200000000ULL;
-    const uint32_t transfer_size_19b = kPacketSizeBytes & 0x7FFFF;
+    const uint32_t transfer_size_19b = kDescriptorBytes & 0x7FFFF;
 
     (void)packet_size_bytes;
     (void)stride_bytes;
 
-    uint32_t src_addr = src_base_l1_addr;
-    uint32_t dst_addr = dst_base_l1_addr;
+    uint32_t hart_id;
+    asm volatile("csrr %0, mhartid" : "=r"(hart_id));
+    const uint32_t hart_offset = (hart_id & 0x7) * 64;
+    uint32_t src_addr = src_base_l1_addr + hart_offset;
+    uint32_t dst_addr = dst_base_l1_addr + hart_offset;
     const uint32_t dst_noc_x = packed_dst_core >> 16;
     const uint32_t dst_noc_y = packed_dst_core & 0xFFFF;
 
@@ -83,83 +88,43 @@ void kernel_main() {
     const uint32_t req_word0 =
         ((kDmaTypeWrite & 0x1) << 8) | ((kEnDataInDescWriteToDst & 0x1) << 9) | (transfer_size_19b << 10);
     const uint32_t req_word1 = (kPacketTarget3b & 0x7) | ((kCompletionSw2b & 0x3) << 8);
-    const uint64_t hdr = static_cast<uint64_t>(req_word0) | (static_cast<uint64_t>(req_word1) << 32);
-
-    // Mock payload qwords [3..7] — fixed filler data
-    constexpr uint64_t kMockPayload[5] = {3, 4, 5, 6, 7};
 
     // --- Write phase ---
+    // Write one 24-byte descriptor per iteration: 3 × uint64_t stores.
+    // Descriptor layout (little-endian):
+    //   bytes  0- 3: req_word0
+    //   bytes  4-11: SrcAddr (64b)
+    //   bytes 12-19: DestAddr (64b)
+    //   bytes 20-23: req_word1
+    // Packed into 3 aligned 64-bit stores:
+    //   q0 = req_word0        | lo32(SrcAddr)  << 32   → bytes  0-7
+    //   q1 = hi32(SrcAddr)    | lo32(DestAddr) << 32   → bytes  8-15
+    //   q2 = hi32(DestAddr)   | req_word1      << 32   → bytes 16-23
     uint64_t t0 = get_timestamp();
 
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+        const uint64_t q0 =
+            static_cast<uint64_t>(req_word0) | (static_cast<uint64_t>(static_cast<uint32_t>(packet_src_addr)) << 32);
+        const uint64_t q1 = static_cast<uint64_t>(static_cast<uint32_t>(packet_src_addr >> 32)) |
+                            (static_cast<uint64_t>(static_cast<uint32_t>(packet_dst_addr)) << 32);
+        const uint64_t q2 = static_cast<uint64_t>(static_cast<uint32_t>(packet_dst_addr >> 32)) |
+                            (static_cast<uint64_t>(req_word1) << 32);
         if constexpr (write_mode == 0) {
-            // 3x64B DMA packet writes to cache
-            // Each 64B: [0] header, [1] src addr, [2] dst addr, [3..7] payload
-            volatile tt_l1_ptr uint64_t* pkt0 = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr);
-            pkt0[0] = hdr;
-            pkt0[1] = packet_src_addr;
-            pkt0[2] = packet_dst_addr;
-            pkt0[3] = kMockPayload[0];
-            pkt0[4] = kMockPayload[1];
-            pkt0[5] = kMockPayload[2];
-            pkt0[6] = kMockPayload[3];
-            pkt0[7] = kMockPayload[4];
-
-            volatile tt_l1_ptr uint64_t* pkt1 = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr + 64);
-            pkt1[0] = hdr;
-            pkt1[1] = packet_src_addr;
-            pkt1[2] = packet_dst_addr;
-            pkt1[3] = kMockPayload[0];
-            pkt1[4] = kMockPayload[1];
-            pkt1[5] = kMockPayload[2];
-            pkt1[6] = kMockPayload[3];
-            pkt1[7] = kMockPayload[4];
-
-            volatile tt_l1_ptr uint64_t* pkt2 = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr + 128);
-            pkt2[0] = hdr;
-            pkt2[1] = packet_src_addr;
-            pkt2[2] = packet_dst_addr;
-            pkt2[3] = kMockPayload[0];
-            pkt2[4] = kMockPayload[1];
-            pkt2[5] = kMockPayload[2];
-            pkt2[6] = kMockPayload[3];
-            pkt2[7] = kMockPayload[4];
-
-            flush_l2_cache_range(src_addr, kPacketSizeBytes);
+            // Write descriptor to L1 cache then flush the cache line to SRAM.
+            volatile tt_l1_ptr uint64_t* desc = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr);
+            desc[0] = q0;
+            desc[1] = q1;
+            desc[2] = q2;
+            flush_l2_cache_range(src_addr, kDescriptorBytes);
         } else {
-            // Direct SRAM write (cache bypass) via non-cacheable alias
-            volatile tt_l1_ptr uint64_t* pkt0 =
+            // Direct SRAM write via non-cacheable alias (cache bypass).
+            volatile tt_l1_ptr uint64_t* desc =
                 reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr + uncached_offset);
-            pkt0[0] = hdr;
-            pkt0[1] = packet_src_addr;
-            pkt0[2] = packet_dst_addr;
-            pkt0[3] = kMockPayload[0];
-            pkt0[4] = kMockPayload[1];
-            pkt0[5] = kMockPayload[2];
-            pkt0[6] = kMockPayload[3];
-            pkt0[7] = kMockPayload[4];
-
-            volatile tt_l1_ptr uint64_t* pkt1 =
-                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr + 64 + uncached_offset);
-            pkt1[0] = hdr;
-            pkt1[1] = packet_src_addr;
-            pkt1[2] = packet_dst_addr;
-            pkt1[3] = kMockPayload[0];
-            pkt1[4] = kMockPayload[1];
-            pkt1[5] = kMockPayload[2];
-            pkt1[6] = kMockPayload[3];
-            pkt1[7] = kMockPayload[4];
-
-            volatile tt_l1_ptr uint64_t* pkt2 =
-                reinterpret_cast<volatile tt_l1_ptr uint64_t*>(src_addr + 128 + uncached_offset);
-            pkt2[0] = hdr;
-            pkt2[1] = packet_src_addr;
-            pkt2[2] = packet_dst_addr;
-            pkt2[3] = kMockPayload[0];
-            pkt2[4] = kMockPayload[1];
-            pkt2[5] = kMockPayload[2];
-            pkt2[6] = kMockPayload[3];
-            pkt2[7] = kMockPayload[4];
+            desc[0] = q0;
+            desc[1] = q1;
+            desc[2] = q2;
+            // Hardware fence: ensure uncached stores commit to SRAM before NOC reads src.
+            asm volatile("fence" ::: "memory");
         }
 
         packet_src_addr += transfer_size_19b;
@@ -169,7 +134,7 @@ void kernel_main() {
     uint64_t t1 = get_timestamp();
 
     // --- NOC phase ---
-    setup_noc_cmdbuf(src_addr, dst_addr, dst_noc_x, dst_noc_y, kPacketSizeBytes);
+    setup_noc_cmdbuf(src_addr, dst_addr, dst_noc_x, dst_noc_y, kDescriptorBytes);
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         if constexpr (update_noc_addr == 1) {
             update_noc_cmdbuf_addrs(src_addr, dst_addr);
@@ -191,9 +156,12 @@ void kernel_main() {
     const uint32_t noc_cycles_avg = static_cast<uint32_t>((t2 - t1) / num_iterations);
     const uint32_t total_cycles_avg = write_cycles_avg + noc_cycles_avg;
 
-    // Write results to L1 via non-cacheable alias so host sees them immediately after kernel exits.
+    // Each DM thread writes to its own slot so the host can average across all active threads.
+    // Slot layout: results_l1_addr + hart_id * 3 * sizeof(uint32_t)
+    // Buffer must be at least 8 * 3 * 4 = 96 bytes (covers all 8 DM cores in the cluster).
+    const uint32_t slot_offset = (hart_id & 0x7) * 3 * sizeof(uint32_t);
     volatile tt_l1_ptr uint32_t* results =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(results_l1_addr + uncached_offset);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(results_l1_addr + slot_offset + uncached_offset);
     results[0] = write_cycles_avg;
     results[1] = noc_cycles_avg;
     results[2] = total_cycles_avg;
@@ -201,7 +169,7 @@ void kernel_main() {
     const char* write_str = (write_mode == 0) ? "CACHE_L2_FLUSH" : "DIRECT_SRAM";
     const char* barrier_str = (barrier_mode == 0) ? "BARRIER_END" : "BARRIER_PER_ITER";
     const char* addr_str = (update_noc_addr == 0) ? "" : "_UPDATE_NOC_ADDR";
-    DPRINT << write_str << "_TWO_PHASE_" << barrier_str << addr_str << " iters=" << num_iterations
-           << " write_avg=" << write_cycles_avg << " noc_avg=" << noc_cycles_avg << " total_avg=" << total_cycles_avg
-           << ENDL();
+    DPRINT << write_str << "_TWO_PHASE_" << barrier_str << addr_str << " core=" << hart_id
+           << " iters=" << num_iterations << " write_avg=" << write_cycles_avg << " noc_avg=" << noc_cycles_avg
+           << " total_avg=" << total_cycles_avg << ENDL();
 }
