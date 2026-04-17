@@ -573,19 +573,35 @@ jobs:
         run: |
           mkdir -p legs
           LEG_COUNT=0
+
+          echo "::group::downloaded_legs contents"
+          find downloaded_legs -maxdepth 6 -print 2>/dev/null || echo "(downloaded_legs does not exist)"
+          echo "::endgroup::"
+
+          # download-artifact's directory structure depends on how many artifacts
+          # matched the pattern: with a single match and merge-multiple:false it may
+          # extract straight into `path/`; with multiple it creates `path/<name>/`.
+          # upload-artifact also preserves the workspace-relative path, so the JSON
+          # can live several levels deep. Walk the whole tree instead of guessing.
           if [[ -d downloaded_legs ]]; then
-            for dir in downloaded_legs/model-trace-leg-*/; do
-              [[ -d "$dir" ]] || continue
-              slug=$(basename "$dir" | sed 's/^model-trace-leg-//')
-              # upload-artifact preserves the workspace-relative path, so the JSON
-              # may be nested (e.g. model_tracer/traced_operations/ttnn_operations_master.json)
-              src=$(find "$dir" -name "ttnn_operations_master.json" -maxdepth 6 | head -1)
-              if [[ -n "$src" && -f "$src" ]]; then
-                cp "$src" "legs/${slug}.json"
-                LEG_COUNT=$((LEG_COUNT + 1))
+            while IFS= read -r src; do
+              rel="${src#downloaded_legs/}"
+              slug=$(echo "$rel" | grep -oE 'model-trace-leg-[^/]+' | head -1 | sed 's/^model-trace-leg-//' || true)
+              if [[ -z "$slug" ]]; then
+                slug="leg-$((LEG_COUNT + 1))"
               fi
-            done
+              # Disambiguate if two JSONs resolve to the same slug.
+              dest="legs/${slug}.json"
+              n=1
+              while [[ -e "$dest" ]]; do
+                dest="legs/${slug}-${n}.json"
+                n=$((n + 1))
+              done
+              cp "$src" "$dest"
+              LEG_COUNT=$((LEG_COUNT + 1))
+            done < <(find downloaded_legs -type f -name 'ttnn_operations_master.json' 2>/dev/null)
           fi
+
           echo "leg_count=$LEG_COUNT" >> $GITHUB_OUTPUT
           if [[ "$LEG_COUNT" -eq 0 ]]; then
             echo "::warning::No successful leg master JSONs to homogenize; skipping load."
