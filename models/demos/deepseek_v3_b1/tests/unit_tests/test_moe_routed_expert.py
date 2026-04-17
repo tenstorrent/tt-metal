@@ -23,10 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
-from models.demos.deepseek_v3_b1.weights.transforms.attention import (
-    fuse_o_proj_gate_mm_norms,
-    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a,
-)
+from models.demos.deepseek_v3_b1.weights.transforms.attention import fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.moe import create_moe_routed_expert_tensors
 
 
@@ -122,19 +119,28 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         f"Created mcast output tensor with shard shape ({M}, {K}) on {mcast_output_core_grid.num_cores()} cores"
     )
 
-    # Gate matmul weights via overlapped tensor (fused with o_proj + gammas, matching production layout)
-    torch_o_proj_weights = torch.zeros((8192, K), dtype=torch.bfloat16)
+    # Gate matmul weights via overlapped tensor (fused with o_proj + gammas + q_ab / kv_a, matching production layout)
+    torch_o_proj_weights = torch.zeros((16384, K), dtype=torch.bfloat16)
     torch_attn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
     torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
     torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
     torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    o_norms = fuse_o_proj_gate_mm_norms(
+    # q_a/q_b/kv_a placeholders — not consumed by this test but required by the
+    # merged fuse.  1x1 mesh expects single-device shapes from the 4x2 layout:
+    # q_b_tp=1, so q_b is (1536, 12288) = (1536, 64 qnope + 64 qrope heads).
+    torch_q_a_proj_weights = torch.zeros((7168, 1536), dtype=torch.bfloat16)
+    torch_q_b_proj_weights = torch.zeros((1536, 12288), dtype=torch.bfloat16)
+    torch_kv_a_proj_weights = torch.zeros((7168, 576), dtype=torch.bfloat16)
+    o_norms = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_attn_norm,
         torch_q_norm,
         torch_kv_norm,
         torch_ffn_norm,
+        torch_q_a_proj_weights,
+        torch_q_b_proj_weights,
+        torch_kv_a_proj_weights,
         device,
     )
     ttnn_gate_mm_weights = o_norms["gate_mm"]
