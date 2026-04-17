@@ -87,6 +87,12 @@ struct NoPreKBlock {
  *   pre_k_block        PreKBlockFn instance (default: {}).
  *   retain_in0         When true, skip popping in0 on the last K-block so the caller
  *                      retains the data (SDPA reuses Q across K chunks). (default: false)
+ *   in1_per_core_w     Actual number of N-tiles in the in1 CB per K-block (= what NCRISC
+ *                      pushes per block). Defaults to 0, meaning derive from
+ *                      out_subblock_w * in1_num_subblocks. Pass the real value when the
+ *                      factory pads per_core_N_compute above the actual in1 shard width
+ *                      (e.g. matmul_multicore_reuse_mcast_dram_sharded), otherwise the
+ *                      helper will wait/pop wrong tile counts and deadlock.
  */
 template <
     bool transpose = false,
@@ -110,7 +116,8 @@ ALWI void matmul_block(
     uint32_t batch = 1,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
-    bool retain_in0 = false);
+    bool retain_in0 = false,
+    uint32_t in1_per_core_w = 0);
 
 /**
  * matmul_reduce_inplace: in-place reduce via matmul using a single-tile column identity.

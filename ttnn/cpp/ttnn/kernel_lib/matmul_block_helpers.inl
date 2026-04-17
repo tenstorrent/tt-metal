@@ -41,13 +41,19 @@ ALWI void matmul_block(
     uint32_t batch,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
-    bool retain_in0) {
+    bool retain_in0,
+    uint32_t in1_per_core_w) {
 
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
     const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;
     const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * in0_num_subblocks;
-    const uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
-    const uint32_t in1_block_num_tiles = out_subblock_w * block_w * in1_num_subblocks;
+    // in1_per_core_w: actual N-width of the in1 CB per K-block.
+    // Derived from subblocks by default; callers with padded per_core_N_compute must
+    // pass the real shard width (per_core_N_in1_sender) to avoid CB wait/pop mismatches.
+    if (in1_per_core_w == 0) {
+        in1_per_core_w = out_subblock_w * in1_num_subblocks;
+    }
+    const uint32_t in1_block_num_tiles = in1_per_core_w * block_w;
     const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
     const uint32_t row_group_tiles = out_subblock_h * in1_per_core_w;
 
@@ -289,6 +295,7 @@ ALWI void matmul_reduce_inplace(
         // advances past the tiles we just consumed, making room for the write.
         cb_pop_front(in_out_cb, subblock_tiles);
         tile_regs_wait();
+        cb_reserve_back(in_out_cb, subblock_tiles);
         for (uint32_t i = 0; i < subblock_tiles; i++) {
             pack_tile(i, in_out_cb);
         }
