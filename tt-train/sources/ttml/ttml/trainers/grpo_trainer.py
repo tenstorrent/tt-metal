@@ -22,7 +22,7 @@ from .callback import TrainerCallback
 
 
 @dataclass
-class GrpoMeshCtx:
+class GRPOMeshCtx:
     """Distributed-mesh handles for tensor creation and reading."""
 
     dp_mapper: object = None
@@ -30,7 +30,7 @@ class GrpoMeshCtx:
     total_devices: int = 1
 
 
-class GrpoCompletion(ABC):
+class GRPOCompleter(ABC):
     """Abstract base for model-specific completion engines used in GRPO training.
 
     Subclass this for each model architecture (Llama, Qwen, etc.).
@@ -38,12 +38,12 @@ class GrpoCompletion(ABC):
 
     @property
     @abstractmethod
-    def ctx(self) -> "CompletionCtx":
-        """Generation parameters (tokenizer, completions_per_prompt, …)."""
+    def tokenizer(self):
+        """The tokenizer used by this completion engine."""
 
     @property
     @abstractmethod
-    def mesh(self) -> "GrpoMeshCtx":
+    def mesh(self) -> "GRPOMeshCtx":
         """Distributed-mesh handles for tensor placement and gradient sync."""
 
     @property
@@ -96,7 +96,7 @@ class GrpoCompletion(ABC):
 
 
 @dataclass
-class GrpoConfig:
+class GRPOConfig:
     epsilon: float
     batch_size: int
     micro_batch_size: int
@@ -113,7 +113,7 @@ class GrpoConfig:
     warmup_steps: int
 
 
-def deallocate_tensors(tensors) -> None:
+def _deallocate_tensors(tensors) -> None:
     if tensors is None:
         return
     if not isinstance(tensors, (list, tuple)):
@@ -151,18 +151,19 @@ def compute_advantages(rewards_np, group_size):
 
 
 def iter_batched_completions(
-    completion: GrpoCompletion,
+    completer: GRPOCompleter,
     prompts: Sequence[List[int]],
     batch_columns: dict,
     batch_size: int = 32,
+    num_generations: int = 1,
 ):
-    completions_per_prompt = completion.ctx.completions_per_prompt
+    completions_per_prompt = num_generations
     n = len(prompts)
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
         prompt_batch = list(prompts[start:end])
 
-        completions_batch = completion.generate(prompt_batch)
+        completions_batch = completer.generate(prompt_batch)
 
         prompt_batch_expanded = [item for item in prompt_batch for _ in range(completions_per_prompt)]
         columns_expanded = {
@@ -246,18 +247,18 @@ def save_checkpoint(
         f.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC\n"))
 
 
-class GrpoTrainer:
+class GRPOTrainer:
     def __init__(
         self,
-        completion: GrpoCompletion,
+        completer: GRPOCompleter,
         dataset,
-        config: GrpoConfig,
+        config: GRPOConfig,
         reward_func: Callable,
         optimizer_config: dict,
         callbacks: list = None,
         model_source: str = None,
     ):
-        self.completion = completion
+        self.completer = completer
         self.dataset = dataset
         self.config = config
         self.reward_func = reward_func
@@ -274,11 +275,11 @@ class GrpoTrainer:
         adv_tt: ttml.autograd.Tensor,
         completions_batch_len: int,
         eps: float,
-        mesh: GrpoMeshCtx = None,
+        mesh: GRPOMeshCtx = None,
     ) -> ttml.autograd.Tensor:
         """Compute the clipped GRPO surrogate loss."""
         if mesh is None:
-            mesh = GrpoMeshCtx()
+            mesh = GRPOMeshCtx()
         B_local, Tp = nlog_probs_old.shape()
         ratio = ttml.ops.unary.exp(nlog_probs_old - nlog_probs_new)
         clipped_ratio = ttml.ops.unary.clip(ratio, 1.0 - eps, 1.0 + eps)
@@ -300,11 +301,10 @@ class GrpoTrainer:
 
     def train(self):
         grpo_cfg = self.config
-        completion = self.completion
-        ctx = completion.ctx
-        tt_model = completion.model
-        tokenizer = ctx.tokenizer
-        mesh = completion.mesh
+        completer = self.completer
+        tt_model = completer.model
+        tokenizer = completer.tokenizer
+        mesh = completer.mesh
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_config_dict)
@@ -327,7 +327,7 @@ class GrpoTrainer:
             cb.on_train_begin(self)
 
         for prompts_batch, completions_batch, dataset_columns_dict in iter_batched_completions(
-            completion, prompts, extra_columns, grpo_cfg.batch_size
+            completer, prompts, extra_columns, grpo_cfg.batch_size, grpo_cfg.num_generations
         ):
             num_batches += 1
 
@@ -336,7 +336,7 @@ class GrpoTrainer:
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
             rewards_np = np.array(rewards, dtype=np.float32)
 
-            advantages_np = compute_advantages(rewards_np, ctx.completions_per_prompt)
+            advantages_np = compute_advantages(rewards_np, grpo_cfg.num_generations)
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
@@ -344,7 +344,7 @@ class GrpoTrainer:
             tt_model.eval()
             with no_grad():
                 for p, c in iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size):
-                    nlog_old, mask = completion.compute_nlog_probs(p, c)
+                    nlog_old, mask = completer.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
                     probs_old_list.append((nlog_old, mask))
@@ -367,7 +367,7 @@ class GrpoTrainer:
                     adv_tt.set_requires_grad(False)
 
                     nlog_old, mask_old = probs_old_list[i]
-                    nlog_probs_new, mask_new = completion.compute_nlog_probs(p, c)
+                    nlog_probs_new, mask_new = completer.compute_nlog_probs(p, c)
 
                     loss = self._compute_grpo_loss(
                         nlog_old,
@@ -382,7 +382,7 @@ class GrpoTrainer:
                     loss.backward(retain_graph=False)
                     ttml.autograd.AutoContext.get_instance().reset_graph()
 
-                    deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
+                    _deallocate_tensors([nlog_probs_new, mask_new, adv_tt, loss])
 
                 accum_count += 1
 
@@ -435,14 +435,7 @@ class GrpoTrainer:
                             cb.on_save(self, num_steps, ckpt_dir)
 
             for nlog_old, mask_old in probs_old_list:
-                deallocate_tensors([nlog_old, mask_old])
+                _deallocate_tensors([nlog_old, mask_old])
 
         for cb in self.callbacks:
             cb.on_train_end(self)
-
-
-# Aliases for the all-caps naming convention
-GRPOMeshCtx = GrpoMeshCtx
-GRPOConfig = GrpoConfig
-GRPOTrainer = GrpoTrainer
-GRPOCompletion = GrpoCompletion

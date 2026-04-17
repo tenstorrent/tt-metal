@@ -18,18 +18,35 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_saf
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
-from ttml.trainers.grpo_trainer import GRPOCompletion, GrpoMeshCtx as GRPOMeshCtx, deallocate_tensors
+from ttml.trainers.grpo_trainer import GRPOCompleter, GRPOMeshCtx
 from .llama_overrides import LlamaCompositeKV
 
 
+TILE_SIZE = 32
+SAMPLE_SEED = 42
+
+
 @dataclass
-class CompletionCtx:
+class LlamaCompletionCtx:
     max_tokens_to_complete: int
     temperature: float
     completions_per_prompt: int = 1
-    sample_seed: int = 42
-    tokenizer: object = None
-    pad_token: int = None
+    _tokenizer: object = None
+    _pad_token: int = None
+
+
+def deallocate_tensors(tensors) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
 
 
 def load_checkpoint(model, checkpoint_path, dp_mapper=None):
@@ -60,23 +77,20 @@ def load_checkpoint(model, checkpoint_path, dp_mapper=None):
             print(f"  - {n}")
 
 
-TILE_SIZE = 32
-
-
 def _round_up(x: int) -> int:
     return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
-class LlamaCompletion(GRPOCompletion):
+class LlamaCompleter(GRPOCompleter):
     """Llama-specific completion engine.
 
     Handles autoregressive generation and forward passes for Llama models.
     All mutable generation state (KV cache, batch dims) lives here, not
-    on :class:`CompletionCtx`.
+    on :class:`LlamaCompletionCtx`.
 
     Args:
-        ctx: Generation parameters. ``tokenizer`` and ``pad_token`` are set
-            automatically from ``model_source`` if not provided.
+        ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
+            automatically from ``model_source``.
         transformer_config: Model architecture config dict (same format as
             used in ``GRPOConfig``).
         device_config: Device mesh config dict (``enable_ddp``, ``mesh_shape``,
@@ -88,7 +102,7 @@ class LlamaCompletion(GRPOCompletion):
 
     def __init__(
         self,
-        ctx: CompletionCtx,
+        ctx: LlamaCompletionCtx,
         transformer_config: dict,
         device_config: dict,
         model_source: str,
@@ -160,9 +174,9 @@ class LlamaCompletion(GRPOCompletion):
             )
             load_from_safetensors(tt_model, model_repo_path, llama_cfg)
 
-        ctx.tokenizer = tokenizer
-        if ctx.pad_token is None:
-            ctx.pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+        ctx._tokenizer = tokenizer
+        if ctx._pad_token is None:
+            ctx._pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
         self._ctx = ctx
         self._model = tt_model
@@ -173,8 +187,8 @@ class LlamaCompletion(GRPOCompletion):
         self._kv_cache_B: int = 0
 
     @property
-    def ctx(self):
-        return self._ctx
+    def tokenizer(self):
+        return self._ctx._tokenizer
 
     @property
     def mesh(self):
@@ -196,7 +210,7 @@ class LlamaCompletion(GRPOCompletion):
         B = ctx.completions_per_prompt * len(prompts)
         N = max_len
 
-        prompt_tokens_np = np.full((B, max_len), ctx.pad_token)
+        prompt_tokens_np = np.full((B, max_len), ctx._pad_token)
         for i, row in enumerate(prompts):
             start = i * ctx.completions_per_prompt
             end = start + ctx.completions_per_prompt
@@ -208,10 +222,9 @@ class LlamaCompletion(GRPOCompletion):
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
         """Generate completions from string prompts, returning decoded strings."""
-        tokenizer = self._ctx.tokenizer
-        prompts = [tokenizer.encode(s) for s in prompt_strs]
+        prompts = [self._ctx._tokenizer.encode(s) for s in prompt_strs]
         completions = self.generate(prompts)
-        return [tokenizer.decode(c, skip_special_tokens=False) for c in completions]
+        return [self._ctx._tokenizer.decode(c, skip_special_tokens=False) for c in completions]
 
     def compute_nlog_probs(
         self, prompts: List[List[int]], completions: List[List[int]]
@@ -219,7 +232,7 @@ class LlamaCompletion(GRPOCompletion):
         assert len(completions) == len(prompts)
 
         B = len(completions)
-        pad_token = self._ctx.pad_token
+        pad_token = self._ctx._pad_token
         mesh = self._mesh
 
         assert B % mesh.total_devices == 0
@@ -289,7 +302,7 @@ class LlamaCompletion(GRPOCompletion):
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
         padded_len = _round_up(tokens_np.shape[1])
-        padded = np.full((B, padded_len), self._ctx.pad_token, dtype=np.uint32)
+        padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
             padded.reshape(B, 1, 1, padded_len), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._mesh.dp_mapper
@@ -322,7 +335,7 @@ class LlamaCompletion(GRPOCompletion):
         return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
     def _get_stop_ids(self) -> set[int]:
-        tokenizer = self._ctx.tokenizer
+        tokenizer = self._ctx._tokenizer
         stop_ids: set[int] = set()
         if tokenizer.eos_token_id is not None:
             stop_ids.add(int(tokenizer.eos_token_id))
@@ -363,7 +376,7 @@ class LlamaCompletion(GRPOCompletion):
 
         B_local = B // self._mesh.total_devices
 
-        V = len(ctx.tokenizer)
+        V = len(ctx._tokenizer)
         padded_V = _round_up(V)
 
         kv_cache = self._get_kv_cache(B_local)
@@ -393,7 +406,7 @@ class LlamaCompletion(GRPOCompletion):
                 token_tensor = ttnn.pad(
                     last_token_column,
                     [(0, 0), (0, 0), (0, 0), (0, TILE_SIZE - 1)],
-                    ctx.pad_token,
+                    ctx._pad_token,
                 )
                 token_tensor = ttml.autograd.Tensor(token_tensor, False)
 

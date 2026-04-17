@@ -4,8 +4,8 @@
 
 import pytest
 
-from utils.llama_completion import CompletionCtx
-from utils.llama_completion import LlamaCompletion
+from utils.llama_completion import LlamaCompletionCtx
+from utils.llama_completion import LlamaCompleter
 
 HF_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TEMPERATURE = 0.0
@@ -58,8 +58,8 @@ def to_chat_prompt(tokenizer, user_text: str) -> str:
 
 @pytest.mark.slow
 def test_capitals_one_by_one_equals_single_batch():
-    llama = LlamaCompletion(
-        ctx=CompletionCtx(
+    llama = LlamaCompleter(
+        ctx=LlamaCompletionCtx(
             max_tokens_to_complete=MAX_COMPLETION_LENGTH,
             temperature=TEMPERATURE,
             completions_per_prompt=NUM_GENERATIONS,
@@ -69,10 +69,10 @@ def test_capitals_one_by_one_equals_single_batch():
         model_source=HF_MODEL_ID,
     )
 
-    assert llama.ctx.completions_per_prompt == 1, "This test expects completions_per_prompt=1 for 1:1 comparison."
-    assert llama.ctx.temperature == 0.0, "This test expects greedy decoding (temperature=0)."
+    assert NUM_GENERATIONS == 1, "This test expects num_generations=1 for 1:1 comparison."
+    assert TEMPERATURE == 0.0, "This test expects greedy decoding (temperature=0)."
 
-    tokenizer = llama.ctx.tokenizer
+    tokenizer = llama.tokenizer
     user_prompts = [
         "The capital of France is",
         "The capital of Portugal is",

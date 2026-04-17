@@ -13,8 +13,8 @@ from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import TrainerCallback
 from ttml.trainers import GRPOTrainer
 from utils.config import read_yaml
-from utils.llama_completion import CompletionCtx
-from utils.llama_completion import LlamaCompletion
+from utils.llama_completion import LlamaCompletionCtx
+from utils.llama_completion import LlamaCompleter
 
 
 class GRPOMonitor(TrainerCallback):
@@ -78,8 +78,8 @@ if __name__ == "__main__":
     )
     grpo_config.output_dir = output_dir
 
-    completion = LlamaCompletion(
-        ctx=CompletionCtx(
+    completer = LlamaCompleter(
+        ctx=LlamaCompletionCtx(
             max_tokens_to_complete=grpo_config.max_completion_length,
             temperature=grpo_config.temperature,
             completions_per_prompt=grpo_config.num_generations,
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     )
 
     grpo_trainer = GRPOTrainer(
-        completion=completion,
+        completer=completer,
         dataset=dataset,
         config=grpo_config,
         reward_func=boolq_reward,

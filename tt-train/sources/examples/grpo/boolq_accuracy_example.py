@@ -12,8 +12,8 @@ from typing import Sequence, Iterator
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.llama_completion import CompletionCtx
-from utils.llama_completion import LlamaCompletion
+from utils.llama_completion import LlamaCompletionCtx
+from utils.llama_completion import LlamaCompleter
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 SYSTEM_PROMPT = "You are a concise assistant that outputs short sentences. Print Yes or No in the first sentence. Make sure your Yes/No answer is factually correct."
@@ -51,16 +51,17 @@ DEVICE_CONFIG = {
 
 
 def iter_generated_completions(
-    llama: LlamaCompletion,
+    llama: LlamaCompleter,
     prompts: Sequence[str],
     batch_size: int = 32,
+    num_generations: int = 1,
 ) -> Iterator[tuple[int, str, str]]:
     for start in range(0, len(prompts), batch_size):
         end = min(start + batch_size, len(prompts))
         prompt_batch = list(prompts[start:end])
         batch_completions = llama.generate_str(prompt_batch)
-        if llama.ctx.completions_per_prompt != 1:
-            raise ValueError(f"Expected completions_per_prompt=1, got {llama.ctx.completions_per_prompt}")
+        if num_generations != 1:
+            raise ValueError(f"Expected num_generations=1, got {num_generations}")
         for offset, completion in enumerate(batch_completions):
             i = start + offset
             yield i, prompts[i], completion
@@ -113,8 +114,8 @@ if __name__ == "__main__":
         )
         csv_writer.writeheader()
 
-        llama = LlamaCompletion(
-            ctx=CompletionCtx(
+        llama = LlamaCompleter(
+            ctx=LlamaCompletionCtx(
                 max_tokens_to_complete=MAX_COMPLETION_LENGTH,
                 temperature=TEMPERATURE,
                 completions_per_prompt=NUM_GENERATIONS,
