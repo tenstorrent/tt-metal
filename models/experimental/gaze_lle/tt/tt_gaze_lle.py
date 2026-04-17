@@ -218,6 +218,15 @@ class TtGazeLLE:
         self.gaze_pos_embed_tt = _to_device(pe, device)
         self.head_token_tt = _to_device(ref_model.head_token.weight.unsqueeze(0), device)  # (1, 1, 256)
 
+        # --- Constants for on-device head-map generation from a 4-scalar bbox.
+        fh, fw = self.featmap_h, self.featmap_w
+        self.idx_h_tt = _to_device(
+            torch.arange(fh, dtype=torch.float32).view(1, fh, 1), device
+        )
+        self.idx_w_tt = _to_device(
+            torch.arange(fw, dtype=torch.float32).view(1, 1, fw), device
+        )
+
         if inout:
             self.inout_token = _to_device(ref_model.inout_token.weight.unsqueeze(0), device)
             # Reference inout_head = Sequential(Linear 256->128, ReLU, Linear 128->1, Sigmoid)
@@ -296,9 +305,27 @@ class TtGazeLLE:
         ttnn.deallocate(feat_tt)
         x_tt = ttnn.add(x_tt, self.gaze_pos_embed_tt)
 
-        head_map = torch.stack([ref._bbox_to_head_map(bb) for bb in bboxes]).view(b, -1, 1).contiguous()
-        head_map_tt = _to_device(head_map, self.device)
-        head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # broadcast → (B, 1024, 256)
+        # ---- Build head-map on device from a 4-scalar bbox. Eliminates the
+        # mid-pipeline upload of the pre-computed (1024,) mask.
+        bbox = bboxes[0]
+        fh, fw = self.featmap_h, self.featmap_w
+        xmin_pix = round(bbox[0] * fw)
+        ymin_pix = round(bbox[1] * fh)
+        xmax_pix = round(bbox[2] * fw)
+        ymax_pix = round(bbox[3] * fh)
+        h_mask = ttnn.mul(
+            ttnn.ge(self.idx_h_tt, float(ymin_pix)),
+            ttnn.lt(self.idx_h_tt, float(ymax_pix)),
+        )  # (1, fh, 1)
+        w_mask = ttnn.mul(
+            ttnn.ge(self.idx_w_tt, float(xmin_pix)),
+            ttnn.lt(self.idx_w_tt, float(xmax_pix)),
+        )  # (1, 1, fw)
+        mask_2d = ttnn.mul(h_mask, w_mask)  # broadcast → (1, fh, fw)
+        ttnn.deallocate(h_mask)
+        ttnn.deallocate(w_mask)
+        head_map_tt = ttnn.reshape(mask_2d, (b, fh * fw, 1))
+        head_contrib = ttnn.mul(head_map_tt, self.head_token_tt)  # (B, 1024, 256)
         ttnn.deallocate(head_map_tt)
         x_tt = ttnn.add(x_tt, head_contrib)
         ttnn.deallocate(head_contrib)
@@ -333,9 +360,8 @@ class TtGazeLLE:
         hm = ttnn.add(hm, self.heatmap_b_tt)
         hm = ttnn.sigmoid(hm)
 
-        # ---- 9. Download the small outputs. The (B, 1024, 4) → (B, 64, 64) re-interleave is
-        # a pure view on contiguous memory.
-        heatmap_compact = ttnn.to_torch(hm).to(torch.float32)  # (B, 1024, 4)
+        # ---- 9. Download the small outputs.
+        heatmap_compact = ttnn.to_torch(hm).to(torch.float32)
         ttnn.deallocate(hm)
         heatmap = (
             heatmap_compact.view(b, self.featmap_h, self.featmap_w, 2, 2)
