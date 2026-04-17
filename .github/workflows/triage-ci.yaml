@@ -20,6 +20,10 @@ on:
         description: "Verify mode: full pytest path"
         type: string
         default: ""
+      verify-expected-failure-sig:
+        description: "Verify mode: expected failure signature (for AI classification)"
+        type: string
+        default: ""
       poll-interval-seconds:
         description: "Verify mode: seconds between status checks"
         type: string
@@ -67,6 +71,8 @@ jobs:
       test-pipeline: ${{ inputs.verify-test-pipeline }}
       test-job: ${{ inputs.verify-test-job }}
       test-name: ${{ inputs.verify-test-name }}
+      expected-failure-sig: ${{ inputs.verify-expected-failure-sig }}
       poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
     secrets:
       GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
