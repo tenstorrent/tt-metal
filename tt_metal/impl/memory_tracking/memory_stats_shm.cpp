@@ -42,12 +42,12 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     std::string shm_name = "/tt_device_" + std::to_string(asic_id) + "_memory";
 
     // Try exclusive create first to see if we're the first
-    shm_fd_ = shm_open(shm_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+    shm_fd_ = shm_open(shm_name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
     if (shm_fd_ != -1) {
         is_creator_ = true;
     } else if (errno == EEXIST) {
         // Already exists, just open it
-        shm_fd_ = shm_open(shm_name.c_str(), O_RDWR, 0666);
+        shm_fd_ = shm_open(shm_name.c_str(), O_RDWR, 0600);
         is_creator_ = false;
     }
 
@@ -504,10 +504,11 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::find_or_create_pid_
         }
     }
 
-    // Not found, create new entry
+    // Not found, create new entry. Use CAS so multiple processes racing to
+    // claim a slot cannot both win the same one.
     for (auto & processe : region_->processes) {
-        if (processe.pid.load(std::memory_order_relaxed) == 0) {
-            processe.pid.store(pid, std::memory_order_relaxed);
+        pid_t expected = 0;
+        if (processe.pid.compare_exchange_strong(expected, pid, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             processe.dram_allocated.store(0, std::memory_order_relaxed);
             processe.l1_allocated.store(0, std::memory_order_relaxed);
             processe.l1_small_allocated.store(0, std::memory_order_relaxed);
