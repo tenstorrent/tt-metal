@@ -50,11 +50,15 @@ def main():
     # ------------------------------------------------------------------ #
     # Device + model setup                                                 #
     # ------------------------------------------------------------------ #
-    # Use all available devices. For Loudbox (8×N150): MeshShape auto-detected.
-    # For single device: MeshShape(1, 1).
+    # Single device: MeshShape(1, 1). T3K: MeshShape(1, 8) + FABRIC_1D.
     import os
 
     num_devices = int(os.environ.get("TT_NUM_DEVICES", 1))
+    if num_devices > 1:
+        # Multi-device needs fabric for inter-device communication (paged attention,
+        # all-gather, all-reduce). T3K uses 1D fabric.
+        print(f"Setting fabric config (FABRIC_1D) for {num_devices} devices...")
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_shape = ttnn.MeshShape(1, num_devices)
     print(f"Opening mesh device ({mesh_shape})...")
     mesh_device = ttnn.open_mesh_device(mesh_shape)
