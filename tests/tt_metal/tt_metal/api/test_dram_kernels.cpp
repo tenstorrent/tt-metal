@@ -139,19 +139,19 @@ TEST_F(BlackholeSingleCardFixture, TensixReadFromDRISCL1) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
-    CoreCoord logical_core_dram{0, 0};
+    CoreCoord logical_core_drisc{0, 0};
     CoreCoord logical_core_tensix{0, 0};
-    CoreCoord dram_virtual = device->virtual_core_from_logical_core(logical_core_dram, CoreType::DRAM);
+    CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
 
-    uint32_t dram_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t drisc_l1_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     uint32_t tensix_l1_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    uint64_t drisc_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     // Host writes magic value to DRISC L1
-    uint64_t write_addr = static_cast<uint64_t>(dram_l1_addr) + dram_l1_noc_offset;
+    uint64_t write_addr = static_cast<uint64_t>(drisc_l1_addr) + drisc_l1_noc_offset;
     std::vector<uint32_t> write_data = {kMagicValue};
     MetalContext::instance().get_cluster().write_core(
-        write_data.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual), write_addr);
+        write_data.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), drisc_virtual), write_addr);
 
     // Tensix kernel reads from DRISC L1
     distributed::MeshWorkload workload;
@@ -163,7 +163,7 @@ TEST_F(BlackholeSingleCardFixture, TensixReadFromDRISCL1) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args = {tensix_l1_addr, dram_l1_addr, dram_virtual.x, dram_virtual.y}});
+            .compile_args = {tensix_l1_addr, drisc_l1_addr, drisc_virtual.x, drisc_virtual.y}});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
@@ -190,14 +190,14 @@ TEST_F(BlackholeSingleCardFixture, DRISCReadFromTensixL1) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
 
-    CoreCoord logical_core_dram{0, 0};
+    CoreCoord logical_core_drisc{0, 0};
     CoreCoord logical_core_tensix{0, 0};
     CoreCoord tensix_virtual = device->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
-    CoreCoord dram_virtual = device->virtual_core_from_logical_core(logical_core_dram, CoreType::DRAM);
+    CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
 
     uint32_t l1_unreserved_base_tensix = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t l1_unreserved_base_dram = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    uint32_t l1_unreserved_base_drisc = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint64_t drisc_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     // Host writes magic value to Tensix L1
     std::vector<uint32_t> write_data = {kMagicValue};
@@ -210,21 +210,21 @@ TEST_F(BlackholeSingleCardFixture, DRISCReadFromTensixL1) {
     // DRISC kernel reads from Tensix L1 into DRISC L1
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_to_tensix.cpp",
-        logical_core_dram,
+        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_read_from_tensix.cpp",
+        logical_core_drisc,
         DramConfig{
             .noc = NOC::NOC_0,
-            .compile_args = {l1_unreserved_base_tensix, l1_unreserved_base_dram, tensix_virtual.x, tensix_virtual.y}});
+            .compile_args = {l1_unreserved_base_tensix, l1_unreserved_base_drisc, tensix_virtual.x, tensix_virtual.y}});
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
     // Verify by reading from DRISC L1
-    uint64_t read_addr = static_cast<uint64_t>(l1_unreserved_base_dram) + dram_l1_noc_offset;
+    uint64_t read_addr = static_cast<uint64_t>(l1_unreserved_base_drisc) + drisc_l1_noc_offset;
     std::vector<uint32_t> result(1, 0);
     MetalContext::instance().get_cluster().read_core(
-        result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), dram_virtual), read_addr);
+        result.data(), sizeof(uint32_t), tt_cxy_pair(mesh_device->build_id(), drisc_virtual), read_addr);
     log_info(LogTest, "DRISC L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
     EXPECT_EQ(result[0], kMagicValue) << "DRISC should have read the value from Tensix L1";
 }
