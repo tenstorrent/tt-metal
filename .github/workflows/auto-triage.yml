@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_name:
-        description: "Workflow file name to inspect (e.g., galaxy-quick)"
+        description: "Workflow file base name under .github/workflows (e.g., .github/workflows/galaxy-quick.yml → galaxy-quick; t3000-unit-tests; single-card-demo-tests), without .yml/.yaml extension"
         required: true
         type: string
       job_name:
@@ -25,6 +25,11 @@ on:
         description: "Slack channel ID for sending notifications"
         required: false
         default: ''
+        type: string
+      cutoff_commit:
+        description: "Optional commit SHA to ignore runs newer than this commit"
+        required: false
+        default: ""
         type: string
 
 
@@ -51,6 +56,7 @@ jobs:
           slack_ts: ${{ inputs.slack_ts }}
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
+          cutoff-commit: ${{ inputs.cutoff_commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action

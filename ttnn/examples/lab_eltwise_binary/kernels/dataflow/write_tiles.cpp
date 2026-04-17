@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ void kernel_main() {
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM
     // buffers (which is most often the case).
-    constexpr uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Create address generator for the output buffer. Address generators can determine
     // physical address based on the provided data layout and base address.
@@ -27,7 +26,7 @@ void kernel_main() {
     // Then, construct the address generator for the output buffer.
     // Observe that here we are just constructing the address generator object, but not using it yet.
     // It will be used in the loop below to determine the address to write the tiles to.
-    const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr, tile_size_bytes);
+    const auto out0_addr_gen = TensorAccessor(out0_layout_args, out0_base_addr);
 
     // Loop over all the tiles and write them to the output buffer.
     for (uint32_t i = 0; i < n_tiles; i++) {

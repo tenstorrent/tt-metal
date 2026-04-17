@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,9 +7,10 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
+
 namespace ttnn::operations::index_fill {
 struct IndexFillOperation {
     struct operation_attributes_t {

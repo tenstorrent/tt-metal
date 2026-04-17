@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
-    constexpr uint32_t input_tensor_page_size = get_named_compile_time_arg_val("input_tensor_page_size");
     constexpr auto src_args = TensorAccessorArgs<0>();
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
@@ -50,7 +49,7 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    const auto s0 = TensorAccessor(src_args, src_addr, input_tensor_page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;

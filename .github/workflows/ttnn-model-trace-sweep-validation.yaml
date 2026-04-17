@@ -1,0 +1,110 @@
+name: "ttnn - model trace sweep validation"
+
+run-name: >-
+  ttnn - model trace sweep validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow-partial-hash-changes:
+        type: boolean
+        description: "Continue if config hash changes are detected during preflight, including when all hashes change"
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  inspect-trace-selection-registry:
+    name: Inspect trace selection registry
+    runs-on: ubuntu-latest
+    outputs:
+      trace-selection-registry-path: ${{ steps.parse-trace-selection-registry.outputs.trace_selection_registry_path }}
+      scope-targets: ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}
+      selected-models: ${{ steps.parse-trace-selection-registry.outputs.selected_models }}
+      selected-trace-ids: ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}
+      caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install registry parser dependency
+        run: pip3 install PyYAML
+
+      - name: Parse trace selection registry
+        id: parse-trace-selection-registry
+        run: |
+          python3 - <<'PY'
+          import os
+          import yaml
+
+          registry_path = "model_tracer/trace_selection_registry.yaml"
+          with open(registry_path, "r", encoding="utf-8") as f:
+              registry_data = yaml.safe_load(f)
+
+          targets = registry_data.get("targets", {})
+          target_keys = set(targets.keys())
+          if target_keys == {"lead_models"}:
+              scope_target = "lead_models"
+          elif target_keys == {"model_traced"}:
+              scope_target = "model_traced"
+          elif {"lead_models", "model_traced"}.issubset(target_keys):
+              scope_target = "all"
+          else:
+              scope_target = "none"
+
+          all_models = []
+          all_trace_ids = []
+          for entries in targets.values():
+              for entry in entries or []:
+                  all_models.extend(entry.get("model", []))
+                  all_trace_ids.extend(entry.get("trace", []))
+
+          unique_models = sorted(set(all_models))
+          unique_trace_ids = sorted(set(all_trace_ids))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"trace_selection_registry_path={registry_path}\n")
+              out.write(f"scope_targets={scope_target}\n")
+              out.write(f"selected_models={', '.join(unique_models) or 'none'}\n")
+              out.write(
+                  f"selected_trace_ids={', '.join(str(trace_id) for trace_id in unique_trace_ids) or 'auto-resolve'}\n"
+              )
+          PY
+
+      - name: Display selected registry options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│        TTNN Model Trace Sweep Validation Configuration      │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Branch/Ref:           ${{ github.ref_name }}"
+          echo "│ Registry:             ${{ steps.parse-trace-selection-registry.outputs.trace_selection_registry_path }}"
+          echo "│ Selected Scope:       ${{ steps.parse-trace-selection-registry.outputs.scope_targets }}"
+          echo "│ Selected Models:      ${{ steps.parse-trace-selection-registry.outputs.selected_models }}"
+          echo "│ Selected Trace IDs:   ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}"
+          echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "::endgroup::"
+
+  run-model-trace-sweep-validation:
+    name: Run model trace sweep validation
+    needs: inspect-trace-selection-registry
+    uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
+    secrets: inherit
+    with:
+      manifest-path: ${{ needs.inspect-trace-selection-registry.outputs.trace-selection-registry-path }}
+      scope-targets: ${{ needs.inspect-trace-selection-registry.outputs.scope-targets }}
+      models: ${{ needs.inspect-trace-selection-registry.outputs.selected-models }}
+      trace-ids: ${{ needs.inspect-trace-selection-registry.outputs.selected-trace-ids }}
+      caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
+      allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}

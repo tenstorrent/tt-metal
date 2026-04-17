@@ -1,18 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
@@ -129,14 +130,10 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{xtensor_data.data(), xtensor_data.size()},
-        []() { return std::uniform_real_distribution<float>(-0.05, 0.05); },
-        seed);
-    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 32, 32});
+    xt::xarray<float> xtensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 32, 32}, -0.05F, 0.05F, seed);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -160,14 +157,10 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_data = xt::empty<float>({32});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{xtensor_data.data(), xtensor_data.size()},
-        []() { return std::uniform_real_distribution<float>(-1.F, 1.F); },
-        seed);
-    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 4, 8});
+    xt::xarray<float> xtensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 4, 8}, -1.0F, 1.0F, seed);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -204,22 +197,14 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{xtensor_a_data.data(), xtensor_a_data.size()},
-        []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
-        seed);
-    xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 128, 64}, -0.005F, 0.005F, seed);
 
-    xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
     uint32_t seed2 = rng();
-    ttml::core::parallel_generate(
-        std::span{xtensor_b_data.data(), xtensor_b_data.size()},
-        []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
-        seed2);
-    xt::xarray<float> xtensor_b = xtensor_b_data.reshape({1, 1, 64, 256});
+    xt::xarray<float> xtensor_b =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 64, 256}, -0.005F, 0.005F, seed2);
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, ttnn::Layout::TILE, mapper.get());

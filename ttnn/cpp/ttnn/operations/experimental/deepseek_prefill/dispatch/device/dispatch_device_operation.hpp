@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,6 @@
 
 #include "dispatch_types.hpp"
 #include "dispatch_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 

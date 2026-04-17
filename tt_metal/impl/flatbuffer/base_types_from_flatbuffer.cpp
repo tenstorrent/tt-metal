@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,6 +82,7 @@ tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input) {
         case flatbuffer::DataFormat::Tf32: return tt::DataFormat::Tf32;
         case flatbuffer::DataFormat::UInt8: return tt::DataFormat::UInt8;
         case flatbuffer::DataFormat::UInt16: return tt::DataFormat::UInt16;
+        case flatbuffer::DataFormat::Int16: return tt::DataFormat::Int16;
         case flatbuffer::DataFormat::Int32: return tt::DataFormat::Int32;
         case flatbuffer::DataFormat::UInt32: return tt::DataFormat::UInt32;
         case flatbuffer::DataFormat::RawUInt8: return tt::DataFormat::RawUInt8;

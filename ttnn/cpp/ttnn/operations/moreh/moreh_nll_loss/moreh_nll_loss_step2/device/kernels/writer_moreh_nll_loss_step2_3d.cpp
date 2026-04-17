@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,9 +18,7 @@ void kernel_main() {
 
     constexpr auto output_args = TensorAccessorArgs<0>();
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_output);
-
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;

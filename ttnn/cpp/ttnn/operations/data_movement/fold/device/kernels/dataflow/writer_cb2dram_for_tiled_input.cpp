@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
     constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch
     // Initialize DRAM address generator for interleaved memory access
-    const auto dst = TensorAccessor(dst_args, dst_addr, stick_nbytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     // Processing loop bounds and state variables
     const uint32_t end_block_id = start_block_id + num_blocks;

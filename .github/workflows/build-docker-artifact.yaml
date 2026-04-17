@@ -66,8 +66,8 @@ on:
         type: choice
         default: "Ubuntu 22.04"
         options:
-            - "Ubuntu 22.04"
-            - "Ubuntu 24.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
         description: "Platform to build Docker images for"
       architecture:
         required: false
@@ -201,9 +201,9 @@ jobs:
         id: llk-images
         run: |
           set -euo pipefail
-          LLK="tt_metal/third_party/tt_llk"
+          LLK="tt_metal/tt-llk"
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
