@@ -56,6 +56,7 @@ def patch_embed(img: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, dev
 _ROPE_CACHE: dict = {}
 _POS_MAX_CACHE: dict = {}
 _ROPE_LUT_CACHE: dict = {}
+_DEVICE_ROPE_CACHE: dict = {}
 
 
 def _rope_cos_sin(D: int, max_pos: int, base: float, dtype):
@@ -127,6 +128,34 @@ def _rope_apply(tokens: torch.Tensor, pos: torch.Tensor, base: float = 100.0) ->
     return tokens * cos_full + rotated * sin_full
 
 
+def _rope_lut_device(pos: torch.Tensor, dh: int, device, base: float = 100.0):
+    """cos_full / sin_full of shape (B, 1, N, dh) uploaded to device — cached
+    per (pos object id, dh) so we pay one upload per inference.
+    """
+    key = (id(pos), dh, base, id(device))
+    cached = _DEVICE_ROPE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    cos_full, sin_full = _rope_lut_host(pos, dh // 2, base, torch.bfloat16)
+    tt_cos = ttnn.from_torch(cos_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_sin = ttnn.from_torch(sin_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _DEVICE_ROPE_CACHE[key] = (tt_cos, tt_sin)
+    return tt_cos, tt_sin
+
+
+def _rope_device(tt_t, tt_cos, tt_sin, B: int, H: int, N: int, dh: int):
+    """Apply DUSt3R 2D RoPE on device. tt_t: (B, H, N, dh) — split y/x halves,
+    rotate each half independently via the [-b, a, -d, c] pattern.
+    """
+    Q = dh // 4
+    a = ttnn.slice(tt_t, [0, 0, 0, 0],         [B, H, N, Q])
+    b = ttnn.slice(tt_t, [0, 0, 0, Q],         [B, H, N, 2 * Q])
+    c = ttnn.slice(tt_t, [0, 0, 0, 2 * Q],     [B, H, N, 3 * Q])
+    d = ttnn.slice(tt_t, [0, 0, 0, 3 * Q],     [B, H, N, 4 * Q])
+    rotated = ttnn.concat([ttnn.neg(b), a, ttnn.neg(d), c], dim=-1)
+    return ttnn.add(ttnn.mul(tt_t, tt_cos), ttnn.mul(rotated, tt_sin))
+
+
 # ---------- Encoder block (device-resident) ----------
 
 def _preload_enc_block_weights(state: dict, i: int, device) -> dict:
@@ -172,12 +201,10 @@ def encoder_block_device_pre(
     tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
         tt_qkv, num_heads=heads, transpose_key=False
     )
-    q = ttnn.to_torch(tt_q)
-    k = ttnn.to_torch(tt_k)
-    q = _rope_apply(q, pos)
-    k = _rope_apply(k, pos)
-    tt_q = _t2d(q, device)
-    tt_k = _t2d(k, device)
+    # On-device 2D RoPE — eliminates the host roundtrip for q/k.
+    tt_cos, tt_sin = _rope_lut_device(pos, dh, device)
+    tt_q = _rope_device(tt_q, tt_cos, tt_sin, B, heads, N, dh)
+    tt_k = _rope_device(tt_k, tt_cos, tt_sin, B, heads, N, dh)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
     tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)  # (B, N, D)
     tt_proj = ttnn.linear(tt_ctx, tt_w["pw"], bias=tt_w["pb"])
@@ -521,12 +548,9 @@ def decoder_block_device_pre(
     tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
         tt_qkv, num_heads=heads, transpose_key=False
     )
-    q = ttnn.to_torch(tt_q)
-    k = ttnn.to_torch(tt_k)
-    q = _rope_apply(q, pos_x)
-    k = _rope_apply(k, pos_x)
-    tt_q = _t2d(q, device)
-    tt_k = _t2d(k, device)
+    tt_cos, tt_sin = _rope_lut_device(pos_x, dh, device)
+    tt_q = _rope_device(tt_q, tt_cos, tt_sin, B, heads, N, dh)
+    tt_k = _rope_device(tt_k, tt_cos, tt_sin, B, heads, N, dh)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
     tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)  # 1 op vs permute+reshape
     tt_proj = ttnn.linear(tt_ctx, tt_w["proj_w"], bias=tt_w["proj_b"])
@@ -542,12 +566,11 @@ def decoder_block_device_pre(
     tt_q, tt_k, tt_v = ttnn.transformer.split_query_key_value_and_split_heads(
         tt_qc, kv_input_tensor=tt_kvc, num_heads=heads, transpose_key=False
     )
-    q = ttnn.to_torch(tt_q)
-    k = ttnn.to_torch(tt_k)
-    q = _rope_apply(q, pos_x)
-    k = _rope_apply(k, pos_y)
-    tt_q = _t2d(q, device)
-    tt_k = _t2d(k, device)
+    tt_cos_q, tt_sin_q = _rope_lut_device(pos_x, dh, device)
+    tt_cos_k, tt_sin_k = _rope_lut_device(pos_y, dh, device)
+    M = int(tt_y.shape[1])
+    tt_q = _rope_device(tt_q, tt_cos_q, tt_sin_q, B, heads, N, dh)
+    tt_k = _rope_device(tt_k, tt_cos_k, tt_sin_k, B, heads, M, dh)
     tt_ctx = ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False)
     tt_ctx = ttnn.transformer.concatenate_heads(tt_ctx)
     tt_cproj = ttnn.linear(tt_ctx, tt_w["cp_w"], bias=tt_w["cp_b"])
