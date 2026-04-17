@@ -70,7 +70,6 @@ def test_gemma_vision(
         state_dict_prefix="model.vision_tower.vision_model.",
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 
