@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -62,13 +63,13 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
         # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -158,8 +159,21 @@ def run(
                 num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
                 if num_shards > num_cores:
                     shard_ok = False
+                # Validate all core coordinates fit within compute grid (excludes dispatch cores)
+                shard_grid = shard_spec.grid
+                for cr in shard_grid:
+                    if cr.start.x >= grid.x or cr.start.y >= grid.y or cr.end.x >= grid.x or cr.end.y >= grid.y:
+                        shard_ok = False
+                        break
+                # Also check total cores in shard grid don't exceed available compute cores
+                if shard_ok:
+                    total_shard_cores = 0
+                    for cr in shard_grid:
+                        total_shard_cores += (cr.end.x - cr.start.x + 1) * (cr.end.y - cr.start.y + 1)
+                    if total_shard_cores > num_cores:
+                        shard_ok = False
         except Exception:
-            pass
+            shard_ok = False
 
         if shard_ok:
             # Convert to sharded using the traced config

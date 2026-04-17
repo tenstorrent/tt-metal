@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,10 +83,9 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
 
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<13>();
-    auto intermediate_tensor_addrgen =
-        TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, tensor0_page_size);
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
     constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
-    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr, tensor0_page_size);
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open_finish();

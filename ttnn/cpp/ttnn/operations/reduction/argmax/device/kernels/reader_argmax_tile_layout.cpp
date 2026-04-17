@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,6 @@ void kernel_main() {
     constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
 
     constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
 
     constexpr uint32_t tile_height = get_compile_time_arg_val(4);
     constexpr uint32_t tile_width = get_compile_time_arg_val(5);
@@ -47,8 +46,8 @@ void kernel_main() {
     constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
-    auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     using dst_accessor_type = decltype(s_dst);
 

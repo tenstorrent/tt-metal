@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(6);
     uint32_t local_scratch_addr = get_arg_val<uint32_t>(7);
 
-    auto s = TensorAccessor(accessor_args, src_buffer_addr, page_size_bytes);
+    auto s = TensorAccessor(accessor_args, src_buffer_addr);
 
     experimental::Noc noc(noc_index);
     experimental::UnicastEndpoint unicast_ep;

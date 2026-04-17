@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -291,7 +291,7 @@ void py_module(nb::module_& m) {
             },
             nb::rv_policy::reference,
             "Get distributed context");
-        py_auto_context.def("get_profiler", &AutoContext::get_profiler, "Get profiler");
+        py_auto_context.def("get_profiler", &AutoContext::get_profiler, nb::rv_policy::reference, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
 

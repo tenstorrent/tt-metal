@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,10 +90,11 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
 
-#define ASSERT(condition, ...) \
-    do {                       \
-        if (!(condition))      \
-            while (true);      \
+#define ASSERT(condition, ...)      \
+    do {                            \
+        if (!(condition)) {         \
+            asm volatile("ebreak"); \
+        }                           \
     } while (0)
 
 #define ASSERT_ENABLED 1

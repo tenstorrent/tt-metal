@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,10 +25,11 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
-        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] == 32 &&
+        a.logical_shape()[0] == 1 && a.logical_shape()[1] == 1 && a.logical_shape()[2] <= 32 &&
             a.logical_shape()[3] % 32 == 0,
-        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,32,M) where "
-        "M is a multiple of 32");
+        "Input tensor shape does not meet the requirements set by this OP: input tensor shape must be (1,1,M,N) "
+        "where "
+        "M <= 32 and N is a multiple of 32");
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
@@ -266,7 +267,7 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
     using OperationType = ttnn::experimental::prim::RMSAllGatherDeviceOperation;
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 

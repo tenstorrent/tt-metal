@@ -23,6 +23,8 @@ on:
         options:
           - disabled
           - all
+          - t3k_ttmetal_tests
+          - t3k_ttnn_tests
           - falcon7b
           - falcon40b
           - llama3-small

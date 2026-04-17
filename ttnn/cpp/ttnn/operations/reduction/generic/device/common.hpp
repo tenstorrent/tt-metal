@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-enum class ReduceOpMath { SUM, MAX, MIN };
+enum class ReduceOpMath { SUM, MAX, MIN, STD, VAR };
 
 enum class ReduceOpDim { H, W, HW };
 

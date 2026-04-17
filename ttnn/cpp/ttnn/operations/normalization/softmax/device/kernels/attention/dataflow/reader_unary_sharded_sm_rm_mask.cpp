@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,14 +14,13 @@ void kernel_main() {
 #if FUSED_SCALE_MASK
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
     constexpr auto mask_args = TensorAccessorArgs<1>();
-    constexpr uint32_t size = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
     const uint32_t mask_addr = get_arg_val<uint32_t>(2);
     const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
 
-    const auto addr_mask = TensorAccessor(mask_args, mask_addr, size);
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_attn_obj(cb_attn);

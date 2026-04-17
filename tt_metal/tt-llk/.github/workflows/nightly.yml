@@ -1,0 +1,84 @@
+name: 🌙 Nightly Tests
+
+on:
+  schedule:
+    # Run every night at 1AM UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      pytest_markers:
+        description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
+        required: false
+        default: "not perf"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+
+  nightly-test-wormhole:
+    name: "🌀 Nightly Tests (Wormhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    secrets: inherit
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      random_order: false
+      timeout_minutes: 360
+      coverage: true
+      use_durations: false
+
+  nightly-test-blackhole:
+    name: "🕳️ Nightly Tests (Blackhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    secrets: inherit
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      random_order: false
+      timeout_minutes: 360
+      coverage: true
+      use_durations: false
+
+  nightly-summary:
+    name: "📊 Nightly Summary"
+    if: always()
+    needs:
+      - nightly-test-wormhole
+      - nightly-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check nightly test results
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  report-status:
+    name: "🔔 Report status"
+    runs-on: ubuntu-latest
+    if: always()
+    needs: nightly-summary
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "Nightly Tests"
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
+          status: ${{ needs.nightly-summary.result }}

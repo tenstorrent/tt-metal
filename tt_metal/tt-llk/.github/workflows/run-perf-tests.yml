@@ -1,0 +1,123 @@
+name: 🚀 Run Performance Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: "🔍 Detect changes"
+    runs-on: ubuntu-latest
+    if: |
+      contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+    outputs:
+      wormhole: ${{ steps.set.outputs.wormhole }}
+      blackhole: ${{ steps.set.outputs.blackhole }}
+      performance: ${{ steps.set.outputs.performance }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 200
+
+      - name: Detect which directories changed
+        uses: dorny/paths-filter@v4
+        id: filter
+        if: github.event_name != 'schedule'
+        with:
+          filters: |
+              wormhole:
+                - 'tt_llk_wormhole_b0/**'
+              blackhole:
+                - 'tt_llk_blackhole/**'
+              performance:
+                - '**/*perf**'
+                - '**/*profiler**'
+
+      - name: Resolve test triggers (nightly vs changes)
+        id: set
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "wormhole=true" >> $GITHUB_OUTPUT
+            echo "blackhole=true" >> $GITHUB_OUTPUT
+            echo "performance=true" >> $GITHUB_OUTPUT
+          else
+            echo "wormhole=${{ steps.filter.outputs.wormhole }}" >> $GITHUB_OUTPUT
+            echo "blackhole=${{ steps.filter.outputs.blackhole }}" >> $GITHUB_OUTPUT
+            echo "performance=${{ steps.filter.outputs.performance }}" >> $GITHUB_OUTPUT
+          fi
+
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    needs: detect-changes
+    secrets: inherit
+
+  setup-and-test-wormhole:
+    name: "🌀 Performance tests (Wormhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: [build-images, detect-changes]
+    if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
+            needs.detect-changes.outputs.performance == 'true' ||
+            github.event_name == 'workflow_dispatch' ||
+            github.event_name == 'workflow_call' }}
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 5
+      pytest_markers: "perf"
+      timeout_minutes: 240
+      compile_time_args: true
+      multi_core_execution: true
+
+  setup-and-test-blackhole:
+    name: "🕳️ Performance tests (Blackhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: [build-images, detect-changes]
+    if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
+            needs.detect-changes.outputs.performance == 'true' ||
+            github.event_name == 'workflow_dispatch' ||
+            github.event_name == 'workflow_call' }}
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 5
+      pytest_markers: "perf"
+      timeout_minutes: 240
+      compile_time_args: true
+      multi_core_execution: true
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: |
+      always() && (
+      contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+      )
+    needs:
+      - build-images
+      - setup-and-test-wormhole
+      - setup-and-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the required jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole

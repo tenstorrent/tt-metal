@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -134,12 +134,9 @@ void append_fabric_vc2_connection_rt_args(
             .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
             .initial_value = 0});
     } else {
-        worker_teardown_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, CoreType::WORKER);
-        worker_buffer_index_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, CoreType::WORKER);
-        worker_flow_control_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, CoreType::WORKER);
+        worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
+        worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
+        worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0);
     }
 
     // Resolve VC2 sender channel addresses via explicit SenderWorkerAdapterSpec

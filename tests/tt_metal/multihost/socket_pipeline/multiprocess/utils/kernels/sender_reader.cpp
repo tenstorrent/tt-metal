@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ void kernel_main() {
 
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
-    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
+    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
     for (uint32_t i = 0; i < num_loop_iterations; i++) {
         auto noc_read_addr = input_addr_gen.get_noc_addr(0);

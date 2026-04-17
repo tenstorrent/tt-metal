@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,20 +50,16 @@ void kernel_main() {
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_accessor =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
-    const auto index_tensor_output_accessor =
-        TensorAccessor(index_tensor_output_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto index_tensor_output_accessor = TensorAccessor(index_tensor_output_args, index_tensor_buffer_addr);
 
     // Physical core lookup table config
     constexpr uint32_t physical_core_lookup_table_tile_size_bytes = get_tile_size(physical_core_lookup_table_cb_index);
-    const auto physical_core_lookup_table_accessor = TensorAccessor(
-        physical_core_lookup_table_args,
-        physical_core_lookup_table_buffer_addr,
-        physical_core_lookup_table_tile_size_bytes);
+    const auto physical_core_lookup_table_accessor =
+        TensorAccessor(physical_core_lookup_table_args, physical_core_lookup_table_buffer_addr);
 
     // Read lookup table for physical core IDs
     cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);

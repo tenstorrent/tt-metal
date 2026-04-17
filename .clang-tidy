@@ -194,4 +194,4 @@ CheckOptions:
 
 FormatStyle: 'file'
 
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '(?!.*\.pb\.h$).*'

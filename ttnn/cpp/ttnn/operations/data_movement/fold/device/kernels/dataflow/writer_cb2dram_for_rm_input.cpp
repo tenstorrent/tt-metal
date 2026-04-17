@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ void kernel_main() {
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     constexpr uint32_t patch_size = stride_h * stride_w;
-    const auto s_out = TensorAccessor(dst_args, dst_addr, stick_nbytes * patch_size);
+    const auto s_out = TensorAccessor(dst_args, dst_addr);
     uint32_t dst_index = get_arg_val<uint32_t>(1);
     uint32_t intermed_l1_scratch = get_write_ptr(cb_id_in1);
     // Datatypes will be multiple of 2 bytes only so it is safe to use uint16_t pointer

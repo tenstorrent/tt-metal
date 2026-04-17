@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,6 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
     constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t output_tensor_page_size = get_named_compile_time_arg_val("output_tensor_page_size");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
@@ -47,7 +46,7 @@ void kernel_main() {
     const uint32_t end_block = get_arg_val<uint32_t>(2);
 
     // Interleaved address configuration for the destination
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_tensor_page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // Input shape, permutation, and destination strides
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args

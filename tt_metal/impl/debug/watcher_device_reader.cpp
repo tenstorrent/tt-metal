@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,8 @@
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 using namespace tt::tt_metal;
 using std::string;
@@ -84,6 +86,15 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
             static const char* const names[] = {"ierisc", "subordinate_ierisc"};
             TT_FATAL(
                 processor_index < 2,
+                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index,
+                core_type);
+            return names[processor_index];
+        }
+        case HalProgrammableCoreType::DRAM: {
+            static const char* const names[] = {"drisc"};
+            TT_FATAL(
+                processor_index < 1,
                 "Watcher data corrupted, unexpected processor index {} on core {}",
                 processor_index,
                 core_type);
@@ -271,6 +282,8 @@ private:
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
+    void DumpTileCountersBypass() const;
+    void DumpTileCountersWithRemapper() const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -399,6 +412,19 @@ void WatcherDeviceReader::Dump(FILE* file) {
         Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
     }
 
+    // Dump DRAM cores (Blackhole only)
+    {
+        const auto& hal = env.get_hal();
+        bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+        if (has_dram_fw) {
+            const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
+            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
+                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
+                    .Dump();
+            }
+        }
+    }
+
     for (auto k_id : dump_data.used_kernel_names) {
         fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
@@ -474,7 +500,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =
-                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
                 dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
@@ -496,7 +522,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     const auto& rtoptions = reader.env.get_rtoptions();
     const auto& hal = reader.env.get_hal();
     CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
-    auto virtual_coord = reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+    CoreCoord virtual_coord = reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
         reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
@@ -505,6 +531,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_type_str = "acteth";
     } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
         core_type_str = "idleth";
+    } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
+        core_type_str = "dram";
     } else {
         core_type_str = "worker";
     }
@@ -522,7 +550,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
     fprintf(reader.f, "%s: ", core_str.c_str());
 
-    uint64_t mailbox_addr = reader.env.get_hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+    uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =
@@ -548,12 +576,15 @@ void WatcherDeviceReader::Core::Dump() const {
     bool is_eth_core =
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
+    bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
 
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
-        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
+    bool enabled = false;
+    if (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled) {
+        enabled = true;
+    } else if (mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
         TT_THROW(
             "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
             core_str_,
@@ -561,16 +592,15 @@ void WatcherDeviceReader::Core::Dump() const {
             dev_msgs::WatcherEnabled,
             dev_msgs::WatcherDisabled);
     }
-    bool enabled = (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
         if (!rtoptions.watcher_status_disabled()) {
             DumpWaypoints();
         }
-        // Ethernet cores have firmware that starts at address 0, so no need to check it for a
-        // magic value.
-        if (!is_eth_core) {
+        // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
+        if (!is_eth_core && !is_dram_core) {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
@@ -593,21 +623,21 @@ void WatcherDeviceReader::Core::Dump() const {
 
     // Dump state always available
     DumpLaunchMessage();
-    // Ethernet cores don't use the sync reg
-    if (!is_eth_core && rtoptions.get_watcher_dump_all()) {
+    // Ethernet and DRAM cores don't use the sync reg
+    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs();
     }
 
     auto kernel_config = launch_msg_.kernel_config();
-    fprintf(reader_.f, "k_ids:");
+    fprintf(reader_.f, "\nk_ids:");
     auto num_processors = reader_.env.get_hal().get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         const char* separator = (i > 0) ? "|" : "";
         fprintf(reader_.f, "%s%3d", separator, kernel_config.watcher_kernel_ids()[i]);
     }
-    if (!is_eth_core && rtoptions.get_watcher_text_start()) {
+    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_text_start()) {
         uint32_t kernel_config_base = kernel_config.kernel_config_base()[0];
         fprintf(reader_.f, " text_start:");
         for (size_t i = 0; i < num_processors; i++) {
@@ -1052,28 +1082,169 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
     const auto& hal = reader_.env.get_hal();
 
-    if (!hal.has_stream_registers()) {
-        return;
+    if (hal.has_stream_registers()) {
+        uint32_t operand_start_stream = hal.get_operand_start_stream();
+        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+
+        // Read back all of the stream state, most of it is unused
+        std::vector<uint32_t> data;
+        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+            uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+
+            uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
+            uint32_t rcvd = data[0];
+
+            uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
+            data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
+            uint32_t ackd = data[0];
+
+            if (rcvd != ackd) {
+                fprintf(reader_.f, "cb[%u](rcv %u!=ack %u) ", operand, rcvd, ackd);
+            }
+        }
     }
 
-    uint32_t operand_start_stream = hal.get_operand_start_stream();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    // Reads posted/acked tile counters used in DFB synchronization
+    // Mismatch indicates a stalled producer/consumer relationship
+    if (hal.has_tile_counter_registers()) {
+        bool remapper_enabled = false;
+        if (hal.has_remapper()) {
+            auto data = reader_.env.get_cluster().read_core(
+                reader_.device_id, virtual_coord_, hal.get_remapper_global_control_addr(), sizeof(uint32_t));
+            remapper_enabled = (data[0] & 0x1) != 0;
+        }
 
-    // Read back all of the stream state, most of it is unused
-    std::vector<uint32_t> data;
-    for (uint32_t operand = 0; operand < max_cbs; operand++) {
-        uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
+        if (remapper_enabled) {
+            DumpTileCountersWithRemapper();
+        } else {
+            DumpTileCountersBypass();
+        }
+    }
+}
 
-        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
-        uint32_t rcvd = data[0];
+void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
+    const auto& hal = reader_.env.get_hal();
 
-        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
-        data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
-        uint32_t ackd = data[0];
+    // NEO side for reading tiles_available directly
+    // In bypass mode, producer/consumer share same TC
+    uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
+    uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
+    uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
+    uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
+    uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
-        if (rcvd != ackd) {
-            fprintf(reader_.f, "cb[%d](rcv %d!=ack %d) ", operand, rcvd, ackd);
+    for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+        uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+        uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
+
+        uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
+
+        auto capacity_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
+        uint32_t buffer_capacity = capacity_data[0];
+
+        auto tiles_avail_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
+        uint32_t tiles_to_consume = tiles_avail_data[0];
+
+        // tiles_to_consume > 0 means posted != acked (consumer has unprocessed tiles)
+        // Sanity: tiles_to_consume can't exceed buffer_capacity
+        if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+            // Bypass mode: producer/consumer share same TC; producer identity not available without DFB config
+            fprintf(reader_.f, "\n  remapper:N/A NEO_%u tc_id:%u tiles_to_consume:%u", neo_id, tc_id, tiles_to_consume);
+        }
+    }
+}
+
+// Dump tile counter mismatches when remapper is enabled.
+// Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
+//   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
+//   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
+// tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
+void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
+    const auto& hal = reader_.env.get_hal();
+
+    uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
+    uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
+    uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
+    uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
+    uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+
+    auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
+        uint32_t neo_id = client_id % NEO_0;
+        uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
+        auto capacity_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
+        auto tiles_avail_data = reader_.env.get_cluster().read_core(
+            reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_tiles_available_offset, sizeof(uint32_t));
+        return {tiles_avail_data[0], capacity_data[0]};
+    };
+
+    for (uint32_t pair_idx = 0; pair_idx < hal.get_remapper_num_pairs(); pair_idx++) {
+        uint32_t clientL_addr =
+            hal.get_remapper_client_l_config_base_addr() + pair_idx * hal.get_remapper_pair_stride();
+        uint32_t clientR_addr =
+            hal.get_remapper_client_r_config_base_addr() + pair_idx * hal.get_remapper_pair_stride();
+
+        auto clientL_data =
+            reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientL_addr, sizeof(uint32_t));
+        auto clientR_data =
+            reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientR_addr, sizeof(uint32_t));
+
+        tClientL_Config_Reg_u clientL;
+        tClientR_Config_Reg_u clientR;
+        clientL.val = clientL_data[0];
+        clientR.val = clientR_data[0];
+
+        if (clientL.f.valid == 0) {
+            continue;
+        }
+
+        uint32_t id_R[4] = {clientR.f.id_0, clientR.f.id_1, clientR.f.id_2, clientR.f.id_3};
+        uint32_t cnt_sel_R[4] = {clientR.f.cnt_sel_0, clientR.f.cnt_sel_1, clientR.f.cnt_sel_2, clientR.f.cnt_sel_3};
+        bool clientL_is_producer = clientL.f.clientl_is_producer;
+
+        if (clientL_is_producer) {
+            // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
+            uint32_t prod_id = clientL.f.id_L;
+            uint32_t prod_tc_id = clientL.f.cnt_sel_L;
+
+            for (uint32_t slot = 0; slot < 4; slot++) {
+                if (!(clientL.f.valid & (1 << slot))) {
+                    continue;
+                }
+                uint32_t cons_id = id_R[slot];
+                uint32_t cons_tc_id = cnt_sel_R[slot];
+
+                auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
+                if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+                    fprintf(reader_.f, "\n  remapper[%u] ", pair_idx);
+                    fprintClientName(reader_.f, prod_id);
+                    fprintf(reader_.f, " tc_id:%u -> ", prod_tc_id);
+                    fprintClientName(reader_.f, cons_id);
+                    fprintf(reader_.f, " tc_id:%u tiles_to_consume:%u", cons_tc_id, tiles_to_consume);
+                }
+            }
+        } else {
+            // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
+            uint32_t cons_id = clientL.f.id_L;
+            uint32_t cons_tc_id = clientL.f.cnt_sel_L;
+
+            auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
+            if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
+                fprintf(reader_.f, "\n  remapper[%u] ", pair_idx);
+                for (uint32_t slot = 0; slot < 4; slot++) {
+                    if (!(clientL.f.valid & (1 << slot))) {
+                        continue;
+                    }
+                    fprintClientName(reader_.f, id_R[slot]);
+                    fprintf(reader_.f, " ");
+                }
+                fprintf(reader_.f, "-> ");
+                fprintClientName(reader_.f, cons_id);
+                fprintf(reader_.f, " tc_id:%u tiles_to_consume:%u", cons_tc_id, tiles_to_consume);
+            }
         }
     }
 }

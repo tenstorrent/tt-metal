@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,7 +32,17 @@ ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<M
         "Head size ({}) cannot have tile padding. Ensure that the head size is not padded.",
         head_size);
 
-    auto output = ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
+    // The sharded program path only supports sharded-to-sharded operation.
+    // When input is sharded but output is interleaved, fall back to the interleaved path
+    // by converting the input to DRAM/L1 interleaved first.
+    const auto& resolved_mem_config = memory_config.value_or(input_tensor.memory_config());
+    const auto& actual_input =
+        (input_tensor.is_sharded() && !resolved_mem_config.is_sharded())
+            ? ttnn::to_memory_config(
+                  input_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, resolved_mem_config.buffer_type()})
+            : input_tensor;
+
+    auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config);
 
     return ttnn::squeeze(output, 1);
 }

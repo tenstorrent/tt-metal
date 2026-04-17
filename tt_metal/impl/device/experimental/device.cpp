@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,6 +39,17 @@ uint32_t get_worker_noc_hop_distance(
     uint32_t dist_left = src.x >= dst.x ? src.x - dst.x : grid_size.x - dst.x + src.x;
     uint32_t dist_top = src.y >= dst.y ? src.y - dst.y : grid_size.y - dst.y + src.y;
     return dist_left + dist_top;
+}
+
+uint32_t get_worker_noc_hop_distance(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_src,
+    const CoreCoord& logical_dst,
+    NOC noc) {
+    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+    const auto linear_index = mesh_coord.to_linear_index(mesh_device->shape());
+    return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
 }
 
 }  // namespace tt::tt_metal::experimental::Device

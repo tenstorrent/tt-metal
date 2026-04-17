@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -305,7 +305,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         for (const auto cb_index :
              {batch_mean_tensor_cb,
@@ -320,7 +320,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
               tmp1_cb,
               tmp2_cb,
               tmp3_cb}) {
-            unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
 

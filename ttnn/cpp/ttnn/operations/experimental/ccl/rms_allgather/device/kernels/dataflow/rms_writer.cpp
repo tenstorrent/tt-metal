@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(16);
 
     // Data type CTs
-    constexpr uint32_t stick_size = get_compile_time_arg_val(17);
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(18) == 1;
 
     // Reshard writer
@@ -189,7 +188,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;

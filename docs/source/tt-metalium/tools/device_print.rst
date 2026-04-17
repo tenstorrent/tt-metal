@@ -7,28 +7,49 @@ Device Debug Print
 Overview
 --------
 
-``DEVICE_PRINT`` is an experimental feature that is meant to replace ``DPRINT``.
-For more info about ``DPRINT``, see the `kernel_print` tool documentation.
+The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
+addresses, and Circular Buffer data from kernels running on the device. Device-side prints are controlled through API
+calls; the host-side is controlled through environment variables.
 
 Enabling
 --------
 
-To enable ``DEVICE_PRINT`` you need to first enable ``DPRINT``. Then, you should enable feature switch that will allow usage of ``DEVICE_PRINT``.
+Device debug printing can be enabled and configured using the environment variables shown below.  The first
+environment variable, ``TT_METAL_DPRINT_CORES`` specifies which cores the host-side will read print data from, and
+whether this environment variable is defined determines whether printing is enabled during kernel compilation.
+Note that the core coordinates are logical coordinates, so worker cores and ethernet cores both start at (0, 0).
+IMPORTANT: During deprecation period, ``TT_METAL_DEVICE_PRINT`` must also be set to 1 to use the new DEVICE_PRINT system.
+If only TT_METAL_DPRINT_CORES is set, the legacy DPRINT system will be used.
 
 .. code-block::
 
-    export TT_METAL_DEVICE_PRINT=1                    # required, use new DEVICE_PRINT system instead of legacy DPRINT.
+    export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_ETH_CORES=0,0                # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_MESH_COORDS.
+    export TT_METAL_DPRINT_NODES="(M0,D0),(M0,D1)"      # optional, comma separated list of `FabricNodeId` nodes (unique node identifiers in format (Mn,Dn), where M is mesh ID and D is device ID) OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_MESH_COORDS.
+    export TT_METAL_DPRINT_MESH_COORDS="(0,0),(1,3)"    # optional, comma separated list of (row,col) coordinates in the global system mesh OR all. Default is all. Mutually exclusive with TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES.
+    export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*
+    export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
+    export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
+    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
+    export TT_METAL_DEVICE_PRINT=1                      # required, use new DEVICE_PRINT system instead of legacy DPRINT. This option is available only during deprecation period of DPRINT, and will be removed in a future release.
 
-To generate device debug prints, include the ``api/debug/dprint.h`` header and use the APIs defined there.
+To generate device debug prints on the device, include the ``api/debug/device_print.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
 
 .. code-block:: c++
 
-    #include "api/debug/dprint.h"  // required in all kernels using DPRINT
+    #include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
+
+    enum TestEnum { VAL0, VAL1, VAL2 };
 
     void kernel_main() {
-        // Direct printing is supported for const char*/char/uint32_t/float
+        // Supported scalar types: bool (prints false/true), char, all fixed-width integer types
+        // (uint8_t-uint64_t, int8_t-int64_t), float, and double.
         DEVICE_PRINT("Test string {} {} {}\n", 'a', 5, 0.123456f);
+        // bool prints as false or true
+        bool flag = true;
+        DEVICE_PRINT("Bool value: {}\n", flag);  // prints: Bool value: true
         // BF16 type printing is supported via provided type
         bf16_t my_bf16_val(0x3dfb); // Equivalent to 0.122559
         DEVICE_PRINT("BF16 value: {}\n", my_bf16_val);
@@ -46,6 +67,47 @@ An example with the different features available is shown below:
         DEVICE_PRINT_DATA0("this is the data movement kernel on noc 0\n");
         DEVICE_PRINT_DATA1("this is the data movement kernel on noc 1\n");
     }
+
+Strings
+^^^^^^^
+
+Runtime ``const char*`` pointers are printed as hex addresses since the host cannot read device memory.
+To print the actual string content, use ``CTSTR()`` which stores the string in the ELF at compile time
+so the host can resolve it:
+
+.. code-block:: c++
+
+    const char* s = "Hello world!";
+    DEVICE_PRINT("Pointer: {}\n", s);               // prints: Pointer: 0x12345678
+    DEVICE_PRINT("String: {}\n", CTSTR("Hello!"));  // prints: String: Hello!
+
+Enums
+^^^^^
+
+Enum types are supported natively. When DWARF debug info is present in the ELF, enum values are
+printed as their symbolic names. Use ``{:#}`` to include the fully-qualified type name:
+
+.. code-block:: c++
+
+    enum class Color : uint8_t { Red = 0, Green = 1, Blue = 2 };
+    DEVICE_PRINT("Color: {}\n", Color::Green);    // prints: Color: Green
+    DEVICE_PRINT("Color: {:#}\n", Color::Blue);   // prints: Color: Color::Blue
+
+Flag enums (with ``operator|``) are detected at compile time and printed with ``|`` separators:
+
+.. code-block:: c++
+
+    enum class Flags : uint32_t { A = 1, B = 2, C = 4 };
+    constexpr Flags operator|(Flags a, Flags b) {
+        return static_cast<Flags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    }
+    DEVICE_PRINT("Flags: {}\n", Flags::A | Flags::C);    // prints: Flags: A | C
+    DEVICE_PRINT("Flags: {:#}\n", Flags::A | Flags::C);  // prints: Flags: Flags::A | Flags::C
+
+If no DWARF debug info is available, enum values are printed as ``(TypeName)integer``.
+
+Circular Buffers
+^^^^^^^^^^^^^^^^
 
 Data from Circular Buffers can be printed using the ``TileSlice`` object. It can be constructed as described below, and fed directly to a ``DEVICE_PRINT`` call.
 

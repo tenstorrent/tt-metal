@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
@@ -124,6 +124,7 @@ FORCE_INLINE void send_pages_over_socket(
 
 void kernel_main() {
     DPRINT << "Starting h2d receiver kernel" << ENDL();
+    DEVICE_PRINT("Starting h2d receiver kernel\n");
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;

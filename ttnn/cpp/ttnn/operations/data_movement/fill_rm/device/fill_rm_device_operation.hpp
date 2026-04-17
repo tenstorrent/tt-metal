@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "fill_rm_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "fill_rm_device_operation_types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

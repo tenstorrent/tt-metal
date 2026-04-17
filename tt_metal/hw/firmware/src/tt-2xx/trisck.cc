@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,10 +46,11 @@ extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
     // asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
-    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    mark_stack_usage();
     wait_for_go_message();
     DPRINT << "DEBUG_NULL_KERNELS got go message" << ENDL();
+    DEVICE_PRINT("DEBUG_NULL_KERNELS got go message\n");
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
@@ -86,7 +87,12 @@ uint32_t _start() {
     RecordPerfCounters();
 
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+
+    // Paint stack after all thread_local writes and CRT init are done.
+    mark_stack_usage();
+
     EARLY_RETURN_FOR_DEBUG
+
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");

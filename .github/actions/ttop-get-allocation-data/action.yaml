@@ -2,11 +2,16 @@
 # Return JSON with hostname - rank mapping
 
 name: 'Get Allocation rank data'
+description: 'Get allocation rank data from Allocation resource status'
 
 inputs:
   allocationName:
     description: 'Allocation name'
     required: true
+  namespace:
+    description: 'Namespace where the allocation exists'
+    required: false
+    default: 'ttop-ci'
 outputs:
   ranksData:
     description: 'JSON dictionary with node names as keys and allocation ranks as values'
@@ -19,12 +24,22 @@ runs:
       shell: bash
       id: get-ranks
       run: |
-        echo "Getting ranks..."
+        echo "Getting ranks for allocation: ${{ inputs.allocationName }} in namespace: ${{ inputs.namespace }}"
 
-        # Get all nodes with allocation.tenstorrent.com/allocated-by = allocationName
-        nodes_json=$(kubectl get nodes -o json \
-          --selector "allocation.tenstorrent.com/allocated-by=${{ inputs.allocationName }}")
-        ranks_json=$(echo $nodes_json | jq '.items | map({(.metadata.name): .metadata.labels["allocation.tenstorrent.com/allocation-rank"]}) | add ')
+        # Get ranks from Allocation status.allocatedNodes array
+        echo "Extracting ranks from Allocation resource status..."
+        allocation_json=$(kubectl get allocation -n ${{ inputs.namespace }} ${{ inputs.allocationName }} -o json)
+
+        # Extract allocatedNodes array and create rank mapping (node_name: rank_index)
+        ranks_json=$(echo "$allocation_json" | jq -r '.status.allocatedNodes | to_entries | map({(.value): (.key | tostring)}) | add')
+
+        if [ "$ranks_json" == "null" ] || [ -z "$ranks_json" ] || [ "$ranks_json" == "{}" ]; then
+          echo "ERROR: Failed to extract rank data from Allocation status"
+          echo "Allocation status:"
+          echo "$allocation_json" | jq .status
+          exit 1
+        fi
+
         echo "ranksData=$(echo $ranks_json | jq -c)" >> $GITHUB_OUTPUT
         echo "Node ranks:"
         echo "$ranks_json" | jq .

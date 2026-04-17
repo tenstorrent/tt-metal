@@ -83,7 +83,7 @@ Why `--bundle-python` is required here:
 
 ## Environment Propagation in `tt-run`
 
-`tt-run` (implemented in `ttnn/ttnn/distributed/ttrun.py`) forwards environment variables to MPI ranks using a combination of automatic pass-through, explicit core variables, and override rules.
+`tt-run` (implemented in `ttnn/ttnn/distributed/ttrun.py`) forwards environment variables to MPI ranks using a combination of automatic pass-through, explicit core variables, and override rules. Behavior is the same in **auto allocation** mode (`--mesh-graph-descriptor`, Phase 1 + Phase 2) and **legacy** mode (`--rank-binding` only). Overview: [ttnn/ttnn/distributed/README_ttrun.md](../../ttnn/ttnn/distributed/README_ttrun.md).
 
 ### `ENV_PASSTHROUGH_PREFIXES`
 

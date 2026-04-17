@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ void kernel_main() {
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
-    const auto s1 = TensorAccessor(dst_args, dst_addr, tile_size);
+    const auto s1 = TensorAccessor(dst_args, dst_addr);
 
     cb_reserve_back(cb_id_out1, 1);  // in this kernel we are not pushing anything into CBs, just using the space
 

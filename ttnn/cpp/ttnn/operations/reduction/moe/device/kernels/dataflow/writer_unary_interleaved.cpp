@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <stdint.h>
@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t scale_cb_index = tt::CBIndex::c_3;
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
-    const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0, tile_bytes);
+    const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_out(out_cb_index);

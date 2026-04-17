@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dummy_mesh_command_queue.hpp"
 #include <distributed/mesh_device_impl.hpp>
-#include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/threading/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <mesh_workload.hpp>

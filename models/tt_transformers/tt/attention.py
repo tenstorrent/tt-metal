@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -521,23 +521,54 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
+        cos, sin = rot_mats[0], rot_mats[1]
+        # Must match padded batch in rot_mats (rope) and nlp_create_qkv_heads_decode output; avoids
+        # ttnn.Tensor.shape host read for graph capture / trace.
+        B_iter = self.batch_size_per_device_group
 
-        q_heads_1BQD = ttnn.experimental.rotary_embedding(
-            q_heads_pre_rot_1BQD,
-            rot_mats[0],
-            rot_mats[1],
-            int_current_pos,
-        )
+        if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
+            q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
+        if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
+            k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
 
-        k_heads_1BKD = ttnn.experimental.rotary_embedding(
-            k_heads_pre_rot_1BKD,
-            rot_mats[0],
-            rot_mats[1],
-            int_current_pos,
-        )
-        # This is done because rotary_embedding outputs are padded in the num_heads dimension both steps
-        # reshape (indicating the padding size) as the slicing are required for attention to work properly
+        q_out_mem = q_heads_pre_rot_1BQD.memory_config()
+        k_out_mem = k_heads_pre_rot_1BKD.memory_config()
+
+        # Sharded concat only supports the last dim (width) on height-sharded tensors, not batch (dim=1).
+        # Merge per-batch rotary outputs in interleaved space, then resharding to match create_qkv_heads.
+        q_il_parts = []
+        k_il_parts = []
+        for b in range(B_iter):
+            q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
+            k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
+            cos_b = cos[:, :, b : b + 1, :]
+            sin_b = sin[:, :, b : b + 1, :]
+            q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
+            k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
+            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+
+            ttnn.deallocate(q_rot)
+            ttnn.deallocate(k_rot)
+
+        if B_iter == 1:
+            q_merged_il = q_il_parts[0]
+            k_merged_il = k_il_parts[0]
+        else:
+            q_merged_il = ttnn.concat(q_il_parts, dim=1)
+            k_merged_il = ttnn.concat(k_il_parts, dim=1)
+            for t in q_il_parts:
+                ttnn.deallocate(t)
+            for t in k_il_parts:
+                ttnn.deallocate(t)
+
+        q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
+        k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
+        ttnn.deallocate(q_merged_il)
+        ttnn.deallocate(k_merged_il)
+        # ttnn.experimental.rotary_embedding pads the head count on axis=-2 up to 32 (tile alignment).
+        # After per-batch rotary + merge, tensors still carry that padding; reshape states the true logical
+        # head count vs padded shape, then we slice to the real n_local_*_heads for SDPA / cache.
         q_heads_1BQD = ttnn.reshape(
             q_heads_1BQD,
             (1, self.batch_size_per_device_group, self.n_local_heads, self.head_dim),

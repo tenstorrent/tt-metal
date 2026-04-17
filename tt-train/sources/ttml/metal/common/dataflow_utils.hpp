@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,6 +86,18 @@ void generate_tile_with_packed_bfloat16_value(const uint32_t cb_id, const uint32
     // 512 = 32x16
     for (uint32_t i = 0; i < 512U; ++i) {
         *ptr++ = packed_bf16_value;
+    }
+    cb_push_back(cb_id, onetile);
+}
+
+// Fills a tile with one repeated 32-bit word.
+// Useful for Float32 scalar tiles (all elements equal to the same fp32 bit pattern).
+void generate_tile_with_uint32_value(const uint32_t cb_id, const uint32_t value_u32) {
+    cb_reserve_back(cb_id, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    const uint32_t num_u32 = get_tile_size(cb_id) / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_u32; ++i) {
+        ptr[i] = value_u32;
     }
     cb_push_back(cb_id, onetile);
 }
@@ -252,6 +264,37 @@ inline void read_one_tile(const uint32_t cb_idx, const AddrGen& addr_gen, const 
 }
 
 /**
+ * Read one tile, extract a single bfloat16 scalar at (row, col), and return it.
+ *
+ * The function uses a caller-provided scratch CB slot for the temporary tile readback.
+ * It assumes row/col refer to logical 32x32 tile coordinates and uses tilized indexing.
+ *
+ * @param addr_gen Address generator for DRAM access
+ * @param row Logical row in the tile [0, 31]
+ * @param col Logical col in the tile [0, 31]
+ * @param cb_scratch Scratch CB index used for temporary tile storage
+ * @param tile_idx Tile index in DRAM (default: 0)
+ * @return Extracted bfloat16 scalar value
+ */
+template <typename AddrGen>
+inline uint16_t read_bfloat16_scalar_from_tile(
+    const AddrGen& addr_gen,
+    const uint32_t row,
+    const uint32_t col,
+    const uint32_t cb_scratch,
+    const uint32_t tile_idx = 0U) {
+    cb_reserve_back(cb_scratch, onetile);
+    const uint32_t l1_addr = get_write_ptr(cb_scratch);
+    noc_async_read_page(tile_idx, addr_gen, l1_addr);
+    noc_async_read_barrier();
+    const auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+    const uint16_t scalar_bf16 = ptr[get_tilized_idx(row, col)];
+    cb_push_back(cb_scratch, onetile);
+    cb_pop_front(cb_scratch, onetile);
+    return scalar_bf16;
+}
+
+/**
  * Utility: read contiguous tiles in row-major order from DRAM to CB.
  *
  * @param cb_idx Circular buffer index to write to
@@ -395,7 +438,9 @@ inline void read_batched_rows_with_padding(
 
 void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool untilize = false) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("======\n");
     for (uint16_t r = 0; r < 32; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -411,8 +456,24 @@ void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool until
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            (uint)r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)0,
+                    .w1 = (uint8_t)32,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 // ----- Multicast synchronization helper functions -----

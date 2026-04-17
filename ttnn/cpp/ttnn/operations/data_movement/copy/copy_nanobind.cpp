@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,10 +54,9 @@ void bind_copy(nb::module_& mod) {
     ttnn::bind_function<"copy">(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::copy),
-            nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert()));
+        nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::copy),
+        nb::arg("input_a").noconvert(),
+        nb::arg("input_b").noconvert());
 }
 
 void bind_assign(nb::module_& mod) {

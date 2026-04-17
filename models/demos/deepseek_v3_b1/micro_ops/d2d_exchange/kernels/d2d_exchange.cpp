@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,18 +19,6 @@ constexpr uint32_t partial_packet_size = get_compile_time_arg_val(6);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(7);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(9);
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -148,6 +136,7 @@ void kernel_main() {
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     DPRINT << "Starting d2d exchange kernel" << ENDL();
+    DEVICE_PRINT("Starting d2d exchange kernel\n");
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
@@ -189,9 +178,12 @@ void kernel_main() {
     }
 
     while (true) {
-        socket_reserve_pages(sender_socket, 1);
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        invalidate_l1_cache();
+        if (termination_semaphore[0] == 1) {
             break;
+        }
+        socket_reserve_pages(sender_socket, 1);
+        while (!socket_wait_for_pages(receiver_socket, 1)) {
         }
 
         auto l1_read_addr = receiver_socket.read_ptr;

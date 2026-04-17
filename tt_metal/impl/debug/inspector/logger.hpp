@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <fstream>
+#include <optional>
 
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
@@ -39,7 +40,7 @@ private:
     }
 
 public:
-    Logger(const std::filesystem::path& logging_path);
+    Logger(const std::filesystem::path& logging_path, std::optional<int> rank);
 
     std::filesystem::path get_logging_path() const noexcept {
         return logging_path;

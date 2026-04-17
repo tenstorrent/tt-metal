@@ -23,10 +23,11 @@ jobs:
     if: |
       contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+       contains(github.event.pull_request.labels.*.name, 'llk:performance-tests'))
     outputs:
       wormhole: ${{ steps.set.outputs.wormhole }}
       blackhole: ${{ steps.set.outputs.blackhole }}
+      common: ${{ steps.set.outputs.common }}
       performance: ${{ steps.set.outputs.performance }}
     steps:
       - name: Checkout code
@@ -41,12 +42,14 @@ jobs:
         with:
           filters: |
               wormhole:
-                - 'tt_llk_wormhole_b0/**'
+                - 'tt_metal/tt-llk/tt_llk_wormhole_b0/**'
               blackhole:
-                - 'tt_llk_blackhole/**'
+                - 'tt_metal/tt-llk/tt_llk_blackhole/**'
+              common:
+                - 'tt_metal/tt-llk/common/**'
               performance:
-                - '**/*perf**'
-                - '**/*profiler**'
+                - 'tt_metal/tt-llk/**/*perf**'
+                - 'tt_metal/tt-llk/**/*profiler**'
 
       - name: Resolve test triggers (nightly vs changes)
         id: set
@@ -54,10 +57,12 @@ jobs:
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             echo "wormhole=true" >> $GITHUB_OUTPUT
             echo "blackhole=true" >> $GITHUB_OUTPUT
+            echo "common=true" >> $GITHUB_OUTPUT
             echo "performance=true" >> $GITHUB_OUTPUT
           else
             echo "wormhole=${{ steps.filter.outputs.wormhole }}" >> $GITHUB_OUTPUT
             echo "blackhole=${{ steps.filter.outputs.blackhole }}" >> $GITHUB_OUTPUT
+            echo "common=${{ steps.filter.outputs.common }}" >> $GITHUB_OUTPUT
             echo "performance=${{ steps.filter.outputs.performance }}" >> $GITHUB_OUTPUT
           fi
 
@@ -72,6 +77,7 @@ jobs:
     uses: ./.github/workflows/llk-setup-and-test.yaml
     needs: [build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.wormhole == 'true' ||
+            needs.detect-changes.outputs.common == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
@@ -89,6 +95,7 @@ jobs:
     uses: ./.github/workflows/llk-setup-and-test.yaml
     needs: [build-images, detect-changes]
     if: ${{ needs.detect-changes.outputs.blackhole == 'true' ||
+            needs.detect-changes.outputs.common == 'true' ||
             needs.detect-changes.outputs.performance == 'true' ||
             github.event_name == 'workflow_dispatch' ||
             github.event_name == 'workflow_call' }}
@@ -107,7 +114,7 @@ jobs:
       always() && (
       contains(fromJSON('["workflow_dispatch","workflow_call","schedule"]'), github.event_name) ||
       (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'performance-tests'))
+       contains(github.event.pull_request.labels.*.name, 'llk:performance-tests'))
       )
     needs:
       - build-images

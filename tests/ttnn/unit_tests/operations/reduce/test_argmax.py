@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,9 @@ import torch
 import ttnn
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
@@ -52,6 +54,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
         ([50, 100, 200], ttnn.ROW_MAJOR_LAYOUT, -1, True, True, torch.int32),
         ([25, 50, 100], ttnn.ROW_MAJOR_LAYOUT, -1, False, True, torch.uint8),
         ([12, 24, 48, 96], ttnn.ROW_MAJOR_LAYOUT, -1, True, False, torch.bfloat16),
+        ([1, 8, 20, 18], ttnn.TILE_LAYOUT, -1, True, False, torch.bfloat16),
     ],
 )
 def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore, dtype):
@@ -78,8 +81,13 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
     if dtype == torch.uint8:  # PyTorch does not have uint32/uint16, so we use uint8
         ttnn_dtype = ttnn.uint32
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype, layout=tensor_layout)
+        if tensor_layout == ttnn.TILE_LAYOUT:
+            ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
+
     else:
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=tensor_layout)
+        if tensor_layout == ttnn.TILE_LAYOUT:
+            ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
 
@@ -114,15 +122,5 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"
-
-    # Convert torch dtype from uint64 to int32
-    # Note: torch does not have uint32
-    torch_result = torch_result.to(torch.int32)
-
-    atol = rtol = 0.1
-    assert torch.allclose(
-        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
-    ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"
+    # test for equivalance
+    assert_equal(torch_result, ttnn_result)

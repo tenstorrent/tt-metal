@@ -120,6 +120,14 @@ run_sentencebert_func() {
 
 }
 
+run_bge_m3_demo() {
+
+  # BGE-M3 Demo
+  HF_MODEL=BAAI/bge-m3 $PYTEST_CMD models/demos/wormhole/bge_m3/demo/demo.py --timeout 1200
+  echo "LOG_METAL: BGE-M3 Demo completed"
+
+}
+
 run_yolov11_func() {
 
  #Yolov11 Demo

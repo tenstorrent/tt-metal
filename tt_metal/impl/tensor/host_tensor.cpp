@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ public:
         buffer_(std::move(other.buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
 
     const DistributedHostBuffer& buffer() const& { return buffer_; }
+    DistributedHostBuffer& buffer() & { return buffer_; }
     DistributedHostBuffer buffer() const&& { return buffer_; }
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
@@ -92,6 +93,11 @@ const TensorTopology& HostTensor::tensor_topology() const {
 
 const DistributedHostBuffer& HostTensor::buffer() const {
     TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    return impl->buffer();
+}
+
+DistributedHostBuffer& HostTensor::buffer() {
+    TT_FATAL(impl != nullptr, "HostTensor is in default constructed state.");
     return impl->buffer();
 }
 

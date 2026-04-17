@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,25 +16,19 @@ void kernel_main() {
     constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_17;
     constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_18;
 
-    const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
-    const uint32_t exp_avg_tile_bytes = get_tile_size(cb_id_exp_avg);
-    const uint32_t exp_avg_sq_tile_bytes = get_tile_size(cb_id_exp_avg_sq);
-
     constexpr auto param_args = TensorAccessorArgs<0>();
     constexpr auto exp_avg_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
     constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
 
-    const auto param_addrg = TensorAccessor(param_args, param_addr, param_tile_bytes);
-    const auto exp_avg_addrg = TensorAccessor(exp_avg_args, exp_avg_addr, exp_avg_tile_bytes);
-    const auto exp_avg_sq_addrg = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr, exp_avg_sq_tile_bytes);
+    const auto param_addrg = TensorAccessor(param_args, param_addr);
+    const auto exp_avg_addrg = TensorAccessor(exp_avg_args, exp_avg_addr);
+    const auto exp_avg_sq_addrg = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr);
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_19;
     const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(3);
-    const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
-    const auto max_exp_avg_sq_addrg =
-        TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr, max_exp_avg_sq_tile_bytes);
+    const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 
     constexpr uint32_t onetile = 1;

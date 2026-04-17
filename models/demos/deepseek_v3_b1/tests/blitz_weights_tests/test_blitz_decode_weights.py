@@ -1,13 +1,16 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 """
 Device tests for overlapped (fused) weight extraction.
 
+All tests are parameterized by dtype (bfloat4_b, bfloat8_b, bfloat16)
+to verify correctness across data type configurations.
+
 Tests all three constituents of get_tt_q_ab_proj_and_kv_a_proj_weights
 (using an NCRISC kernel to extract each sub-tensor, then verifying
-against an independently preprocessed + bfp8 round-tripped reference):
+against an independently preprocessed + dtype round-tripped reference):
   - q_a_proj (packed)
   - q_b_proj (shuffled)
   - kv_a_proj (shard-reordered)
@@ -15,7 +18,7 @@ against an independently preprocessed + bfp8 round-tripped reference):
 Tests all constituents of get_tt_o_proj_and_gate_mm_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - o_proj  (BFP8)
+  - o_proj  (parameterized dtype)
   - gate_mm (BFP16)
   - attn_norm (BFP16, 1x32 tile)
   - q_norm (BFP16, 1x32 tile)
@@ -25,14 +28,15 @@ against a dtype round-tripped reference):
 Tests both constituents of get_tt_kv_b12_proj_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - kv_b1_proj (HEIGHT_SHARDED, BFP8)
-  - kv_b2_proj (HEIGHT_SHARDED, BFP8)
+  - kv_b1_proj (HEIGHT_SHARDED)
+  - kv_b2_proj (WIDTH_SHARDED) — extracted in original shape
+    since shuffle_kv_b2 preserves per-tile data and linear tile order
 
 Tests both constituents of get_tt_moe_shared_expert_weights
 (using CopyToOutput to extract each sub-tensor, then verifying
 against a dtype round-tripped reference):
-  - gate_proj (block-sharded HEIGHT_SHARDED, BFP4)
-  - up_proj   (block-sharded HEIGHT_SHARDED, BFP4)
+  - gate_proj (block-sharded HEIGHT_SHARDED)
+  - up_proj   (block-sharded HEIGHT_SHARDED)
 """
 
 import pytest
@@ -40,14 +44,26 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
 )
-from models.demos.deepseek_v3_b1.tests.blitz_weights_tests.op import CopyToOutput
+from models.demos.deepseek_v3_b1.weights.transforms.attention import (
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
+    fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a,
+    fuse_q_ab_kv_a,
+)
+from models.demos.deepseek_v3_b1.weights.transforms.moe import fuse_gate_up
+
+
+def _fused_tensor_storage_bytes(overlapped: ttnn.OverlappedTensor) -> int:
+    """Bytes occupied by the shared ``fused_tensor`` buffer (UINT32 storage = 4 bytes per element)."""
+    ft = overlapped.fused_tensor
+    return int(ft.logical_volume() * 4)
 
 
 # ---------------------------------------------------------------------------
@@ -130,16 +146,17 @@ def _get_roundtrip_reference(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify all three constituents of the q_ab_proj + kv_a_proj overlap.
 
-    Creates the fused tensor once via BlitzDecodeWeights, then extracts
+    Creates the fused tensor once via fuse_q_ab_kv_a, then extracts
     each sub-tensor with CopyToOutput and checks it against an
     independently preprocessed + bfp8 round-tripped reference.
 
@@ -162,21 +179,25 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    mla_tp = mesh_cols
+    # 1x1 mesh for dtype round-trip references: create from the root mesh, not nested under
+    # `submesh`. Nested submeshes are not enumerated by `bh_2d_mesh_device_context` teardown and
+    # trigger CQ/parent-child close ordering failures (see MeshDeviceImpl::close_impl).
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh_shape = (mesh_rows, mesh_cols)
+    q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
 
     torch.manual_seed(42)
     q_a_raw = torch.randn(cfg.q_a_proj_shape, dtype=torch.bfloat16)
-    q_b_raw = torch.randn(cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * mla_tp, dtype=torch.bfloat16)
+    q_b_raw = torch.randn(cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp, dtype=torch.bfloat16)
     kv_raw = torch.randn(cfg.kv_a_proj_shape, dtype=torch.bfloat16)
 
-    bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused q_ab_proj + kv_a_proj weights ...")
-    q_a, q_b, kv = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a_raw, q_b_raw, kv_raw)
+    qab_kva = fuse_q_ab_kv_a(q_a_raw, q_b_raw, kv_raw, submesh, dtype=dtype)
+    q_a, q_b, kv = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract all three sub-tensors while fused buffer is alive -----------
     logger.info("Extracting q_a_proj from fused buffer ...")
@@ -223,8 +244,8 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     logger.info("Building q_b_proj per-TP round-trip references ...")
     q_b_tp_refs = []
-    for tp_idx in range(mla_tp):
-        q_b_slice = cfg.get_q_b_slice(q_b_raw, tp_idx, mla_tp)
+    for tp_idx in range(q_b_tp):
+        q_b_slice = cfg.get_q_b_slice(q_b_raw, tp_idx, mesh_shape)
         ref = _get_roundtrip_reference(
             cfg.shuffle_q_b(q_b_slice),
             q_b.core_range_set,
@@ -232,8 +253,6 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
             dtype=q_b.dtype,
         )
         q_b_tp_refs.append(ref)
-
-    ttnn.close_mesh_device(single_device)
 
     q_a_h = q_a.tensor_shape[0]
     q_b_h = q_b.tensor_shape[0]
@@ -257,16 +276,17 @@ def test_q_ab_proj_kv_a_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): q_a_proj, q_b_proj, kv_a_proj overlap passed")
 
 
-@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
+@pytest.mark.parametrize("o_proj_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
     """Verify all constituents of the o_proj + gate_mm + rmsnorm gamma overlap.
 
-    Creates the fused tensor once via BlitzDecodeWeights, then extracts
+    Creates the fused tensor once via fuse_o_proj_gate_mm_norms, then extracts
     each sub-tensor with CopyToOutput and checks it against an
     independently preprocessed + dtype round-tripped reference.
 
@@ -291,32 +311,41 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
-    mla_tp = mesh_cols
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh_shape = (mesh_rows, mesh_cols)
+    o_proj_tp = cfg.o_proj.tp(mesh_shape)
     tile_1x32 = ttnn.Tile([1, 32])
 
     torch.manual_seed(42)
-    o_proj_raw = torch.randn(cfg.o_proj_shape[0] * mla_tp, cfg.o_proj_shape[1], dtype=torch.bfloat16)
-    gate_mm_raw = torch.randn(cfg.gate_mm_shape, dtype=torch.bfloat16)
-    attn_norm_raw = torch.randn(cfg.attn_norm_shape, dtype=torch.bfloat16)
-    q_norm_raw = torch.randn(cfg.q_norm_shape, dtype=torch.bfloat16)
-    kv_norm_raw = torch.randn(cfg.kv_norm_shape, dtype=torch.bfloat16)
-    ffn_norm_raw = torch.randn(cfg.ffn_norm_shape, dtype=torch.bfloat16)
+    o_proj_raw = torch.randn(*cfg.o_proj.raw_tensor_shape, dtype=torch.bfloat16)
+    gate_mm_raw = torch.randn(cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
+    attn_norm_raw = torch.randn(cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    q_norm_raw = torch.randn(cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    kv_norm_raw = torch.randn(cfg.kv_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    ffn_norm_raw = torch.randn(cfg.ffn_norm.raw_tensor_shape, dtype=torch.bfloat16)
 
-    bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused o_proj + gate_mm + rmsnorm gamma weights ...")
-    o_proj, gate_mm, attn_norm_g, q_norm_g, kv_norm_g, ffn_norm_g = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = fuse_o_proj_gate_mm_norms(
         o_proj_raw,
         gate_mm_raw,
         attn_norm_raw,
         q_norm_raw,
         kv_norm_raw,
         ffn_norm_raw,
+        submesh,
+        o_proj_dtype=o_proj_dtype,
     )
+    o_proj = o_norms["o_proj"]
+    gate_mm = o_norms["gate_mm"]
+    attn_norm_g = o_norms["attn_norm"]
+    q_norm_g = o_norms["q_norm"]
+    ffn_norm_g = o_norms["ffn_norm"]
+    kv_norm_g = o_norms["kv_norm"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract o_proj (BFP8) while fused buffer is alive -------------------
     logger.info("Extracting o_proj from fused buffer ...")
@@ -362,9 +391,9 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
 
     # -- Build references (dtype round-trip on single device) ----------------
     logger.info("Building o_proj per-TP round-trip references ...")
-    per_device_o_h = cfg.o_proj_shape[0]
+    per_device_o_h = cfg.o_proj.per_device_height(mesh_shape)
     o_tp_refs = []
-    for tp_idx in range(mla_tp):
+    for tp_idx in range(o_proj_tp):
         o_slice = o_proj_raw[tp_idx * per_device_o_h : (tp_idx + 1) * per_device_o_h, :]
         ref = _get_roundtrip_reference(
             o_slice,
@@ -399,8 +428,6 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
             tile=tile_1x32,
         )
 
-    ttnn.close_mesh_device(single_device)
-
     o_h = o_proj.tensor_shape[0]
     g_h = gate_mm.tensor_shape[0]
 
@@ -422,16 +449,279 @@ def test_o_proj_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh
         logger.info(f"Device {device_idx} (TP={tp_group}): o_proj, gate_mm, gammas overlap passed")
 
 
+@pytest.mark.parametrize("o_proj_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_o_proj_tp4_shuffled_gate_mm_rmsnorm_gamma_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, o_proj_dtype):
+    """Verify single fused buffer: TP4+shuffle o_proj, gate_mm, norms, and q_a/q_b/kv_a.
+
+    Uses :func:`fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a` (all nine tensors
+    in one ``overlap_tensors`` call).  Per mesh device, o_proj is the ``shuffle_q_a`` pack of the
+    ``(8192, 1792)`` slice (``tp_dim=(1, 0)``), shard ``(4096, 32)`` on 112 cores.
+    """
+    import os
+
+    if os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID", "0") != "1":
+        pytest.skip("Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1 for per-core allocation")
+
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
+    cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    qab_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh_shape = (mesh_rows, mesh_cols)
+    q_b_tp = qab_cfg.q_b_shard_spec.tp(mesh_shape)
+    tile_1x32 = ttnn.Tile([1, 32])
+
+    torch.manual_seed(42)
+    # TP4+shuffle fuse expects full-mesh logical weights (16384, 7168), not cfg.o_proj.raw_tensor_shape
+    # (8192, 7168) which is the per-device slice for the non-TP4 overlap path.
+    o_proj_raw = torch.randn(16384, 7168, dtype=torch.bfloat16)
+    gate_mm_raw = torch.randn(cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
+    attn_norm_raw = torch.randn(cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    q_norm_raw = torch.randn(cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    kv_norm_raw = torch.randn(cfg.kv_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    ffn_norm_raw = torch.randn(cfg.ffn_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    q_a_raw = torch.randn(qab_cfg.q_a_proj_shape, dtype=torch.bfloat16)
+    q_b_raw = torch.randn(qab_cfg.q_b_proj_shape[0], qab_cfg.q_b_proj_shape[1] * q_b_tp, dtype=torch.bfloat16)
+    kv_raw = torch.randn(qab_cfg.kv_a_proj_shape, dtype=torch.bfloat16)
+
+    logger.info("Building single fused buffer: TP4+shuffle o_proj + gate + norms + q_ab + kv_a ...")
+    fused = fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
+        o_proj_raw,
+        gate_mm_raw,
+        attn_norm_raw,
+        q_norm_raw,
+        kv_norm_raw,
+        ffn_norm_raw,
+        q_a_raw,
+        q_b_raw,
+        kv_raw,
+        submesh,
+        o_proj_dtype=o_proj_dtype,
+        q_ab_dtype=o_proj_dtype,
+    )
+    o_proj = fused["o_proj"]
+    gate_mm = fused["gate_mm"]
+    attn_norm_g = fused["attn_norm"]
+    q_norm_g = fused["q_norm"]
+    ffn_norm_g = fused["ffn_norm"]
+    kv_norm_g = fused["kv_norm"]
+    q_a = fused["q_a_proj"]
+    q_b = fused["q_b_proj"]
+    kv = fused["kv_a_proj"]
+
+    ft = o_proj.fused_tensor
+    fused_bytes = _fused_tensor_storage_bytes(o_proj)
+    ss = ft.memory_config().shard_spec
+    sh0, sh1 = int(ss.shape[0]), int(ss.shape[1])
+    per_core_bytes = sh0 * sh1 * 4
+    num_cores = ss.num_cores()
+    num_mesh_devices = submesh.get_num_devices()
+    logger.info(
+        "[merged TP4 o_proj + gate + norms + q_a + q_b + kv_a] fused_tensor total: {} B ({:.2f} KiB, {:.2f} MiB) "
+        "(logical_volume * 4 for UINT32 backing)",
+        fused_bytes,
+        fused_bytes / 1024,
+        fused_bytes / (1024**2),
+    )
+    logger.info(
+        "[merged TP4 …] per-core fused shard: {} B ({:.2f} KiB)  (memory_config shard_shape=({}, {}), UINT32; "
+        "shard_spec.num_cores()={}, mesh_devices={})",
+        per_core_bytes,
+        per_core_bytes / 1024,
+        sh0,
+        sh1,
+        num_cores,
+        num_mesh_devices,
+    )
+
+    replicate = ttnn.ReplicateTensorToMesh(submesh)
+    composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
+
+    logger.info("Extracting o_proj from fused buffer ...")
+    o_out = _create_output_device_tensor(
+        *o_proj.tensor_shape, o_proj.core_range_set, submesh, dtype=o_proj.dtype, mesh_mapper=replicate
+    )
+    o_out = CopyToOutput.op(o_proj.fused_tensor, o_out, byte_offset=o_proj.byte_offset)
+    o_result = ttnn.to_torch(o_out, mesh_composer=composer)
+    ttnn.deallocate(o_out)
+
+    logger.info("Extracting gate_mm from fused buffer ...")
+    g_out = _create_output_device_tensor(
+        *gate_mm.tensor_shape, gate_mm.core_range_set, submesh, dtype=gate_mm.dtype, mesh_mapper=replicate
+    )
+    g_out = CopyToOutput.op(gate_mm.fused_tensor, g_out, byte_offset=gate_mm.byte_offset)
+    g_result = ttnn.to_torch(g_out, mesh_composer=composer)
+    ttnn.deallocate(g_out)
+
+    gamma_results = {}
+    for name, ov in [
+        ("attn_norm", attn_norm_g),
+        ("q_norm", q_norm_g),
+        ("kv_norm", kv_norm_g),
+        ("ffn_norm", ffn_norm_g),
+    ]:
+        out = _create_output_device_tensor(
+            *ov.tensor_shape,
+            ov.core_range_set,
+            submesh,
+            dtype=ov.dtype,
+            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            tile=tile_1x32,
+            mesh_mapper=replicate,
+        )
+        logger.info(f"Extracting {name} from fused buffer ...")
+        out = CopyToOutput.op(ov.fused_tensor, out, byte_offset=ov.byte_offset)
+        gamma_results[name] = ttnn.to_torch(out, mesh_composer=composer)
+        ttnn.deallocate(out)
+
+    logger.info("Extracting q_a_proj from fused buffer ...")
+    q_a_out = _create_output_device_tensor(
+        *q_a.tensor_shape, q_a.core_range_set, submesh, dtype=q_a.dtype, mesh_mapper=replicate
+    )
+    q_a_out = CopyToOutput.op(q_a.fused_tensor, q_a_out, byte_offset=q_a.byte_offset)
+    q_a_result = ttnn.to_torch(q_a_out, mesh_composer=composer)
+    ttnn.deallocate(q_a_out)
+
+    logger.info("Extracting q_b_proj from fused buffer ...")
+    q_b_out = _create_output_device_tensor(
+        *q_b.tensor_shape, q_b.core_range_set, submesh, dtype=q_b.dtype, mesh_mapper=replicate
+    )
+    q_b_out = CopyToOutput.op(q_b.fused_tensor, q_b_out, byte_offset=q_b.byte_offset)
+    q_b_result = ttnn.to_torch(q_b_out, mesh_composer=composer)
+    ttnn.deallocate(q_b_out)
+
+    logger.info("Extracting kv_a_proj from fused buffer ...")
+    kv_out = _create_output_device_tensor(
+        *kv.tensor_shape, kv.core_range_set, submesh, dtype=kv.dtype, mesh_mapper=replicate
+    )
+    kv_out = CopyToOutput.op(kv.fused_tensor, kv_out, byte_offset=kv.byte_offset)
+    kv_result = ttnn.to_torch(kv_out, mesh_composer=composer)
+    ttnn.deallocate(kv_out)
+
+    ttnn.deallocate(o_proj.fused_tensor)
+
+    logger.info("Building per-device o_proj (TP4+shuffle) round-trip references ...")
+    o_tp_refs = []
+    for device_idx in range(num_devices):
+        mesh_row = device_idx // mesh_cols
+        mesh_col = device_idx % mesh_cols
+        o_slice = o_proj_raw[
+            8192 * mesh_col : 8192 * (mesh_col + 1),
+            1792 * mesh_row : 1792 * (mesh_row + 1),
+        ]
+        ref = _get_roundtrip_reference(
+            qab_cfg.shuffle_q_a(o_slice),
+            o_proj.core_range_set,
+            single_device,
+            dtype=o_proj.dtype,
+        )
+        o_tp_refs.append(ref)
+
+    logger.info("Building gate_mm round-trip reference ...")
+    g_ref = _get_roundtrip_reference(
+        gate_mm_raw,
+        gate_mm.core_range_set,
+        single_device,
+        dtype=gate_mm.dtype,
+    )
+
+    gamma_refs = {}
+    for name, raw, ov in [
+        ("attn_norm", attn_norm_raw, attn_norm_g),
+        ("q_norm", q_norm_raw, q_norm_g),
+        ("kv_norm", kv_norm_raw, kv_norm_g),
+        ("ffn_norm", ffn_norm_raw, ffn_norm_g),
+    ]:
+        logger.info(f"Building {name} round-trip reference ...")
+        gamma_refs[name] = _get_roundtrip_reference(
+            raw,
+            ov.core_range_set,
+            single_device,
+            dtype=ov.dtype,
+            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            tile=tile_1x32,
+        )
+
+    logger.info("Building q_a_proj / kv_a_proj round-trip references ...")
+    q_a_ref = _get_roundtrip_reference(
+        qab_cfg.shuffle_q_a(q_a_raw),
+        q_a.core_range_set,
+        single_device,
+        dtype=q_a.dtype,
+    )
+    kv_ref = _get_roundtrip_reference(
+        qab_cfg.shuffle_kv_a(kv_raw),
+        kv.core_range_set,
+        single_device,
+        dtype=kv.dtype,
+    )
+    logger.info("Building q_b_proj per-TP round-trip references ...")
+    q_b_tp_refs = []
+    for tp_idx in range(q_b_tp):
+        q_b_slice = qab_cfg.get_q_b_slice(q_b_raw, tp_idx, mesh_shape)
+        ref = _get_roundtrip_reference(
+            qab_cfg.shuffle_q_b(q_b_slice),
+            q_b.core_range_set,
+            single_device,
+            dtype=q_b.dtype,
+        )
+        q_b_tp_refs.append(ref)
+
+    o_h = o_proj.tensor_shape[0]
+    g_h = gate_mm.tensor_shape[0]
+    q_a_h = q_a.tensor_shape[0]
+    q_b_h = q_b.tensor_shape[0]
+    kv_h = kv.tensor_shape[0]
+
+    logger.info("Verifying per-device results ...")
+    for device_idx in range(num_devices):
+        tp_group = device_idx % mesh_cols
+
+        o_slice = o_result[device_idx * o_h : (device_idx + 1) * o_h]
+        assert torch.equal(o_slice, o_tp_refs[device_idx]), f"o_proj mismatch on device {device_idx}"
+
+        g_slice = g_result[device_idx * g_h : (device_idx + 1) * g_h]
+        assert torch.equal(g_slice, g_ref), f"gate_mm mismatch on device {device_idx}"
+
+        for name in ["attn_norm", "q_norm", "kv_norm", "ffn_norm"]:
+            gamma_h = gamma_results[name].shape[0] // num_devices
+            gamma_slice = gamma_results[name][device_idx * gamma_h : (device_idx + 1) * gamma_h]
+            assert torch.equal(gamma_slice, gamma_refs[name]), f"{name} mismatch on device {device_idx}"
+
+        q_a_slice = q_a_result[device_idx * q_a_h : (device_idx + 1) * q_a_h]
+        assert torch.equal(q_a_slice, q_a_ref), f"q_a_proj mismatch on device {device_idx}"
+
+        q_b_slice = q_b_result[device_idx * q_b_h : (device_idx + 1) * q_b_h]
+        assert torch.equal(q_b_slice, q_b_tp_refs[tp_group]), f"q_b_proj mismatch on device {device_idx}"
+
+        kv_slice = kv_result[device_idx * kv_h : (device_idx + 1) * kv_h]
+        assert torch.equal(kv_slice, kv_ref), f"kv_a_proj mismatch on device {device_idx}"
+
+        logger.info(
+            f"Device {device_idx} (TP={tp_group}): TP4+shuffle o_proj, gate_mm, gammas, q_ab, kv_a overlap passed"
+        )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify both constituents of the kv_b1 + kv_b2 overlap.
 
-    Creates the fused tensor once via BlitzDecodeWeights, then extracts
+    Creates the fused tensor once via fuse_kv_b12, then extracts
     each sub-tensor with CopyToOutput and checks it against an
     independently preprocessed + bfp8 round-tripped reference.
 
@@ -443,8 +733,9 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         kv_b1_proj (8192, 512) as bfloat8_b
           HEIGHT_SHARDED on 64 cores (8x8 Qnope grid), shard (128, 512)
 
-        kv_b2_proj (512, 8192) pre-transposed to (8192, 512) as bfloat8_b
-          HEIGHT_SHARDED on 64 cores, shard (128, 512)
+        kv_b2_proj (512, 8192) as bfloat8_b
+          Extracted as WIDTH_SHARDED on 64 cores, shard (512, 128)
+          (byte-identical to the HEIGHT_SHARDED (128, 512) shard after shuffle)
 
     For multi-device (4x2 mesh), mla_tp=2 across mesh columns:
     both tensors are TP-sharded on the 8192 (heads) dim.
@@ -454,6 +745,8 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     mla_tp = mesh_cols
     cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 
@@ -461,13 +754,12 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
     kv_b1_raw = torch.randn(cfg.kv_b1_proj_shape[0] * mla_tp, cfg.kv_b1_proj_shape[1], dtype=torch.bfloat16)
     kv_b2_raw = torch.randn(cfg.kv_b2_proj_shape[0], cfg.kv_b2_proj_shape[1] * mla_tp, dtype=torch.bfloat16)
 
-    bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused kv_b1 + kv_b2 weights ...")
-    kv_b1, kv_b2 = bdw.get_tt_kv_b12_proj_weights(kv_b1_raw, kv_b2_raw)
+    kv_b12 = fuse_kv_b12(kv_b1_raw, kv_b2_raw, submesh, dtype=dtype)
+    kv_b1, kv_b2 = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
     # -- Extract kv_b1 (HEIGHT_SHARDED, BFP8) while fused buffer is alive ----
     logger.info("Extracting kv_b1_proj from fused buffer ...")
@@ -483,14 +775,19 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
     kv_b1_result = ttnn.to_torch(kv_b1_out, mesh_composer=composer)
     ttnn.deallocate(kv_b1_out)
 
-    # -- Extract kv_b2 (HEIGHT_SHARDED, BFP8) while fused buffer is alive -----
+    # -- Extract kv_b2 (WIDTH_SHARDED, BFP8) while fused buffer is alive -----
+    # The shuffle_kv_b2 rearrangement preserves per-tile element data and
+    # linear tile order, so each core's (128, 512) HEIGHT_SHARDED shard is
+    # byte-identical to the original (512, 128) WIDTH_SHARDED shard.
+    # Extracting as WIDTH_SHARDED lets us compare directly against the
+    # unshuffled reference without calling shuffle_kv_b2.
     logger.info("Extracting kv_b2_proj from fused buffer ...")
     kv_b2_out = _create_output_device_tensor(
-        *cfg.kv_b1_proj_shape,
+        *cfg.kv_b2_proj_shape,
         kv_b2.core_range_set,
         submesh,
         dtype=kv_b2.dtype,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         mesh_mapper=replicate,
     )
     kv_b2_out = CopyToOutput.op(kv_b2.fused_tensor, kv_b2_out, byte_offset=kv_b2.byte_offset)
@@ -519,19 +816,17 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
         logger.info(f"Building kv_b2_proj round-trip reference (TP={tp_idx}) ...")
         b2_slice = kv_b2_raw[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
-        b2_physical = cfg.shuffle_kv_b2(b2_slice)
         ref = _get_roundtrip_reference(
-            b2_physical,
+            b2_slice,
             kv_b2.core_range_set,
             single_device,
             dtype=kv_b2.dtype,
-            sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
         kv_b2_tp_refs.append(ref)
 
-    ttnn.close_mesh_device(single_device)
-
     kv_b1_h = kv_b1.tensor_shape[0]
+    kv_b2_h = cfg.kv_b2_proj_shape[0]
 
     logger.info("Verifying per-device results ...")
     for device_idx in range(num_devices):
@@ -542,7 +837,7 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
             b1_slice, kv_b1_tp_refs[tp_group]
         ), f"kv_b1_proj mismatch on device {device_idx} (TP={tp_group})"
 
-        b2_slice = kv_b2_result[device_idx * kv_b1_h : (device_idx + 1) * kv_b1_h]
+        b2_slice = kv_b2_result[device_idx * kv_b2_h : (device_idx + 1) * kv_b2_h]
         assert torch.equal(
             b2_slice, kv_b2_tp_refs[tp_group]
         ), f"kv_b2_proj mismatch on device {device_idx} (TP={tp_group})"
@@ -550,16 +845,17 @@ def test_kv_b12_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         logger.info(f"Device {device_idx} (TP={tp_group}): kv_b1_proj, kv_b2_proj overlap passed")
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
+def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols, dtype):
     """Verify both constituents of the gate + up projection overlap.
 
-    Creates the fused tensor once via BlitzDecodeWeights, then extracts
+    Creates the fused tensor once via fuse_gate_up, then extracts
     each sub-tensor with CopyToOutput and checks it against an
     independently preprocessed + bfp4 round-tripped reference.
 
@@ -582,6 +878,8 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    # 1x1 mesh for references: sibling under root mesh (not nested under `submesh`); see q_ab test.
+    single_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
     moe_tp = num_devices
     cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
 
@@ -592,11 +890,9 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
 
     replicate = ttnn.ReplicateTensorToMesh(submesh)
     composer = ttnn.ConcatMeshToTensor(submesh, dim=0)
-    single_device = submesh.create_submesh(ttnn.MeshShape((1, 1)))
 
-    bdw = BlitzDecodeWeights(submesh)
     logger.info("Building fused gate + up proj weights ...")
-    gate, up, _ = bdw.get_tt_moe_shared_expert_weights(gate_raw, up_raw, down_raw)
+    gate, up, _ = fuse_gate_up(gate_raw, up_raw, down_raw, submesh, dtype=dtype)
 
     # -- Extract gate (block-sharded BFP4) while fused buffer is alive -------
     logger.info("Extracting gate_proj from fused buffer ...")
@@ -656,8 +952,6 @@ def test_gate_up_proj_overlap(bh_2d_mesh_device, mesh_rows, mesh_cols):
             sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         up_tp_refs.append(ref)
-
-    ttnn.close_mesh_device(single_device)
 
     # -- Verify per-device ---------------------------------------------------
     gate_h = cfg.stacked_shape[0]

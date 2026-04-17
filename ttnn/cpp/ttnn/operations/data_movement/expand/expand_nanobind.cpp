@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,12 +49,11 @@ void bind_expand(nb::module_& mod) {
     ttnn::bind_function<"expand">(
         mod,
         doc,
-        ttnn::overload_t(
-            &expand_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("output_shape"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &expand_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("output_shape"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,9 +32,7 @@ void kernel_main() {
     uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
-    const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise

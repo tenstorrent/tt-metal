@@ -2,6 +2,8 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(PERF_MICROBENCH_TESTS_SRCS
+    disaggregation/bench_kv_chunk_address_table.cpp
+    disaggregation/bench_kv_chunk_address_table_serialization.cpp
     dispatch/test_pgm_dispatch.cpp
     dispatch/benchmark_rw_buffer.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp

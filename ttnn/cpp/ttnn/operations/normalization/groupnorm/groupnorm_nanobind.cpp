@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
+#include <tuple>
+
+#include "ttnn/device.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "groupnorm.hpp"
 #include "groupnorm_grid_utils.hpp"
@@ -55,7 +59,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 bias (ttnn.Tensor, optional): Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (ttnn.DataType, optional): Defaults to `None`.
-                core_grid (CoreGrid, optional): Must be provided (see limitations). Defaults to `None`.
+                core_grid (CoreGrid, optional): Defaults to `None`.
                 inplace (bool, optional): Defaults to `True`.
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
                 num_out_blocks (int, optional): Allows the output to be processed in multiple smaller chunks, to reduce the amount of L1 required at a time. Should only be used if needed to relieve L1 pressure, as this negatively impacts performance. Defaults to `None`.
@@ -104,7 +108,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
               - For the :attr:`input_tensor`, H*W must be a multiple of the tile size (32) and C must be a multiple of the tile size and divide evenly into :attr:`num_groups`.
               - For the :attr:`input_mask`, C must match the number of groups, H must match a tile's height, and W must be a multiple of a tile's width.
-              - :attr:`core_grid` must be provided
+              - If :attr:`core_grid` is not provided, it will be inferred using helper functions such as :func:`ttnn.determine_expected_group_norm_dram_grid_size` and :func:`ttnn.determine_expected_group_norm_sharded_config_and_grid_size`. This grid may not be optimal.
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
@@ -114,25 +118,24 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
     ttnn::bind_function<"group_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::group_norm,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("num_groups"),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("input_mask") = nb::none(),
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("reciprocals") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("inplace") = true,
-            nb::arg("output_layout") = nb::none(),
-            nb::arg("num_out_blocks") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("negative_mask") = nb::none(),
-            nb::arg("use_welford") = false));
+        &ttnn::group_norm,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("num_groups"),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("input_mask") = nb::none(),
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("reciprocals") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("inplace") = true,
+        nb::arg("output_layout") = nb::none(),
+        nb::arg("num_out_blocks") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("negative_mask") = nb::none(),
+        nb::arg("use_welford") = false);
     mod.def(
         "create_group_norm_input_mask",
         [](int64_t num_channel,
@@ -210,6 +213,42 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         R"doc(
             Find the largest valid CoreGrid within (max_x, max_y) bounds
             for DRAM interleaved group-norm. Raises if no valid grid exists.
+        )doc");
+    mod.def(
+        "determine_expected_group_norm_sharded_config_and_grid_size",
+        [](ttnn::MeshDevice* device,
+           uint32_t num_channels,
+           int num_groups,
+           uint32_t input_nhw,
+           bool is_height_sharded,
+           bool is_row_major) {
+            TT_FATAL(
+                device != nullptr,
+                "determine_expected_group_norm_sharded_config_and_grid_size: device must not be null.");
+            const auto grid = device->compute_with_storage_grid_size();
+            auto result = ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
+                grid, num_channels, num_groups, input_nhw, is_height_sharded, is_row_major);
+            return std::make_tuple(result.memory_config, result.core_grid);
+        },
+        nb::kw_only(),
+        nb::arg("device"),
+        nb::arg("num_channels"),
+        nb::arg("num_groups"),
+        nb::arg("input_nhw"),
+        nb::arg("is_height_sharded"),
+        nb::arg("is_row_major") = false,
+        R"doc(
+    Derive sharded memory config and grid for group norm.
+
+    - num_channels must be divisible by num_groups and 32 (tile width).
+    - input_nhw is N*H*W in logical units; padded to core multiples.
+    - If is_height_sharded: shard along NHW only; channels per core is all C.
+      Otherwise: shard across channels and NHW (BLOCK_SHARDED).
+    - is_row_major toggles shard shape orientation.
+
+    Keyword-only arguments. Uses ``device.compute_with_storage_grid_size()``.
+
+    Returns: ``(MemoryConfig, CoreGrid)`` for L1 height- or block-sharded group norm.
         )doc");
 }
 }  // namespace

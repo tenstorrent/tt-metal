@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -64,13 +64,13 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
         # Single device (default)
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -137,13 +137,17 @@ def run(
             return [1.0, 0.0]
 
     # Parse scalars - cache_idx and batch_offset
+    # update_cache(cache_tensor, input_tensor, update_index, batch_offset)
+    # → arg0=cache (tensor), arg1=input (tensor), arg2=update_index, arg3=batch_offset
+    pos_args = extract_positional_args(kwargs)
     if scalar and isinstance(scalar, dict):
         cache_idx = int(scalar.get("update_index", shape_a[2] // 2))
         batch_offset = int(scalar.get("batch_offset", 0))
     else:
-        # Default to middle of cache sequence length
-        cache_idx = shape_a[2] // 2 if len(shape_a) > 2 else 0
-        batch_offset = 0
+        raw_idx = pos_args.get(2, None)
+        raw_batch = pos_args.get(3, None)
+        cache_idx = int(raw_idx) if raw_idx is not None else (shape_a[2] // 2 if len(shape_a) > 2 else 0)
+        batch_offset = int(raw_batch) if raw_batch is not None else 0
 
     # Generate cache tensor
     torch_cache = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(

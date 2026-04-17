@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -73,10 +73,11 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return (
-        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
-    )
+    return ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.GALAXY,
+        ttnn.cluster.ClusterType.TG,
+        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+    ]
 
 
 # TODO: Remove this when TG clusters are deprecated.

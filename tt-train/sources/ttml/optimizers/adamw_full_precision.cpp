@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ AdamWFullPrecision::AdamWFullPrecision(
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             // Create fp32 master weights from the initial bf16 weights
-            auto bf16_weights = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
+            auto bf16_weights = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
             auto fp32_master = ttnn::typecast(bf16_weights, tt::tt_metal::DataType::FLOAT32);
             m_master_weights.emplace(name, autograd::create_tensor(fp32_master, /* requires_grad */ false));
 

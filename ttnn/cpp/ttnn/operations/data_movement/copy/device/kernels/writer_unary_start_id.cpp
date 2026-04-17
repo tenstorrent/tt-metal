@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 #endif
 
 #ifdef BACKWARDS
@@ -49,7 +49,7 @@ void kernel_main() {
 #endif
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        uint64_t dest_noc_addr = get_noc_addr(i, s);
+        uint64_t dest_noc_addr = s.get_noc_addr(i);
         noc_async_write(l1_read_addr, dest_noc_addr, tile_bytes);
         noc_async_write_barrier();
         cb_pop_front(cb_id_out, onetile);

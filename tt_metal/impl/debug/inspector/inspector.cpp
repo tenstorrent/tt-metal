@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,13 +42,13 @@ bool Inspector::is_enabled() {
     return false;
 }
 
-std::unique_ptr<inspector::Data> Inspector::initialize() {
+std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank) {
     if (!is_enabled()) {
         // Inspector is not enabled, skipping initialization.
         return nullptr;
     }
     try {
-        auto* data = new inspector::Data();
+        auto* data = new inspector::Data(rank);
 
         return std::unique_ptr<inspector::Data>(data);
     } catch (const std::exception& e) {

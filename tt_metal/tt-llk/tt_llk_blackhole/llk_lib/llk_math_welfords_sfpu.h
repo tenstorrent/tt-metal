@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <cstdint>
+#include <type_traits>
+
+#include "ckernel_globals.h"
+#include "ckernel_include.h"
+#include "ckernel_ops.h"
+#include "ckernel_sfpu.h"
+#include "ckernel_template.h"
+#include "cmath_common.h"
+#include "llk_math_common.h"
+#include "llk_sfpu_types.h"
+#include "sfpu/ckernel_sfpu_welfords.h"
+
+// local function declarations
+inline void welfords_sfpu_configure_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+}
+
+inline void welfords_sfpu_configure_mop();
+
+template <DstSync Dst>
+inline void _llk_math_welfords_sfpu_start_(const std::uint32_t dst_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+}
+
+inline void _llk_math_welfords_sfpu_done_()
+{
+    math::clear_dst_reg_addr();
+
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
+}
+
+inline void _llk_math_welfords_sfpu_inc_dst_face_addr_()
+{
+    math::inc_dst_addr<8>();
+    math::inc_dst_addr<8>();
+}
+
+inline void _llk_math_welfords_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();
+    welfords_sfpu_configure_addrmod();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    _program_welfords_replay_buffer_();
+}
+
+inline void _llk_math_welfords_sfpu_uninit_()
+{
+    // No state to restore - all states are transient or default
+}

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,16 @@
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn::experimental::prim {
+
+// Largest divisor of n that is <= cap. Always returns at least 1.
+static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
+    for (uint32_t d = std::min(n, cap); d >= 1; d--) {
+        if (n % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
 
 Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
@@ -97,6 +107,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
+    // Matmul subblock sizing. out_subblock_w fills the dst register row; out_subblock_h
+    // batches multiple tile-rows per matmul call for weight reuse.
+    // On Wormhole B0 the matmul unit benefits from sub_h > 1 (preferred 2×4 subblock).
+    // On Blackhole the row-by-row fused tilize+matmul is faster, so keep sub_h = 1 with optimized blockings.
+    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
+    const bool scale_subblock_h =
+        tt::tt_metal::hal::get_arch() == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
+    const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
+
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
     uint32_t patch_size_bytes = patch_size * dtype_bytes;                // bytes of actual data per patch row
@@ -122,15 +142,23 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
-    // Compute tilizes TILE_HEIGHT rows at a time, so vol2col_rm only needs to double-buffer
-    // that many patches. The reader pushes in matching chunks.
-    uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+    // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h
+    // tile-rows before each matmul call, so vol2col_tiled needs out_subblock_h*K_t
+    // tiles instead of the full M_t*K_t.
+    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before
+    // the next is pushed.
+    // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
+    // between reader pushes and compute tilize pops on the partial last row.
+    uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
+                                    ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
+                                    : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     tt::tt_metal::create_cb(
         cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
+    tt::tt_metal::create_cb(
+        cb_vol2col_tiled_id, program, core_grid, tile_size, out_subblock_h * matmul_K_t, data_format);
 
     uint32_t cb_weight_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
@@ -192,7 +220,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         padded_patch_size_bytes,
         patch_size_bytes,
         vol2col_rm_pages);
-    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
+    log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, out_subblock_h * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
         tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
@@ -210,7 +238,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
     uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
-                               (tile_size * matmul_M_t * matmul_K_t) +          // vol2col_tiled
+                               (tile_size * out_subblock_h * matmul_K_t) +      // vol2col_tiled
                                (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
                                (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
                                (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
@@ -363,18 +391,16 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Matmul parameters
-    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    // Matmul parameters (out_subblock_h, out_subblock_w, dst_size computed earlier for CB sizing)
     const uint32_t in0_block_w = matmul_K_t;
 
-    const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
     TT_FATAL(matmul_N_t % out_subblock_w == 0, "matmul_N_t must be divisible by out_subblock_w");
-    // If out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // row-major intermediate buffer.
-    const uint32_t out_subblock_h =
-        (out_subblock_w == matmul_N_t) ? (std::min(matmul_M_t, dst_size / out_subblock_w)) : 1;
-
-    const uint32_t in0_num_subblocks = matmul_M_t / out_subblock_h;
+    TT_FATAL(
+        matmul_M_t % out_subblock_h == 0,
+        "matmul_M_t ({}) must be divisible by out_subblock_h ({})",
+        matmul_M_t,
+        out_subblock_h);
+    const uint32_t in0_num_subblocks = 1;
     const uint32_t in1_num_subblocks = matmul_N_t / out_subblock_w;
 
     log_debug(tt::LogOp, "Matmul parameters:");

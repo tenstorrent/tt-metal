@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
@@ -64,7 +64,6 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
 
-    constexpr uint32_t tile_bytes = TILE_HW * element_size;
     constexpr uint32_t w_dim = RANK - 1;
 
     // For output height, tile-based:
@@ -123,7 +122,7 @@ void kernel_main() {
     // The stride for stepping along dimension `permuted_w_dim` in the final output
     uint32_t W_stride_tile = dest_tiled_strides[permuted_w_dim];
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t idxs[RANK];
     idxs[RANK - 1] = 0;

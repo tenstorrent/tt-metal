@@ -95,7 +95,7 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 
 - **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
 - **Guide**: `model_tracer/GUIDE.md` - Full workflow, manifest format, schema, CLI reference
-- **Sweep Manifest**: `model_tracer/sweep_manifest.yaml` - Controls which traces are included in test reconstruction
+- **Trace Selection Registry**: `model_tracer/trace_selection_registry.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters

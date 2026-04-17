@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -163,9 +163,9 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
         input_cb_index,
         output_cb_index};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[input_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     constexpr bool math_approx_mode = false;
@@ -188,7 +188,7 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
             path,
             core_group_1,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -203,7 +203,7 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
             path,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -237,7 +237,11 @@ TypecastRowMajorChunkedProgramFactory::cached_program_t TypecastRowMajorChunkedP
          num_cores,
          full_chunks_per_row,
          input_full_chunk_size_bytes,
-         output_full_chunk_size_bytes}};
+         output_full_chunk_size_bytes,
+         core_group_1,
+         core_group_2,
+         num_rows_per_core_group_1,
+         num_rows_per_core_group_2}};
 }
 
 void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
@@ -257,11 +261,11 @@ void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    // Recalculate row distribution (in case tensor changed)
-    const uint32_t num_rows = src_buffer->num_pages();
-    const uint32_t num_rows_per_core = (num_rows + num_cores - 1) / num_cores;
+    // Use the same two-group row distribution as create() to match compile-time per_core_block_cnt.
+    const CoreRangeSet& core_group_1 = cached_program.shared_variables.core_group_1;
+    const uint32_t num_rows_per_core_group_1 = cached_program.shared_variables.num_rows_per_core_group_1;
+    const uint32_t num_rows_per_core_group_2 = cached_program.shared_variables.num_rows_per_core_group_2;
 
-    // Reconstruct all_cores CoreRangeSet to use corerange_to_cores for consistency
     const CoreCoord compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
     const CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
@@ -269,7 +273,8 @@ void TypecastRowMajorChunkedProgramFactory::override_runtime_arguments(
 
     uint32_t num_rows_written = 0;
     for (const CoreCoord& core : cores_vec) {
-        uint32_t rows_for_this_core = std::min(num_rows_per_core, num_rows - num_rows_written);
+        bool is_group_1 = core_group_1.contains(core);
+        uint32_t rows_for_this_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
 
         {
             auto& runtime_args = GetRuntimeArgs(program, typecast_reader_kernel_id, core);

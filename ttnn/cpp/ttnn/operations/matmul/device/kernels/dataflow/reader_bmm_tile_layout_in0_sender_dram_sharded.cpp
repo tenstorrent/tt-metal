@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,6 @@ void kernel_main() {
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(2);
     constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(3);
     // in0 mcast args
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(6);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(7);
     // block args
@@ -31,10 +30,9 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(10);
     constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
-    // in0 semaphore always valid
-    uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(13));
-
     constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in0_block_h = in0_block_num_tiles / in0_block_w;
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
     // RUNTIME ARGS
@@ -70,13 +68,6 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
-
     uint32_t local_read_addr = cb_in2.get_read_ptr();
 
     if (worker_core_type == 1) {  // mcast sender + no compute
@@ -98,17 +89,23 @@ void kernel_main() {
 
             // Now we have the block in the CB address, we can mcast to dests!
 
-            // Zero out padded regions for the very last tile
+            // Zero out padded regions for tiles in the last K-column/row
             if constexpr (in0_last_ktile_w > 0) {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
-                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                    for (uint32_t h = 0; h < in0_block_h; ++h) {
+                        auto in0_last_ktile_ptr =
+                            local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                    }
                 }
             }
             if constexpr (in0_last_ktile_h > 0) {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
-                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                    for (uint32_t w = 0; w < in0_block_w; ++w) {
+                        auto in0_last_ktile_ptr =
+                            local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                    }
                 }
             }
 
@@ -157,17 +154,23 @@ void kernel_main() {
                 sender_sem.wait(in0_mcast_num_dests - 1);
                 sender_sem.set(0);
 
-                // Zero out padded regions for the very last tile
+                // Zero out padded regions for tiles in the last K-column/row
                 if constexpr (in0_last_ktile_w > 0) {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
-                        auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                        for (uint32_t h = 0; h < in0_block_h; ++h) {
+                            auto in0_last_ktile_ptr =
+                                local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                            pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
+                        }
                     }
                 }
                 if constexpr (in0_last_ktile_h > 0) {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
-                        auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                        for (uint32_t w = 0; w < in0_block_w; ++w) {
+                            auto in0_last_ktile_ptr =
+                                local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                            pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
+                        }
                     }
                 }
 #ifndef SKIP_MCAST
@@ -185,8 +188,20 @@ void kernel_main() {
                      .addr = l1_write_addr_in0},
                     true);
 #endif
-                noc_semaphore_set_multicast_loopback_src(
-                    in0_mcast_sender_valid_semaphore, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                // Set local semaphore to VALID. For single-core configurations, this is all we need.
+                receiver_sem.set(VALID);
+                if constexpr (in0_mcast_num_cores > 1) {
+                    receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                        noc,
+                        in0_mcast_dest_noc_start_x,
+                        in0_mcast_dest_noc_start_y,
+                        in0_mcast_dest_noc_end_x,
+                        in0_mcast_dest_noc_end_y,
+                        in0_mcast_num_cores);
+                    // Flush to ensure the NoC has read the VALID value from receiver_sem's L1
+                    // address before the next iteration overwrites it with INVALID.
+                    noc.async_writes_flushed();
+                }
 
                 local_read_addr += in0_block_size_bytes;
 

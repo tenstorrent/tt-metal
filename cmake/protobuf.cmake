@@ -25,6 +25,14 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
 
     file(MAKE_DIRECTORY ${PROTO_GENERATED_DIR})
 
+    # Place a no-op .clang-tidy in the generated directory so that generated
+    # .pb.h headers are not scanned when included by other translation units.
+    configure_file(
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/clang-tidy.d/.clang-tidy.disable.yaml"
+        "${PROTO_GENERATED_DIR}/.clang-tidy"
+        COPYONLY
+    )
+
     set(GENERATED_CC ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.cc)
     set(GENERATED_H ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.h)
 

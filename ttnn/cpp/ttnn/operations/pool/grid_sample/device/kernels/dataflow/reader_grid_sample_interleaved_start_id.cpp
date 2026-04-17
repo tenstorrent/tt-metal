@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
 #include <stdint.h>
 #include "api/compile_time_args.h"
-#include "api/dataflow/dataflow_api.h"
+#include <api/dataflow/dataflow_api.h>
 #include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
@@ -37,8 +37,11 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<12>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    const auto grid_tensor_accessor = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
+    const auto grid_tensor_accessor = TensorAccessor(grid_args, grid_addr);
+    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
+
+    experimental::CB grid_cb(grid_cb_index);
+    experimental::Noc noc;
 
     const uint32_t end_id = start_page_id + num_pages;
 
@@ -52,8 +55,9 @@ void kernel_main() {
     However, if there was no previous read for the appropriate stick, the memory in that location is invalid, and could
     include NaN and Inf values. For that reason we zero out the input_cb at the start.
     */
-
-    zero_out_tiles<input_cb_index>();
+    experimental::CB input_cb(input_cb_index);
+    experimental::CB scalar_cb(scalar_cb_index);
+    zero_out_tiles<input_cb_index>(noc, input_cb);
 
     // Calculate starting batch from starting spatial position (avoid division in loop)
     uint32_t curr_batch = start_page_id / output_hw_size;
@@ -63,14 +67,11 @@ void kernel_main() {
     // Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
         // Read the grid stick for this spatial position (contains grid_batches sets of coordinates)
-        uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
-        uint64_t grid_noc_addr = grid_tensor_accessor.get_noc_addr(spatial_pos);
-
-        noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
-        noc_async_read_barrier();
+        noc.async_read(grid_tensor_accessor, grid_cb, grid_stick_nbytes, {.page_id = spatial_pos}, {});
+        noc.async_read_barrier();
 
         // Cast to appropriate pointer type for grid data access
-        volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
+        volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(grid_cb.get_write_ptr());
 
         // Inner loop: process grid_batches coordinate sets within this spatial position
         for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
@@ -82,7 +83,7 @@ void kernel_main() {
                 input_width,
                 input_stick_nbytes,
                 input_cb_index,
-                scalar_cb_index>(grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
+                scalar_cb_index>(noc, input_cb, scalar_cb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
         }
 
         // Update batch tracking (avoid division in loop)

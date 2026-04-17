@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -106,12 +106,11 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
     uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
-    uint32_t num_rows = input_tensor.logical_shape().size() > 2
-                            ? input_tensor.logical_shape()[-2] * input_tensor.logical_shape()[-3]
-                            : input_tensor.logical_shape()[-2];
-    if (input_tensor.logical_shape().size() == 4) {
-        num_rows *= input_tensor.logical_shape()[0];
-    }
+    uint32_t num_rows = std::accumulate(
+        input_tensor.logical_shape().cbegin(),
+        input_tensor.logical_shape().cend() - 1,
+        1u,
+        std::multiplies<uint32_t>());
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,9 @@ inline void llk_unpack_AB_reduce_block_max_row(
     std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * row_start_index;
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    LLK_ASSERT(
+        cb_access_within_bounds(operandA_id, row_start_index, block_ct_dim), "Indexed tile read exceeds CB boundary");
 
     _llk_unpack_AB_reduce_block_max_row_<respect_trigger>(address_a, base_address_b);
 }

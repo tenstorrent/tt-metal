@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,7 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     experimental::CircularBuffer cb(cb_id_out0);
     experimental::Noc noc;

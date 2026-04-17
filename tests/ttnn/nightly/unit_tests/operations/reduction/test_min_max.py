@@ -1,11 +1,14 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
-from functools import partial
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
@@ -21,6 +24,7 @@ from functools import partial
         ((32, 32, 32, 32), 0),
         ((32, 32, 32, 32), 2),
         ((32, 32, 32, 32), 3),
+        ((1, 2, 18, 20), 3),
     ),
 )
 @pytest.mark.parametrize(
@@ -59,9 +63,10 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     else:
         raise AttributeError()
 
-    # print(f"x.max/min = {value}")
-
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
+    if layout == ttnn.TILE_LAYOUT:
+        tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
+
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
     elif kind == "min":
@@ -71,7 +76,16 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         tt_npu = ttnn.mean(tt_input)
 
     tt_output = tt_npu.cpu().to_torch()
-    comparison_fn = torch.equal
     if kind == "mean":
-        comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)
-    assert comparison_fn(tt_output, torch_output)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_output,
+            tt_output,
+            pcc_threshold=0.9999,
+            rtol=0.006,
+            atol=0.008,
+            frobenius_threshold=0.006,
+        )
+    else:
+        # test for equivalance
+        assert_equal(torch_output, tt_output)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ void kernel_main() {
 
     // TensorAccessor
     constexpr auto tensor_args = TensorAccessorArgs<initial_ct_idx>();
-    auto tensor_accessor = TensorAccessor(tensor_args, input_address, page_size);
+    auto tensor_accessor = TensorAccessor(tensor_args, input_address);
 
     constexpr uint32_t scaler = 0;
     generate_reduce_scaler(compute_input_cb_id_1, scaler);

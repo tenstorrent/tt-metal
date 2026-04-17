@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@ void kernel_main() {
     constexpr uint32_t matmul_K_t = get_compile_time_arg_val(15);
     constexpr uint32_t matmul_N_t = get_compile_time_arg_val(16);
     constexpr uint32_t num_patches_tile_padded = get_compile_time_arg_val(17);
-    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
@@ -69,9 +68,9 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
-    const auto weight_reader = TensorAccessor(weight_args, weight_addr, tile_bytes);
-    const auto bias_reader = TensorAccessor(bias_args, bias_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
+    const auto weight_reader = TensorAccessor(weight_args, weight_addr);
+    const auto bias_reader = TensorAccessor(bias_args, bias_addr);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;

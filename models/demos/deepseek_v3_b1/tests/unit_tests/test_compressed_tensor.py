@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the CompressedTensor class."""
@@ -508,3 +508,68 @@ def test_device_bfp0_bfp2_bfp4_uneven_height_shard(device):
     pcc = metric_value(x.numpy(), recovered.numpy(), "pcc")
     print(f"Overall PCC (including bfp0): {pcc:.6f}")
     assert pcc > 0.93, f"Overall PCC {pcc:.6f} too low"
+
+
+def test_from_bspm_tile_counts(device):
+    """Verify CompressedTensor.from_bspm() applies the correct tile format distribution.
+
+    Loads a real BSPM assignment for R1 layer 4 expert 0 gate_proj and checks that
+    the resulting tile_counts reflect mixed precision (bfp4 dominant + bfp2/bfp0
+    minority) rather than a uniform assignment.
+
+    Requires BSPM_DIR env var pointing to a BitSculpt results root that contains
+    deepseek-r1-0528/layer_4/precision_eval/precision_map_B_3.5.bspm.
+    """
+    import os
+    from pathlib import Path
+
+    bspm_dir = os.environ.get("BSPM_DIR")
+    if not bspm_dir:
+        import pytest
+
+        pytest.skip("BSPM_DIR not set")
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        import pytest
+
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    # R1 expert gate_proj: (7168, 2048) → tile grid (224, 64)
+    K, N = 7168, 2048
+    tiles_h, tiles_w = K // 32, N // 32
+    assignment = load_bspm_for_expert(str(bspm_path), expert_idx=0, proj_idx=0, tile_rows=tiles_h, tile_cols=tiles_w)
+    assert assignment.shape == (tiles_h, tiles_w), f"Expected ({tiles_h}, {tiles_w}), got {assignment.shape}"
+
+    torch.manual_seed(0)
+    weight = torch.randn(K, N).float()
+
+    # Use DRAM WIDTH_SHARDED memory config matching production layout
+    num_banks = device.dram_grid_size().x
+    N_padded = ((N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    per_core_N = N_padded // num_banks
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.dram_grid_size().x - 1, 0))}
+    )
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    ct = CompressedTensor.from_bspm(weight, assignment, device=device, memory_config=mem_config)
+
+    counts = ct.tile_counts
+    total_tiles = sum(counts.values())
+    print(f"BSPM tile counts: {counts} / {total_tiles} total")
+
+    # At 3.5 b/e: ~65% bfp4 (code=1), ~35% bfp2+bfp0 (codes=2,3)
+    assert counts.get("bfp4", 0) > 0, f"Expected bfp4 tiles: {counts}"
+    low_precision = counts.get("bfp2", 0) + counts.get("bfp0", 0)
+    assert low_precision > 0, f"Expected bfp2/bfp0 tiles at 3.5 b/e budget: {counts}"
+    # bfp4 should dominate (>50% of tiles)
+    assert counts.get("bfp4", 0) > total_tiles // 2, f"bfp4 should dominate at 3.5 b/e: {counts}"
+    # Should NOT be all-bfp4 (that would mean BSPM codes were ignored)
+    assert counts.get("bfp4", 0) < total_tiles, f"All tiles are bfp4 — BSPM assignment was not applied: {counts}"

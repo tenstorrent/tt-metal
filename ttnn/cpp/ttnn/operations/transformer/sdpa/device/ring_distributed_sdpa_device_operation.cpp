@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -303,7 +303,7 @@ RingDistributedSdpaDeviceOperation::create_op_performance_model(
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     // In chunked/paged-KV mode, k_shape[2] is the page block size, not the full KV sequence length.
     // Use chunk_start_idx + q_shape[2] as the effective Sk (similar to SDPAOperation).

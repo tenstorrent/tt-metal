@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -554,7 +554,7 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     // Default fp32_dest_acc to true if both inputs are FP32, false otherwise
     bool default_fp32_acc = (input_dtype == DataType::FLOAT32 && weight_dtype == DataType::FLOAT32);
     return init_device_compute_kernel_config(
-        device->arch(), std::nullopt, MathFidelity::HiFi4, true, default_fp32_acc, false);
+        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, default_fp32_acc, false);
 }
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(

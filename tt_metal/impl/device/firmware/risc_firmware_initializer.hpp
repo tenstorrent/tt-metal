@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,9 +50,11 @@ private:
     // Take the cores out of reset state. This should be called after setting the correct program counter for execution.
     void reset_cores(tt::ChipId device_id);
 
+    void terminate_active_ethernet_cores_on_all_chips();
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);
     void assert_tensix_workers_impl(tt::ChipId device_id);
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
+    void assert_dram_cores(tt::ChipId device_id);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -558,6 +558,15 @@ void device_module(nb::module_& m_device) {
         nb::arg("device"),
         R"doc(
         Experimental: If Slow Dispatch is enabled, this function disables the ability to run multiple non-overlapping programs concurrently on the same device.
+        )doc");
+    m_device.def(
+        "is_asynchronous_slow_dispatch_enabled",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(device);
+        },
+        nb::arg("device"),
+        R"doc(
+        Experimental: Returns whether asynchronous slow dispatch is currently enabled on the given device.
         )doc");
 }
 

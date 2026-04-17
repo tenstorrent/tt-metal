@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common.hpp"                // For MeshCoordinate
@@ -26,6 +27,7 @@ struct TestDevice;
 // Progress monitoring configuration
 struct ProgressMonitorConfig {
     bool enabled = false;
+    bool show_workers = false;
     uint32_t poll_interval_seconds = 2;    // How often to poll progress
     uint32_t hung_threshold_seconds = 30;  // When to warn about hung devices
 };
@@ -58,8 +60,9 @@ public:
     TestProgressMonitor(TestProgressMonitor&&) = delete;
     TestProgressMonitor& operator=(TestProgressMonitor&&) = delete;
 
-    // Poll until programs complete (runs in calling thread)
-    void poll_until_complete();
+    // Poll until programs complete or all remaining devices are hung.
+    // Returns true if all devices completed normally, false if aborted due to hang.
+    bool poll_until_complete();
 
 private:
     // Poll all devices and collect progress
@@ -68,8 +71,11 @@ private:
     // Poll a single device's senders
     DeviceProgress poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device);
 
-    // Check for hung devices and display warnings
-    void check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+    // Check for hung devices and display warnings. Returns true if all remaining devices are hung.
+    bool check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+
+    // Generate a detailed report of all device states at abort time
+    void generate_hung_report(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
 
     // Display progress (single line summary)
     void display_progress(
@@ -101,6 +107,10 @@ private:
     // Hung detection state
     std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceState> device_states_;
     std::chrono::seconds hung_threshold_;
+
+    // Per-device completion tracking
+    std::unordered_set<tt::tt_fabric::FabricNodeId> completed_devices_;
+    uint32_t total_active_devices_ = 0;
 };
 
 }  // namespace tt::tt_fabric::fabric_tests

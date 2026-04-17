@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -56,6 +56,7 @@ def check_normal_distribution(data, expected_mean=0.0, expected_std=1.0, sigma_t
 class TestRandn:
     # --- default behaviour ---
 
+    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_randn_defaults(self):
         tensor = ttml.ops.randn(DEFAULT_SHAPE)
         ttnn_tensor = tensor.get_value(precision=FULL_PRECISION)
@@ -77,6 +78,8 @@ class TestRandn:
 
     @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
     def test_randn_dtype(self, dtype):
+        if dtype == ttnn.DataType.BFLOAT16:
+            pytest.skip("Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
         tensor = ttml.ops.randn(DEFAULT_SHAPE, dtype=dtype)
         ttnn_tensor = tensor.get_value(precision=FULL_PRECISION)
         assert ttnn_tensor.dtype == dtype

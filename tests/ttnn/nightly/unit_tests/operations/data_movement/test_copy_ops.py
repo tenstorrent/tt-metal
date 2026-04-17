@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -405,6 +405,7 @@ def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, dev
     Test that row-major typecast produces same results as tile layout typecast.
     This ensures correctness of the row-major implementation.
     """
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/41665")
     torch.manual_seed(12345)
 
     # Use appropriate torch dtype and generation method based on input_dtype

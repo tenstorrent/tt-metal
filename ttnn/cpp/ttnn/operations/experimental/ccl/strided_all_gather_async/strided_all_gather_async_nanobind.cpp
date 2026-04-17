@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,7 +67,6 @@ void bind_strided_all_gather_async(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
         nb::arg("cluster_axis") = nb::none(),
-        nb::arg("tiles_per_chunk") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
         nb::arg("mm_cores_y") = nb::none(),
@@ -75,4 +74,4 @@ void bind_strided_all_gather_async(nb::module_& mod) {
         nb::arg("mm_block_wt") = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace

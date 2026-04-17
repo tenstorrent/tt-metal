@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::precise() {
     ttnn::WormholeComputeKernelConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
+    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     config.packer_l1_acc = true;
     return config;
 }
@@ -19,7 +19,7 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::softmax() {
     ttnn::WormholeComputeKernelConfig config;
     config.fp32_dest_acc_en = false;
     config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
+    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     config.packer_l1_acc = true;
     return config;
 }
@@ -28,7 +28,7 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::matmul() {
     ttnn::WormholeComputeKernelConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
+    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     config.packer_l1_acc = true;
     return config;
 }
@@ -37,7 +37,7 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::fast() {
     ttnn::WormholeComputeKernelConfig config;
     config.fp32_dest_acc_en = false;
     config.math_approx_mode = true;
-    config.math_fidelity = MathFidelity::LoFi;
+    config.math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     config.packer_l1_acc = false;
     return config;
 }

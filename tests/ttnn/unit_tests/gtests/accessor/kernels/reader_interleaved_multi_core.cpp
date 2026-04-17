@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ void kernel_main() {
     uint32_t start_page_id = get_arg_val<uint32_t>(1);
     uint32_t end_page_id = get_arg_val<uint32_t>(2);
 
-    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
+    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
 
     auto process_pages = [&](const auto& page) {
         cb_reserve_back(cb_id, 1);
@@ -36,6 +36,7 @@ void kernel_main() {
         auto page = pages.begin();
         for (; page != pages.end(); page += BIG_STEP) {
             // DPRINT << "write " << page->page_id() << " to " << page->noc_addr() << ENDL();
+            // DEVICE_PRINT("write page {} to {}\n", page->page_id(), page->noc_addr());
             process_pages(*page);
         }
     }
@@ -45,6 +46,7 @@ void kernel_main() {
     auto pages = tensor_accessor_src.pages(start_page_id, end_page_id);
     for (const auto& page : pages) {
         // DPRINT << "write " << page.page_id() << " to " << page.noc_addr() << ENDL();
+        // DEVICE_PRINT("write page {} to {}\n", page.page_id(), page.noc_addr());
         process_pages(page);
     }
 #endif

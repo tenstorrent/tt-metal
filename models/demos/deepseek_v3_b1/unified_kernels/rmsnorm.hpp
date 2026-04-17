@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -21,6 +21,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
+#include "api/compute/experimental/pack_block.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
 #endif
@@ -121,6 +122,7 @@ struct RMSNorm {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
             reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
             pack_reconfig_data_format<true>(CTArgs::output_cb);
+            pack_block_contiguous_init(CTArgs::output_cb);
             {
                 // Square the input
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
@@ -137,9 +139,6 @@ struct RMSNorm {
                 // Multiply input by 1/RMS
                 rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(CTArgs::input_cb);
                 rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(CTArgs::input_cb, 0, 0, 0);
-                if constexpr (pop_input) {
-                    cb_pop_front(CTArgs::input_cb, num_tiles);
-                }
             }
             {
                 // Multiply by the weight
@@ -151,9 +150,12 @@ struct RMSNorm {
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile_block(0, CTArgs::output_cb, num_tiles);
+                pack_block_contiguous(0, CTArgs::output_cb, num_tiles);
                 cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();
+            }
+            if constexpr (pop_input) {
+                cb_pop_front(CTArgs::input_cb, num_tiles);
             }
         }
 #endif

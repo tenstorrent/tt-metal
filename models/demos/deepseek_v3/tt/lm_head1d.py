@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 from pathlib import Path
 
 import torch
@@ -63,8 +64,8 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
-            1, 0
+        weight_tensor = (
+            get_dequantized_tensor(state_dict, "weight").permute(1, 0).contiguous()
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
 
@@ -83,14 +84,79 @@ class LMHead1D(AbstractModule):
         }
 
     @classmethod
-    def decode_model_config(cls, mesh_device: ttnn.Device) -> ModelDecodeConfig:
-        """Generate model configuration for this module."""
-        # Construct the config
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelDecodeConfig:
+        """Generate model configuration for this module.
+
+        Args:
+            hf_config: HuggingFace model configuration.
+            mesh_device: Mesh device whose column count (`shape[1]`) defines tensor-parallel
+                vocab sharding for the LM head program config.
+        """
+        hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
+        tile_size = 32
+        mesh_cols = mesh_device.shape[1]
+        if vocab_size % mesh_cols != 0:
+            raise ValueError(
+                f"LMHead1D.decode_model_config requires vocab_size ({vocab_size}) to be divisible by "
+                f"mesh_device.shape[1] ({mesh_cols})."
+            )
+        if hidden_dim % tile_size != 0:
+            raise ValueError(
+                f"LMHead1D.decode_model_config requires hidden_dim ({hidden_dim}) to be a multiple of "
+                f"tile_size ({tile_size})."
+            )
+        n_per_device = vocab_size // mesh_cols
+        if n_per_device % tile_size != 0:
+            raise ValueError(
+                f"LMHead1D.decode_model_config requires per-device vocab shard size ({n_per_device}) to be "
+                f"a multiple of tile_size ({tile_size}). Computed from vocab_size ({vocab_size}) and "
+                f"mesh_device.shape[1] ({mesh_cols})."
+            )
+        K_tiles = hidden_dim // tile_size
+        N_tiles = n_per_device // tile_size
+        if N_tiles == 0:
+            raise ValueError(
+                "LMHead1D.decode_model_config requires N_tiles >= 1 (per-device vocab must span at least "
+                f"one tile in N); got N_tiles=0 from n_per_device={n_per_device}, tile_size={tile_size}."
+            )
+
+        # 1D multicast: broadcast small decode activation to all cores,
+        # each core computes a slice of the output columns (N dimension).
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        num_cores = grid_size.x * grid_size.y
+        per_core_N = math.ceil(N_tiles / num_cores)
+        if per_core_N == 0:
+            raise ValueError(
+                "LMHead1D.decode_model_config requires per_core_N >= 1 for matmul subblocking; "
+                f"got per_core_N=0 (N_tiles={N_tiles}, num_cores={num_cores})."
+            )
+
+        in0_block_w = 32
+        while K_tiles % in0_block_w != 0:
+            in0_block_w //= 2
+
+        out_subblock_w = min(per_core_N, 4)
+        while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_size.x, grid_size.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                program_config=program_config,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -103,7 +169,7 @@ class LMHead1D(AbstractModule):
         }
 
     @classmethod
-    def prefill_model_config(cls, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
         """Generate model configuration for this module."""
         # Construct the config
         return {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -138,7 +138,6 @@ class KVCacheBranch:
         cos_sin_cb = 0  # tile (NCRISC reads from DRAM)
         trans_mat_cb = 2  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
         rotated_input_interm_cb = 3  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        cos_sin_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
         dkv_matmul_input_cb = 6  # 1x32 tile, 64 bytes (224 tiles = 1x7168)
         dkv_matmul_output_cb = 7  # 1x32 tile, 64 bytes (1 tile per core for rope input)
         dkv_matmul_weights_cb = 8  # 32x32 tile, 2048 bytes (sharded weights)
@@ -239,10 +238,9 @@ class KVCacheBranch:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
+        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
         # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
         # Plus destination CB info for reserve/push
         # Writes directly to kv_rmsnorm_input_cb
@@ -290,7 +288,6 @@ class KVCacheBranch:
             ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("rotated_in_interm_cb", rotated_input_interm_cb),
-            ("cos_sin_interm_cb", cos_sin_interm_cb),
             ("out_cb", k_rope_output_cb),
             ("Wt", krope_Wt),
             ("Ht", krope_Ht),
@@ -389,18 +386,6 @@ class KVCacheBranch:
             format_descriptors=[rotated_interm_format],
         )
 
-        cos_sin_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_sin_interm_cb,
-            data_format=data_format,
-            page_size=krope_tile_size,
-            tile=krope_tile_descriptor,
-        )
-        cos_sin_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=2 * krope_tile_size,
-            core_ranges=krope_core_grid,
-            format_descriptors=[cos_sin_interm_format],
-        )
-
         k_rope_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=k_rope_output_cb,
             data_format=data_format,
@@ -437,13 +422,14 @@ class KVCacheBranch:
             kernel_source="models/demos/deepseek_v3_b1/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
             core_ranges=input_core_grid,
             # NCRISC named compile-time args:
+            # dkv_gather receiver args on NCRISC (ReceiverOnNCRISC mode)
             ncrisc_named_compile_time_args=dkv_matmul_ncrisc_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
+            + dkv_gather_receiver_named_compile_time_args
             + krope_ncrisc_named_compile_time_args,
             # BRISC named compile-time args
-            brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
-            + kv_rmsnorm_brisc_named_compile_time_args
+            brisc_named_compile_time_args=kv_rmsnorm_brisc_named_compile_time_args
             + krope_brisc_named_compile_time_args,
             # BRISC common runtime args: KV cache buffer address and write position
             brisc_common_runtime_args=[
@@ -515,7 +501,6 @@ class KVCacheBranch:
                 cos_sin_cb_descriptor,
                 trans_mat_cb_descriptor,
                 rotated_interm_cb_descriptor,
-                cos_sin_interm_cb_descriptor,
                 k_rope_output_cb_descriptor,
             ],
             semaphores=[

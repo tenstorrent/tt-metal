@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,9 @@ Topology = ttnn._ttnn.operations.ccl.Topology
 DispatchAlgorithm = ttnn._ttnn.operations.experimental.ccl_experimental.DispatchAlgorithm
 WorkerMode = ttnn._ttnn.operations.experimental.ccl_experimental.WorkerMode
 
+# Experimental CCL enum for moe_compute operation
+MoEActivationFunction = ttnn._ttnn.operations.experimental.ccl_experimental.MoEActivationFunction
+
 # TODO: Add golden functions (#12747)
 
-__all__ = ["Topology", "DispatchAlgorithm", "WorkerMode"]
+__all__ = ["Topology", "DispatchAlgorithm", "WorkerMode", "MoEActivationFunction"]

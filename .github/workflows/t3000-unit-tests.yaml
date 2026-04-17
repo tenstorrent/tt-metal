@@ -20,6 +20,7 @@ on:
           # - llama3.1-70b
           - llama3.2-90b
           - mistral
+          - mistral-small-3.1-24b-vision
           - mixtral
           - grok
           - unet shallow

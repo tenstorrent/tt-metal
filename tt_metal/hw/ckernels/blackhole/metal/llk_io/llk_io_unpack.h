@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include "llk_unpack_common_api.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
+#include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
@@ -42,6 +43,10 @@ inline void llk_pop_tiles(
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
     get_local_cb_interface(input).fifo_rd_ptr += num_words;
+
+    LLK_ASSERT(
+        get_local_cb_interface(input).fifo_rd_ptr <= get_local_cb_interface(input).fifo_limit,
+        "CB pop_front: fifo_rd_ptr exceeds fifo_limit");
 
     if (get_local_cb_interface(input).fifo_rd_ptr >= get_local_cb_interface(input).fifo_limit) {
         get_local_cb_interface(input).fifo_rd_ptr -= get_local_cb_interface(input).fifo_size;

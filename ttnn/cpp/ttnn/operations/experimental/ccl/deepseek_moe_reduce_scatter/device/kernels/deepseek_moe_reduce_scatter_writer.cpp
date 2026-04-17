@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,54 +70,54 @@ void kernel_main() {
     constexpr auto intermediate_slice_0_tensor_args = TensorAccessorArgs<intermediate_slice_0_ct_val>();
     constexpr uint32_t intermediate_slice_0_ct_offset = intermediate_slice_0_tensor_args.num_compile_time_args();
     const auto intermediate_slice_0_tensor_accesor =
-        TensorAccessor(intermediate_slice_0_tensor_args, intermediate_slice_0_address, page_size);
+        TensorAccessor(intermediate_slice_0_tensor_args, intermediate_slice_0_address);
 
     constexpr uint32_t intermediate_slice_1_ct_val = intermediate_slice_0_ct_val + intermediate_slice_0_ct_offset;
     constexpr auto intermediate_slice_1_tensor_args = TensorAccessorArgs<intermediate_slice_1_ct_val>();
     constexpr uint32_t intermediate_slice_1_ct_offset = intermediate_slice_1_tensor_args.num_compile_time_args();
     const auto intermediate_slice_1_tensor_accesor =
-        TensorAccessor(intermediate_slice_1_tensor_args, intermediate_slice_1_address, page_size);
+        TensorAccessor(intermediate_slice_1_tensor_args, intermediate_slice_1_address);
 
     constexpr uint32_t intermediate_slice_2_ct_val = intermediate_slice_1_ct_val + intermediate_slice_1_ct_offset;
     constexpr auto intermediate_slice_2_tensor_args = TensorAccessorArgs<intermediate_slice_2_ct_val>();
     constexpr uint32_t intermediate_slice_2_ct_offset = intermediate_slice_2_tensor_args.num_compile_time_args();
     const auto intermediate_slice_2_tensor_accesor =
-        TensorAccessor(intermediate_slice_2_tensor_args, intermediate_slice_2_address, page_size);
+        TensorAccessor(intermediate_slice_2_tensor_args, intermediate_slice_2_address);
 
     constexpr uint32_t intermediate_slice_3_ct_val = intermediate_slice_2_ct_val + intermediate_slice_2_ct_offset;
     constexpr auto intermediate_slice_3_tensor_args = TensorAccessorArgs<intermediate_slice_3_ct_val>();
     constexpr uint32_t intermediate_slice_3_ct_offset = intermediate_slice_3_tensor_args.num_compile_time_args();
     const auto intermediate_slice_3_tensor_accesor =
-        TensorAccessor(intermediate_slice_3_tensor_args, intermediate_slice_3_address, page_size);
+        TensorAccessor(intermediate_slice_3_tensor_args, intermediate_slice_3_address);
 
     constexpr uint32_t intermediate_slice_4_ct_val = intermediate_slice_3_ct_val + intermediate_slice_3_ct_offset;
     constexpr auto intermediate_slice_4_tensor_args = TensorAccessorArgs<intermediate_slice_4_ct_val>();
     constexpr uint32_t intermediate_slice_4_ct_offset = intermediate_slice_4_tensor_args.num_compile_time_args();
     const auto intermediate_slice_4_tensor_accesor =
-        TensorAccessor(intermediate_slice_4_tensor_args, intermediate_slice_4_address, page_size);
+        TensorAccessor(intermediate_slice_4_tensor_args, intermediate_slice_4_address);
 
     constexpr uint32_t intermediate_slice_5_ct_val = intermediate_slice_4_ct_val + intermediate_slice_4_ct_offset;
     constexpr auto intermediate_slice_5_tensor_args = TensorAccessorArgs<intermediate_slice_5_ct_val>();
     constexpr uint32_t intermediate_slice_5_ct_offset = intermediate_slice_5_tensor_args.num_compile_time_args();
     const auto intermediate_slice_5_tensor_accesor =
-        TensorAccessor(intermediate_slice_5_tensor_args, intermediate_slice_5_address, page_size);
+        TensorAccessor(intermediate_slice_5_tensor_args, intermediate_slice_5_address);
 
     constexpr uint32_t intermediate_slice_6_ct_val = intermediate_slice_5_ct_val + intermediate_slice_5_ct_offset;
     constexpr auto intermediate_slice_6_tensor_args = TensorAccessorArgs<intermediate_slice_6_ct_val>();
     constexpr uint32_t intermediate_slice_6_ct_offset = intermediate_slice_6_tensor_args.num_compile_time_args();
     const auto intermediate_slice_6_tensor_accesor =
-        TensorAccessor(intermediate_slice_6_tensor_args, intermediate_slice_6_address, page_size);
+        TensorAccessor(intermediate_slice_6_tensor_args, intermediate_slice_6_address);
 
     constexpr uint32_t intermediate_slice_7_ct_val = intermediate_slice_6_ct_val + intermediate_slice_6_ct_offset;
     constexpr auto intermediate_slice_7_tensor_args = TensorAccessorArgs<intermediate_slice_7_ct_val>();
     constexpr uint32_t intermediate_slice_7_ct_offset = intermediate_slice_7_tensor_args.num_compile_time_args();
     const auto intermediate_slice_7_tensor_accesor =
-        TensorAccessor(intermediate_slice_7_tensor_args, intermediate_slice_7_address, page_size);
+        TensorAccessor(intermediate_slice_7_tensor_args, intermediate_slice_7_address);
 
     // output TensorAccessor
     constexpr uint32_t output_ct_val = intermediate_slice_7_ct_val + intermediate_slice_7_ct_offset;
     constexpr auto output_tensor_args = TensorAccessorArgs<output_ct_val>();
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address, page_size);
+    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address);
 
     // connect to fabric
     size_t arg_for_fab = arg_idx;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_pack_common.h"
+#include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
@@ -75,6 +76,10 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
 
     get_local_cb_interface(output).fifo_wr_ptr += num_words;
     get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
+
+    LLK_ASSERT(
+        get_local_cb_interface(output).fifo_wr_ptr <= get_local_cb_interface(output).fifo_limit,
+        "CB push_back: fifo_wr_ptr exceeds fifo_limit");
 
     if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
         get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;

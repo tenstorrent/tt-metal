@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ from run_checks import run as get_run_checks
 import os
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.tt_exalens_lib import read_from_device
+from ttexalens.memory_access import MemoryAccess
 from triage import ScriptConfig, log_check_risc, run_script
 
 script_config = ScriptConfig(
@@ -31,6 +31,10 @@ script_config = ScriptConfig(
 def check_binary_integrity(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ):
+    if not dispatcher_data.risc_enabled(risc_name):
+        return
+
+    l1_mem_access = MemoryAccess.create_l1(location)
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
@@ -55,7 +59,7 @@ def check_binary_integrity(
             else:
                 address: int = section["sh_addr"]
                 data: bytes = section.data()
-                read_data = read_from_device(location, address, num_bytes=len(data))
+                read_data = l1_mem_access.read(address, len(data))
                 log_check_risc(
                     risc_name,
                     location,
@@ -87,7 +91,7 @@ def check_binary_integrity(
                 else:
                     data: bytes = section.data()
                     address: int = dispatcher_core_data.kernel_offset
-                    read_data = read_from_device(location, address, num_bytes=len(data))
+                    read_data = l1_mem_access.read(address, len(data))
                     log_check_risc(
                         risc_name,
                         location,
@@ -97,7 +101,7 @@ def check_binary_integrity(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "dram"]
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)

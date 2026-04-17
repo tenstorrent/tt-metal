@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -190,67 +190,6 @@ Tensor _make_global_from_hw_impl(
 }  // namespace ttnn::detail
 
 namespace ttnn {
-
-// TODO: In future will uplift the op once the floor and tan has supported.
-// digamma support for the range of (1, inf)
-Tensor digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor input = input_a.dtype() == DataType::BFLOAT8_B ? ttnn::fill_implicit_tile_padding(input_a, 1.0f) : input_a;
-    Tensor t_log_out = ttnn::log(input, true, output_mem_config);  // negative log is not useful here
-
-    // 1/2(z)
-    Tensor input_recip = ttnn::reciprocal(input, output_mem_config);
-    Tensor output = ttnn::multiply(input_recip, 0.5f, std::nullopt, output_mem_config);
-    Tensor tmp = ttnn::square(input_recip, output_mem_config);
-    Tensor val_square = tmp;
-    // (1/12) * x^2
-    output = ttnn::subtract(output, ttnn::multiply(tmp, 0.083333333f), std::nullopt, output_mem_config);
-
-    // (1/120) * x^4
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.008333333333333333f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/252) * x^6
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(
-        output,
-        ttnn::multiply(tmp, 0.003968253968253968f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    // (1/240) *x^8
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.004166666666666667f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/132) * x^10
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(output, ttnn::multiply(tmp, 0.007575757575757576), std::nullopt, output_mem_config);
-
-    //(691/32760) * x^12
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.021092796092796094, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/12) * x^14
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(
-        output,
-        ttnn::multiply(tmp, 0.08333333333333333, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    return ttnn::subtract(t_log_out, output, std::nullopt, output_mem_config);
-}
 
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
@@ -475,27 +414,21 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
-// polygamma support for the range of input(1, 10) and n(1, 10)
+// polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
+// The kernel evaluates (-1)^(n+1) * n! * Σ_{k=0}^{10} 1/(x + k)^(n+1) and applies an Euler–Maclaurin
+// tail correction term to approximate the infinite remainder Σ_{k=11}^{∞} 1/(x + k)^(n+1), rather than
+// performing a hard truncation at k = 10. This is a single kernel dispatch instead of 11+ composite ops.
 Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
-    float k_der = 1.0f + k;
-    float fact_val = std::tgamma(k_der);
-    float pos_neg = 1.0f;
-    if (k == 2 || k == 4 || k == 6 || k == 8 || k == 10) {
-        pos_neg = -1.0f;
-    }
-    Tensor temp(input_a);
-    {
-        Tensor z1 = ttnn::reciprocal(ttnn::power(input_a, k_der, output_mem_config), output_mem_config);
-        temp = z1;
-        for (int idx = 1; idx < 11; idx++) {
-            z1 = ttnn::reciprocal(
-                ttnn::power(ttnn::add(input_a, idx, std::nullopt, output_mem_config), k_der, output_mem_config),
-                output_mem_config);
-            temp = ttnn::add(temp, z1, std::nullopt, output_mem_config);
-        }
-    }
-    fact_val *= pos_neg;
-    return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
+    // Range includes k=11 to support polygamma_bw which computes polygamma(input, n+1)
+    TT_FATAL(k >= 1 && k <= 11, "polygamma order must be in range [1, 11], got {}", k);
+    float n = static_cast<float>(k);
+    float fact_val = std::tgamma(1.0f + k);       // k!
+    float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
+    float scale = fact_val * pos_neg;
+    return ttnn::detail::unary_impl(
+        input_a,
+        {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
+        output_mem_config);
 }
 
 // // tanhshrink(x) = x - tanh(x)
@@ -511,11 +444,6 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     Tensor result = ttnn::multiply(input, (1.0f / 2.0f), std::nullopt, output_mem_config);
     Tensor floor_res = ttnn::floor(result, output_mem_config);
     return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
-}
-
-// frac(x) = x - trunc(x), fractional part
-Tensor frac(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::subtract(x, ttnn::trunc(x, output_mem_config), std::nullopt, output_mem_config);
 }
 
 }  // namespace ttnn::operations::unary

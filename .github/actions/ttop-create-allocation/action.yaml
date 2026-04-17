@@ -15,6 +15,10 @@ inputs:
     description: 'List of explicit nodes (ignored when spec is provided)'
     required: false
     default: ''
+  namespace:
+    description: 'Kubernetes namespace for the allocation'
+    required: false
+    default: 'ttop-ci'
 
 runs:
   using: 'composite'
@@ -30,6 +34,7 @@ runs:
         kind: Allocation
         metadata:
           name: ${{ inputs.allocationName }}
+          namespace: ${{ inputs.namespace }}
         spec:
           retryPolicy: Always
           allocationType: Explicit
@@ -49,6 +54,7 @@ runs:
         kind: Allocation
         metadata:
           name: ${{ inputs.allocationName }}
+          namespace: ${{ inputs.namespace }}
         spec:
           retryPolicy: Always
         ${SPEC}
@@ -59,10 +65,10 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl apply -f -
+        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for allocation
       shell: bash
       run: |
         echo "Waiting for allocation to be ready..."
-        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m -n ${{ inputs.namespace }}

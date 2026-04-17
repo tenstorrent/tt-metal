@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,7 @@ from models.common.utility_functions import (
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -183,9 +180,9 @@ def run_test_matmul_in1_dram_sharded(
 
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        pt_out, tt_out, atol=0.002 * K, rtol=1.062 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -386,9 +383,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     print(tt_out)
     print(pt_out)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert True
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 @pytest.mark.parametrize(
@@ -610,6 +605,4 @@ def test_matmul_2d_in1_dram_sharded(
     if activation != None:
         pt_out = torch.nn.functional.gelu(pt_out)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)

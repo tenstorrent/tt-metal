@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal::experimental::blitz {
 
@@ -18,7 +17,6 @@ struct BlitzDecodePipelineStage {
     ::tt::tt_metal::distributed::MeshCoordinate exit_node_coord;
 };
 
-std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(
-    const ::tt::tt_metal::distributed::MeshDevice& mesh_device);
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline();
 
 }  // namespace tt::tt_metal::experimental::blitz

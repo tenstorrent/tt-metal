@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_8;
     const uint32_t tile_bytes = get_tile_size(cb_out);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t output_tile_idx = tile_row_start * Wt;
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,10 +24,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // Tensor config
-    const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const auto values_tensor_accessor = TensorAccessor(values_tensor_args, dst_addr0, tile_bytes_values);
-    const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
-    const auto indices_tensor_accessor = TensorAccessor(indices_tensor_args, dst_addr1, tile_bytes_ind);
+    const auto values_tensor_accessor = TensorAccessor(values_tensor_args, dst_addr0);
+    const auto indices_tensor_accessor = TensorAccessor(indices_tensor_args, dst_addr1);
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {

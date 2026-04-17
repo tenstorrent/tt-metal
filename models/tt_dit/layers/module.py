@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
-        self.unload_set = None  # set of modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -100,7 +100,6 @@ class Module(ABC):
         module_key_prefix: str,
         missing_keys: MutableSequence[str],
         unexpected_keys: MutableSequence[str],
-        on_host: bool,
     ) -> None:
         state_dict = dict(state_dict)
         self._prepare_torch_state(state_dict)
@@ -114,7 +113,6 @@ class Module(ABC):
                     module_key_prefix=f"{module_key_prefix}{name}.",
                     missing_keys=missing_keys,
                     unexpected_keys=unexpected_keys,
-                    on_host=on_host,
                 )
             except LoadingError:
                 raise
@@ -125,7 +123,7 @@ class Module(ABC):
         for name, parameter in self.named_parameters():
             if name in state_dict:
                 try:
-                    parameter.load_torch_tensor(state_dict.pop(name), on_host=on_host)
+                    parameter.load_torch_tensor(state_dict.pop(name))
                 except LoadingError as err:
                     msg = f"while loading '{module_key_prefix}{name}': {err}"
                     raise LoadingError(msg) from err
@@ -135,30 +133,21 @@ class Module(ABC):
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
-    def load_torch_state_dict(
-        self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True, on_host: bool = False
-    ) -> IncompatibleKeys:
+    def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 
         Args:
             state_dict: Mapping of parameter names to PyTorch tensors.
             strict: If `True`, raises ValueError on missing or unexpected keys.
-            on_host: If `True`, keeps tensors in host memory. This is used when saving the module
-                to disk, since for device tensors, every shard is currently stored to disk, even
-                for replicated tensors, leading to redundant copies of data.
 
         Returns:
             `IncompatibleKeys` containing lists of missing and unexpected keys.
         """
         missing_keys = []
         unexpected_keys = []
-
+        self.evict_coresident_exclusions()
         self._load_torch_state_dict_inner(
-            state_dict,
-            module_key_prefix="",
-            missing_keys=missing_keys,
-            unexpected_keys=unexpected_keys,
-            on_host=on_host,
+            state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
         )
 
         if strict and (missing_keys or unexpected_keys):
@@ -189,6 +178,8 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
+        self.evict_coresident_exclusions()
+
         for name, child in self.named_children():
             child.load(directory, prefix=f"{prefix}{name}.")
 
@@ -215,13 +206,22 @@ class Module(ABC):
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def set_unload_set(self, *args: Module) -> None:
+    def register_coresident_exclusions(self, *args: Module) -> None:
         """
-        Set the modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        Register modules that cannot be resident in memory at the same time as this module.
+        They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
         Args:
-            *args: Arbitrary number of Modules that cannot be loaded together with this module.
+            *args: Modules that cannot be co-resident in memory with this module.
         """
-        self.unload_set = set(args)
+        if self.coresident_exclusions is None:
+            self.coresident_exclusions = set()
+        self.coresident_exclusions.update(args)
+
+    def evict_coresident_exclusions(self) -> None:
+        """Evict the modules that cannot be resident in memory at the same time as this module."""
+        if self.coresident_exclusions is not None:
+            for module in self.coresident_exclusions:
+                module.deallocate_weights()
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -376,13 +376,13 @@ class Parameter:
         self.on_host = on_host
         self._data = None
 
-    def load_torch_tensor(self, torch_tensor: torch.Tensor, /, *, on_host: bool = False) -> None:
+    def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
         if shape != self.total_shape:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
             raise LoadingError(msg)
 
-        data = tensor.from_torch(
+        self.data = tensor.from_torch(
             torch_tensor,
             device=self.device,
             layout=self.layout,
@@ -390,9 +390,8 @@ class Parameter:
             memory_config=self.memory_config,
             pad_value=self.pad_value,
             mesh_axes=self.mesh_axes,
-            on_host=self.on_host or on_host,
+            on_host=self.on_host,
         )
-        self._set_data(data, allow_on_host=on_host)
 
     def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data)
@@ -414,7 +413,8 @@ class Parameter:
 
     @data.setter
     def data(self, value: ttnn.Tensor) -> None:
-        self._set_data(value)
+        self._check_data(value)
+        self._data = value
 
     def deallocate(self) -> None:
         """Deallocate the parameter's device memory."""
@@ -422,15 +422,14 @@ class Parameter:
             ttnn.deallocate(self._data)
             self._data = None
 
-    def _set_data(self, value: ttnn.Tensor, *, allow_on_host: bool = False) -> None:
+    def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
                 raise LoadingError(msg)
         elif value.device() is None:
-            if not allow_on_host:
-                msg = "expected device tensor, got host tensor"
-                raise LoadingError(msg)
+            msg = "expected device tensor, got host tensor"
+            raise LoadingError(msg)
         elif value.device() != self.device:
             msg = "device mismatch"
             raise LoadingError(msg)
@@ -450,5 +449,3 @@ class Parameter:
         if value.shape != self.local_shape:
             msg = f"shape mismatch: expected {self.local_shape}, got {tuple(value.shape)}"
             raise LoadingError(msg)
-
-        self._data = value

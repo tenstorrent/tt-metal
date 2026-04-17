@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,6 +55,8 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<4>();
     uint32_t read_size = stick_size;
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     // pre-populate packet headers

@@ -26,7 +26,7 @@ target_link_libraries(
     ttmetalium_hostdevcommon
     INTERFACE
         fmt::fmt-header-only
-        umd::device
+        umd::tt-umd
 )
 
 install(

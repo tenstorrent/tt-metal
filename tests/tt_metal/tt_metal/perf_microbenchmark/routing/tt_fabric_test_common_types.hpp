@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -318,6 +318,9 @@ struct PhysicalMeshConfig {
         // Default path to the mesh descriptor.
     }
 };
+
+// Format a fabric node id with Tray/Node info, e.g. "(0,5) [T0/N5]"
+std::string format_device_label(const FabricNodeId& node_id);
 
 // Helper functions for fetching pattern parameters
 TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);

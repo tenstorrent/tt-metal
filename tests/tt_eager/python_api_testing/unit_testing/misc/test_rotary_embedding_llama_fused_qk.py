@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -134,4 +134,6 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     if (batch * 2) % ttnn.TILE_SIZE != 0:
         num_ops += 1  # slice
 
-    assert device.num_program_cache_entries() == num_ops
+    assert (
+        device.cache_entries_counter.total == num_ops
+    ), f"Expected {num_ops} program cache entries, but found {device.cache_entries_counter.total}"

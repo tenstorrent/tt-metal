@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -70,6 +70,12 @@ def test_rand(device):
     # Create a TT-NN tensor with random values uniformly distributed between 0 and 1
     tensor = ttnn.rand(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     logger.info("TT-NN rand tensor:", tensor)
+
+
+def test_randn(device):
+    # Create a TT-NN tensor with random values standard normal distributed
+    tensor = ttnn.randn(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    logger.info("TT-NN randn tensor:", tensor)
 
 
 def test_from_buffer(device):

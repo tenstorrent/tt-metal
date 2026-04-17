@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,7 @@ _triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
     import capnp
+    from mpi4py import MPI
 except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions

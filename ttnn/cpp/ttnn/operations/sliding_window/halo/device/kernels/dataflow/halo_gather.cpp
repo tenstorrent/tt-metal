@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -270,10 +270,8 @@ void kernel_main() {
     constexpr auto gather_config_tensor_args =
         TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
 
-    const auto padding_config_accessor =
-        TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);
-    const auto gather_config_accessor =
-        TensorAccessor(gather_config_tensor_args, gather_config_dram_addr, gather_config_page_size);
+    const auto padding_config_accessor = TensorAccessor(padding_config_tensor_args, padding_config_dram_addr);
+    const auto gather_config_accessor = TensorAccessor(gather_config_tensor_args, gather_config_dram_addr);
 
     uint32_t config_read_index = get_arg_val<uint32_t>(0);
 

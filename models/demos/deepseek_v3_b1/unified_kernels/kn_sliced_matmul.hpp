@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -15,6 +15,7 @@
 #include "api/compute/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/experimental/pack_block.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -112,6 +113,7 @@ struct KNSlicedMatmul {
 
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(
                 args.act_cb, args.weights_cb, args.out_cb, out_w);
+            pack_block_contiguous_init(args.out_cb);
 
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);
@@ -129,9 +131,7 @@ struct KNSlicedMatmul {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t j = 0; j < out_w; j++) {
-                pack_tile(j, args.out_cb, j);
-            }
+            pack_block_contiguous(0, args.out_cb, out_w);
             tile_regs_release();
 
             custom_mm_block_uninit<dense_packing>();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,11 +19,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma_grad = 16;
     constexpr uint32_t cb_id_beta_grad = 17;
 
-    const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
-    const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
-
-    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr, gamma_grad_tile_bytes);
-    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr, beta_grad_tile_bytes);
+    const auto gamma_grad_addrg = TensorAccessor(gamma_grad_args, gamma_grad_addr);
+    const auto beta_grad_addrg = TensorAccessor(beta_grad_args, beta_grad_addr);
 
     constexpr uint32_t onetile = 1;
 

@@ -1,0 +1,60 @@
+# This file defines the test matrix for multihost pipeline tests.
+# These tests run on exabox multihost infrastructure with allocation/reset lifecycle.
+
+# Each entry represents a test with the following keys:
+#   name: The display name for the test in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   sp_config: Single pod configuration (sp1, sp4, sp5) to run this test on.
+
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
+
+# ============================================================================
+# BH SP1 Multihost Pipeline Tests
+# ============================================================================
+
+- name: "Physical Discovery Test"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+  skus:
+    bh_sp1:
+      timeout: 10
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp1
+
+- name: "System Health Check"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_sp1:
+      timeout: 10
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp1
+
+- name: "Pipeline Test (DeepSeek V3 B1)"
+  cmd: |
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
+    mkdir -p $PIPELINE_DIR
+    python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+      --mpi-user user \
+      --hostfile /ci/ttrun/hostfile \
+      --worker-tt-metal-home /home/user/tt-metal \
+      --output-dir $PIPELINE_DIR \
+      models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+    tt-run --skip-executable-check \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+      /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+  skus:
+    bh_sp1:
+      timeout: 30
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sp1

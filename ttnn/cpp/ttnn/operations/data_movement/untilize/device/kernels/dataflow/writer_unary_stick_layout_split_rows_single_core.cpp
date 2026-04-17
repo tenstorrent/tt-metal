@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@ void kernel_main() {
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_across_height = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_columns_of_blocks = get_compile_time_arg_val(4);
@@ -21,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t output_single_block_width_size = get_compile_time_arg_val(7);
 
     constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint64_t base_dst_noc_addr[tile_height];
 

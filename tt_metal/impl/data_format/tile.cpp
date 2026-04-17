@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,6 +86,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
         case DataFormat::UInt16:
+        case DataFormat::Int16:
         case DataFormat::RawUInt16: return (tile_hw * 2);
         case DataFormat::UInt32:
         case DataFormat::Int32:

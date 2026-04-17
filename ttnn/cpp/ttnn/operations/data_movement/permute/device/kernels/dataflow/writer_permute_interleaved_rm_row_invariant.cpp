@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
     uint32_t input_shape[N], perm[N], dest_strides[N];
