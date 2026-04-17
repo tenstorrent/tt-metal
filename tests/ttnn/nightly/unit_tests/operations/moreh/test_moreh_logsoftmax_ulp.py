@@ -86,25 +86,24 @@ def _run_ttnn_logsoftmax(
 # Test parameters: strategy-consistent shape sweeps (multiples of 32 for tiles)
 # ---------------------------------------------------------------------------
 
-# 2D SMALL strategies: inner dim at small / medium / large; no outer N,C
-_SMALL_INNER = [32, 160, 352]
-# 4D LARGE strategies: small/large for the reduction dim; small/large (N,C) pairs
-_N_C_PAIRS = [(1, 1), (2, 3)]  # (N_small,C_small) and (N_large,C_large)
-_LARGE_W_SIZES = [160, 480]  # small and large W for LARGE_W strategy
-_LARGE_H_SIZES = [128, 384]  # small and large H for LARGE_H strategy
-_LARGE_C_DIMS = [7, 32]  # small (sub-tile) and large (tile-boundary) C
-
 
 def _build_moreh_logsoftmax_strategy_cases():
     """Build strategy cases with N×C outer-dim variation for LARGE strategies."""
     st = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
     cases = []
 
-    # 2D SMALL strategies: no N,C (2D input)
+    # 2D SMALL strategies: inner dim at small / medium / large; no outer N,C
+    _SMALL_INNER = [32, 160, 352]
     for w in _SMALL_INNER:
         cases.append(((32, w), 1, st.SMALL_W, f"SMALL_W-32x{w}"))
     for h in _SMALL_INNER:
         cases.append(((h, 32), 0, st.SMALL_H, f"SMALL_H-{h}x32"))
+
+    # 4D LARGE strategies: small/large for the reduction dim; small/large (N,C) pairs
+    _N_C_PAIRS = [(1, 1), (2, 3)]  # (N_small,C_small) and (N_large,C_large)
+    _LARGE_W_SIZES = [160, 480]  # small and large W for LARGE_W strategy
+    _LARGE_H_SIZES = [128, 384]  # small and large H for LARGE_H strategy
+    _LARGE_C_DIMS = [7, 32]  # small (sub-tile) and large (tile-boundary) C
 
     # 4D LARGE_W: vary (N,C) pair and W; fix H=128
     for n, c in _N_C_PAIRS:

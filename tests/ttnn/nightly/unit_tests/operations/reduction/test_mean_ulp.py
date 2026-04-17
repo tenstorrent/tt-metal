@@ -95,17 +95,18 @@ def _run_ttnn_mean(
 # Test parameters — 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
 # ---------------------------------------------------------------------------
 
-_N_SIZES = [1, 8]  # small, large batch
-_C_SIZES = [1, 4]  # small, large channel
-_H_SIZES = [32, 128, 512]  # small, medium, large H
-_W_SIZES = [64, 512, 2048]  # small, medium, large W
-_H_FIXED = 32  # non-reduction H for W-reduction shapes
-_W_FIXED = 64  # non-reduction W for H-reduction shapes
-
 
 def _build_mean_shapes_and_dims():
     """Build (shape, dim, id) cases: N×C grid for W and H reduction, plus HW and odd."""
     out = []
+
+    # 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
+    _N_SIZES = [1, 8]  # small, large batch
+    _C_SIZES = [1, 4]  # small, large channel
+    _H_SIZES = [32, 128, 512]  # small, medium, large H
+    _W_SIZES = [64, 512, 2048]  # small, medium, large W
+    _H_FIXED = 32  # non-reduction H for W-reduction shapes
+    _W_FIXED = 64  # non-reduction W for H-reduction shapes
 
     # W-reduction: vary N, C, W; fix H
     for n in _N_SIZES:

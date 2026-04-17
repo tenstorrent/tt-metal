@@ -122,16 +122,17 @@ _BF16_ULP_THRESHOLD_BF16_DEST = 20000  # W=14336 fp32_acc=False peaks at ~6679 U
 _BF16_NEAR_ZERO_ATOL_FRACTION_FP32_DEST = 0.002  # tight; fp32 rounding error is tiny
 _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST = 0.06  # loose; BF16 accum can be ~2% of range on near-zero output
 
-_LN_W_SIZES = [64, 512, 4096]  # small / medium / large W (normalization dim)
-_LN_H_SIZES = [32, 256, 2048]  # small / medium / large H (batch rows)
-_LN_SQUARES = [64, 256]  # small and large square
-_LN_H_FIXED = 32
-_LN_W_FIXED = 64
-
 
 def _build_layer_norm_shapes():
     seen = set()
     rows = []
+
+    # small / medium / large W (normalization dim), H (batch rows), and squares
+    _LN_W_SIZES = [64, 512, 4096]
+    _LN_H_SIZES = [32, 256, 2048]
+    _LN_SQUARES = [64, 256]
+    _LN_H_FIXED = 32
+    _LN_W_FIXED = 64
 
     def add(h, w, tag):
         key = (h, w)

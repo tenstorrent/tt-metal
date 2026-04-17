@@ -83,16 +83,17 @@ def _run_ttnn_softmax(
 # Test parameters — 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
 # ---------------------------------------------------------------------------
 
-_N_SIZES = [1, 8]  # small, large batch
-_C_SIZES = [1, 4]  # small, large channel
-_H_SIZES = [32, 128, 512]  # small, medium, large H (reduction dim for H-softmax)
-_W_SIZES = [128, 512, 4096]  # small, medium, large W (reduction dim for W-softmax)
-_H_FIXED = 32  # non-softmax H for W-reduction cases
-_W_FIXED = 64  # non-softmax W for H-reduction cases
-
 
 def _build_softmax_shapes_and_dims():
     out = []
+    # 2×2×3×3 grid: small/large for N,C; small/medium/large for H,W
+    _N_SIZES = [1, 8]  # small, large batch
+    _C_SIZES = [1, 4]  # small, large channel
+    _H_SIZES = [32, 128, 512]  # small, medium, large H (reduction dim for H-softmax)
+    _W_SIZES = [128, 512, 4096]  # small, medium, large W (reduction dim for W-softmax)
+    _H_FIXED = 32  # non-softmax H for W-reduction cases
+    _W_FIXED = 64  # non-softmax W for H-reduction cases
+
     # W-softmax: vary N, C, W; fix H
     for n in _N_SIZES:
         for c in _C_SIZES:
