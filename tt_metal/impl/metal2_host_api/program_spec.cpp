@@ -1134,33 +1134,10 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 }
 
 // ----------------------------------------------------------------------------
-// InjectDFBAccessorArgs: inject DFB local accessor name -> ID into named_compile_args
-// ----------------------------------------------------------------------------
-//
-// TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel!
-//       This CTA hack will be deleted in the next PR.
-
-void InjectDFBAccessorArgs(
-    KernelSpec::CompileTimeArgBindings& named_compile_args,
-    const KernelSpec& kernel_spec,
-    const DFBNameToIdMap& dfb_name_to_id) {
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        TT_FATAL(
-            !named_compile_args.contains(local_dfb_name),
-            "DFB local accessor name '{}' collides with an existing CTA in kernel '{}'. ",
-            local_dfb_name,
-            kernel_spec.unique_id);
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
-}
-
-// ----------------------------------------------------------------------------
 // MakeGen1DataMovementConfig: Create a DataMovementConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
     const auto& gen1 = dm_config.gen1_data_movement_config.value();
@@ -1173,17 +1150,13 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec, con
         defines_map[key] = value;
     }
 
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1210,10 +1183,6 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         defines_map[key] = value;
     }
 
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return ComputeConfig{
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
@@ -1223,7 +1192,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
         .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1405,7 +1374,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
-                auto config = MakeGen1DataMovementConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeGen1DataMovementConfig(kernel_spec);
                 kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);

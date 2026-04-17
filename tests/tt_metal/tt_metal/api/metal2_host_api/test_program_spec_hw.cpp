@@ -107,7 +107,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     consumer.source_type = KernelSpec::SourceType::FILE_PATH;
     consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
 
-    // DFB: both kernels bind it with local accessor name "buf"
+    // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
     BindDFBToKernel(producer, "loopback_dfb", "my_local_dfb_name", KernelSpec::DFBEndpointType::PRODUCER);

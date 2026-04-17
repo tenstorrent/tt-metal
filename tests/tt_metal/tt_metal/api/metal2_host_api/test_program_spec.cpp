@@ -138,6 +138,34 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    const std::vector<std::string> invalid_names = {
+        "",               // empty
+        "has-dash",       // hyphen
+        "has space",      // whitespace
+        "1starts_digit",  // leading digit
+        "has.dot",        // punctuation
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec;
+        spec.program_id = "test_program";
+
+        auto kernel = MakeMinimalDMKernel("kernel", node);
+        auto dfb = MakeMinimalDFB("dfb", node);
+
+        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+
+        spec.kernels = {kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb"})};
+
+        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+    }
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
