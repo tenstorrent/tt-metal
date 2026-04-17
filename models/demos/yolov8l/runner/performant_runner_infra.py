@@ -65,19 +65,24 @@ class YOLOv8lPerformanceRunnerInfra:
             # exit("Unsupported device")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
         n, c, h, w = torch_input_tensor.shape
-        if c < min_channels:
-            c = min_channels
-        elif c % min_channels != 0:
-            c = ((c // min_channels) + 1) * min_channels
+        c_padded = c
+        if c_padded < min_channels:
+            c_padded = min_channels
+        elif c_padded % min_channels != 0:
+            c_padded = ((c_padded // min_channels) + 1) * min_channels
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n, h, w, c_padded],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
+        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
+        if c < c_padded:
+            pad_c = c_padded - c
+            torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, pad_c), mode="constant", value=0)
         input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
         tt_inputs_host = ttnn.from_host_shards(
             [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
@@ -100,7 +105,6 @@ class YOLOv8lPerformanceRunnerInfra:
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
         )
-
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
@@ -122,24 +126,10 @@ class YOLOv8lPerformanceRunnerInfra:
 
 
 def yolov8l_dram_sharded_input_from_torch(device, torch_input_tensor):
-    """Upload NCHW tensor to device in DRAM height-sharded layout (same as performant-runner staging)."""
     assert torch_input_tensor.ndim == 4, "Expected input shape (N, C, H, W)"
+    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
     input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
     tt_inputs_host = ttnn.from_host_shards(
         [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
     )
-    dram_grid_size = device.dram_grid_size()
-    dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-        ),
-        [
-            divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
-            tt_inputs_host.shape[-1],
-        ],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    sharded_mem_config_DRAM = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
-    )
-    return tt_inputs_host.to(device, sharded_mem_config_DRAM)
+    return tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
