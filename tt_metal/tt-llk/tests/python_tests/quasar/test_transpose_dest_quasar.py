@@ -76,6 +76,7 @@ def generate_qsr_transpose_dest_combinations(
         """Determine valid math_transpose_faces modes depending on dest_acc."""
         if dest_acc == DestAccumulation.Yes:
             return (Transpose.No, Transpose.Yes)
+        # Transpose within faces only is not supported for 16-bit dest in the transpose dest kernel.
         return (Transpose.Yes,)
 
     def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
