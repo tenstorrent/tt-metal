@@ -232,7 +232,7 @@ def create_tensor_on_mesh(
         is_2d_distribution = len(dist_parsed) >= 2
 
         if not mesh_compatible or not entries or "PlacementShard" not in placement_str:
-            if is_2d_distribution:
+            if is_2d_distribution and mesh_compatible:
                 mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape_tuple)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)

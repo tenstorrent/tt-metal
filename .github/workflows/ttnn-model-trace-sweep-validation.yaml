@@ -6,6 +6,11 @@ run-name: >-
 on:
   workflow_dispatch:
     inputs:
+      models-filter:
+        type: string
+        description: "Comma-separated list of models to validate (e.g. 'efficientnetb0' or 'efficientnetb0,whisper'). Leave empty to validate all models in the registry."
+        required: false
+        default: ""
       allow-partial-hash-changes:
         type: boolean
         description: "Continue if config hash changes are detected during preflight, including when all hashes change"
@@ -35,6 +40,8 @@ jobs:
 
       - name: Parse trace selection registry
         id: parse-trace-selection-registry
+        env:
+          MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           python3 - <<'PY'
           import os
@@ -44,7 +51,29 @@ jobs:
           with open(registry_path, "r", encoding="utf-8") as f:
               registry_data = yaml.safe_load(f)
 
+          models_filter_raw = os.environ.get("MODELS_FILTER", "").strip()
+          models_filter = {m.strip() for m in models_filter_raw.split(",") if m.strip()} if models_filter_raw else set()
+
           targets = registry_data.get("targets", {})
+
+          if models_filter:
+              filtered_targets = {}
+              for scope, entries in targets.items():
+                  filtered_entries = []
+                  for entry in entries or []:
+                      matched = [m for m in entry.get("model", []) if m in models_filter]
+                      if matched:
+                          filtered_entries.append({**entry, "model": matched})
+                  if filtered_entries:
+                      filtered_targets[scope] = filtered_entries
+              targets = filtered_targets
+              registry_data["targets"] = targets
+
+              filtered_path = "model_tracer/trace_selection_registry_filtered.yaml"
+              with open(filtered_path, "w", encoding="utf-8") as f:
+                  yaml.dump(registry_data, f, default_flow_style=False, sort_keys=False)
+              registry_path = filtered_path
+
           target_keys = set(targets.keys())
           if target_keys == {"lead_models"}:
               scope_target = "lead_models"

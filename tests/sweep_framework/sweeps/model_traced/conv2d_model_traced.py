@@ -432,8 +432,12 @@ def run(
         tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
 
     # --- Call ttnn.conv2d ---
-    return_output_dim = bool(kwargs.get("return_output_dim", False))
-    return_weights_and_bias = bool(kwargs.get("return_weights_and_bias", False))
+    raw_rod = kwargs.get("return_output_dim", False)
+    return_output_dim = str(raw_rod).strip().lower() in ("true", "1") if isinstance(raw_rod, str) else bool(raw_rod)
+    raw_rwb = kwargs.get("return_weights_and_bias", False)
+    return_weights_and_bias = (
+        str(raw_rwb).strip().lower() in ("true", "1") if isinstance(raw_rwb, str) else bool(raw_rwb)
+    )
 
     start_time = start_measuring_time()
 
