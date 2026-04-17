@@ -1437,67 +1437,6 @@ TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
     ASSERT_EQ(stages.size(), num_meshes + 1) << "Expected " << (num_meshes + 1) << " stages (num_meshes=" << num_meshes
                                              << " + 1 loopback), got " << stages.size();
 
-    auto eth_chan_dir_cstr = [](tt::tt_fabric::eth_chan_directions d) -> const char* {
-        switch (d) {
-            case tt::tt_fabric::eth_chan_directions::EAST: return "EAST";
-            case tt::tt_fabric::eth_chan_directions::WEST: return "WEST";
-            case tt::tt_fabric::eth_chan_directions::NORTH: return "NORTH";
-            case tt::tt_fabric::eth_chan_directions::SOUTH: return "SOUTH";
-            case tt::tt_fabric::eth_chan_directions::Z: return "Z";
-            default: return "UNKNOWN";
-        }
-    };
-
-    log_info(tt::LogTest, "=== Blitz pipeline chosen exit nodes (direction to next stage entry, tray, ASIC loc) ===");
-    const auto& topology_mapper_for_log = control_plane.get_topology_mapper();
-    for (std::size_t i = 0; i < stages.size(); i++) {
-        const auto& stage = stages[i];
-        MeshId mesh_id{static_cast<uint32_t>(stage.stage_index)};
-        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, stage.exit_node_coord));
-        auto tray_id = topology_mapper_for_log.get_tray_id_for_fabric_node_id(exit_fn);
-        auto asic_loc = topology_mapper_for_log.get_asic_location_for_fabric_node_id(exit_fn);
-
-        const std::size_t next_i = (i + 1) % stages.size();
-        const auto& next_stage = stages[next_i];
-        MeshId next_mesh_id{static_cast<uint32_t>(next_stage.stage_index)};
-        FabricNodeId next_entry_fn(
-            next_mesh_id, mesh_graph.coordinate_to_chip(next_mesh_id, next_stage.entry_node_coord));
-
-        std::string link_dirs;
-        for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
-            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
-            if (peer_fn != next_entry_fn) {
-                continue;
-            }
-            tt::tt_fabric::eth_chan_directions dst_dir =
-                control_plane.get_eth_chan_direction(peer_fn, static_cast<int>(peer_chan));
-            if (!link_dirs.empty()) {
-                link_dirs += "; ";
-            }
-            link_dirs += fmt::format(
-                "exit_chan={} {} -> entry_chan={} {}",
-                src_chan,
-                eth_chan_dir_cstr(src_dir),
-                peer_chan,
-                eth_chan_dir_cstr(dst_dir));
-        }
-        if (link_dirs.empty()) {
-            link_dirs = "(no single-hop link to next entry — check pipeline topology)";
-        }
-
-        log_info(
-            tt::LogTest,
-            "  stage[{}] exit={} mesh_coord={} tray_id={} asic_location={} | -> stage[{}] entry={} | {}",
-            i,
-            exit_fn,
-            coord_str(stage.exit_node_coord),
-            *tray_id,
-            *asic_loc,
-            next_i,
-            next_entry_fn,
-            link_dirs);
-    }
-
     // 1. No stage has identical entry and exit coords
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& s = stages[i];
@@ -1586,6 +1525,16 @@ TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
     };
     auto eth_dirs_match_kind = [&](EthDir a, EthDir b) {
         return (is_z_eth_dir(a) && is_z_eth_dir(b)) || (is_nesw_eth_dir(a) && is_nesw_eth_dir(b));
+    };
+    auto eth_chan_dir_cstr = [](EthDir d) -> const char* {
+        switch (d) {
+            case EthDir::EAST: return "EAST";
+            case EthDir::WEST: return "WEST";
+            case EthDir::NORTH: return "NORTH";
+            case EthDir::SOUTH: return "SOUTH";
+            case EthDir::Z: return "Z";
+            default: return "UNKNOWN";
+        }
     };
 
     // 3b. Stage exit -> next stage entry (full ring): Z-Z or NESW-NESW on each fabric hop.
