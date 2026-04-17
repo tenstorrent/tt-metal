@@ -214,9 +214,11 @@ def _setup(pixel_values: torch.Tensor):
         return
     img_size = pixel_values.shape[-1]
     cpu_model = build_da3_metric(load_weights=True, img_size=img_size).eval()
-    # Backbone stays fp32 on CPU (only used for the cheap patch_embed). The DPT
-    # head is the dominant CPU cost (~283ms vs ~112ms chip backbone), so cast
-    # it to bfloat16 — same AVX512_BF16 win as iter 1 on conv2d.
+    # Cast both halves to bfloat16. The head benefits via AVX512_BF16 conv2d
+    # (head also goes channels_last). The backbone is only used for the cheap
+    # patch_embed + cls + pos_embed step before chip upload — running it in
+    # bf16 directly saves the fp32->bf16 cast we'd otherwise do on the result.
+    cpu_model.backbone = cpu_model.backbone.to(torch.bfloat16)
     cpu_model.head = cpu_model.head.to(torch.bfloat16).to(memory_format=torch.channels_last)
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
@@ -241,7 +243,8 @@ def run(pixel_values: torch.Tensor):
     attention_mask = _state["attention_mask"]
 
     with torch.inference_mode():
-        emb, Hp, Wp = _cpu_embed(pixel_values, cpu_model.backbone)
+        # Backbone is bfloat16; match dtype on input to avoid an in-conv cast.
+        emb, Hp, Wp = _cpu_embed(pixel_values.to(torch.bfloat16), cpu_model.backbone)
 
         # Pad sequence dim to a tile multiple (1370 -> 1376) for ttnn matmul.
         N = emb.shape[1]
