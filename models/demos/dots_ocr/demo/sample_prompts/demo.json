@@ -1,0 +1,3 @@
+[
+    { "image": "models/demos/dots_ocr/demo/sample_prompts/sample_document.png", "prompt": "Extract the text from this document." }
+]
