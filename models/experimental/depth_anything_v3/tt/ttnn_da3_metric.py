@@ -160,6 +160,29 @@ def _ttnn_block(x, p, attention_mask):
     return x
 
 
+def _cpu_head_post_projects(head, projected, img_hw):
+    """DPT head minus the 1x1 reassemble convs (those run on chip in iter 16).
+
+    `projected` is a list of 4 tensors shaped (B, 1+N, ch_i) — cls token still
+    at index 0, channel widths already projected to (256, 512, 1024, 1024)."""
+    H, W = img_hw
+    Hp, Wp = H // PATCH_SIZE, W // PATCH_SIZE
+    feats = []
+    for i, x in enumerate(projected):
+        x = x[:, 1:, :].transpose(1, 2).reshape(x.shape[0], -1, Hp, Wp).contiguous()
+        feats.append(head.resize_layers[i](x))
+    layer_rns = [head.scratch.layer1_rn, head.scratch.layer2_rn,
+                 head.scratch.layer3_rn, head.scratch.layer4_rn]
+    rn = [layer_rns[i](feats[i]) for i in range(4)]
+    path = head.scratch.refinenet4(rn[3])
+    path = head.scratch.refinenet3(path, rn[2])
+    path = head.scratch.refinenet2(path, rn[1])
+    path = head.scratch.refinenet1(path, rn[0])
+    path = head.scratch.output_conv1(path)
+    path = F.interpolate(path, size=(H, W), mode="bilinear", align_corners=True)
+    return head.scratch.output_conv2(path)
+
+
 def _cpu_embed(pixel_values: torch.Tensor, backbone) -> Tuple[torch.Tensor, int, int]:
     """Run patch_embed + cls prepend + pos_embed on CPU (cheap, no tiling pain)."""
     B, _, H, W = pixel_values.shape
@@ -180,6 +203,26 @@ def _build_attention_mask(seq_len: int, padded_len: int, device):
     return ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _upload_projects(head, device, layer_indices):
+    """Upload the 4 DPT 1x1 reassemble convs as on-chip linears.
+
+    Each `head.projects[i]` is Conv2d(1024, out_ch, 1x1, bias=True). The 1x1
+    conv on a (B, 1024, H, W) tensor is identical to a linear on (B, H*W, 1024)
+    with weight (1024, out_ch). Running on chip both speeds up the CPU head and
+    shrinks the per-call download (some stages have <1024 channels after)."""
+    out = []
+    for i, layer_idx in enumerate(layer_indices):
+        proj = head.projects[i]
+        w = proj.weight.squeeze(-1).squeeze(-1).T.contiguous()  # (1024, out_ch)
+        b = proj.bias  # (out_ch,)
+        out.append({
+            "weight": _to_dev(w, device),
+            "bias": _to_dev(b.unsqueeze(0), device),
+            "out_ch": w.shape[1],
+        })
+    return out
+
+
 def _setup(pixel_values: torch.Tensor):
     """One-time setup: load the model, open the device, upload all weights."""
     if "device" in _state:
@@ -187,19 +230,20 @@ def _setup(pixel_values: torch.Tensor):
     img_size = pixel_values.shape[-1]
     cpu_model = build_da3_metric(load_weights=True, img_size=img_size).eval()
     # Backbone stays fp32 on CPU (only used for the cheap patch_embed). The DPT
-    # head is the dominant CPU cost (~283ms vs ~112ms chip backbone), so cast
-    # it to bfloat16 — same AVX512_BF16 win as iter 1 on conv2d.
+    # head is the dominant CPU cost — cast to bfloat16 for AVX512_BF16 conv2d.
     cpu_model.head = cpu_model.head.to(torch.bfloat16)
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
     padded = _next_tile(seq_len)
     attention_mask = _build_attention_mask(seq_len, padded, device)
+    projects = _upload_projects(cpu_model.head, device, OUT_LAYERS)
     _state.update(
         cpu_model=cpu_model,
         device=device,
         blocks=blocks,
         attention_mask=attention_mask,
+        projects=projects,
     )
 
 
@@ -211,6 +255,7 @@ def run(pixel_values: torch.Tensor):
     device = _state["device"]
     blocks = _state["blocks"]
     attention_mask = _state["attention_mask"]
+    projects = _state["projects"]
 
     with torch.inference_mode():
         emb, Hp, Wp = _cpu_embed(pixel_values, cpu_model.backbone)
@@ -228,17 +273,28 @@ def run(pixel_values: torch.Tensor):
             device=device,
         )
 
-        intermediates_cpu: List[torch.Tensor] = []
+        # Project the 4 intermediates on chip (1x1 conv as ttnn.linear), so the
+        # CPU only sees pre-projected features at smaller channel counts.
+        projected_cpu: List[torch.Tensor] = []
+        out_layer_set = set(OUT_LAYERS)
         for i, p in enumerate(blocks):
             x_tt = _ttnn_block(x_tt, p, attention_mask)
-            if i in OUT_LAYERS:
-                t = ttnn.to_torch(x_tt)
-                # Keep as bfloat16 — the head was cast to bfloat16 in setup.
-                intermediates_cpu.append(t[..., :N, :])
+            if i in out_layer_set:
+                proj = projects[OUT_LAYERS.index(i)]
+                projected = ttnn.linear(
+                    x_tt, proj["weight"], bias=proj["bias"],
+                    memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16,
+                    compute_kernel_config=_hifi4_kernel_config(),
+                )
+                t = ttnn.to_torch(projected)
+                ttnn.deallocate(projected)
+                projected_cpu.append(t[..., :N, :])  # drop pad rows
 
         ttnn.deallocate(x_tt)
 
-        # DPT head on CPU using the float32 intermediates we downloaded.
-        depth = cpu_model.head(intermediates_cpu, img_hw=pixel_values.shape[-2:])
+        # CPU head from after `projects[i]` onwards.
+        depth = _cpu_head_post_projects(
+            cpu_model.head, projected_cpu, img_hw=pixel_values.shape[-2:]
+        )
 
     return depth, 0.0
