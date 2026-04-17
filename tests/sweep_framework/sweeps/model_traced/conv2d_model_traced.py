@@ -416,11 +416,14 @@ def run(
         tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
 
     # --- Call ttnn.conv2d ---
+    return_output_dim = bool(kwargs.get("return_output_dim", False))
+    return_weights_and_bias = bool(kwargs.get("return_weights_and_bias", False))
+
     start_time = start_measuring_time()
 
     padding_arg = full_padding if full_padding is not None else (pad_h, pad_w)
 
-    tt_output = ttnn.conv2d(
+    result = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         device=device,
@@ -438,9 +441,24 @@ def run(
         conv_config=conv_config,
         compute_config=compute_config,
         dtype=output_dtype,
+        return_output_dim=return_output_dim,
+        return_weights_and_bias=return_weights_and_bias,
     )
 
     e2e_perf = stop_measuring_time(start_time)
+
+    # --- Extract output tensor from result ---
+    # Return type depends on return_output_dim and return_weights_and_bias:
+    #   both True  -> (tensor, (h, w), (weight, bias))
+    #   output_dim -> (tensor, (h, w))
+    #   weights    -> (tensor, (weight, bias))
+    #   neither    -> tensor
+    if return_output_dim and return_weights_and_bias:
+        tt_output = result[0]
+    elif return_output_dim or return_weights_and_bias:
+        tt_output = result[0]
+    else:
+        tt_output = result
 
     # --- Extract output ---
     if is_mesh_device:
