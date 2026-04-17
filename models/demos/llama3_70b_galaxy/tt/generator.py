@@ -1150,12 +1150,10 @@ class Generator(WarmupForwardMixin):
 
         if not return_logits:
             return self.model.sampling.sample(
-                logits=tt_tok,
-                tt_out_tok=tt_tokens,
+                logits=tt_tok[0],
                 enable_trace=False,
             )
-
-        return tt_tok, None
+        return tt_tok
 
     def _capture_trace_text(
         self,
