@@ -1,0 +1,13 @@
+How to benchmark:
+
+Run following command on main and on this branch:
+TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 TT_METAL_DEVICE_PROFILER=1 python3 -m tracy -r -v -m pytest tests/ttnn/benchmark/python/test_eq_gt_binary_benchmark.py::test_eq_gt_binary_tracy_once -v
+
+It creates a folder in generated/profiler/reports/ with the name of the current date and time. You'll have 2 folders (from main and from this branch).
+
+Now run the command to generate a plot (with your own labels and generated folders):
+python tools/tracy/compare_ops_perf_bar_chart.py generated/profiler/reports/2026_04_17_09_51_04 generated/profiler/reports/2026_04_17_09_34_10 -o generated/profiler/reports/eq_gt_kernel_compare.png --label-a main --label-b my_bf16 --pair-keep first
+
+The test runs every OP twice (warmup and signposted). You should use the --pair-keep option to keep only the signposted runs.
+
+That's it!
