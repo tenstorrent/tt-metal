@@ -44,6 +44,10 @@ wormhole_b0:
 
 blackhole:
   # Job-level timeouts
+  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
@@ -69,6 +73,8 @@ blackhole:
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
 
   # Numeric mismatches, not root caused
