@@ -51,15 +51,6 @@ protected:
     }
 };
 
-// T3K fixture: 2x4 mesh with FABRIC_1D.  Exercises non-MMIO ERISC forwarding
-// nodes (devices 1,3,4,5) that sit in the interior of the mesh and are most
-// susceptible to ETH TXQ flow-control deadlock during fabric teardown.
-class MeshDevice2x4Fabric1DFixture : public MeshDeviceFixtureBase {
-protected:
-    MeshDevice2x4Fabric1DFixture() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{2, 4}, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
-};
 
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
