@@ -495,8 +495,8 @@ inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
+        vInt whole_v = float_to_int16(v, RoundMode::NearestEven);
+        v -= int32_to_float(whole_v, RoundMode::NearestEven);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }

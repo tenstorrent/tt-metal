@@ -82,7 +82,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
     sfpi::vInt exponential_part = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z)); // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vInt fractional_part  = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract mantissa ( = leftover part, in [0; 1])
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
     }
 
     return y;

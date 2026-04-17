@@ -87,8 +87,8 @@ inline void _calculate_sine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, 0);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, 0);
+        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
@@ -114,8 +114,8 @@ inline void _calculate_cosine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, 0);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, 0);
+        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
+        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
@@ -214,7 +214,7 @@ inline void _calculate_atanh_()
             }
             else
             {
-                den = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, 0));
+                den = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, sfpi::RoundMode::NearestEven));
             }
             num              = num * den;
             den              = _calculate_log_body_no_init_(num);
