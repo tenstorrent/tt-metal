@@ -1554,15 +1554,18 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
-// WH N150 grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
-//   - compute_grid = 8x8 (valid nodes: x in [0,7], y in [0,7])
-//   - OOB examples: {8, 0} (x too large), {0, 8} (y too large), {0, 100} (far OOB)
+// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+//   - Fast dispatch: compute_grid = 8x8 (y in [0,7]; one row reserved for dispatch)
+//   - Slow dispatch: compute_grid = 8x9 (y in [0,8]; full logical tensix grid, no rows reserved)
+//
+// The apparent grid size is different in slow dispatch vs. fast dispatch mode. CI runs with
+// both, so choose OOB coordinates that will fail in both cases.
 //
 // These tests use the WH mock device, not real hardware.
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
-    // {0, 8}: y=8 is one past the 8-tall compute grid.
-    const NodeCoord oob_node{0, 8};
+    // y=9 is just outside the 9-row slow-dispatch grid (also outside the 8-row fast-dispatch grid).
+    const NodeCoord oob_node{0, 9};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
@@ -1577,7 +1580,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
-    // {8, 0} is out of bounds: x=8 is beyond the 8-wide compute grid.
+    // x=8 is just outside the 8-column grid (same in fast and slow dispatch).
     const NodeCoord oob_node{8, 0};
 
     ProgramSpec spec;
@@ -1596,7 +1599,7 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
     // valid node, but the DFB it produces to targets an OOB node.
     const NodeCoord valid_node{0, 0};
-    const NodeCoord oob_node{0, 100};
+    const NodeCoord oob_node{0, 9};  // just outside the 9-row slow-dispatch grid
 
     ProgramSpec spec;
     spec.program_id = "test_program";
