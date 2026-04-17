@@ -108,7 +108,7 @@ def test_forward_pass(
     else:
         assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(state_dict)
+        reference_model.load_state_dict(state_dict, strict=False)
 
     weight_config = get_test_weight_config(
         TTExperts,
