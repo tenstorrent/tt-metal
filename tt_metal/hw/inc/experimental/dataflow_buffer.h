@@ -33,18 +33,17 @@ namespace experimental {
 //
 // The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
 // The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
-// Usage:
 //
-//   // Host code declares "my_dfb_name" as a the DFB local accessor name for this kernel.
+// Usage example:
+//   // (Host code declares "my_dfb_name" as a the DFB local accessor name for this kernel.)
 //   // In the kernel code:
-//   DataflowBuffer dfb(my_dfb_name);
+//   DataflowBuffer my_dfb(dfb::my_dfb_name);
 //
 // Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
 //
 // Currently, DFBAccessor is backed by a compile-time ID, baked into the kernel binary.
-// If we later decide we need a dynamic mechanism instead, the implementation can switch to an
-// implicit RTA, changing only the generated header and the DFBAccessor struct's internals.
-// (Kernel source code stays unchanged.)
+// If we want to switch to using using an implicit CRTA mechanism, the implementation of
+// DFBAccessor can be transparently modified (kernel-side syntax stays unchanged).
 struct DFBAccessor {
     explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
     uint16_t id;

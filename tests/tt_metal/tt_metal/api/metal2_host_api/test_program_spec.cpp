@@ -746,14 +746,10 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // SECTION 4: Programs Creation Tests
 // ============================================================================
 // These verify that valid ProgramSpec configurations produce a Program without throwing.
-// They exercise the full MakeProgramFromSpec pipeline: spec validation, DFB ID assignment,
-// DFBAccessor handle map construction, and kernel object creation.
+// They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
 //
-// Coverage gap: JIT compilation and device-side execution are not tested here.
-// Mock device isn't really enough to test anything on device side adequately.
-// Execution-level coverage for DFB local accessor bindings will come from:
-//   - DFB integration tests: tests/tt_metal/tt_metal/api/dataflow_buffer/. (TODO)
-//   - Real-hardware tests via the WH/BH Metal 2.0 host API path (when that lands)
+// Coverage gaps (JIT compilation, device-side execution) are covered by HW tests.
+// (see test_program_spec_hw.cpp)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();

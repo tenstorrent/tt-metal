@@ -32,7 +32,7 @@ public:
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    // (Initially just DFB local accessor bindings, but will be extended.)
+    // (Initially just DFB local accessor names, but will be extended and refactored as needed.)
     virtual void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
 

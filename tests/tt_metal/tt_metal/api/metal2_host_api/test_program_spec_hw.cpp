@@ -9,6 +9,8 @@
 // end-to-end on real hardware, with particular focus on DFB local accessor names.
 //
 // Requires: TT_METAL_SLOW_DISPATCH_MODE=1
+//
+// TODO: Switch to using fast dispatch once the MeshWorkload code paths are added.
 
 #include <gtest/gtest.h>
 #include <cstdint>
