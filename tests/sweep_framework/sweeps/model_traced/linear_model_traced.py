@@ -6,7 +6,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -55,32 +55,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -154,22 +133,10 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    # When program_config is BatchedDRAMSharded, keep DRAM-sharded input_b (required).
-    if program_config is None:
-        if memory_config is not None and "SHARDED" in str(memory_config):
-            memory_config = None
-        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
-            output_memory_config = None
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
-            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        # Also clear memory_config from parsed_op_kwargs (built before cleanup)
-        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
-            del parsed_op_kwargs["memory_config"]
+    # Skip traced program_config but keep sharded memory configs. Model-traced
+    # sweeps run on the same architecture, so the shard specs are valid. Clearing
+    # them causes the tracer to record DRAM/INTERLEAVED instead of the traced
+    # L1/SHARDED config, failing validation.
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -328,15 +295,11 @@ def run(
         # Standard linear path
         linear_kwargs = {
             "bias": ttnn_bias,
-            "transpose_a": transpose_a,
-            "transpose_b": transpose_b,
         }
-
-        # Add optional parameters from traced config
-        if memory_config is not None:
-            linear_kwargs["memory_config"] = memory_config
-        elif output_memory_config is not None:
-            linear_kwargs["memory_config"] = output_memory_config
+        if transpose_a:
+            linear_kwargs["transpose_a"] = transpose_a
+        if transpose_b:
+            linear_kwargs["transpose_b"] = transpose_b
 
         if dtype is not None:
             linear_kwargs["dtype"] = dtype

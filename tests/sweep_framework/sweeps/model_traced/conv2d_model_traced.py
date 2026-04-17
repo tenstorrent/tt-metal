@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import (
     stop_measuring_time,
 )
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -39,25 +39,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape, l1_small_size=65536)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape, l1_small_size=65536)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 _DTYPE_MAP = {
@@ -160,7 +146,7 @@ def _parse_conv_config(traced_conv_config):
     }
     for attr in bool_attrs:
         m = re.search(rf"{attr}=(\w+)", value_str)
-        if m:
+        if m and m.group(1) != "std":
             setattr(conv_config, attr, m.group(1).lower() in ("true", "1"))
 
     int_attrs = {"act_block_h_override", "act_block_w_div"}
@@ -170,6 +156,33 @@ def _parse_conv_config(traced_conv_config):
             setattr(conv_config, attr, int(m.group(1)))
 
     return conv_config
+
+
+_SLICE_TYPE_MAP = {
+    "L1_FULL": "L1Full",
+    "L1Full": "L1Full",
+    "DRAMSliceHeight": "DRAMSliceHeight",
+    "DRAM_SLICE_HEIGHT": "DRAMSliceHeight",
+    "DRAMSliceWidth": "DRAMSliceWidth",
+    "DRAM_SLICE_WIDTH": "DRAMSliceWidth",
+}
+
+
+def _parse_slice_config(cfg_dict):
+    """Parse a slice_config dict into ttnn.Op2DSliceConfig."""
+    if not cfg_dict or not isinstance(cfg_dict, dict):
+        return None
+    value_str = cfg_dict.get("value", "")
+    m = re.search(r"slice_type=SliceType::(\w+)", value_str)
+    slice_type_str = m.group(1) if m else "L1_FULL"
+    enum_name = _SLICE_TYPE_MAP.get(slice_type_str, "L1Full")
+    slice_type = getattr(ttnn.Op2DSliceConfig.SliceTypeEnum, enum_name, ttnn.Op2DSliceConfig.SliceTypeEnum.L1Full)
+    m_num = re.search(r"num_slices=(\d+)", value_str)
+    num_slices = int(m_num.group(1)) if m_num else 0
+    kw = {"slice_type": slice_type}
+    if num_slices > 0:
+        kw["num_slices"] = num_slices
+    return ttnn.Op2DSliceConfig(**kw)
 
 
 def _parse_compute_config(device, compute_config_dict):
@@ -183,8 +196,11 @@ def _parse_compute_config(device, compute_config_dict):
         "MathFidelity.HiFi3": ttnn.MathFidelity.HiFi3,
         "MathFidelity.HiFi4": ttnn.MathFidelity.HiFi4,
     }
-    fidelity_str = compute_config_dict.get("math_fidelity", "MathFidelity.HiFi4")
-    math_fidelity = fidelity_map.get(fidelity_str, ttnn.MathFidelity.HiFi4)
+    raw_fidelity = compute_config_dict.get("math_fidelity", "MathFidelity.HiFi4")
+    if isinstance(raw_fidelity, ttnn.MathFidelity):
+        math_fidelity = raw_fidelity
+    else:
+        math_fidelity = fidelity_map.get(str(raw_fidelity), ttnn.MathFidelity.HiFi4)
 
     math_approx = str(compute_config_dict.get("math_approx_mode", "False")).lower() in ("true", "1")
     fp32_acc = bool(compute_config_dict.get("fp32_dest_acc_en", False))
@@ -423,7 +439,7 @@ def run(
 
     padding_arg = full_padding if full_padding is not None else (pad_h, pad_w)
 
-    result = ttnn.conv2d(
+    conv2d_kwargs = dict(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         device=device,
@@ -444,6 +460,12 @@ def run(
         return_output_dim=return_output_dim,
         return_weights_and_bias=return_weights_and_bias,
     )
+
+    traced_slice_config = kwargs.get("slice_config")
+    if traced_slice_config is not None and isinstance(traced_slice_config, dict):
+        conv2d_kwargs["slice_config"] = _parse_slice_config(traced_slice_config)
+
+    result = ttnn.conv2d(**conv2d_kwargs)
 
     e2e_perf = stop_measuring_time(start_time)
 

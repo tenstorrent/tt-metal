@@ -221,9 +221,21 @@ def create_tensor_on_mesh(
 
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
 
+        dist_raw = tensor_placement.get("distribution_shape", "")
+        if isinstance(dist_raw, str):
+            try:
+                dist_parsed = _ast.literal_eval(dist_raw)
+            except Exception:
+                dist_parsed = []
+        else:
+            dist_parsed = list(dist_raw) if dist_raw else []
+        is_2d_distribution = len(dist_parsed) >= 2
+
         if not mesh_compatible or not entries or "PlacementShard" not in placement_str:
-            # Device mesh too small or no shard placement - replicate
-            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            if is_2d_distribution:
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape_tuple)
+            else:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         elif len(entries) >= 2:
             dims = []
             for entry in entries[:2]:
@@ -256,9 +268,15 @@ def create_tensor_on_mesh(
 
                 mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
             else:
-                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+                if is_2d_distribution:
+                    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape_tuple)
+                else:
+                    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         else:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            if is_2d_distribution:
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape_tuple)
+            else:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -301,6 +319,20 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
             return None
 
     return None
+
+
+def get_model_traced_mesh_shape() -> Tuple[int, int]:
+    """Get mesh shape for model-traced sweep modules.
+
+    Model traces are always captured on a mesh device (even 1x1 on single
+    chips).  The tracer records 2-D ``tensor_placement`` metadata that is
+    only reproduced when the sweep re-executes on a mesh device.
+
+    Returns ``MESH_DEVICE_SHAPE`` from the environment when set, otherwise
+    falls back to ``(1, 1)`` so that the sweep device topology matches the
+    trace topology.
+    """
+    return get_mesh_shape() or (1, 1)
 
 
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
