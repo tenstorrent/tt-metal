@@ -19,7 +19,7 @@ from models.tt_dit.utils.check import assert_quality
     "clip_path, tokenizer_path, expected_pcc",
     [
         ("text_encoder", "tokenizer", 0.99),
-        ("text_encoder_2", "tokenizer_2", 0.98),
+        ("text_encoder_2", "tokenizer_2", 0.978),
     ],
     ids=["encoder_1", "encoder_2"],
 )
