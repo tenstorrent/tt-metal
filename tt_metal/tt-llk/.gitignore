@@ -41,3 +41,9 @@ tests/python_tests/helpers/test_stimuli_v2_*.py
 tests/python_tests/test_eltwise_unary_datacopy_custom_v2_migration.py
 tests/python_tests/test_zzz_eltwise_unary_sfpu_v2_migration.py
 tests/python_tests/test_zzz_eltwise_unary_sfpu_v2_parity.py
+tests/python_tests/test_zzz_unpack_tilize_v2_parity.py
+tests/python_tests/test_zzz_pack_untilize_v2_parity.py
+tests/python_tests/test_matmul_v2_parity.py
+tests/python_tests/test_unpack_matmul_v2_parity.py
+tests/python_tests/test_reduce_v2_parity.py
+tests/python_tests/test_stimuli_v2_legacy_defaults.py
