@@ -331,8 +331,7 @@ def prepare_generator_args(
 
 
 def _gemma3_text_demo_device_params():
-    # Blackhole (e.g. P150) matches multimodal vision_demo: extra CQ + L1 small; trace size may be overridden by
-    # get_supported_trace_region_size (trace_region_config.py) from HF_MODEL when applicable.
+    # Blackhole (e.g. P150) needs an extra CQ, L1 small, and a larger trace region than Wormhole.
     if is_blackhole():
         return {
             "fabric_config": True,
@@ -843,8 +842,7 @@ def test_demo_text(
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
 
-    # Non-paged decode compiles a different SDPA path that exhausts L1 on Wormhole (circular-buffer clash).
-    # Blackhole uses a different grid/L1 budget; keep paged decode as default there too, but allow non-paged.
+    # Non-paged decode exhausts L1 on Wormhole; Blackhole has enough headroom so allow it there.
     if not paged_attention and is_wormhole_b0():
         pytest.skip(
             "Gemma3 text_demo: non-paged KV decode is not supported on Wormhole (L1 limits in "
@@ -935,9 +933,7 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
-    # On-device sampling when Transformer built SamplingGenerator (Gemma3 ModelArgs sets
-    # device_sampling_max_per_device_vocab; see models/demos/multimodal/gemma3/tt/model_config.py).
-    # Token-accuracy mode needs full host logits for top-k checks / teacher forcing -- keep sampling on host.
+    # Sample on device when the Transformer exposes a SamplingGenerator; token-accuracy mode keeps host logits.
     model_supports_device_sampling = (
         getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
     )
@@ -1019,14 +1015,8 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
-        logger.info(
-            f"[VERIFY PREFILL_CTX] prompt_tokens_shape={tuple(input_tokens_prefill_pt.shape)} "
-            f"page_table_shape={tuple(page_table.shape) if page_table is not None else None}"
-        )
-
         if can_sample_on_device:
-            # Greedy (temperature==0): top_k=1 and top_p=1 match host argmax; avoid host logits + sample_host.
-            # Non-greedy: device top-k/top-p with demo temperature/top_p.
+            # Greedy path uses top_k=1/top_p=1 so it matches host argmax.
             t = sampling_params.get("temperature", 0) or 0
             if t <= 0:
                 device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
@@ -1048,13 +1038,9 @@ def test_demo_text(
         if device_sampling_params is not None:
             prefill_tokens, _prefill_lp = prefill_out
             prefilled_token = prefill_tokens.long()
-            logger.info(f"[VERIFY PREFILL] device_sampling first_token_ids={prefilled_token.flatten()[:4].tolist()}")
         else:
             logits = prefill_out
             prefilled_token = torch.argmax(logits, dim=-1)
-            logger.info(
-                f"[VERIFY PREFILL] logits_shape={tuple(logits.shape)} argmax_first={prefilled_token.flatten()[:4].tolist()}"
-            )
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -1074,7 +1060,7 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        # decode_forward expects batch-major token ids shaped [B, 1] (see Transformer.prepare_decode_inputs_host).
+        # decode_forward expects batch-major token ids shaped [B, 1].
         out_tok = prefilled_flat.reshape(global_batch_size, 1)
 
         logger.info(f"Starting decode loop...")
@@ -1086,14 +1072,6 @@ def test_demo_text(
             if token_accuracy:
                 out_tok[0, 0] = token_acc.collect_predicted_tokens(out_tok[0, 0].item()).squeeze()
 
-            _verify_demo = iteration < 12 or (44 <= iteration <= 58)
-            if _verify_demo:
-                logger.info(
-                    f"[VERIFY DEMO] iter={iteration} expect_decode_step={iteration + 1} "
-                    f"token_in={out_tok[0, 0].item()} current_pos_before_forward={current_pos[0].item()}"
-                )
-
-            # Run decode forward
             logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
@@ -1103,22 +1081,8 @@ def test_demo_text(
                 sampling_params=device_sampling_params,
             )
 
-            if _verify_demo:
-                if device_sampling_params is not None:
-                    # decode_forward returns per-user sampled token ids, not full vocab logits
-                    logger.info(
-                        f"[VERIFY DEMO] iter={iteration} device_sampling=True (no host top-5 logits); "
-                        f"decode_out_shape={tuple(logits.shape)}"
-                    )
-                else:
-                    top_5_logits, top_5_indices = torch.topk(logits[0, 0, :], k=5)
-                    logger.info(
-                        f"[VERIFY DEMO] iter={iteration} top5_idx={top_5_indices.tolist()} top5_logit={top_5_logits.tolist()}"
-                    )
-
-            # Get the next token
             if device_sampling_params is not None:
-                # process_output_decode may return [B] or [B, 1] token ids
+                # Device decode can return [B] or [B, 1] token ids; normalize to [B, 1].
                 out_tok = logits.reshape(global_batch_size, 1) if logits.dim() == 1 else logits
                 if out_tok.shape != (global_batch_size, 1):
                     out_tok = out_tok.reshape(global_batch_size, -1)[:, -1:]
@@ -1133,12 +1097,6 @@ def test_demo_text(
                     out_tok = out_tok.unsqueeze(-1)
                 elif out_tok.dim() == 2 and out_tok.shape[-1] != 1:
                     out_tok = out_tok[:, :1]
-
-            if _verify_demo:
-                logger.info(
-                    f"[VERIFY DEMO] iter={iteration} sampled_token={out_tok[0, 0].item()} "
-                    f"decoded={tokenizer.decode([out_tok[0, 0].item()])!r}"
-                )
 
             profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
             decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)

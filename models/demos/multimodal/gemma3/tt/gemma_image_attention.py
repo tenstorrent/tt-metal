@@ -234,15 +234,7 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        # NOTE: bias is applied as a separate ttnn.add instead of via the
-        # ``bias=`` kwarg of ttnn.linear. Passing a bias into ttnn.linear
-        # triggers the FUSE_BIAS code path in the
-        # ``bmm_large_block_zm_fused_bias_activation`` compute kernel, which
-        # (post PR #42427) requires a ``bias_ntiles`` named compile-time arg
-        # that older pre-built libtt_metal.so binaries in mixed-tree dev
-        # setups do not populate, leading to a JIT build failure. Doing the
-        # add outside the matmul avoids the FUSE_BIAS path entirely while
-        # producing identical results.
+        # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
