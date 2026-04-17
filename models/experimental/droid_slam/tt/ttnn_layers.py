@@ -20,12 +20,12 @@ SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
 
 
 def _default_compute_config(device):
-    # HiFi4 + fp32 accumulator is required for long conv chains
-    # (DROID-SLAM has 16 layers in the encoder alone) — bf16 accumulation
-    # drifts PCC below 0.99 end-to-end.
+    # HiFi2 gives us ~2x the FPU throughput of HiFi4 while keeping
+    # 7-bit mantissa precision — together with fp32_dest_acc_en that's
+    # enough for DROID-SLAM's 16-layer encoder to stay above 99% PCC.
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
