@@ -144,29 +144,48 @@ class _TtGraphAggFastPath:
         return eta, eh, ew, upmask, uh, uw
 
 
+def _slice_conv_outch(conv, keep):
+    """Build a trimmed copy of a Conv2d that keeps only the first
+    `keep` output channels. The reference checkpoint has 3-channel
+    delta/weight heads; only the first 2 are ever consumed downstream.
+    """
+    new = torch.nn.Conv2d(
+        conv.in_channels,
+        keep,
+        kernel_size=conv.kernel_size,
+        stride=conv.stride,
+        padding=conv.padding,
+        bias=conv.bias is not None,
+    )
+    new.weight.data.copy_(conv.weight.data[:keep])
+    if conv.bias is not None:
+        new.bias.data.copy_(conv.bias.data[:keep])
+    return new
+
+
 class _TtDeltaWeightHeads:
     """Fused 128→256 pre-conv + independent tail convs for delta/weight."""
 
     def __init__(self, ref_update):
         self.pre = TtConv2d(ref_update.deltaweight_pre, activation=RELU)
-        self.delta_tail = TtConv2d(ref_update.delta_tail, activation=None)
-        self.weight_tail = TtConv2d(ref_update.weight_tail, activation=None)
+        # Tail convs trimmed to 2ch so there is no runtime slice to drop
+        # the unused third channel, and the conv itself does 33% less
+        # compute.
+        self.delta_tail = TtConv2d(
+            _slice_conv_outch(ref_update.delta_tail, 2), activation=None
+        )
+        self.weight_tail = TtConv2d(
+            _slice_conv_outch(ref_update.weight_tail, 2), activation=None
+        )
 
     def __call__(self, net, device, batch_size, h, w):
         pre, ph, pw = self.pre(net, device, batch_size, h, w)
         n_last = pre.shape[-2]
         pre_d = ttnn.slice(pre, [0, 0, 0, 0], [1, 1, n_last, 128])
         pre_w = ttnn.slice(pre, [0, 0, 0, 128], [1, 1, n_last, 256])
-        delta_raw, dh, dw = self.delta_tail(pre_d, device, batch_size, ph, pw)
+        delta, dh, dw = self.delta_tail(pre_d, device, batch_size, ph, pw)
         weight_raw, wh, ww = self.weight_tail(pre_w, device, batch_size, ph, pw)
-        # Slice both heads to the two consumed output channels on device
-        # so CPU only sees 2-channel data after download.
-        dn = delta_raw.shape[-2]
-        delta = ttnn.slice(delta_raw, [0, 0, 0, 0], [1, 1, dn, 2])
-        wn = weight_raw.shape[-2]
-        weight = ttnn.sigmoid(
-            ttnn.slice(weight_raw, [0, 0, 0, 0], [1, 1, wn, 2])
-        )
+        weight = ttnn.sigmoid(weight_raw)
         return delta, dh, dw, weight, wh, ww
 
 
