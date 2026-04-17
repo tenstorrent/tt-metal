@@ -45,9 +45,9 @@ std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
     std::vector<uint16_t> result;
     result.reserve(in.size() * 2);
     for (const uint32_t val : in) {
-        auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
-        result.push_back(std::bit_cast<uint16_t>(two_bfloats.first));
-        result.push_back(std::bit_cast<uint16_t>(two_bfloats.second));
+        auto [lo, hi] = unpack_two_bfloat16_from_uint32(val);
+        result.push_back(std::bit_cast<uint16_t>(lo));
+        result.push_back(std::bit_cast<uint16_t>(hi));
     }
     return result;
 }
