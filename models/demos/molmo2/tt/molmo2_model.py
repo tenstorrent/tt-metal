@@ -972,7 +972,7 @@ class Molmo2Model(LightweightModule):
             )
 
         # Forward through text model (handles both prefill and decode via KV cache)
-        logits, new_kv_caches = self.text_model(
+        logits, new_kv_caches, _ = self.text_model(
             hidden_states=hidden_states_ttnn,
             start_pos=start_pos,
             attn_mask=attn_mask_ttnn,

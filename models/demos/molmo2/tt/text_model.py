@@ -226,7 +226,7 @@ class TextModel(LightweightModule):
         chunk_page_table: Optional[ttnn.Tensor] = None,
         chunk_start_idx: Optional[int] = None,
         last_token_idx: Optional[int] = None,
-    ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]], Optional[List[ttnn.Tensor]]]:
         """
         Forward pass through text model (without embedding).
 
@@ -247,7 +247,8 @@ class TextModel(LightweightModule):
             chunk_start_idx: Starting position of current chunk (enables chunked attention)
 
         Returns:
-            Tuple of (logits, new_kv_caches)
+            ``(logits, new_kv_caches, all_hidden_states)`` where ``all_hidden_states`` is ``None`` unless
+            ``output_hidden_states`` is True.
         """
         seq_len = hidden_states.shape[-2]
 
@@ -282,10 +283,6 @@ class TextModel(LightweightModule):
 
         # For long sequences, slice to last real token before LM head to avoid
         # materializing [seq_len, vocab_size] logits (9.5GB at 32K).
-        print("=" * 100)
-        print(last_token_idx)
-        print(x.shape)
-        print("=" * 100)
         if last_token_idx is not None:
             x = ttnn.slice(x, (0, 0, last_token_idx, 0), (1, 1, last_token_idx + 1, self.hidden_dim))
 
@@ -303,7 +300,7 @@ class TextModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        return logits, new_kv_caches
+        return logits, new_kv_caches, all_hidden_states if output_hidden_states else None
 
     def forward_with_embedding(
         self,
@@ -327,7 +324,8 @@ class TextModel(LightweightModule):
             Tuple of (logits, new_kv_caches)
         """
         hidden_states = self.embed_tokens(input_ids)
-        return self.forward(hidden_states, start_pos, attn_mask, kv_caches, user_id=user_id)
+        logits, new_kv_caches, _ = self.forward(hidden_states, start_pos, attn_mask, kv_caches, user_id=user_id)
+        return logits, new_kv_caches
 
     def forward_decode(
         self,

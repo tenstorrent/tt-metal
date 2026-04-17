@@ -1581,7 +1581,7 @@ class Molmo2Generator:
         try:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-            logits_trace, _ = self.model.text_model.forward(
+            logits_trace, _, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
                 start_pos=0,
                 attn_mask=None,
@@ -1825,7 +1825,7 @@ class Molmo2Generator:
             # Only pass page_table if paged attention is enabled
             page_table_for_trace = trace_tensors.get("page_table") if self.use_paged_attention else None
 
-            logits, _ = self.model.text_model.forward(
+            logits, _, _ = self.model.text_model.forward(
                 hidden_states=fused_embed,
                 start_pos=0,
                 attn_mask=None,
@@ -2076,7 +2076,7 @@ class Molmo2Generator:
                 self.init_page_table(seq_len)
                 warmup_page_table = self.page_table
 
-            logits, _ = self.model.text_model.forward(
+            logits, _, _ = self.model.text_model.forward(
                 hidden_states=fused_embed,
                 start_pos=0,
                 attn_mask=None,
@@ -2563,7 +2563,7 @@ class Molmo2Generator:
             # Also pass page_table to compile paged attention ops
             rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
             effective_page_table = trace_tensors.get("page_table")  # Get page_table from trace_tensors if available
-            logits, _ = self.model.text_model.forward(
+            logits, _, _ = self.model.text_model.forward(
                 hidden_states=trace_tensors["hidden_states"],
                 start_pos=0,
                 attn_mask=attn_mask,
@@ -2587,7 +2587,7 @@ class Molmo2Generator:
                 seq_len = hidden_states_ttnn.shape[-2]
                 rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
 
-            logits, _ = self.model.text_model.forward(
+            logits, _, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
                 attn_mask=attn_mask,
@@ -2909,7 +2909,7 @@ class Molmo2Generator:
                     )
                 # For long sequences, pass last_token_idx to avoid 9.5GB LM head logits
                 lti = original_seq_len - 1 if seq_len > 8192 else None
-                logits, _ = self.model.text_model.forward(
+                logits, _, _ = self.model.text_model.forward(
                     hidden_states=hidden_states_ttnn,
                     start_pos=0,
                     attn_mask=prefill_attn_mask_ttnn,
@@ -3003,7 +3003,7 @@ class Molmo2Generator:
             )
 
             # Forward pass with chunked attention
-            chunk_logits, _ = self.model.text_model.forward(
+            chunk_logits, _, _ = self.model.text_model.forward(
                 hidden_states=chunk_hidden,
                 start_pos=chunk_start,
                 attn_mask=None,
@@ -3854,6 +3854,9 @@ def run_video_demo(
         use_vision_trace: Whether to use tracing for vision backbone
         use_unified_trace: Whether to use unified Vision+Prefill trace
         use_paged_attention: Whether to use paged attention (for vLLM compatibility)
+
+    Returns:
+        ``(response_text, perf_metrics)`` where ``perf_metrics`` is a dict (includes ``output_text``).
     """
     logger.info("=" * 60)
     logger.info("Molmo2-8B Video Demo")
@@ -3989,7 +3992,7 @@ def run_video_demo(
         logger.info(f"Response: {response}")
         logger.info("=" * 60)
 
-        return perf_metrics
+        return response, perf_metrics
 
     finally:
         ttnn.close_mesh_device(device)

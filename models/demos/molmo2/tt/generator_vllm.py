@@ -17,17 +17,17 @@ from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
 from transformers import BatchFeature
-
-import ttnn
-from models.demos.molmo2.tt.hf_processor import hf_patches_to_images
-from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
-from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.molmo import MolmoProcessingInfo, get_patches_grid_size, select_tiling
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
 from vllm.multimodal.parse import MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import BaseMultiModalProcessor, PromptReplacement, PromptUpdate
+
+import ttnn
+from models.demos.molmo2.tt.hf_processor import hf_patches_to_images
+from models.demos.molmo2.tt.prefill_attention_mask import build_molmo2_prefill_attention_bias
+from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 
 # BaseDummyInputsBuilder location varies between vLLM versions
 try:
@@ -3448,7 +3448,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
-                _, _ = self.model.text_model.forward(
+                _, _, _ = self.model.text_model.forward(
                     hidden_states=chunk_hidden_ttnn,
                     start_pos=0,
                     attn_mask=None,

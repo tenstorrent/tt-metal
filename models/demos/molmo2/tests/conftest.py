@@ -4,11 +4,63 @@
 
 import gc
 import os
+from pathlib import Path
 
 import pytest
 import torch
 
 import ttnn
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--molmo2-video",
+        action="store",
+        default=None,
+        dest="molmo2_test_video",
+        help="Path to a .mp4 for test_video_pcc_reference_vs_ttnn (overrides MOLMO2_TEST_VIDEO).",
+    )
+    parser.addoption(
+        "--molmo2-prompt",
+        action="store",
+        default=None,
+        dest="molmo2_prompt_text",
+        help="User prompt for video PCC test (overrides MOLMO2_VIDEO_PROMPT). Include <|video|> at the start of the user text; required for HF video forward.",
+    )
+
+
+@pytest.fixture
+def molmo2_video_path(request):
+    """
+    Absolute path to a local video file for Molmo2 video PCC tests.
+
+    Resolution order: ``--molmo2-video`` CLI, then ``MOLMO2_TEST_VIDEO`` env.
+    Skips the test if neither is set; fails if the path does not exist.
+    """
+    cli = request.config.getoption("molmo2_test_video")
+    path_str = (cli if cli else os.environ.get("MOLMO2_TEST_VIDEO") or "").strip()
+    if not path_str:
+        pytest.skip("Set MOLMO2_TEST_VIDEO or pass --molmo2-video=/path/to/video.mp4")
+    path = Path(path_str).expanduser().resolve()
+    if not path.is_file():
+        pytest.fail(f"Molmo2 test video not found or not a file: {path}")
+    return str(path)
+
+
+@pytest.fixture
+def molmo2_video_prompt(request):
+    """
+    Prompt text for ``test_video_pcc_reference_vs_ttnn`` (same string for HF and TTNN).
+
+    Resolution: ``--molmo2-prompt``, then ``MOLMO2_VIDEO_PROMPT``, else a short default.
+    """
+    cli = request.config.getoption("molmo2_prompt_text")
+    if cli:
+        return cli
+    return os.environ.get(
+        "MOLMO2_VIDEO_PROMPT",
+        "<|video|>\nDescribe what happens in this video briefly.",
+    )
 
 
 @pytest.fixture(autouse=True)
