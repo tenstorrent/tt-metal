@@ -70,21 +70,15 @@ class TtDroidNet:
         bn = b * n
         images_bn = images.view(bn, c, h, w)
 
-        # Upload once, normalize on device (sub mean, mul inv_std after /255).
+        # Upload + normalize ONCE; fnet keeps its input live
+        # (deallocate_activation=False) so cnet can reuse the same tile.
         x_tt = _pack_nchw_to_tile_nhwc(images_bn, self.device)
         x_tt = ttnn.multiply(x_tt, 1.0 / 255.0)
         x_tt = ttnn.subtract(x_tt, self._mean)
         x_tt = ttnn.multiply(x_tt, self._inv_std)
 
-        # fnet + cnet (in series — running them concurrently would
-        # require two inputs resident, which pressures L1).
         fmaps_tt, fh, fw = self.tt_fnet(x_tt, batch_size=bn, h=h, w=w)
-        # The input tile may already be consumed by fnet; re-upload for cnet.
-        x_tt2 = _pack_nchw_to_tile_nhwc(images_bn, self.device)
-        x_tt2 = ttnn.multiply(x_tt2, 1.0 / 255.0)
-        x_tt2 = ttnn.subtract(x_tt2, self._mean)
-        x_tt2 = ttnn.multiply(x_tt2, self._inv_std)
-        context_tt, ch_, cw_ = self.tt_cnet(x_tt2, batch_size=bn, h=h, w=w)
+        context_tt, ch_, cw_ = self.tt_cnet(x_tt, batch_size=bn, h=h, w=w)
 
         # context has 256 channels — split into net(128) + inp(128),
         # apply tanh/relu on device.
