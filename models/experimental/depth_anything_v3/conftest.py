@@ -16,3 +16,9 @@ import os
 _MEDGEMMA_TREE = "/home/ttuser/experiments/medgemma/tt-metal"
 os.environ.setdefault("TT_METAL_RUNTIME_ROOT", _MEDGEMMA_TREE)
 os.environ.setdefault("TT_METAL_HOME", _MEDGEMMA_TREE)
+
+# Cap CPU threads at 16. The head's deepest refinenet ops are 296x296x256
+# convs — fewer threads avoid OMP contention; 32 (the pytorch default) and
+# 64 (all hyperthreads) both measured slower in earlier iterations.
+import torch as _torch
+_torch.set_num_threads(16)
