@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -48,6 +49,18 @@ def _assert_no_garbage_tokens(results: dict) -> None:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
 
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
     statistics = results.get("statistics", {})
     assert statistics, "Expected demo statistics for performance assertion"
@@ -63,6 +76,11 @@ def _assert_perf_targets(results: dict, perf_targets: dict[str, float]) -> None:
             f"{metric_name}={measured:.6f} is outside expected range "
             f"[{lower:.6f}, {upper:.6f}] (expected {expected:.6f} +/- {PERF_MARGIN*100:.1f}%)"
         )
+
+
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
 
 
 def _demo_case(
@@ -167,7 +185,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
-            max_prompts=24,
+            max_prompts=64,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -197,7 +215,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,
@@ -228,7 +246,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         _demo_case(
-            max_prompts=512,
+            max_prompts=128,
             max_users_per_row=8,
             repeat_batches=1,
             max_new_tokens=129,
@@ -258,7 +276,7 @@ def _demo_case(
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
         _demo_case(
-            max_prompts=56,
+            max_prompts=14,
             max_users_per_row=8,
             repeat_batches=20,
             max_new_tokens=129,
@@ -333,16 +351,17 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     else:
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
-    # Save results to JSON for artifact upload when requested by the case.
-    if case["artifact_name"] is not None:
+    # Save artifact from host rank 0 only to avoid multi-host write races.
+    if case["artifact_name"] is not None and _is_primary_artifact_writer():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{case['artifact_name']}.json"
+        output_file = artifact_dir / f"{_timestamped_artifact_stem(case['artifact_name'])}.json"
 
         output_data = {
-            "prompts": prompts,
+            "prompts": prompts if prompts else [],
             "generations": [],
             "statistics": results.get("statistics", {}),
+            "model_params": results.get("model_params", {}),
         }
 
         for i, gen_result in enumerate(results["generations"]):

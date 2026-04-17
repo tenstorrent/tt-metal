@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_gate_weights,
     get_ep_mesh_composer,
     get_gate_outputs,
+    get_max_payload_size,
     get_sp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
@@ -43,7 +44,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_test
             (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -54,7 +55,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_test
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -65,7 +66,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_test
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -76,7 +77,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_test
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,

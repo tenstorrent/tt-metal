@@ -124,7 +124,7 @@ def test_ttnn_reduce(
     tt_combine_output = ttnn.from_torch(
         torch_combine_output,
         mesh_mapper=mesh_mapper,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
