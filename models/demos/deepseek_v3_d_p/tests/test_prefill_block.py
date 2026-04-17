@@ -33,7 +33,7 @@ PCC_THRESHOLD_KVPE = 0.999
 @pytest.mark.parametrize(
     "input_source, is_balanced, isl_total",
     [
-        ("random", True, 4096),
+        ("random", True, 25 * 1024),
     ],
     ids=["random_input"],
 )
