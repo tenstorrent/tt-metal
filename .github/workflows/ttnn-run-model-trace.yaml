@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      run-validation:
+        description: "Run the sweep validation pipeline against the newly uploaded trace (requires load-to-db)"
+        required: false
+        type: boolean
+        default: false
       timeout-minutes:
         description: "Timeout per tracing leg (minutes)"
         required: false
@@ -271,6 +276,7 @@ jobs:
           EXTRA_ARGS: ${{ matrix.extra_args }}
           STORE_RAW: ${{ inputs.store-raw-traces }}
           LOAD_DB: ${{ inputs.load-to-db }}
+          RUN_VALIDATION: ${{ inputs.run-validation }}
           TIMEOUT: ${{ inputs.timeout-minutes }}
           TT_METAL_SHA: ${{ github.sha }}
         run: |
@@ -292,6 +298,7 @@ jobs:
           echo "│ HF weights source:    $HF_SOURCE"
           echo "│ Store Raw Traces:     $STORE_RAW"
           echo "│ Load to DB:           $LOAD_DB"
+          echo "│ Run Validation:       $RUN_VALIDATION"
           echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
           echo "│ Timeout:              $TIMEOUT minutes"
           echo "│ tt-metal SHA:         $TT_METAL_SHA"
@@ -819,7 +826,9 @@ jobs:
   trigger-validation:
     name: Trigger validation
     needs: [homogenize-and-load]
-    if: ${{ inputs.load-to-db && needs.homogenize-and-load.outputs.trace-run-id != '' }}
+    # Validation needs a concrete trace_run_id (produced only when load-to-db
+    # successfully uploaded). run-validation is the user's explicit opt-in.
+    if: ${{ inputs.run-validation && inputs.load-to-db && needs.homogenize-and-load.outputs.trace-run-id != '' }}
     permissions:
       contents: read
       packages: write
@@ -849,6 +858,7 @@ jobs:
           TRACE_RUN_ID: ${{ needs.homogenize-and-load.outputs.trace-run-id }}
           HOMOGENIZED_TRACE_UID: ${{ needs.homogenize-and-load.outputs.trace-uid }}
           LOAD_TO_DB: ${{ inputs.load-to-db }}
+          RUN_VALIDATION: ${{ inputs.run-validation }}
         run: |
           python3 - <<'PY'
           import json
@@ -883,6 +893,7 @@ jobs:
               f"- Models requested: **{os.environ.get('MODEL_COUNT', '?')}**",
               f"- Succeeded: **{success}** / Failed: **{failed}**",
               f"- Load to DB: **{os.environ.get('LOAD_TO_DB', 'false')}**",
+              f"- Run Validation: **{os.environ.get('RUN_VALIDATION', 'false')}**",
           ]
           trace_run_id = os.environ.get("TRACE_RUN_ID")
           trace_uid = os.environ.get("HOMOGENIZED_TRACE_UID")
