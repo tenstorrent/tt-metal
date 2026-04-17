@@ -162,13 +162,13 @@ def siglip2_attention(
     # Fused concatenate_heads: replaces permute + reshape
     context = ttnn.transformer.concatenate_heads(context)
 
-    # Output projection — bf8 output since next op is residual add + LN (both re-normalize/upcast)
+    # Output projection (weight already padded for input)
     output = ttnn.linear(
         context,
         proj_weight,
         bias=proj_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
     ttnn.deallocate(context)
@@ -202,7 +202,7 @@ def siglip2_mlp(
         fc2_weight,
         bias=fc2_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         core_grid=CORE_GRID_BH,
     )
     ttnn.deallocate(intermediate)
