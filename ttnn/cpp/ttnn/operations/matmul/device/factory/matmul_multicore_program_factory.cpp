@@ -51,14 +51,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     tt::tt_metal::IDevice* device = a.device();
 
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
-    const auto kernel_config =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
-    const auto math_fidelity = std::get<0>(kernel_config);
-    const auto math_approx_mode = std::get<1>(kernel_config);
-    const auto fp32_dest_acc_en = std::get<2>(kernel_config);
-    // packer_l1_acc (element 3 in the tuple) is not applicable, because the compute kernel doesn't have any
-    // intermediate accumulation.
-    const auto dst_full_sync_en = std::get<4>(kernel_config);
+    // packer_l1_acc is not applicable, because the compute kernel doesn't have any
+    // intermediate accumulation. Silences compiler warnings.
+    (void)packer_l1_acc;
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
