@@ -47,15 +47,19 @@ _TILE = 32
 _state: dict = {}
 
 
+_HIFI4 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+
 def _hifi4_kernel_config():
     """Higher matmul fidelity + fp32 accumulation. Closes most of the bf16 PCC
-    gap left by the default LoFi math fidelity used in ttnn.linear/matmul."""
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
+    gap left by the default LoFi math fidelity. Cached as a module constant —
+    constructing it per call adds 168 ctor calls per forward."""
+    return _HIFI4
 
 
 def _next_tile(n: int) -> int:
