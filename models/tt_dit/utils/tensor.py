@@ -324,9 +324,9 @@ def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType)
 
 
 def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
-    """On-device float-to-uint8: multiply by 255, clamp [0, 255], typecast."""
+    """On-device float-to-uint8: map [-1, 1] to [0, 255] via (x + 1) * 127.5, clamp [0, 255], typecast."""
     t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
-    t = ttnn.multiply(t, 255.0)
+    t = ttnn.multiply_(ttnn.add_(t, 1.0), 127.5)
     t = ttnn.clamp(t, min=0.0, max=255.0)
     t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.typecast(t, ttnn.uint8)
