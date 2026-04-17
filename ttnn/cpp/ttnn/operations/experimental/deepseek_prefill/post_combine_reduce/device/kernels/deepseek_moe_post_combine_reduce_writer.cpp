@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t output_tile_size = get_tile_size(cb_output);
 
     const auto weight_addrg = TensorAccessor(weight_accessor_args, weight_addr);
-    const auto output_addrg = TensorAccessor(output_accessor_args, output_addr, output_tile_size);
+    const auto output_addrg = TensorAccessor(output_accessor_args, output_addr);
     const auto dispatch_table_addrg =
         TensorAccessor(dispatch_table_accessor_args, dispatch_table_addr, dispatch_table_page_size);
     const auto indices_addrg = TensorAccessor(indices_accessor_args, indices_addr, indices_page_size);
