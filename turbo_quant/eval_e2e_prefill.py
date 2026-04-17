@@ -55,6 +55,7 @@ def migrate_prefill_kv_to_turbo_quant(
     seed: int = 42,
     rotation_absorbed: bool = False,
     cache_dtype=None,
+    cluster_shape=None,
 ):
     """Migrate prefill KV from layer_past into TurboQuant pre-rescaled format.
 
@@ -86,13 +87,24 @@ def migrate_prefill_kv_to_turbo_quant(
     dtype_label = {ttnn.bfloat16: "BF16", ttnn.bfloat4_b: "BFP4", ttnn.bfloat8_b: "BFP8"}.get(
         cache_dtype, str(cache_dtype)
     )
+
+    # Multi-device: each device holds n_local_kv_heads. Concat along dim 1 (heads)
+    # when reading back, shard along dim 1 when writing back.
+    num_devices = cluster_shape[1] if cluster_shape else 1
+    if num_devices > 1:
+        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=cluster_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=cluster_shape)
+    else:
+        mesh_composer = None
+        mesh_mapper = None
+
     print(f"  Migrating {len(tt_model.layers)} layers × {prompt_len} positions to TQ {dtype_label} pre-rescaled ...")
     for layer in tt_model.layers:
         # Read BFP8 KV → CPU float32.
         k_bf16 = ttnn.typecast(layer.attention.layer_past[0], ttnn.bfloat16)
         v_bf16 = ttnn.typecast(layer.attention.layer_past[1], ttnn.bfloat16)
-        k_cpu = ttnn.to_torch(k_bf16).float()  # [1, heads, max_seq, head_dim]
-        v_cpu = ttnn.to_torch(v_bf16).float()
+        k_cpu = ttnn.to_torch(k_bf16, mesh_composer=mesh_composer).float()  # [1, n_kv_heads, max_seq, head_dim]
+        v_cpu = ttnn.to_torch(v_bf16, mesh_composer=mesh_composer).float()
         ttnn.deallocate(k_bf16)
         ttnn.deallocate(v_bf16)
 
@@ -130,6 +142,7 @@ def migrate_prefill_kv_to_turbo_quant(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
         layer.attention.layer_past[1] = ttnn.from_torch(
             v_full,
@@ -137,6 +150,7 @@ def migrate_prefill_kv_to_turbo_quant(
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         )
 
 
