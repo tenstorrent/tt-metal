@@ -549,12 +549,16 @@ def pack_mxfp8p(
 
 def pack_mxfp4(
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 8059b4bb6b2 (Finished tests with mxfp4.)
     tensor,
     num_faces=4,
     face_r_dim=16,
     use_srcs: bool = False,
     dest_acc: bool = False,
     exp_rnd_en: bool = False,
+<<<<<<< HEAD
 =======
     tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
 >>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
@@ -566,6 +570,12 @@ def pack_mxfp4(
 =======
     Function is implemented based on the OCP MX specification and ws_tensix quantization model.
 >>>>>>> d46fee49454 (Added warnings and asserts to MxFp4 unpack and pack.)
+=======
+):
+    """
+    Pack tensor into MXFP4 format (E2M1 variant).
+    Function is implemented based on the OCP MX specification and Tensix hardware documentation.
+>>>>>>> 8059b4bb6b2 (Finished tests with mxfp4.)
 
     MXFP4 uses 32-element blocks per OCP MX spec, each with:
     - 1 shared E8M0 scale (8 bits)
@@ -591,10 +601,15 @@ def pack_mxfp4(
         dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry
             (4×16, 40 bytes/slice) instead of 16-bit (8×16, 72 bytes/slice).
 <<<<<<< HEAD
+<<<<<<< HEAD
         exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
             model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
 =======
 >>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
+=======
+        exp_rnd_en: If True, increment non-zero, non-special E8M0 scales to
+            model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF behavior (default: disabled).
+>>>>>>> 8059b4bb6b2 (Finished tests with mxfp4.)
 
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
@@ -632,10 +647,14 @@ def pack_mxfp4(
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     # Scale selection aligned to ws-tensix storage.py verification model:
 =======
     # Scale selection aligned to storage.py verification model:
 >>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
+=======
+    # Scale selection aligned to ws-tensix storage.py verification model:
+>>>>>>> 8059b4bb6b2 (Finished tests with mxfp4.)
     # shared_exp = floor(log2(amax))
     # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
     # E8M0 = shared_exp_adj + 127
@@ -683,6 +702,15 @@ def pack_mxfp4(
         scales_e8m0_array = np.where(can_inc, scales_e8m0_array + 1, scales_e8m0_array)
 =======
 >>>>>>> ab99bdfa956 (Set up more tests to support MxFp4.)
+
+    if exp_rnd_en:
+        # Match mx_block_exp_rnd_to_inf: increment only for non-zero, non-special exponents.
+        can_inc = (
+            (scales_e8m0_array != 0)
+            & (scales_e8m0_array != 254)
+            & (scales_e8m0_array != 255)
+        )
+        scales_e8m0_array = np.where(can_inc, scales_e8m0_array + 1, scales_e8m0_array)
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
