@@ -140,3 +140,43 @@ registry:
     config_count: 233
     loaded_at: '2026-04-07'
     notes: ''
+
+  - trace_id: 7
+    status: draft
+    models: [efficientnetb0]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: cada780c-568c-409a-9837-ba2c6f2fba0c
+    tt_metal_sha: 9ae67e7abe2c9f026eea910bce0084c650573345
+    config_count: 163
+    loaded_at: '2026-04-16'
+    notes: ''
+
+  - trace_id: 8
+    status: draft
+    models: [llama-3.2-1b]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: b1498e7d-136e-45d1-a2e3-bdde0f098ae0
+    tt_metal_sha: af7d31afb5fe3e499564dac2775a4e3d591fe137
+    config_count: 223
+    loaded_at: '2026-04-16'
+    notes: ''
+
+  - trace_id: 9
+    status: draft
+    models: [tt_dit]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 44091313-d561-4b25-9cb2-483faaba1488
+    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
+    config_count: 249
+    loaded_at: '2026-04-17'
+    notes: ''
+
+  - trace_id: 10
+    status: draft
+    models: [gpt_oss]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 39637819-20dc-4fc4-a168-b1d3bdf0495f
+    tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
+    config_count: 130
+    loaded_at: '2026-04-17'
+    notes: ''

@@ -81,8 +81,10 @@ def _append_registry_entries(entries, path):
     """
     _require_yaml()
     with open(path, "a") as f:
-        f.write("\n")
         for entry in entries:
+            # Blank line separator before each appended entry (keeps a single
+            # trailing newline at end-of-file so end-of-file-fixer stays happy).
+            f.write("\n")
             f.write(f"  - trace_id: {entry['trace_id']}\n")
             f.write(f"    status: {entry['status']}\n")
             models = entry.get("models", [])
@@ -110,7 +112,6 @@ def _append_registry_entries(entries, path):
             notes_escaped = notes.replace("'", "''")
             f.write(f"    loaded_at: '{loaded_at_escaped}'\n")
             f.write(f"    notes: '{notes_escaped}'\n")
-            f.write("\n")
 
 
 DEFAULT_SCHEMA = "ttnn_ops_v6"
@@ -559,7 +560,7 @@ def refresh_trace_aggregates(cur, trace_run_ids, configuration_ids, schema=DEFAU
         )
 
 
-def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_SCHEMA):
+def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_SCHEMA, emit_id_file=None):
     """Main loading function.
 
     Args:
@@ -569,6 +570,10 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
         dry_run: If True, run all logic but roll back every DB write at the end.
                  Prints the same stats so you can verify behaviour without persisting anything.
         schema: Database schema to load into (default: DEFAULT_SCHEMA).
+        emit_id_file: Optional path to write the newly-created trace_run_id(s) to,
+                      one integer per line. Only written on a successful (non-dry-run)
+                      load that actually created trace_runs. CI pipelines consume this
+                      to pin downstream validation to the traces just uploaded.
     """
     _validate_schema(schema)
     json_path = json_path or JSON_PATH
@@ -858,6 +863,13 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
 
     if dry_run:
         return
+
+    if emit_id_file and trace_run_cache:
+        new_ids = sorted(set(trace_run_cache.values()))
+        emit_path = Path(emit_id_file).resolve()
+        emit_path.parent.mkdir(parents=True, exist_ok=True)
+        emit_path.write_text("\n".join(str(i) for i in new_ids) + "\n")
+        print(f"  Wrote {len(new_ids)} trace_run_id(s) to {emit_path}")
 
     # Auto-append draft entries to manifest registry
     if trace_run_cache and yaml is not None:
@@ -2275,9 +2287,29 @@ if __name__ == "__main__":
             args = sys.argv[2:]
             dry_run = "--dry-run" in args
             args = [a for a in args if a != "--dry-run"]
+            emit_id_file = None
+            filtered = []
+            i = 0
+            while i < len(args):
+                if args[i] == "--emit-id-file" and i + 1 < len(args):
+                    emit_id_file = args[i + 1]
+                    i += 2
+                elif args[i].startswith("--emit-id-file="):
+                    emit_id_file = args[i].split("=", 1)[1]
+                    i += 1
+                else:
+                    filtered.append(args[i])
+                    i += 1
+            args = filtered
             json_path = args[0] if len(args) > 0 else None
             sha = args[1] if len(args) > 1 else None
-            load_data(json_path=json_path, tt_metal_sha=sha, dry_run=dry_run, schema=_schema)
+            load_data(
+                json_path=json_path,
+                tt_metal_sha=sha,
+                dry_run=dry_run,
+                schema=_schema,
+                emit_id_file=emit_id_file,
+            )
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
             model_filter = sys.argv[3].split(",") if len(sys.argv) > 3 else None
@@ -2357,7 +2389,9 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {cmd}")
             print("Usage (all commands accept --schema <name>, default: ttnn_ops_v6):")
-            print("  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run]           # Load JSON to DB")
+            print(
+                "  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run] [--emit-id-file PATH]  # Load JSON to DB"
+            )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [models]                # Reconstruct JSON from DB"
             )
