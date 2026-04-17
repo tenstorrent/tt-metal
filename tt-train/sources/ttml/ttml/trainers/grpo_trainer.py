@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import ttml
 import ttnn
-from safetensors.torch import save_file
+from safetensors.numpy import save_file
 from ttml.common.utils import create_optimizer, no_grad
 from .callback import TrainerCallback
 
