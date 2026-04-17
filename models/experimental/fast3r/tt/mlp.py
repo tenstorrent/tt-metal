@@ -38,7 +38,21 @@ class TtMlp:
         self.fc2_w = to_device_weight(device, fc2_w)
         self.fc2_b = to_device_bias(device, fc2_b)
 
+    CORE_GRID = ttnn.CoreGrid(y=10, x=10)
+    COMPUTE = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        y = ttnn.linear(x, self.fc1_w, bias=self.fc1_b, activation="gelu")
-        y = ttnn.linear(y, self.fc2_w, bias=self.fc2_b)
+        y = ttnn.linear(
+            x, self.fc1_w, bias=self.fc1_b, activation="gelu",
+            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+        )
+        y = ttnn.linear(
+            y, self.fc2_w, bias=self.fc2_b,
+            core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
+        )
         return y
