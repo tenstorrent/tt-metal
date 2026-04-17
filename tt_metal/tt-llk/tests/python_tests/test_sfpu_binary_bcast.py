@@ -110,7 +110,7 @@ SUPPORTED_FORMATS = input_output_formats(
 @skip_for_quasar
 @parametrize(
     formats=SUPPORTED_FORMATS,
-    bcast_dim=[SfpuBcastDim.BCAST_COL],  # , SfpuBcastDim.BCAST_COL],
+    bcast_dim=[SfpuBcastDim.BCAST_ROW, SfpuBcastDim.BCAST_COL],
     eltwise_op=SUPPORTED_ELTWISE_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
@@ -135,8 +135,9 @@ def test_sfpu_binary_bcast(
     # src_A = torch.zeros(1024, dtype=src_A.dtype)
     # src_B = torch.zeros(1024, dtype=src_B.dtype)
     # src_B_rm = src_B.view(32, 32)
-    # for r in range(32):
-    #     src_B_rm[r, 0] = float(r)
+    # # For row bcasting: set src_B's row 0 to increasing values, rest zero
+    # for c in range(32):
+    #     src_B_rm[0, c] = float(c)
 
     # print("src_A (row-major view):")
     # print(src_A.view(32, 32))
@@ -188,10 +189,10 @@ def test_sfpu_binary_bcast(
     untlized_golden_tensor = untilize(
         golden_tensor, stimuli_format=formats.output_format
     )
+
+    untilized_res_tensor = untilize(res_tensor, stimuli_format=formats.output_format)
     # print("untlized_golden_tensor:")
     # print(untlized_golden_tensor.view(32, 32))
-
-    # untilized_res_tensor = untilize(res_tensor, stimuli_format=formats.output_format)
     # print("untilized_res_tensor:")
     # print(untilized_res_tensor.view(32, 32))
 
