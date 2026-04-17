@@ -95,6 +95,7 @@ export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
 export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "$WORKTREE_BRANCH")
 mkdir -p $LOG_DIR/instructions
 ```
 
@@ -117,7 +118,7 @@ top-level are **exported** (not just shell locals) — Step 0a's Python heredoc
 reads them via `os.environ`:
 
 ```bash
-export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS
+export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 ```
 
 Snapshot agent playbooks for reproducibility:
@@ -176,6 +177,7 @@ import json, os
 print(json.dumps({
   "number": int(os.environ["ISSUE_NUMBER"]),
   "title":  os.environ["ISSUE_TITLE"],
+  "url":    os.environ.get("ISSUE_URL", f"https://github.com/tenstorrent/tt-llk/issues/{os.environ['ISSUE_NUMBER']}"),
   "labels": os.environ.get("ISSUE_LABELS","").split(",") if os.environ.get("ISSUE_LABELS") else [],
 }))
 PY
@@ -195,6 +197,7 @@ python codegen/scripts/run_json_writer.py init \
     --model "${CODEGEN_MODEL:-opus}" \
     --run-type "${CODEGEN_RUN_TYPE:-manual}" \
     --git-commit "$GIT_COMMIT" \
+    --git-branch "$GIT_BRANCH" \
     --pipeline-steps "$PIPELINE_STEPS" \
     --issue "$ISSUE_JSON"
 ```
@@ -238,7 +241,8 @@ python codegen/scripts/run_json_writer.py finalize \
     --log-dir "$LOG_DIR" \
     --status "skipped" \
     --final-result "success" \
-    --final-message "Issue out of scope — no LLK changes required for ${TARGET_ARCH}"
+    --final-message "Issue out of scope — no LLK changes required for ${TARGET_ARCH}" \
+    --solver-state "not_working"
 ```
 and skip to Step 6 with status `"skipped"`.
 
@@ -429,7 +433,8 @@ python codegen/scripts/run_json_writer.py finalize \
     --log-dir "$LOG_DIR" \
     --status "failed" \
     --final-result "compile_error" \
-    --final-message "Debugger stuck after 5 attempts — ${FIRST_COMPILE_ERROR_LINE}"
+    --final-message "Debugger stuck after 5 attempts — ${FIRST_COMPILE_ERROR_LINE}" \
+    --solver-state "not_working"
 ```
 
 If fixed → proceed to Step 5.
@@ -550,6 +555,15 @@ Every variable below is `export`'d so Step 6b's Python heredoc can read it
 from `os.environ`:
 
 ```bash
+# Map the 4-state STATUS to the dashboard's 5-state solver_state model.
+# "working" covers both "success" (tests pass) and "compiled" (builds but tests didn't pass),
+# since the issue's stated problem is resolved in both cases; "not_working" covers "failed"
+# and out-of-scope "skipped" runs.
+case "$STATUS" in
+  success|compiled) export SOLVER_STATE=working ;;
+  failed|skipped)   export SOLVER_STATE=not_working ;;
+esac
+
 export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only origin/main...HEAD 2>/dev/null || echo "")
 export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))" | tr -d '\n')
@@ -568,6 +582,7 @@ python codegen/scripts/run_json_writer.py finalize \
     --status "$STATUS" \
     --final-result "$FINAL_RESULT" \
     --final-message "${TARGET_ARCH} issue #${ISSUE_NUMBER} run complete — ${STATUS}" \
+    --solver-state "$SOLVER_STATE" \
     --patch-json "$(python - <<PY
 import json, os
 patch = {
