@@ -7,11 +7,13 @@ import csv
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Sequence, Iterator
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
+from utils.config import read_yaml
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
@@ -23,31 +25,8 @@ TEMPERATURE = 0.0
 NUM_GENERATIONS = 1
 PROMPTS_TO_VALIDATE = 20
 
-TRANSFORMER_CONFIG = {
-    "model_type": "llama",
-    "num_heads": 32,
-    "num_groups": 8,
-    "embedding_dim": 2048,
-    "intermediate_dim": 8192,
-    "dropout_prob": 0.0,
-    "num_blocks": 16,
-    "weight_tying": "enabled",
-    "vocab_size": 32000,
-    "max_sequence_length": 1024,
-    "runner_type": "memory_efficient",
-    "theta": 500000.0,
-    "rope_scaling": {
-        "scaling_factor": 32.0,
-        "high_freq_factor": 4.0,
-        "low_freq_factor": 1.0,
-        "original_context_length": 8192,
-    },
-}
-
-DEVICE_CONFIG = {
-    "enable_ddp": True,
-    "mesh_shape": [1, 2],
-}
+_CONFIG_PATH = Path(__file__).with_suffix(".yaml")
+TRANSFORMER_CONFIG, DEVICE_CONFIG, _, _ = read_yaml(str(_CONFIG_PATH))
 
 
 def iter_generated_completions(
