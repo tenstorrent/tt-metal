@@ -45,7 +45,7 @@ class TtAttention:
         qkv = ttnn.linear(
             x, self.qkv_w, bias=self.qkv_b,
             core_grid=self.CORE_GRID, compute_kernel_config=self.COMPUTE,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b,
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.num_heads, transpose_k_heads=False
