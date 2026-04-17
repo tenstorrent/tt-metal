@@ -310,6 +310,18 @@ def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, 
 ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
 
 
+def _golden_function_rrelu(input_tensor_a, *args, **kwargs):
+    import torch
+
+    lower = kwargs.get("lower", 0.125)
+    upper = kwargs.get("upper", 1.0 / 3.0)
+    training = kwargs.get("training", False)
+    return torch.nn.functional.rrelu(input_tensor_a, lower=lower, upper=upper, training=training)
+
+
+ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)
+
+
 def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kwargs):
     import torch
 

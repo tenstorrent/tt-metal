@@ -2230,6 +2230,43 @@ void py_module(nb::module_& mod) {
     }
     {
         const auto* doc = R"doc(
+        Applies the Randomized Leaky ReLU (RReLU) function element-wise.
+
+        .. math::
+            \text{RReLU}(x) = \begin{cases} x & \text{if } x \geq 0 \\ ax & \text{if } x < 0 \end{cases}
+
+        where *a* is sampled from :math:`\mathcal{U}(\text{lower}, \text{upper})` during training,
+        and :math:`a = (\text{lower} + \text{upper}) / 2` during evaluation.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            lower (float, optional): lower bound of the uniform distribution. Defaults to `0.125`.
+            upper (float, optional): upper bound of the uniform distribution. Defaults to `0.3333333333333333`.
+            training (bool, optional): if True, use random slopes; if False, use midpoint. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grids. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+        )doc";
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc,
+            &ttnn::rrelu,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 0.3333333333333333f,
+            nb::arg("training") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none());
+    }
+    {
+        const auto* doc = R"doc(
         Performs threshold function on :attr:`input_tensor`, :attr:`threshold`, :attr:`value`.
 
         Args:

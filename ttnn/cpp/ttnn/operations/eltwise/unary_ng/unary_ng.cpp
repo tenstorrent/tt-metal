@@ -9,6 +9,9 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
+#include <bit>
+#include <random>
+
 namespace ttnn::operations::unary_ng::detail {
 
 Tensor unary_ng_impl(
@@ -360,6 +363,27 @@ Tensor rad2deg(
         {},
         std::nullopt,
         std::nullopt,
+        sub_core_grids);
+}
+
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    bool training,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
+    float training_f = training ? 1.0f : 0.0f;
+    // Generate a random PRNG seed per call so training mode produces different slopes each invocation.
+    uint32_t seed = training ? static_cast<uint32_t>(std::random_device{}()) : 0u;
+    float seed_f = std::bit_cast<float>(seed);
+    return operations::unary_ng::detail::unary_ng_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, training_f, seed_f}}},
+        memory_config,
+        optional_output_tensor,
         sub_core_grids);
 }
 

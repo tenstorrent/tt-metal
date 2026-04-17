@@ -103,6 +103,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -596,6 +597,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         }
         case UnaryOpType::SQRT: {
             return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
+        }
+        case UnaryOpType::RRELU: {
+            float lower = static_cast<float>(params[0]);
+            float upper = static_cast<float>(params[1]);
+            float training = static_cast<float>(params[2]);
+            uint32_t lower_u = std::bit_cast<uint32_t>(lower);
+            uint32_t upper_u = std::bit_cast<uint32_t>(upper);
+            uint32_t training_u = training != 0.0f ? 1u : 0u;
+            uint32_t seed_u = params.size() > 3 ? std::bit_cast<uint32_t>(static_cast<float>(params[3])) : 0u;
+            return {
+                fmt::format("rrelu_tile_init(0x{:x});", seed_u),
+                fmt::format("rrelu_tile({}, 0x{:x}, 0x{:x}, 0x{:x});", idst, lower_u, upper_u, training_u)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };

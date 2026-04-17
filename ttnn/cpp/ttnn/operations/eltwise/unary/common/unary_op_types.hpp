@@ -134,6 +134,7 @@ enum class UnaryOpType {
     LGAMMA,
     DIGAMMA,
     POLYGAMMA,
+    RRELU,
 };
 
 enum class VecMode {
