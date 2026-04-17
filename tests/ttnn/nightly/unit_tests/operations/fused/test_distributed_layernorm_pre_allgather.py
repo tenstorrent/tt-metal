@@ -11,6 +11,7 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 TEST_PADDING_VALUE = -42
 
@@ -480,45 +481,37 @@ def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
 
 
-def test_pre_allgather_ignores_implicit_tile_padding(device):
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 37, 72)],
+)
+def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
     """layer_norm_pre_all_gather stats match for ttnn.ones vs torch2tt_tensor."""
-    inp_shape = (1, 1, 37, 72)
-    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     tt_from_torch = torch2tt_tensor(
         torch.ones(inp_shape, dtype=torch.bfloat16),
         tt_dtype=ttnn.bfloat16,
         tt_device=device,
         tt_layout=ttnn.TILE_LAYOUT,
-        tt_memory_config=dram_memcfg,
     )
     tt_ones = ttnn.ones(
         shape=inp_shape,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=dram_memcfg,
     )
 
     stats_from_torch = ttnn.layer_norm_pre_all_gather(
         tt_from_torch,
         dtype=ttnn.bfloat16,
-        memory_config=dram_memcfg,
     )
     stats_from_ones = ttnn.layer_norm_pre_all_gather(
         tt_ones,
         dtype=ttnn.bfloat16,
-        memory_config=dram_memcfg,
     )
 
     out_from_torch = tt2torch_tensor(stats_from_torch)
     out_from_ones = tt2torch_tensor(stats_from_ones)
 
-    passing, output_str = comp_allclose_and_pcc(
-        out_from_torch,
-        out_from_ones,
-        rtol=1e-3,
-        atol=1e-3,
-        pcc=0.99,
-    )
-    assert passing, output_str
+    # test for equivalance
+    assert_equal(out_from_torch, out_from_ones)

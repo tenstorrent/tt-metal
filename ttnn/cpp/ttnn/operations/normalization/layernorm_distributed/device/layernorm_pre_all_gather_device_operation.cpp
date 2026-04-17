@@ -103,7 +103,7 @@ Tensor layer_norm_pre_all_gather(
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
-    auto padded_input = ttnn::fill_implicit_tile_padding(input, 0.0f);
+    auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -113,7 +113,7 @@ Tensor layer_norm_pre_all_gather(
             .use_2d_core_grid = use_2d_core_grid,
         },
         OperationType::tensor_args_t{
-            .input = padded_input,
+            .input = input_padded,
             .recip_tensor = recip_tensor,
         });
 }
