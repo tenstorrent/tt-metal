@@ -9,10 +9,16 @@ import subprocess
 import numpy as np
 
 
-def export_to_video(frames, output_video_path: str, fps: int = 16, crf: int = 25) -> str:
+def export_to_video(
+    frames, output_video_path: str, fps: int = 16, crf: int = 25, preset: str | None = "ultrafast"
+) -> str:
     """Encode frames to video via ffmpeg subprocess.
 
     Accepts either float32 [0,1] or uint8 [0,255] frames with shape (T, H, W, 3).
+    ``preset`` is passed directly as the libx264 ``-preset`` flag (e.g.
+    "ultrafast", "veryfast", "medium", "slow").  When *None* ffmpeg uses its
+    built-in default ("medium"). We default to "ultrafast" for faster encoding,
+    at expense of filesize.
     """
     from imageio_ffmpeg import get_ffmpeg_exe
 
@@ -44,6 +50,10 @@ def export_to_video(frames, output_video_path: str, fps: int = 16, crf: int = 25
         "yuv420p",
         "-crf",
         str(crf),
+    ]
+    if preset is not None:
+        cmd += ["-preset", preset]
+    cmd += [
         "-v",
         "warning",
         output_video_path,
