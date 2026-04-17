@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_de
 from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
 from models.demos.deepseek_v3_b1.weights.prepare import (
     SramCompressedExpertSlots,
+    SramExpertCoreGrids,
     SramHotExpertConfig,
     _build_l1_compressed_tensor,
     build_sram_hot_expert_config,
@@ -141,7 +142,7 @@ def test_prepare_compressed_sram_slots(device):
         state_dict=sd,
         layer_idx=layer_idx,
         initial_expert_indices=expert_indices,
-        core_grid=core_grid,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
         assigner=assigner,
         move_to_device=True,
     )
@@ -181,7 +182,7 @@ def test_sram_slot_fmt_tensors(device):
         state_dict=sd,
         layer_idx=layer_idx,
         initial_expert_indices=expert_indices,
-        core_grid=core_grid,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
         assigner=assigner,
         move_to_device=True,
     )
@@ -236,6 +237,8 @@ def test_sram_hot_expert_config_per_layer(device):
     core_grid = _build_sram_core_grid(device, NUM_CORES)
     assigner = _make_assigner()
 
+    uniform_grids = SramExpertCoreGrids.uniform(core_grid)
+
     # Layer 3: 2 slots
     sd3 = _make_state_dict(3, config[3], K=K, N=N)
     slots3 = prepare_compressed_sram_slots(
@@ -243,7 +246,7 @@ def test_sram_hot_expert_config_per_layer(device):
         state_dict=sd3,
         layer_idx=3,
         initial_expert_indices=config[3],
-        core_grid=core_grid,
+        core_grids=uniform_grids,
         assigner=assigner,
         move_to_device=True,
     )
@@ -257,7 +260,7 @@ def test_sram_hot_expert_config_per_layer(device):
         state_dict=sd7,
         layer_idx=7,
         initial_expert_indices=config[7],
-        core_grid=core_grid,
+        core_grids=uniform_grids,
         assigner=assigner,
         move_to_device=True,
     )
@@ -288,6 +291,7 @@ def test_compute_expert_l1_bytes():
     estimate (sum of independent per-projection maxes).
     """
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(core_grid)
     num_cores = 8
     assigner = _make_assigner(formats=["bfp8", "bfp4", "bfp2"])
 
@@ -304,7 +308,7 @@ def test_compute_expert_l1_bytes():
         assignments.append(result.assignment)
         shapes.append(tuple(w.shape))
 
-    computed = compute_expert_l1_bytes(assignments, shapes, core_grid)
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids)
     assert computed > 0, "L1 bytes must be positive"
 
     # Conservative estimate: sum of independent per-projection maxes
@@ -333,7 +337,7 @@ def test_compute_expert_l1_bytes():
     assert computed <= conservative, f"Tightened {computed} must be <= conservative {conservative}"
 
     # Determinism
-    computed2 = compute_expert_l1_bytes(assignments, shapes, core_grid)
+    computed2 = compute_expert_l1_bytes(assignments, shapes, core_grids)
     assert computed == computed2, "compute_expert_l1_bytes must be deterministic"
 
     logger.info(f"compute_expert_l1_bytes: {computed} bytes (conservative: {conservative})")
@@ -342,6 +346,7 @@ def test_compute_expert_l1_bytes():
 def test_compute_expert_l1_bytes_uniform_assignment():
     """All-bfp8 assignment yields uniform shard sizes across cores."""
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(core_grid)
     tiles_h = K // TILE_W
     tiles_w = N // TILE_W
     uniform_bfp8 = np.zeros((tiles_h, tiles_w), dtype=np.int32)
@@ -349,7 +354,7 @@ def test_compute_expert_l1_bytes_uniform_assignment():
     assignments = [uniform_bfp8, uniform_bfp8, uniform_bfp8]
     shapes = [(K, N), (K, N), (K, N)]
 
-    computed = compute_expert_l1_bytes(assignments, shapes, core_grid)
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids)
 
     from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
 
@@ -373,7 +378,9 @@ def test_build_sram_hot_expert_config_budget():
     expert_indices = list(range(num_experts))
     sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
     assigner = _make_assigner()
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    )
 
     freqs = [0] * 256
     for i, e in enumerate(expert_indices):
@@ -382,12 +389,12 @@ def test_build_sram_hot_expert_config_budget():
     routing_frequencies = {layer_idx: freqs}
 
     large_budget = 10 * 1024 * 1024
-    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, large_budget, routing_frequencies)
+    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, large_budget, routing_frequencies)
     assert layer_idx in config
     assert len(config[layer_idx]) == num_experts
 
     tiny_budget = 1
-    config_tiny = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, tiny_budget, routing_frequencies)
+    config_tiny = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, tiny_budget, routing_frequencies)
     assert config_tiny.get(layer_idx) is None or len(config_tiny.get(layer_idx, [])) == 0
 
 
@@ -396,13 +403,15 @@ def test_build_sram_hot_expert_config_zero_budget():
     layer_idx = 5
     sd = _make_state_dict(layer_idx, [0, 1], K=K, N=N)
     assigner = _make_assigner()
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    )
     freqs = [0] * 256
     freqs[0] = 50
     freqs[1] = 30
     routing_frequencies = {layer_idx: freqs}
 
-    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grid, 0, routing_frequencies)
+    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, 0, routing_frequencies)
     assert config.get(layer_idx) is None
 
 
@@ -415,7 +424,9 @@ def test_build_sram_hot_expert_config_multi_layer():
         sd.update(_make_state_dict(li, experts_per_layer[li], K=K, N=N))
 
     assigner = _make_assigner()
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    )
 
     routing_frequencies = {}
     for li in layers:
@@ -425,7 +436,7 @@ def test_build_sram_hot_expert_config_multi_layer():
         routing_frequencies[li] = freqs
 
     large_budget = 10 * 1024 * 1024
-    config = build_sram_hot_expert_config(sd, layers, assigner, core_grid, large_budget, routing_frequencies)
+    config = build_sram_hot_expert_config(sd, layers, assigner, core_grids, large_budget, routing_frequencies)
 
     assert 3 in config and 5 in config
     assert len(config[3]) == 3
