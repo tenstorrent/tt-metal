@@ -37,16 +37,16 @@ ALWI void max_util_unpack(
     constexpr uint32_t num_faces_A = 4;
     constexpr uint32_t num_faces_B = 4;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Bfp4_b,
         (uint32_t)DataFormat::Bfp8_b,
-        (uint32_t)DataFormat::Bfp4_b,
+        (uint32_t)DataFormat::Float16_b,
         (uint32_t)DataFormat::Bfp8_b,
+        (uint32_t)DataFormat::Float16_b,
         face_r_dim,
         face_r_dim,
         num_faces_A,
         num_faces_B,
-        36 /* tile size for float16_b >> 4 */,
-        68 /* tile size for float16_b >> 4 */);
+        68 /* tile size for float16_b >> 4 */,
+        128 /* tile size for float16_b >> 4 */);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);  // set address counters for z and w dimensions for all channels
     TT_SETADCXX(p_setadc::UNP_A, 1024 - 1, 0x0);
@@ -251,7 +251,11 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
 
     // TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0);
     ckernel_template tmp(
-        8, 1, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0));
+        8,
+        2,
+        lltt::replay_insn(ckernel::math::replay_buf_offset, 15),
+        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0));
+    tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0));
     tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 0));
     tmp.program();
 
@@ -298,7 +302,7 @@ ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
         .set(ADDR_MOD_1);
 
     const std::uint32_t MOP_INNER_LOOP = 1;
-    const std::uint32_t MOP_OUTER_LOOP = 2;
+    const std::uint32_t MOP_OUTER_LOOP = 5;
     ckernel::ckernel_template tmp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
@@ -371,6 +375,6 @@ void kernel_main() {
     // PACK((max_util_sfpu(num_loops, num_tiles)));
 
     std::uint64_t t1 = ckernel::read_wall_clock();
-    std::uint64_t kernel_fpu_cycles = (16 * 8) * num_loops * num_tiles;
+    std::uint64_t kernel_fpu_cycles = (16 * 2 * 8) * num_loops * num_tiles;
     MATH({ DPRINT << "Kernel FPU utilization: " << (kernel_fpu_cycles * 100) / (t1 - t0) << "%" << ENDL(); });
 }
