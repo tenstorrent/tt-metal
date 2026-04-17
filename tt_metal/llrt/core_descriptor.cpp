@@ -52,6 +52,19 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
+    // For mock devices (hardware-free testing), use small simulation YAML files.
+    // This gives a predictable 1x1 compute grid so that bounds-checking validation
+    // in MakeProgramFromSpec works correctly for out-of-bounds tests.
+    // (Without this, the mock WH cluster has 0 harvested rows → "galaxy" product →
+    //  9-row grid, so coordinates like {0, 8} appear in-bounds and no exception is thrown.)
+    if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        switch (arch) {
+            case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
+            default: break;  // QUASAR handled below (always uses simulation YAML)
+        }
+    }
+
     if (env.get_rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
@@ -258,7 +271,9 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || env.get_rtoptions().get_simulator_enabled(), "Dispatch cores size must be positive");
+        !dispatch_cores.empty() || env.get_rtoptions().get_simulator_enabled() ||
+            env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock,
+        "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
     std::vector<RelativeCoreCoord> fabric_mux_cores;
