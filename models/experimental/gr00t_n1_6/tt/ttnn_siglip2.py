@@ -159,9 +159,8 @@ def siglip2_attention(
     ttnn.deallocate(k)
     ttnn.deallocate(v)
 
-    # Reshape back: [B, heads, seq, padded_hd] -> [B, seq, heads*padded_hd]
-    context = ttnn.permute(context, (0, 2, 1, 3))
-    context = ttnn.reshape(context, (batch_size, seq_len, num_heads * padded_head_dim))
+    # Fused concatenate_heads: replaces permute + reshape
+    context = ttnn.transformer.concatenate_heads(context)
 
     # Output projection (weight already padded for input)
     output = ttnn.linear(

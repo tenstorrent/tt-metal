@@ -236,8 +236,7 @@ class DiTAttentionOptimizedTTNN:
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            context = ttnn.permute(context, (0, 2, 1, 3))
-            attn_3d = ttnn.reshape(context, (batch_size, q_seq, self.num_heads * self.padded_head_dim))
+            attn_3d = ttnn.transformer.concatenate_heads(context)
             ttnn.deallocate(context)
             output = ttnn.linear(
                 attn_3d,
@@ -273,9 +272,8 @@ class DiTAttentionOptimizedTTNN:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape back: [B, heads, q_seq, padded_hd] -> [B, q_seq, heads*padded_hd]
-        context = ttnn.permute(context, (0, 2, 1, 3))
-        attn_3d = ttnn.reshape(context, (batch_size, q_seq, self.num_heads * self.padded_head_dim))
+        # Fused concatenate_heads replaces permute + reshape
+        attn_3d = ttnn.transformer.concatenate_heads(context)
         ttnn.deallocate(context)
 
         # Output projection (weight already padded for input)
