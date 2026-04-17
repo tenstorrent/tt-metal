@@ -44,7 +44,7 @@ Owner:
 from dataclasses import dataclass
 
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from operation_runtime_map import run as get_operation_runtime_map
+from operation_runtime_map import run as get_operation_runtime_map, OperationRuntimeMap
 from operation_param_parser import ParameterParser
 from run_checks import (
     run as get_run_checks,
@@ -227,7 +227,7 @@ def _collect_dispatcher_data(
 def _collect_running_operations(
     dispatcher_data: DispatcherData,
     run_checks: RunChecks,
-    runtime_id_to_operation: dict[int, tuple[str, str]],
+    runtime_id_to_operation: OperationRuntimeMap,
     show_all_cores: bool = False,
 ) -> list[RunningOperationSummary] | None:
     """Collect and aggregate running operations across all cores.
@@ -271,18 +271,27 @@ def _collect_running_operations(
             if dispatcher_core_data.host_assigned_id in (None, 0):
                 continue
 
-            # Get operation name and parameters from runtime_id mapping
-            # The host_assigned_id from dispatcher should match runtime_id from inspector
-            operation_name, operation_parameters = runtime_id_to_operation.get(
-                dispatcher_core_data.host_assigned_id, ("", "")
+            dispatch_mode = dispatcher_core_data.dispatch_mode
+
+            # The mailbox host_assigned_id is raw in fast dispatch but EncodePerDeviceProgramID-encoded
+            # in slow dispatch; the map handles both via `lookup`.
+            operation_name, operation_parameters = runtime_id_to_operation.lookup(
+                dispatcher_core_data.host_assigned_id, dispatch_mode
             )
 
-            prev_runtime_id = dispatcher_core_data.previous_host_assigned_id
-
-            if prev_runtime_id not in (None, 0):
-                prev_operation_name, prev_operation_parameters = runtime_id_to_operation.get(prev_runtime_id, ("", ""))
-            else:
+            # Slow dispatch overwrites a single launch slot, so the "previous" entry
+            # is stale/invalid — leave it blank.
+            if dispatch_mode == "HOST":
+                prev_runtime_id = None
                 prev_operation_name, prev_operation_parameters = "", ""
+            else:
+                prev_runtime_id = dispatcher_core_data.previous_host_assigned_id
+                if prev_runtime_id not in (None, 0):
+                    prev_operation_name, prev_operation_parameters = runtime_id_to_operation.lookup(
+                        prev_runtime_id, dispatch_mode
+                    )
+                else:
+                    prev_operation_name, prev_operation_parameters = "", ""
 
             # Get or create aggregation for this host_assigned_id
             aggregation = aggregations.setdefault(
@@ -291,7 +300,7 @@ def _collect_running_operations(
                     dispatcher_core_data.host_assigned_id,
                     operation_name,
                     operation_parameters,
-                    prev_runtime_id if prev_runtime_id > 0 else None,
+                    prev_runtime_id if prev_runtime_id and prev_runtime_id > 0 else None,
                     prev_operation_name,
                     prev_operation_parameters,
                 ),
