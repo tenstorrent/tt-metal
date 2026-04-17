@@ -1,13 +1,13 @@
 ---
 name: bh-orchestrator
-description: Blackhole issue-solving orchestrator. Receives issue context from the top-level orchestrator, owns its own logging to blackhole_issue_solver/, and coordinates BH agents to analyze, plan, fix, and test.
+description: "Shared LLK issue-solver orchestrator. Receives TARGET_ARCH and issue context from the top-level orchestrator; coordinates analyze → plan → fix → test across blackhole, quasar, and wormhole."
 model: opus
 tools: Read, Write, Bash, Glob, Grep, Agent
 ---
 
-# Blackhole Issue Solver Orchestrator
+# LLK Issue Solver Orchestrator
 
-This orchestrator is called by the **top-level orchestrator** (which handles issue fetching, branch setup, and routing by architecture). It receives the issue context as input, manages its own logging, and coordinates the Blackhole-specific agents.
+This orchestrator is called by the **top-level orchestrator** (which handles issue fetching, branch setup, and routing by architecture). It receives the issue context as input, manages its own logging, and coordinates the arch-specific agents.
 
 ---
 
@@ -20,6 +20,7 @@ Read-only git commands are allowed (`git rev-parse`, `git log`, `git status`, `g
 ## Input
 
 You will receive:
+- **TARGET_ARCH** — one of `blackhole`, `quasar`, `wormhole` (selects the per-arch profile — see `codegen/references/arch-profiles.md`)
 - **ISSUE_NUMBER** — the GitHub issue number
 - **ISSUE_TITLE** — the issue title (verbatim from GitHub)
 - **ISSUE_BODY** — the full issue description (verbatim — error messages, reproduction steps, code snippets, etc.)
@@ -36,6 +37,52 @@ You will receive:
 
 ---
 
+## Step 0a: Load the arch profile
+
+Read `codegen/references/arch-profiles.md` for the authoritative table. Export
+each field as an environment variable so bash commands and subagent prompts
+resolve paths correctly:
+
+```bash
+case "$TARGET_ARCH" in
+  blackhole)
+    export LLK_DIR=tt_llk_blackhole
+    export TESTS_DIR=tests/python_tests/blackhole
+    export SIM_PORT=5555
+    export REF_ARCH=wormhole
+    export REF_LLK_DIR=tt_llk_wormhole_b0
+    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
+    export DASHBOARD_PROJECT_ID=blackhole_issue_solver
+    ;;
+  quasar)
+    export LLK_DIR=tt_llk_quasar
+    export TESTS_DIR=tests/python_tests/quasar
+    export SIM_PORT=5556
+    export REF_ARCH=blackhole
+    export REF_LLK_DIR=tt_llk_blackhole
+    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/quasar_issue_solver
+    export DASHBOARD_PROJECT_ID=quasar_issue_solver
+    ;;
+  wormhole)
+    export LLK_DIR=tt_llk_wormhole_b0
+    export TESTS_DIR=tests/python_tests/wormhole
+    export SIM_PORT=5557
+    export REF_ARCH=
+    export REF_LLK_DIR=
+    export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/wormhole_issue_solver
+    export DASHBOARD_PROJECT_ID=wormhole_issue_solver
+    ;;
+  *)
+    echo "Unknown TARGET_ARCH: $TARGET_ARCH" >&2
+    exit 1
+    ;;
+esac
+```
+
+Every path, port, and log-root in this orchestrator below uses these variables — no other file should hardcode arch-specific values.
+
+---
+
 ## Step 0: Setup Logging
 
 This orchestrator owns its logging. Enter the worktree, then create a run directory and track metrics. Every variable that's later referenced by a Python heredoc (`os.environ[...]`) is `export`'d so the subprocess can read it.
@@ -44,7 +91,6 @@ This orchestrator owns its logging. Enter the worktree, then create a run direct
 # Enter the worktree so all relative paths resolve inside it, not the source branch.
 cd "$WORKTREE_DIR/tt_metal/tt-llk"
 
-export LOGS_BASE=/proj_sw/user_dev/llk_code_gen/blackhole_issue_solver
 export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
@@ -76,7 +122,7 @@ export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS
 
 Snapshot agent playbooks for reproducibility:
 ```bash
-cp codegen/agents/blackhole/bh-*.md $LOG_DIR/instructions/
+cp codegen/agents/issue-solver/*.md $LOG_DIR/instructions/
 ```
 
 Pass `LOG_DIR` and `WORKTREE_DIR` to every agent prompt so they can self-log their reasoning and operate in the correct working directory.
@@ -91,9 +137,9 @@ for `run.json` files with `status: "running"` and reads `current_step`,
 `/proj_sw/user_dev/llk_code_gen/dashboard/GEN_MONITOR_FIELDS.md` and
 `/proj_sw/user_dev/llk_code_gen/dashboard/RUN_JSON_SPEC.md`.
 
-The Blackhole issue-solver pipeline does NOT match the default 10-step codegen
+The LLK issue-solver pipeline does NOT match the default 10-step codegen
 pipeline, so a **custom `pipeline_steps`** list is passed at init so the
-dashboard renders the BH-specific nodes:
+dashboard renders the issue-solver-specific nodes:
 
 ```
 analyzer → arch_lookup (optional) → planner → writer → fix_compile (optional)
@@ -112,7 +158,7 @@ analyzer → arch_lookup (optional) → planner → writer → fix_compile (opti
 
 All writes are atomic (write-to-temp + rename).
 
-### Step 0a: Write the initial run.json
+### Step 0b: Write the initial run.json
 
 ```bash
 PIPELINE_STEPS='[
@@ -140,7 +186,7 @@ python codegen/scripts/run_json_writer.py init \
     --run-id "$RUN_ID" \
     --kernel "issue_${ISSUE_NUMBER}" \
     --kernel-type "issue_solver" \
-    --arch "blackhole" \
+    --arch "$TARGET_ARCH" \
     --start-time "$START_TIME" \
     --first-step "analyzer" \
     --first-message "Analyzing issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
@@ -164,7 +210,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Analyze BH issue #{ISSUE_NUMBER}"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-issue-analyzer.md to analyze this issue.
+    Read and follow codegen/agents/issue-solver/issue-analyzer.md to analyze this issue.
 
     Issue number: {ISSUE_NUMBER}
     Issue title: {ISSUE_TITLE}
@@ -227,9 +273,9 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "BH arch research for issue #{ISSUE_NUMBER}"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-arch-lookup.md.
+    Read and follow codegen/agents/issue-solver/arch-lookup.md.
 
-    We are fixing Blackhole issue #{ISSUE_NUMBER}: {ISSUE_TITLE}
+    We are fixing issue #{ISSUE_NUMBER} ({TARGET_ARCH}): {ISSUE_TITLE}
 
     The issue analysis is at: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
     Read it to understand what hardware details are needed.
@@ -269,7 +315,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Plan fix for BH issue #{ISSUE_NUMBER}"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-fix-planner.md.
+    Read and follow codegen/agents/issue-solver/fix-planner.md.
 
     Issue number: {ISSUE_NUMBER}
     Analysis: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_analysis.md
@@ -308,7 +354,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Fix BH issue #{ISSUE_NUMBER}"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-fixer.md.
+    Read and follow codegen/agents/issue-solver/fixer.md.
 
     Issue number: {ISSUE_NUMBER}
     Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
@@ -354,7 +400,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Debug BH issue #{ISSUE_NUMBER} compile error"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-debugger.md.
+    Read and follow codegen/agents/issue-solver/debugger.md.
 
     Issue number: {ISSUE_NUMBER}
     Error type: compilation
@@ -410,7 +456,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Test BH issue #{ISSUE_NUMBER} fix"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-tester.md.
+    Read and follow codegen/agents/issue-solver/tester.md.
 
     Issue number: {ISSUE_NUMBER}
     Fix plan: codegen/artifacts/bh_issue_{ISSUE_NUMBER}_fix_plan.md
@@ -461,7 +507,7 @@ Agent tool:
   subagent_type: "general-purpose"
   description: "Debug BH issue #{ISSUE_NUMBER} test failure"
   prompt: |
-    Read and follow codegen/agents/blackhole/bh-debugger.md.
+    Read and follow codegen/agents/issue-solver/debugger.md.
 
     Issue number: {ISSUE_NUMBER}
     Error type: runtime
@@ -556,7 +602,7 @@ The expected schema (matches the run.json that finalize wrote):
 ```json
 {
   "run_id": "{RUN_ID}",
-  "arch": "blackhole",
+  "arch": "{TARGET_ARCH}",
   "status": "success|compiled|failed|skipped",
   "obstacle": null,
   "start_time": "{START_TIME}",
@@ -654,11 +700,11 @@ The top-level can use this to decide next steps (commit, PR, move to next issue,
 
 | Path | Purpose |
 |------|---------|
-| `tt_llk_blackhole/` | Blackhole LLK implementations (fix target) |
-| `tt_llk_blackhole/common/inc/sfpu/` | SFPU kernel implementations |
-| `tt_llk_blackhole/llk_lib/` | LLK library headers (math, pack, unpack) |
-| `tt_llk_blackhole/instructions/assembly.yaml` | BH ISA definition (use grep — large file) |
-| `tt_llk_wormhole_b0/` | Wormhole LLK (reference for comparison) |
+| `$LLK_DIR/` | Target arch LLK implementations (fix target) |
+| `$LLK_DIR/common/inc/sfpu/` | SFPU kernel implementations |
+| `$LLK_DIR/llk_lib/` | LLK library headers (math, pack, unpack) |
+| `$LLK_DIR/instructions/assembly.yaml` | Target arch ISA definition (use grep — large file) |
+| `$REF_LLK_DIR/` | Reference arch LLK (for comparison; empty for wormhole) |
 | `codegen/references/common-errors.md` | Known error patterns |
 | `tests/` | Test infrastructure |
 
@@ -669,21 +715,21 @@ The top-level can use this to decide next steps (commit, PR, move to next issue,
 # Read the params from the matching pytest's TestConfig(templates=[...], runtimes=[...]).
 cd codegen
 source ../tests/.venv/bin/activate
-CHIP_ARCH=blackhole python scripts/compiler.py \
+CHIP_ARCH=$TARGET_ARCH python scripts/compiler.py \
     {path_to_test_source} \
     -t "TEMPLATE_PARAM(...)" -r "RUNTIME_PARAM(...)" -v
 
-# Functional tests (BH) — ALWAYS use flock wrapper
+# Functional tests — ALWAYS use flock wrapper
 flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash -c '
-  STALE=$(lsof -ti :5555 2>/dev/null || true)
-  [ -n "$STALE" ] && echo "Killing stale port 5555 processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
-  pkill -9 -f "tt-exalens.*--port=5555" 2>/dev/null || true
+  STALE=$(lsof -ti :$SIM_PORT 2>/dev/null || true)
+  [ -n "$STALE" ] && echo "Killing stale port $SIM_PORT processes: $STALE" && echo "$STALE" | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "tt-exalens.*--port=$SIM_PORT" 2>/dev/null || true
   sleep 1
   source ../tests/.venv/bin/activate
-  cd ../tests/python_tests/blackhole
-  CHIP_ARCH=blackhole pytest -x --run-simulator --port=5555 {test_file}
+  cd ../$TESTS_DIR
+  CHIP_ARCH=$TARGET_ARCH pytest -x --run-simulator --port=$SIM_PORT {test_file}
 '
 
-# List available BH tests
-ls tests/python_tests/blackhole/test_*.py 2>/dev/null
+# List available tests
+ls $TESTS_DIR/test_*.py 2>/dev/null
 ```
