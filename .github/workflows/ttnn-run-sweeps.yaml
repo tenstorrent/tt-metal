@@ -1,4 +1,4 @@
-name: "ttnn - Run sweeps"
+name: "ttnn - run sweeps"
 
 run-name: >-
   ${{

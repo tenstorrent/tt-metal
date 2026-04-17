@@ -83,6 +83,18 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def get_python_cmd():
+    """Return the preferred Python interpreter for tt-metal tooling."""
+    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
+    if os.path.exists(python_env_path):
+        return python_env_path
+
+    if sys.executable:
+        return sys.executable
+    # Docker and CI jobs rely on the container's default Python.
+    return "python3"
+
+
 def _infer_board_type_from_arch(arch_str):
     """Map a tt-smi ``arch`` string (e.g. ``"wormhole_b0"``) to a board type."""
     if not arch_str:
@@ -749,7 +761,7 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 def detect_pytest_tests(test_path):
     """Detect if a file/path contains pytest test cases"""
     try:
-        python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+        python_cmd = get_python_cmd()
         result = subprocess.run(
             [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
             cwd=BASE_DIR,
@@ -779,14 +791,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     if debug_mode:
         print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
 
-    # Use python executable from tt-metal environment
-    # Try to find python_env, fall back to system python3 if not found (e.g., in Docker/CI)
-    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
-    if os.path.exists(python_env_path):
-        python_cmd = python_env_path
-    else:
-        # Fallback to system python3 (used in Docker containers)
-        python_cmd = "python3"
+    # Use python executable from tt-metal environment when available.
+    python_cmd = get_python_cmd()
 
     # Create a unique subdirectory for this run based on source name and timestamp
     # This prevents conflicts with previous runs
@@ -1247,6 +1253,16 @@ Examples (Import existing traces):
                 print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
 
         print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+
+        if not args.load and not result["trace_files"]:
+            if result["success"]:
+                print("❌ Error: Test run completed but produced no operation trace files")
+            else:
+                print(
+                    f"❌ Error: Test execution failed with exit code {result['exit_code']} "
+                    "before any operation trace files were generated"
+                )
+            return 1
 
         if result["trace_files"]:
             # Load valid operations and excluded operations
