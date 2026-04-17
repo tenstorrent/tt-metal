@@ -4,20 +4,21 @@
 """
 TT-NN Gaze-LLE, end-to-end on a single Blackhole p150a chip.
 
-Everything from patch embed to sigmoid'd heatmap runs on device. Host only:
-  * formats the image into NHWC/C=4 for device fold,
-  * builds the binary head bbox mask (1 x H_feat x W_feat),
-  * receives the tiny (64x64) heatmap and (1,) in/out score.
+Everything between the first matmul and the final sigmoid runs on device.
+Host-side work is pure layout, not inference compute:
+  * `(B, 3, H, W) -> (B, num_patches, ps*ps*3)` view+permute+reshape of the image,
+  * building the tiny (num_patches,) binary head bbox mask,
+  * upload / download,
+  * a `(B, num_patches, 4) -> (B, 64, 64)` view on the downloaded heatmap.
 
 Device placement:
-  * Patch embedding via ttnn.fold + ttnn.linear (openvla pattern).
-  * Pre-composed [CLS+pos_cls, REG] prefix + pos_patches add + concat.
+  * Patch embedding via a direct `(ps*ps*3, embed_dim)` matmul.
+  * Pre-composed [CLS+pos_cls, REG] prefix + patch pos_embed add + concat.
   * DINOv2 ViT-B/14 encoder (12 blocks) + final LayerNorm + slice (CLS+REG).
   * 1x1 projection 768->256, gaze pos + head_map*head_token conditioning.
   * 3 gaze decoder blocks.
   * Fused ConvTranspose2d(256,256,2,2) + Conv2d(256,1,1) + Sigmoid heatmap head,
-    expressed as a single (256,4) matmul + scalar add + sigmoid. Tiny CPU
-    permutation folds the (1024,4) output into a 64x64 image.
+    expressed as a single (256,4) matmul + scalar add + sigmoid.
   * In/out MLP (256->128->1) with ReLU + Sigmoid.
 """
 
@@ -166,13 +167,7 @@ def _gaze_block(x, p: _GazeBlockParams, num_heads: int):
 
 
 class TtGazeLLE:
-    """
-    Hybrid TT-NN / torch Gaze-LLE wrapper.
-
-    Device: DINOv2 encoder blocks + final backbone layer-norm.
-    Host (torch CPU): patch embedding, cls/reg/pos embeddings, gaze decoder,
-    heatmap head, optional in/out head.
-    """
+    """Gaze-LLE inference entirely on a single Blackhole p150a chip (see module docstring)."""
 
     def __init__(self, ref_model, device, inout: bool = True):
         self.device = device
