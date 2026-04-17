@@ -171,7 +171,7 @@ class TtDroidNet:
         if self._extract_trace_id is not None and x_tt is self._image_cache[1]:
             # Replay path — traced ops rewrite the same on-device buffers.
             ttnn.execute_trace(
-                self.device, self._extract_trace_id, cq_id=0, blocking=True
+                self.device, self._extract_trace_id, cq_id=0, blocking=False
             )
             fmaps_tt, fh, fw, net_tt, inp_tt, ch_, cw_ = self._extract_trace_outputs
         elif (
@@ -279,7 +279,7 @@ class TtDroidNet:
             and self._update_trace_key == key
         ):
             ttnn.execute_trace(
-                self.device, self._update_trace_id, cq_id=0, blocking=True
+                self.device, self._update_trace_id, cq_id=0, blocking=False
             )
             net_o_tt, delta_tt, weight_tt, eta_tt, upmask_tt, eta_scaled = (
                 self._update_trace_outputs
