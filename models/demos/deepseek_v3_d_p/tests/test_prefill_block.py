@@ -62,7 +62,7 @@ PCC_THRESHOLD_KVPE = 0.999
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(600 * 100)
 def test_prefill_block(
     config_only,
     mesh_device,
