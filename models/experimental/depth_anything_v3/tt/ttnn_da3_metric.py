@@ -160,6 +160,35 @@ def _ttnn_block(x, p, attention_mask):
     return x
 
 
+def _cpu_head_channels_last(head, intermediates, img_hw):
+    """DPT head with explicit channels_last activation layout. The head's weights
+    are converted to channels_last in setup; we need to convert each intermediate
+    once after the (B, N, C) -> (B, C, H, W) reshape and the rest stays NHWC.
+
+    Microprofile pre-iter17 showed refinenets = 106ms / 154ms head (largest hotspot);
+    these are 3x3 convs at 296x296 with 256 channels which benefit from the AVX512
+    NHWC bf16 conv2d kernels."""
+    H, W = img_hw
+    Hp, Wp = H // PATCH_SIZE, W // PATCH_SIZE
+    feats = []
+    for i, x in enumerate(intermediates):
+        x = x[:, 1:, :].transpose(1, 2).reshape(x.shape[0], -1, Hp, Wp)
+        x = x.contiguous(memory_format=torch.channels_last)
+        x = head.projects[i](x)
+        x = head.resize_layers[i](x)
+        feats.append(x)
+    layer_rns = [head.scratch.layer1_rn, head.scratch.layer2_rn,
+                 head.scratch.layer3_rn, head.scratch.layer4_rn]
+    rn = [layer_rns[i](feats[i]) for i in range(4)]
+    path = head.scratch.refinenet4(rn[3])
+    path = head.scratch.refinenet3(path, rn[2])
+    path = head.scratch.refinenet2(path, rn[1])
+    path = head.scratch.refinenet1(path, rn[0])
+    path = head.scratch.output_conv1(path)
+    path = F.interpolate(path, size=(H, W), mode="bilinear", align_corners=True)
+    return head.scratch.output_conv2(path)
+
+
 def _cpu_embed(pixel_values: torch.Tensor, backbone) -> Tuple[torch.Tensor, int, int]:
     """Run patch_embed + cls prepend + pos_embed on CPU (cheap, no tiling pain)."""
     B, _, H, W = pixel_values.shape
@@ -189,7 +218,7 @@ def _setup(pixel_values: torch.Tensor):
     # Backbone stays fp32 on CPU (only used for the cheap patch_embed). The DPT
     # head is the dominant CPU cost (~283ms vs ~112ms chip backbone), so cast
     # it to bfloat16 — same AVX512_BF16 win as iter 1 on conv2d.
-    cpu_model.head = cpu_model.head.to(torch.bfloat16)
+    cpu_model.head = cpu_model.head.to(torch.bfloat16).to(memory_format=torch.channels_last)
     device = ttnn.open_device(device_id=_DEVICE_ID)
     blocks = [_upload_block(b, device) for b in cpu_model.backbone.blocks]
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
@@ -238,7 +267,9 @@ def run(pixel_values: torch.Tensor):
 
         ttnn.deallocate(x_tt)
 
-        # DPT head on CPU using the float32 intermediates we downloaded.
-        depth = cpu_model.head(intermediates_cpu, img_hw=pixel_values.shape[-2:])
+        # DPT head with explicit channels_last activation layout.
+        depth = _cpu_head_channels_last(
+            cpu_model.head, intermediates_cpu, img_hw=pixel_values.shape[-2:]
+        )
 
     return depth, 0.0
