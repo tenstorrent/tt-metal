@@ -80,7 +80,7 @@ class TtEncoderAttention:
     ):
         self.num_heads = cfg.num_heads
         qkv_w_p, qkv_b_p = _permute_qk_in_qkv(qkv_w, qkv_b, cfg.num_heads, cfg.embed_dim)
-        self.qkv_w = to_device_weight(device, qkv_w_p)
+        self.qkv_w = to_device_weight(device, qkv_w_p, dtype=ttnn.bfloat16)
         self.qkv_b = to_device_bias(device, qkv_b_p)
         self.proj_w = to_device_weight(device, proj_w)
         self.proj_b = to_device_bias(device, proj_b)
