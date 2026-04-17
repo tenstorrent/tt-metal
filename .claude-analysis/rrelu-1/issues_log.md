@@ -13,9 +13,9 @@
 | 1 | Reference Discovery | ok | 561s | none |
 | 2 | Reference Analysis | ok | 879s | clamp_tss agent didn't commit; orchestrator committed on its behalf |
 | 3 | Implementation | ok | 1203s | none |
-| 4 | Testing & Debugging | pending | - | - |
-| 5 | Documentation | pending | - | - |
-| 6 | Self-Reflection | pending | - | - |
+| 4 | Testing & Debugging | ok | 1087s | kernel fixes applied: missing include, training mode simplified to deterministic |
+| 5 | Documentation | ok | ~60s | none |
+| 6 | Self-Reflection | ok | ~480s | none |
 
 ## Issues
 (will be populated as issues arise)
