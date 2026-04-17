@@ -17,6 +17,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
@@ -119,6 +120,26 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     } else {
         auto coords = non_uniform_data_movement::enqueue_write_tensor(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+        device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
+    }
+    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
+    GraphTracker::instance().track_function_end(device_tensor);
+}
+
+void copy_to_device_filtered(
+    const Tensor& host_tensor,
+    Tensor& device_tensor,
+    const CoreRangeSet& logical_core_filter,
+    std::optional<tt::tt_metal::QueueId> cq_id) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_device_filtered", host_tensor, device_tensor, cq_id);
+    auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+    if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
+        enqueue_write_tensor(
+            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
+    } else {
+        auto coords = non_uniform_data_movement::enqueue_write_tensor(
+            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor(), logical_core_filter);
         device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
     }
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
