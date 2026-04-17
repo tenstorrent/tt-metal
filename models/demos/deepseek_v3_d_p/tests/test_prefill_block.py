@@ -44,7 +44,7 @@ PCC_THRESHOLD_KVPE = 0.999
     ],
     ids=["moe-gate_device"],
 )
-@pytest.mark.parametrize("num_iterations", 100)
+@pytest.mark.parametrize("num_iterations", [100])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
