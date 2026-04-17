@@ -98,13 +98,60 @@ class BasicEncoder(nn.Module):
 class ConvGRU(nn.Module):
     def __init__(self, h_planes=128, i_planes=128 + 128 + 64):
         super().__init__()
-        self.convz = nn.Conv2d(h_planes + i_planes, h_planes, 3, padding=1)
-        self.convr = nn.Conv2d(h_planes + i_planes, h_planes, 3, padding=1)
+        self.h_planes = h_planes
+        # convz/convr share the `net_inp` input — fuse them into one
+        # 2H-channel conv, split the output.
+        self.convzr = nn.Conv2d(h_planes + i_planes, 2 * h_planes, 3, padding=1)
         self.convq = nn.Conv2d(h_planes + i_planes, h_planes, 3, padding=1)
         self.w = nn.Conv2d(h_planes, h_planes, 1)
-        self.convz_glo = nn.Conv2d(h_planes, h_planes, 1)
-        self.convr_glo = nn.Conv2d(h_planes, h_planes, 1)
-        self.convq_glo = nn.Conv2d(h_planes, h_planes, 1)
+        # same fusion for the three global-context 1x1 convs.
+        self.convzrq_glo = nn.Conv2d(h_planes, 3 * h_planes, 1)
+
+    # --- state-dict migration from the unfused upstream checkpoint ---
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        legacy_keys = {
+            f"{prefix}convz.weight": None,
+            f"{prefix}convz.bias": None,
+            f"{prefix}convr.weight": None,
+            f"{prefix}convr.bias": None,
+            f"{prefix}convz_glo.weight": None,
+            f"{prefix}convz_glo.bias": None,
+            f"{prefix}convr_glo.weight": None,
+            f"{prefix}convr_glo.bias": None,
+            f"{prefix}convq_glo.weight": None,
+            f"{prefix}convq_glo.bias": None,
+        }
+        legacy_present = all(k in state_dict for k in legacy_keys)
+        if legacy_present:
+            for k in legacy_keys:
+                legacy_keys[k] = state_dict.pop(k)
+            state_dict[f"{prefix}convzr.weight"] = torch.cat(
+                [legacy_keys[f"{prefix}convz.weight"], legacy_keys[f"{prefix}convr.weight"]], dim=0
+            )
+            state_dict[f"{prefix}convzr.bias"] = torch.cat(
+                [legacy_keys[f"{prefix}convz.bias"], legacy_keys[f"{prefix}convr.bias"]], dim=0
+            )
+            state_dict[f"{prefix}convzrq_glo.weight"] = torch.cat(
+                [
+                    legacy_keys[f"{prefix}convz_glo.weight"],
+                    legacy_keys[f"{prefix}convr_glo.weight"],
+                    legacy_keys[f"{prefix}convq_glo.weight"],
+                ],
+                dim=0,
+            )
+            state_dict[f"{prefix}convzrq_glo.bias"] = torch.cat(
+                [
+                    legacy_keys[f"{prefix}convz_glo.bias"],
+                    legacy_keys[f"{prefix}convr_glo.bias"],
+                    legacy_keys[f"{prefix}convq_glo.bias"],
+                ],
+                dim=0,
+            )
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+        )
 
     def forward(self, net, *inputs):
         inp = torch.cat(inputs, dim=1)
@@ -112,9 +159,14 @@ class ConvGRU(nn.Module):
         b, c, h, w = net.shape
         glo = torch.sigmoid(self.w(net)) * net
         glo = glo.view(b, c, h * w).mean(-1).view(b, c, 1, 1)
-        z = torch.sigmoid(self.convz(net_inp) + self.convz_glo(glo))
-        r = torch.sigmoid(self.convr(net_inp) + self.convr_glo(glo))
-        q = torch.tanh(self.convq(torch.cat([r * net, inp], dim=1)) + self.convq_glo(glo))
+        glo_zrq = self.convzrq_glo(glo)
+        glo_z, glo_r, glo_q = glo_zrq.split(self.h_planes, dim=1)
+
+        zr = self.convzr(net_inp)
+        zr_z, zr_r = zr.split(self.h_planes, dim=1)
+        z = torch.sigmoid(zr_z + glo_z)
+        r = torch.sigmoid(zr_r + glo_r)
+        q = torch.tanh(self.convq(torch.cat([r * net, inp], dim=1)) + glo_q)
         return (1 - z) * net + z * q
 
 
