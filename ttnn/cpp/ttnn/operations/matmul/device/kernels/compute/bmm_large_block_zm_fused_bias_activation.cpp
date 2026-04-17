@@ -80,7 +80,7 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);
@@ -208,25 +208,13 @@ void kernel_main() {
                 }
 
                 // ── Phase 1: K-loop matmul ──────────────────────────────
-                // Helper absorbs ROW_MAJOR_OUTPUT pack-strategy switch and SKIP_COMPUTE elision.
-                // Pass the "real" downstream out_cb (what the writer eventually consumes) so
-                // the helper's shared-memory-protection reserve targets the right CB. With
-                // FUSE_BIAS that's out_cb_id even though the matmul itself packs to partials;
-                // without bias it's whatever the untilize/writer phase reads.
                 constexpr uint32_t phase1_out_cb =
 #ifdef FUSE_BIAS
                     out_cb_id;
 #else
                     mm_out_cb_id;
 #endif
-                matmul_block<
-                    in1_transpose_tile,
-                    l1_acc,
-                    pack_last_to_interm,
-                    do_relu,
-                    row_major_output,
-                    PostFn,
-                    PreFn>(
+                matmul_block<in1_transpose_tile, l1_acc, pack_last_to_interm, do_relu, row_major_output, PostFn, PreFn>(
                     in0_cb_id,
                     in1_cb_id,
                     phase1_out_cb,
@@ -239,7 +227,9 @@ void kernel_main() {
                     out_subblock_w,
                     1,
                     PostFn{},
-                    PreFn{});
+                    PreFn{},
+                    /*retain_in0=*/false,
+                    /*in1_per_core_w=*/in1_block_w);
 
                 // ── Phase 2: Bias addition ──────────────────────────────
 #ifdef FUSE_BIAS
