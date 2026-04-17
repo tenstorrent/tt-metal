@@ -381,6 +381,16 @@ class WanAttention(Module):
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
+                # Optional SDPA input dtype cast (e.g. bf8 for quantization experiments)
+                sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+                if sdpa_input_dtype is not None:
+                    q_BHNE = ttnn.typecast(q_BHNE, sdpa_input_dtype)
+                    k_BHNE = ttnn.typecast(k_BHNE, sdpa_input_dtype)
+                    v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                dummy = self.dummy_joint_input
+                if sdpa_input_dtype is not None and dummy.dtype != sdpa_input_dtype:
+                    dummy = ttnn.typecast(dummy, sdpa_input_dtype)
+
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
@@ -417,14 +427,14 @@ class WanAttention(Module):
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy,
+                        dummy,
+                        dummy,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
                         persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                         ),
                         joint_strategy="rear",
                         logical_n=N,
@@ -442,6 +452,8 @@ class WanAttention(Module):
                         ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                         use_column_major_ccl=True,
                     )
+                    if sdpa_input_dtype is not None:
+                        spatial_BHNE = ttnn.typecast(spatial_BHNE, ttnn.bfloat16)
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                     q_BHNE,
