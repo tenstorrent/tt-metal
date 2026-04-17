@@ -303,17 +303,11 @@ class DiTBlockTTNN:
         self.ffn = DiTFFNTTNN(weights, f"{prefix}ff.", device)
 
     def __call__(
-        self,
-        hidden_states: ttnn.Tensor,
-        timestep_emb: ttnn.Tensor,
-        backbone_features: Optional[ttnn.Tensor] = None,
-        precomputed_kv: Optional[ttnn.Tensor] = None,
+        self, hidden_states: ttnn.Tensor, timestep_emb: ttnn.Tensor, backbone_features: Optional[ttnn.Tensor] = None
     ) -> ttnn.Tensor:
         # AdaLN -> Attention -> Residual
         normed = self.adaln(hidden_states, timestep_emb)
-        attn_out = self.attn(
-            normed, encoder_hidden_states=backbone_features, precomputed_kv=precomputed_kv
-        )
+        attn_out = self.attn(normed, encoder_hidden_states=backbone_features)
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
@@ -374,16 +368,8 @@ class AlternateVLDiTTTNN:
         Returns:
             [B, action_seq, 1024]
         """
-        # Precompute cross-attn K/V for each cross-attn block (constant across Euler steps)
-        precomputed_kvs = [
-            block.attn.precompute_kv(backbone_features) if block.attn.is_cross_attention else None
-            for block in self.blocks
-        ]
-        for block, kv in zip(self.blocks, precomputed_kvs):
-            hidden_states = block(hidden_states, timestep_emb, backbone_features, precomputed_kv=kv)
-        for kv in precomputed_kvs:
-            if kv is not None:
-                ttnn.deallocate(kv)
+        for block in self.blocks:
+            hidden_states = block(hidden_states, timestep_emb, backbone_features)
 
         # Output processing (AdaLN-style, NOT a gated FFN):
         # conditioning = temb

@@ -181,31 +181,14 @@ class DiTAttentionOptimizedTTNN:
             )
             self.to_out_0_bias = preprocess_linear_bias(out_b, device) if out_b is not None else None
 
-    def precompute_kv(self, encoder_hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        """Precompute fused KV for cross-attn. Backbone is constant across Euler steps."""
-        assert self.is_cross_attention, "precompute_kv is only for cross-attn blocks"
-        return ttnn.linear(
-            encoder_hidden_states,
-            self.to_kv_weight,
-            bias=self.to_kv_bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=CORE_GRID_BH,
-        )
-
-    def __call__(
-        self,
-        hidden_states: ttnn.Tensor,
-        encoder_hidden_states: Optional[ttnn.Tensor] = None,
-        precomputed_kv: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, encoder_hidden_states: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """Fully on-device attention with padded heads + fused QKV matmul."""
         batch_size = hidden_states.shape[0]
         q_seq = hidden_states.shape[1]
         padded_inner = self.padded_inner
 
         if self.is_cross_attention and encoder_hidden_states is not None:
-            # Q: single matmul; K/V: use precomputed if provided (constant across Euler steps)
+            # Q: single matmul; K/V: fused matmul (2 matmuls instead of 3)
             q = ttnn.linear(
                 hidden_states,
                 self.to_q_weight,
@@ -214,24 +197,18 @@ class DiTAttentionOptimizedTTNN:
                 dtype=ttnn.bfloat16,
                 core_grid=CORE_GRID_BH,
             )
-            if precomputed_kv is not None:
-                kv = precomputed_kv
-                own_kv = False
-            else:
-                kv = ttnn.linear(
-                    encoder_hidden_states,
-                    self.to_kv_weight,
-                    bias=self.to_kv_bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
-                    core_grid=CORE_GRID_BH,
-                )
-                own_kv = True
+            kv = ttnn.linear(
+                encoder_hidden_states,
+                self.to_kv_weight,
+                bias=self.to_kv_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                core_grid=CORE_GRID_BH,
+            )
             kv_seq = encoder_hidden_states.shape[1]
             k = ttnn.slice(kv, [0, 0, 0], [batch_size, kv_seq, padded_inner])
             v = ttnn.slice(kv, [0, 0, padded_inner], [batch_size, kv_seq, 2 * padded_inner])
-            if own_kv:
-                ttnn.deallocate(kv)
+            ttnn.deallocate(kv)
         else:
             # Self-attn: one fused QKV matmul (1 instead of 3)
             qkv = ttnn.linear(
