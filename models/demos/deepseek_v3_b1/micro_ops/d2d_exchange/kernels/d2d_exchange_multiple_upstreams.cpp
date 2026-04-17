@@ -97,7 +97,7 @@ FORCE_INLINE void send_worker_data_over_fabric(
     uint64_t dst = dst_addr;
     if constexpr (partial_packet_size > 0) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
-            write_data_to_remote_core_with_ack<false>(
+            write_data_to_remote_core_with_ack(
                 fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
             src += whole_packet_size;
             dst += whole_packet_size;
@@ -106,7 +106,7 @@ FORCE_INLINE void send_worker_data_over_fabric(
             fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, partial_packet_size);
     } else if constexpr (num_whole_fabric_packets_per_link > 0) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link - 1; ++i) {
-            write_data_to_remote_core_with_ack<false>(
+            write_data_to_remote_core_with_ack(
                 fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
             src += whole_packet_size;
             dst += whole_packet_size;
@@ -135,14 +135,12 @@ FORCE_INLINE bool process_upstream_sockets(
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
-
+    invalidate_l1_cache();
+    if (termination_semaphore[0] == 1) {
+        return true;
+    }
     while (remaining > 0) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
-            return true;
-        }
-
-        if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
+        if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1)) {
             uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
             uint64_t dst_addr = dst_addr_base + (socket_start_idx + worker_idx) * upstream_page_size;
 
