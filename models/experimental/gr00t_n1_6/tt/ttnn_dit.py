@@ -248,14 +248,14 @@ class DiTFFNTTNN:
             self.down_bias = preprocess_linear_bias(b_down, device) if b_down is not None else None
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        # Up projection with GELU: 1536 -> 6144. Store intermediate as bfloat8_b to halve
-        # the 6144-dim activation memory bandwidth between up and down matmul (128x/inference).
+        # Up projection with GELU: 1536 -> 6144. Store intermediate as bfloat4_b (4-bit block float)
+        # for max bandwidth reduction on the 6144-dim activation (128x/inference).
         h = ttnn.linear(
             hidden_states,
             self.up_weight,
             bias=self.up_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             core_grid=CORE_GRID_BH,
             activation="gelu",
         )
