@@ -150,3 +150,13 @@ registry:
     config_count: 163
     loaded_at: '2026-04-16'
     notes: ''
+
+  - trace_id: 8
+    status: draft
+    models: [llama-3.2-1b]
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: b1498e7d-136e-45d1-a2e3-bdde0f098ae0
+    tt_metal_sha: af7d31afb5fe3e499564dac2775a4e3d591fe137
+    config_count: 223
+    loaded_at: '2026-04-16'
+    notes: ''
