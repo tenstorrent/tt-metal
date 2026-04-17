@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import gc
-
 import pytest
 import torch
 import transformers
@@ -270,8 +268,7 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size_per_devic
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-# Single batch: distil-large-v3 + preprocess_model_parameters peaks host RAM; mel length 3000 per HF.
-@pytest.mark.parametrize("batch_size_per_device", [1])
+@pytest.mark.parametrize("batch_size_per_device", [1, 2])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, sequence_length):
@@ -294,8 +291,6 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
         prefix="encoder",
         device=mesh_device,
     )
-    del model
-    gc.collect()
 
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         config=config,
@@ -322,7 +317,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
         # Pull capture result to host before replay: second call reuses the same device output buffer.
         out_capture_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
-        output_replay = run_encoder_traced_or_eager(
+        output = run_encoder_traced_or_eager(
             mesh_device,
             config,
             ttnn_parameters,
@@ -332,7 +327,7 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size_per_device, seq
             trace_state=encoder_trace_state,
         )
         ttnn.synchronize_device(mesh_device)
-        replay_torch = ttnn.to_torch(output_replay, mesh_composer=output_mesh_composer)
+        replay_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
     finally:
         encoder_trace_state.release_all(mesh_device)
 
