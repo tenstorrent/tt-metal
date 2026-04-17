@@ -27,6 +27,7 @@
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
+#include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
@@ -366,6 +367,36 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("epsilon"));
+
+        // Low-level RMSNorm backward (matches tt-train C++ `ttml::metal::rmsnorm_bw`), for microbenchmarks.
+        py_rmsnorm.def(
+            "rmsnorm_bw",
+            [](const autograd::TensorPtr& input,
+                const autograd::TensorPtr& gamma,
+                const autograd::TensorPtr& rms,
+                const autograd::TensorPtr& dL_dout,
+                uint32_t max_num_cores) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr> {
+                auto grads = ttml::metal::rmsnorm_bw(
+                    input->get_value(),
+                    gamma->get_value(),
+                    rms->get_value(),
+                    dL_dout->get_value(),
+                    max_num_cores);
+                if (grads.size() != 2U) {
+                    throw std::runtime_error("rmsnorm_bw: unexpected number of tensors from metal rmsnorm_bw");
+                }
+                if (!grads[0].has_value() || !grads[1].has_value()) {
+                    throw std::runtime_error("rmsnorm_bw: expected gradients for input and gamma");
+                }
+                return std::make_tuple(
+                    autograd::create_tensor(std::move(grads[0].value())),
+                    autograd::create_tensor(std::move(grads[1].value())));
+            },
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"),
+            nb::arg("max_num_cores") = 0U);
     }
 
     m.def(

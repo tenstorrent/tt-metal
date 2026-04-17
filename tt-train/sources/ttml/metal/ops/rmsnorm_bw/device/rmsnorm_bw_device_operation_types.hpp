@@ -11,6 +11,8 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 // Attributes for the backward operation (add more if needed)
 struct operation_attributes_t {
     float epsilon = 1e-6F;
+    // Maximum worker cores to use (clamped to the device compute grid). 0 means use the full grid.
+    uint32_t max_num_cores = 0U;
 };
 
 // Tensors required for backward

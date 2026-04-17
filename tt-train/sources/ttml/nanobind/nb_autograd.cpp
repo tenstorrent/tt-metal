@@ -70,6 +70,7 @@ void py_module(nb::module_& m) {
             [](const TensorPtr& self) -> TensorPtr { return self; },
             "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
+        py_tensor.def("deallocate_storage", &Tensor::deallocate_storage, "Free device buffers for the tensor value");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
             "set_grad_from_tensor",

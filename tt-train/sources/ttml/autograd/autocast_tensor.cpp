@@ -65,4 +65,15 @@ AutocastTensor::AutocastTensor(const tt::tt_metal::Tensor &tensor) {
     set_tensor(tensor);
 }
 
+void AutocastTensor::deallocate_storage() {
+    if (has_half()) {
+        m_half_precision_tensor.deallocate();
+    }
+    if (has_full()) {
+        m_full_precision_tensor.deallocate();
+    }
+    m_half_precision_tensor = tt::tt_metal::Tensor();
+    m_full_precision_tensor = tt::tt_metal::Tensor();
+}
+
 }  // namespace ttml::autograd
