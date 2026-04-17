@@ -97,8 +97,8 @@ class TtEncoderAttention:
             qkv, num_heads=self.num_heads, transpose_k_heads=False
         )
         ttnn.deallocate(qkv)
-        q_rot = ttnn.experimental.rotary_embedding(q, self.cos, self.sin)
-        k_rot = ttnn.experimental.rotary_embedding(k, self.cos, self.sin)
+        q_rot = ttnn.experimental.rotary_embedding(q, self.cos, self.sin, compute_kernel_config=TtAttention.QKV_COMPUTE)
+        k_rot = ttnn.experimental.rotary_embedding(k, self.cos, self.sin, compute_kernel_config=TtAttention.QKV_COMPUTE)
         ttnn.deallocate(q); ttnn.deallocate(k)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_rot, k_rot, v, is_causal=False, program_config=TtAttention.SDPA_PROG,
