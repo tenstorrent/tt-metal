@@ -16,7 +16,6 @@
 
 #include <fmt/format.h>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -31,7 +30,6 @@ namespace tt::tt_metal::experimental::blitz {
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshId;
 using ::tt::tt_metal::distributed::MeshCoordinate;
-using ::tt::tt_metal::distributed::multihost::Rank;
 
 namespace {
 
@@ -43,102 +41,6 @@ const char* eth_chan_dir_cstr(tt::tt_fabric::eth_chan_directions d) {
         case tt::tt_fabric::eth_chan_directions::SOUTH: return "SOUTH";
         case tt::tt_fabric::eth_chan_directions::Z: return "Z";
         default: return "UNKNOWN";
-    }
-}
-
-std::string describe_fabric_node_line(
-    const tt::tt_fabric::ControlPlane& control_plane,
-    const tt::tt_fabric::MeshGraph& mesh_graph,
-    std::size_t stage_index,
-    const MeshCoordinate& coord,
-    const char* role_label) {
-    MeshId mesh_id{static_cast<uint32_t>(stage_index)};
-    ChipId chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
-    FabricNodeId fn(mesh_id, chip_id);
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-    auto host = topology_mapper.get_hostname_for_fabric_node_id(fn);
-    auto tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fn);
-    auto asic_loc = topology_mapper.get_asic_location_for_fabric_node_id(fn);
-    return fmt::format(
-        "{}: host={} tray_id={} asic_location={} mesh_id={} logical_chip_id={} mesh_coord=({}, {}) fabric_node={}",
-        role_label,
-        host,
-        *tray_id,
-        *asic_loc,
-        *mesh_id,
-        chip_id,
-        coord[0],
-        coord[1],
-        fn);
-}
-
-std::string describe_direct_eth_links(
-    const tt::tt_fabric::ControlPlane& control_plane, FabricNodeId src_fn, FabricNodeId dst_fn) {
-    std::vector<std::string> link_parts;
-    for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(src_fn)) {
-        auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(src_fn, src_chan);
-        if (peer_fn != dst_fn) {
-            continue;
-        }
-        tt::tt_fabric::eth_chan_directions dst_dir =
-            control_plane.get_eth_chan_direction(peer_fn, static_cast<int>(peer_chan));
-        link_parts.push_back(fmt::format(
-            "src_chan={} src_port_dir={} dst_chan={} dst_port_dir={}",
-            src_chan,
-            eth_chan_dir_cstr(src_dir),
-            peer_chan,
-            eth_chan_dir_cstr(dst_dir)));
-    }
-    if (link_parts.empty()) {
-        return "no single-hop ethernet link found (topology may be multi-hop or unmapped on this rank)";
-    }
-    std::string joined;
-    for (std::size_t i = 0; i < link_parts.size(); i++) {
-        if (i != 0) {
-            joined += "; ";
-        }
-        joined += link_parts[i];
-    }
-    return joined;
-}
-
-void log_blitz_decode_pipeline_stages(const std::vector<BlitzDecodePipelineStage>& stages) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    if (*ctx->rank() != 0) {
-        return;
-    }
-
-    log_info(tt::LogMetal, "Blitz decode pipeline: {} stages (including loopback)", stages.size());
-    for (std::size_t i = 0; i < stages.size(); i++) {
-        const auto& stage = stages[i];
-        MeshId mesh_id{static_cast<uint32_t>(stage.stage_index)};
-        FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, stage.entry_node_coord));
-        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, stage.exit_node_coord));
-
-        const std::size_t next_i = (i + 1) % stages.size();
-        const auto& next_stage = stages[next_i];
-        MeshId next_mesh_id{static_cast<uint32_t>(next_stage.stage_index)};
-        FabricNodeId next_entry_fn(
-            next_mesh_id, mesh_graph.coordinate_to_chip(next_mesh_id, next_stage.entry_node_coord));
-
-        log_info(tt::LogMetal, "BlitzDecode stage [{}] stage_index={}", i, stage.stage_index);
-        log_info(
-            tt::LogMetal,
-            "  {}",
-            describe_fabric_node_line(control_plane, mesh_graph, stage.stage_index, stage.entry_node_coord, "entry"));
-        log_info(
-            tt::LogMetal,
-            "  {}",
-            describe_fabric_node_line(control_plane, mesh_graph, stage.stage_index, stage.exit_node_coord, "exit"));
-        log_info(
-            tt::LogMetal,
-            "  exit -> next_stage[{}] entry ({} -> {}): {}",
-            next_i,
-            exit_fn,
-            next_entry_fn,
-            describe_direct_eth_links(control_plane, exit_fn, next_entry_fn));
     }
 }
 
@@ -248,16 +150,6 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology() {
         loopback_exit_fn.has_value() && stage_0_entry_fn.has_value(),
         "Could not find a directly-connected unclaimed pair on mesh {} for loopback exit -> stage 0 entry",
         *mesh_ids[0]);
-
-    const auto& ctx = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    if (*ctx->rank() == 0) {
-        log_info(
-            tt::LogMetal,
-            "Blitz loopback pair: exit={} -> entry={}, non_z={}",
-            *loopback_exit_fn,
-            *stage_0_entry_fn,
-            found_non_z_pair);
-    }
 
     std::vector<BlitzDecodePipelineStage> stages;
     stages.reserve(num_meshes + 1);
@@ -765,7 +657,6 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages) {
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline() {
     auto stages = build_pipeline_from_topology();
     validate_pipeline(stages);
-    log_blitz_decode_pipeline_stages(stages);
 
     // Synchronize all ranks before returning so that downstream socket creation
     // (which cascades sequentially through stages) starts from a common point.

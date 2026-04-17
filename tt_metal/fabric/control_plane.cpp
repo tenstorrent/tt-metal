@@ -3185,30 +3185,6 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
                     num_physical_channels_found++;
                 }
             }
-            std::string phys_loc_str;
-            if (topology_mapper_ != nullptr) {
-                try {
-                    FabricNodeId fn_id(my_mesh_id, src_device);
-                    auto hostname = topology_mapper_->get_hostname_for_fabric_node_id(fn_id);
-                    auto tray_id = topology_mapper_->get_tray_id_for_fabric_node_id(fn_id);
-                    auto asic_location = topology_mapper_->get_asic_location_for_fabric_node_id(fn_id);
-                    phys_loc_str = fmt::format(" (host={}, tray={}, loc={})", hostname, *tray_id, *asic_location);
-                } catch (const std::exception&) {
-                    phys_loc_str = " (physical_location_unavailable)";
-                }
-            }
-            log_info(
-                tt::LogFabric,
-                "get_requested_exit_nodes: mesh {} -> {}, FabricNodeId M{}D{}{}: num_channels_requested={}, "
-                "num_physical_channels_found={}, total_src_exit_node_chips={}",
-                *my_mesh_id,
-                *neighbor_mesh_id,
-                *my_mesh_id,
-                src_device,
-                phys_loc_str,
-                num_channels_requested,
-                num_physical_channels_found,
-                src_exit_node_chips.size());
             TT_FATAL(
                 num_physical_channels_found >= num_channels_requested,
                 "Requested {} channels between {} and {} on src FabricNodeId {}, but only have {} physical channels",
@@ -3543,15 +3519,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                                         resolved = true;
                                     }
                                 }
-                                if (resolved) {
-                                    log_info(
-                                        tt::LogFabric,
-                                        "Z/non-Z mismatch for M{} <-> M{} (hash={}): "
-                                        "demoted Z side to non-Z",
-                                        *src_mesh,
-                                        *dest_mesh,
-                                        connection_hash);
-                                }
                             }
                             if (!resolved) {
                                 // Promote non-Z side to Z (required for assign_z pairs,
@@ -3568,15 +3535,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                                         final_dest_port_id = *z_port;
                                         resolved = true;
                                     }
-                                }
-                                if (resolved) {
-                                    log_warning(
-                                        tt::LogFabric,
-                                        "Z/non-Z mismatch for M{} <-> M{} (hash={}): "
-                                        "promoted non-Z side to Z",
-                                        *src_mesh,
-                                        *dest_mesh,
-                                        connection_hash);
                                 }
                             }
                             if (!resolved) {
@@ -3633,14 +3591,6 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                             used_z_port_ids[*dest_mesh].insert(final_dest_port_id);
                             record_chip_z_usage(*dest_mesh, c, *src_mesh);
                         }
-
-                        log_debug(
-                            tt::LogDistributed,
-                            "Connecting Meshes {} {} over Logical Ports {} {}",
-                            *src_mesh,
-                            *dest_mesh,
-                            create_port_tag(final_src_port_id),
-                            create_port_tag(final_dest_port_id));
 
                         // Carry the symmetric connection_hash through to each host so they
                         // can deterministically map back to the exact physical cable they own
