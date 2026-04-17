@@ -59,6 +59,8 @@ size_t max_packet_size_bytes = 0;
 uint32_t wan_debug_dram_ring_index = 0;
 // WAN debug L1/DRAM snapshot sequence; starts at 1 (0 = never written). Wraps 0xFFFFFFFF -> 1.
 uint32_t wan_debug_junk_seq = 1;
+// One-shot WAN CSR dump to watcher when hung (avoid spamming the ring buffer every loop iter).
+bool hung_wan_csr_dumped_to_watcher = false;
 
 // bool first_worker_connection = false;
 // size_t last_worker_connection_value = 0;
@@ -2622,21 +2624,50 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             // }
 
             if constexpr (is_sender_channel_serviced[0] && MY_ERISC_ID == 0) {
-                // WAN debug (ERISC 0 only): snapshot Ethernet/WAN registers into CT-arg L1, optional mirror to DRAM
-                // ring.
+                // WAN debug (ERISC 0 only): snapshot into CT-arg L1, optional mirror to DRAM ring.
                 if (WAN_DEBUG_REGISTER_STATE_BASE_ADDR != 0) {
                     auto* wan_l1 =
                         reinterpret_cast<volatile tt_l1_ptr WANDebugRegisterState*>(WAN_DEBUG_REGISTER_STATE_BASE_ADDR);
-                    // Ethernet CSRs: use READ_REG (volatile tt_reg_ptr) per risc_common.h, not plain volatile
-                    // uint32_t*.
+                    // MMIO-backed snapshot fields: use READ_REG (volatile tt_reg_ptr) per risc_common.h, not plain
+                    // volatile uint32_t*.
                     wan_l1->sequence_number = wan_debug_junk_seq;
                     wan_l1->version_number = 1;
                     wan_l1->eth_noc_coordinates = wan_debug_eth_logical_xy_packed;
-                    wan_l1->wan_csr_a = READ_REG(WAN_DEBUG_REGISTER_A);
-                    wan_l1->wan_csr_b = READ_REG(WAN_DEBUG_REGISTER_B);
-                    wan_l1->wan_csr_c = READ_REG(WAN_DEBUG_REGISTER_C);
-                    wan_l1->wan_csr_d = READ_REG(WAN_DEBUG_REGISTER_D);
-                    wan_l1->reserved_pad_u32_0 = 0;
+                    wan_l1->wan_debug_register_0 = READ_REG(WAN_DEBUG_REGISTER_0);
+                    wan_l1->wan_debug_register_1 = READ_REG(WAN_DEBUG_REGISTER_1);
+                    wan_l1->wan_debug_register_3 = READ_REG(WAN_DEBUG_REGISTER_3);
+                    for (uint32_t i = 0; i < WAN_DEBUG_REGISTER_SET_9_NUM; i++) {
+                        wan_l1->wan_debug_register_set_9[i] =
+                            READ_REG(WAN_DEBUG_REGISTER_SET_9_BASE + i * WAN_DEBUG_REGISTER_SET_9_OFFSET);
+                    }
+                    for (uint32_t i = 0; i < WAN_DEBUG_REGISTER_SET_10_NUM; i++) {
+                        wan_l1->wan_debug_register_set_10[i] =
+                            READ_REG(WAN_DEBUG_REGISTER_SET_10_BASE + i * WAN_DEBUG_REGISTER_SET_10_OFFSET);
+                    }
+                    // WAN_DEBUG_REGISTER_11..20: L1-backed words (not READ_REG targets).
+                    wan_l1->wan_debug_register_11 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_11);
+                    wan_l1->wan_debug_register_12 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_12);
+                    wan_l1->wan_debug_register_13 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_13);
+                    wan_l1->wan_debug_register_14 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_14);
+                    wan_l1->wan_debug_register_15 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_15);
+                    wan_l1->wan_debug_register_16 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_16);
+                    wan_l1->wan_debug_register_17 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_17);
+                    wan_l1->wan_debug_register_18 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_18);
+                    wan_l1->wan_debug_register_19 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_19);
+                    wan_l1->wan_debug_register_20 =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_20);
+                    for (uint32_t pi = 0; pi < WAN_DEBUG_REGISTER_STATE_RESERVED_PAD_U32; pi++) {
+                        wan_l1->reserved_pad_u32_for_16byte_stride[pi] = 0;
+                    }
 
                     if (WAN_DEBUG_DRAM_BANK_BYTE_OFFSET != 0 && WAN_DEBUG_DRAM_RING_SLOTS_PER_HALF != 0) {
                         const uint32_t slot_byte_offset =
@@ -2660,19 +2691,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
-
-            // if (hung) {
-            //     static bool hung_wan_csr_dumped_to_watcher = false;
-            //     if (!hung_wan_csr_dumped_to_watcher) {
-            //         hung_wan_csr_dumped_to_watcher = true;
-            //         WATCHER_RING_BUFFER_PUSH(0xBAD08888);
-            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_A));
-            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_B));
-            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_C));
-            //         WATCHER_RING_BUFFER_PUSH(READ_REG(WAN_DEBUG_REGISTER_D));
-            //         WATCHER_RING_BUFFER_PUSH(wan_debug_eth_logical_xy_packed);
-            //     }
-            // }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();

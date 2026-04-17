@@ -189,7 +189,7 @@ namespace {
 // Writes one ETH SS register on every active logical Ethernet core (same policy as get_active_ethernet_cores(false)).
 void write_eth_ss_reg_to_all_active_eth_cores(
     tt::Cluster& cluster, const std::vector<Device*>& active_devices, std::uint64_t reg_addr, const char* reg_name) {
-    const std::uint32_t reg_val = WAN_DEBUG_REGISTER_E_F_PRESET_U32;
+    const std::uint32_t reg_val = WAN_DEBUG_REGISTER_4_5_PRESET_U32;
     // Include fabric-router ETH cores: they are still active links; only skip_reserved_cores=true trims them (WH).
     constexpr bool kSkipReservedFabricRouters = false;
     std::ostringstream cores_written;
@@ -229,16 +229,88 @@ void write_eth_ss_reg_to_all_active_eth_cores(
         cores_written.str());
 }
 
+// RMW one ETH SS register on every active logical Ethernet core (same policy as
+// write_eth_ss_reg_to_all_active_eth_cores).
+void rmw_eth_ss_reg_to_all_active_eth_cores(
+    tt::Cluster& cluster,
+    const std::vector<Device*>& active_devices,
+    std::uint64_t reg_addr,
+    std::uint32_t rmw_mask,
+    std::uint32_t rmw_value,
+    const char* reg_name) {
+    constexpr bool kSkipReservedFabricRouters = false;
+    std::ostringstream cores_touched;
+    for (Device* dev : active_devices) {
+        if (dev == nullptr) {
+            continue;
+        }
+        const ChipId chip_id = dev->id();
+        for (const CoreCoord& logical_eth_core : dev->get_active_ethernet_cores(kSkipReservedFabricRouters)) {
+            const CoreCoord virt_xy =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_eth_core, CoreType::ETH);
+            if (cores_touched.tellp() > 0) {
+                cores_touched << "; ";
+            }
+            cores_touched << "chip" << chip_id << " L(" << logical_eth_core.x << ',' << logical_eth_core.y << ") T("
+                          << virt_xy.x << ',' << virt_xy.y << ')';
+
+            const tt_cxy_pair cxy(chip_id, virt_xy.x, virt_xy.y);
+            std::uint32_t cur = 0;
+            cluster.read_reg(&cur, cxy, reg_addr);
+            const std::uint32_t next = (cur & ~rmw_mask) | rmw_value;
+            cluster.write_reg(&next, cxy, reg_addr);
+            std::uint32_t readback = 0;
+            cluster.read_reg(&readback, cxy, reg_addr);
+            if (readback != next) {
+                log_warning(
+                    tt::LogMetal,
+                    "{} RMW readback mismatch: chip {} eth ({}, {}): wrote 0x{:08x} got 0x{:08x}",
+                    reg_name,
+                    chip_id,
+                    virt_xy.x,
+                    virt_xy.y,
+                    next,
+                    readback);
+            }
+        }
+    }
+    log_info(
+        tt::LogMetal,
+        "RMW {} on active Ethernet cores ({} device(s)): {}",
+        reg_name,
+        active_devices.size(),
+        cores_touched.str());
+}
+
+// WAN_DEBUG_REGISTER_6/H (TX/RX MAC CFG) on the same active Ethernet cores as E/F.
+void rmw_wan_debug_reg_to_all_active_eth_cores(tt::Cluster& cluster, const std::vector<Device*>& active_devices) {
+    rmw_eth_ss_reg_to_all_active_eth_cores(
+        cluster,
+        active_devices,
+        static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_6),
+        WAN_DEBUG_REGISTER_6_RMW_MASK,
+        WAN_DEBUG_REGISTER_6_RMW_VALUE,
+        "WAN_DEBUG_REGISTER_6 (TX MAC CFG, bits 5/7/8)");
+    rmw_eth_ss_reg_to_all_active_eth_cores(
+        cluster,
+        active_devices,
+        static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_7),
+        WAN_DEBUG_REGISTER_7_RMW_MASK,
+        WAN_DEBUG_REGISTER_7_RMW_VALUE,
+        "WAN_DEBUG_REGISTER_7 (RX MAC CFG, bits 7/9/10)");
+}
+
 void write_eth_ss_reg_all_eth_cores(
     tt::Cluster& cluster, const std::vector<Device*>& active_devices, bool is_mock_device) {
     if (is_mock_device) {
         return;
     }
     write_eth_ss_reg_to_all_active_eth_cores(
-        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_E), "WAN_DEBUG_REGISTER_E");
+        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_4), "WAN_DEBUG_REGISTER_4");
     write_eth_ss_reg_to_all_active_eth_cores(
-        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_F), "WAN_DEBUG_REGISTER_F");
-    log_info(tt::LogMetal, "Sleeping 10 seconds after WAN debug register E/F writes before continuing init");
+        cluster, active_devices, static_cast<std::uint64_t>(WAN_DEBUG_REGISTER_5), "WAN_DEBUG_REGISTER_5");
+    rmw_wan_debug_reg_to_all_active_eth_cores(cluster, active_devices);
+    log_info(tt::LogMetal, "Sleeping 10 seconds after WAN debug register E/F + G/H RMW before continuing init");
     sleep(10);
 }
 

@@ -294,7 +294,9 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
              (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
-            (addr == RISCV_DEBUG_REG_SOFT_RESET_0) || (addr == WAN_DEBUG_REGISTER_E || addr == WAN_DEBUG_REGISTER_F));
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
+            (addr == WAN_DEBUG_REGISTER_4 || addr == WAN_DEBUG_REGISTER_5 || addr == WAN_DEBUG_REGISTER_6 ||
+             addr == WAN_DEBUG_REGISTER_7));
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };

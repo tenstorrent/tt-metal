@@ -334,7 +334,8 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
             (addr == IERISC_RESET_PC ||
              addr == SUBORDINATE_IERISC_RESET_PC) ||  // used to program start addr for eth FW
-            (addr == WAN_DEBUG_REGISTER_E || addr == WAN_DEBUG_REGISTER_F));
+            (addr == WAN_DEBUG_REGISTER_4 || addr == WAN_DEBUG_REGISTER_5 || addr == WAN_DEBUG_REGISTER_6 ||
+             addr == WAN_DEBUG_REGISTER_7));
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
