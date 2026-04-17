@@ -99,8 +99,18 @@ def tt_vit_attention(
     scale = head_dim ** -0.5
 
     if L >= 512 and (L % 32) == 0:
+        # Tune SDPA program config: enable approximate exp in softmax (cheaper).
+        # Chunk sizes chosen to divide both windowed L=576 (576/64=9) and
+        # global L=5184 (5184/64=81) evenly.
+        sdpa_pc = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=64,
+            k_chunk_size=64,
+            exp_approx_mode=True,
+        )
         tt_attn_out = ttnn.transformer.scaled_dot_product_attention(
             tt_q, tt_k, tt_v, is_causal=False, scale=scale,
+            program_config=sdpa_pc,
         )
     else:
         tt_kt = ttnn.transpose(tt_k, -2, -1)
