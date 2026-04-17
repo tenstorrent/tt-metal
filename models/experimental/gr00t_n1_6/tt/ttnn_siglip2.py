@@ -193,13 +193,16 @@ def siglip2_mlp(
     fc2_weight: ttnn.Tensor,
     fc2_bias: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    """MLP with GELU activation: hidden -> intermediate -> hidden."""
+    """MLP with GELU activation: hidden -> intermediate -> hidden.
+
+    Intermediate (4304-wide) in bfloat8_b halves activation bandwidth for the subsequent fc2 matmul.
+    """
     intermediate = ttnn.linear(
         hidden_states,
         fc1_weight,
         bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         core_grid=CORE_GRID_BH,
         activation="gelu",
     )
