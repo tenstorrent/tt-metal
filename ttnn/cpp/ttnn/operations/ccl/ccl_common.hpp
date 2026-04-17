@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <map>
 #include <numeric>
 
 #include "ttnn/distributed/types.hpp"
@@ -782,5 +784,28 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
+
+// ==================== Fabric Perf Model Helpers ====================
+// Used by CCL op roofline performance models to estimate fabric transfer time.
+
+// Look up measured fabric bandwidth (GB/s) for a given packet size from a
+// bandwidth map indexed by {packet_size -> [WH, BH]}. Returns the bandwidth
+// for the nearest entry. Same interpolation pattern as common_tm_bw_model.
+float lookup_fabric_bw(uint32_t packet_size, const std::map<uint32_t, std::array<float, 2>>& bw_map, int arch_index);
+
+// Estimate fabric transfer time (nanoseconds) for a data movement across links.
+//   data_bytes:   total bytes that must traverse the bottleneck link
+//   num_links:    number of parallel ethernet links
+//   packet_size:  packet size for bandwidth map lookup
+//   is_multicast: true -> use multicast BW map, false -> use unicast BW map
+//   num_hops:     number of fabric hops (for latency)
+//   arch:         device architecture (WORMHOLE_B0 or BLACKHOLE)
+float estimate_fabric_transfer_ns(
+    int64_t data_bytes,
+    uint32_t num_links,
+    uint32_t packet_size,
+    bool is_multicast,
+    uint32_t num_hops,
+    tt::ARCH arch);
 
 }  // namespace ttnn::ccl

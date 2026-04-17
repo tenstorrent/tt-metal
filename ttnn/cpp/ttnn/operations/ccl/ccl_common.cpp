@@ -1896,4 +1896,87 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
+// ==================== Fabric Perf Model Helpers ====================
+//
+// Measured fabric bandwidth and latency data sourced from:
+//   tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/
+//
+// Maps are indexed by packet size (bytes) -> {WH_GB_per_s, BH_GB_per_s}.
+// Convention: index 0 = Wormhole B0, index 1 = Blackhole (same as common_tm_bw_model).
+
+namespace {
+
+enum FabricArchIndex { WormholeIdx = 0, BlackholeIdx = 1 };
+
+// Measured per-link unicast bandwidth (GB/s).
+// Source: NeighborExchangeUnicast, NOC_UNICAST_WRITE, single hop.
+// WH: golden_bandwidth_summary_wormhole_b0_t3k.csv
+// BH: golden_bandwidth_summary_blackhole_p150_x4.csv
+static const std::map<uint32_t, std::array<float, 2>> fabric_unicast_bw_per_link = {
+    {2048, {8.33f, 19.23f}},
+    {4096, {9.49f, 38.38f}},
+};
+
+// Measured per-link multicast bandwidth (GB/s).
+// Source: LinearMulticast, NOC_UNICAST_WRITE, sender throughput.
+// WH: golden_bandwidth_summary_wormhole_b0_t3k.csv (2,4 devices)
+// BH: golden_bandwidth_summary_blackhole_p150_x4.csv (2 devices)
+static const std::map<uint32_t, std::array<float, 2>> fabric_multicast_bw_per_link = {
+    {2048, {6.83f, 14.84f}},
+    {4096, {11.05f, 29.07f}},
+    {5440, {11.55f, 38.17f}},
+    {8192, {10.61f, 41.05f}},
+    {16384, {10.61f, 41.84f}},
+};
+
+// Measured per-hop fabric latency (nanoseconds), representative values from
+// 4KB payload NOC_UNICAST_WRITE measurements.
+// WH T3K: ~1443 ns (Linear), ~1481 ns (Ring) -> 1450 ns representative
+// BH P150x4: ~819 ns (Linear), ~867 ns (Ring) -> 840 ns representative
+static constexpr std::array<float, 2> fabric_hop_latency_ns = {1450.0f, 840.0f};
+
+}  // anonymous namespace
+
+float lookup_fabric_bw(uint32_t packet_size, const std::map<uint32_t, std::array<float, 2>>& bw_map, int arch_index) {
+    // Find nearest entry by clamping to map bounds, then picking closest key.
+    if (bw_map.empty()) {
+        return 1.0f;  // fallback to avoid division by zero
+    }
+
+    auto upper = bw_map.lower_bound(packet_size);
+    if (upper == bw_map.end()) {
+        // Beyond last entry: use last
+        return std::prev(bw_map.end())->second[arch_index];
+    }
+    if (upper == bw_map.begin()) {
+        // Before first entry: use first
+        return bw_map.begin()->second[arch_index];
+    }
+
+    auto lower = std::prev(upper);
+    // Pick the closer entry
+    if (packet_size - lower->first <= upper->first - packet_size) {
+        return lower->second[arch_index];
+    }
+    return upper->second[arch_index];
+}
+
+float estimate_fabric_transfer_ns(
+    int64_t data_bytes, uint32_t num_links, uint32_t packet_size, bool is_multicast, uint32_t num_hops, tt::ARCH arch) {
+    const int arch_index = (arch == tt::ARCH::BLACKHOLE) ? BlackholeIdx : WormholeIdx;
+
+    const auto& bw_map = is_multicast ? fabric_multicast_bw_per_link : fabric_unicast_bw_per_link;
+    const float bw_per_link_GBps = lookup_fabric_bw(packet_size, bw_map, arch_index);
+
+    // Total bandwidth across all parallel links.
+    // Since BW is in GB/s: bytes / GB_per_s = nanoseconds.
+    const float total_bw_GBps = bw_per_link_GBps * static_cast<float>(num_links);
+
+    const float transfer_ns = (total_bw_GBps > 0.0f) ? static_cast<float>(data_bytes) / total_bw_GBps : 0.0f;
+
+    const float latency_ns = static_cast<float>(num_hops) * fabric_hop_latency_ns[arch_index];
+
+    return transfer_ns + latency_ns;
+}
+
 }  // namespace ttnn::ccl
