@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _DRISC_MODE_H_
-#define _DRISC_MODE_H_
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -120,7 +119,7 @@ inline __attribute__((always_inline)) void drisc_set_noc2axi_mode_all(void) {
 #include "api/dataflow/dataflow_api.h"
 
 // Caller-side address of NIU_CFG_0 for the given NIU instance (0 or 1).
-inline __attribute__((always_inline)) uint32_t _drisc_remote_niu_cfg_local_addr(uint8_t noc) {
+inline __attribute__((always_inline)) uint32_t drisc_remote_niu_cfg_local_addr(uint8_t noc) {
     return NOC_CFG(NIU_CFG_0) + (noc * NOC_INSTANCE_OFFSET);
 }
 
@@ -128,10 +127,10 @@ inline __attribute__((always_inline)) uint32_t _drisc_remote_niu_cfg_local_addr(
 // and is returned.
 inline __attribute__((always_inline)) uint32_t drisc_remote_read_niu_cfg(
     uint32_t drisc_noc_x, uint32_t drisc_noc_y, uint32_t scratch_l1_addr, uint8_t noc = noc_index) {
-    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, _drisc_remote_niu_cfg_local_addr(noc), noc);
+    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, drisc_remote_niu_cfg_local_addr(noc), noc);
     noc_async_read(niu_addr, scratch_l1_addr, sizeof(uint32_t), noc);
     noc_async_read_barrier(noc);
-    return *(volatile uint32_t*)scratch_l1_addr;
+    return *reinterpret_cast<volatile uint32_t*>(scratch_l1_addr);
 }
 
 // Put the remote DRISC NIU into stream mode (DRISC L1 reachable via NOC).
@@ -139,7 +138,7 @@ inline __attribute__((always_inline)) void drisc_remote_set_stream_mode(
     uint32_t drisc_noc_x, uint32_t drisc_noc_y, uint32_t scratch_l1_addr, uint8_t noc = noc_index) {
     uint32_t cfg = drisc_remote_read_niu_cfg(drisc_noc_x, drisc_noc_y, scratch_l1_addr, noc);
     cfg &= ~(1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE);
-    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, _drisc_remote_niu_cfg_local_addr(noc), noc);
+    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, drisc_remote_niu_cfg_local_addr(noc), noc);
     noc_inline_dw_write(niu_addr, cfg, 0xF, noc);
     noc_async_write_barrier(noc);
 }
@@ -150,7 +149,7 @@ inline __attribute__((always_inline)) void drisc_remote_set_noc2axi_mode(
     uint32_t drisc_noc_x, uint32_t drisc_noc_y, uint32_t scratch_l1_addr, uint8_t noc = noc_index) {
     uint32_t cfg = drisc_remote_read_niu_cfg(drisc_noc_x, drisc_noc_y, scratch_l1_addr, noc);
     cfg |= (1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE);
-    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, _drisc_remote_niu_cfg_local_addr(noc), noc);
+    uint64_t niu_addr = get_noc_addr(drisc_noc_x, drisc_noc_y, drisc_remote_niu_cfg_local_addr(noc), noc);
     noc_inline_dw_write(niu_addr, cfg, 0xF, noc);
     noc_async_write_barrier(noc);
 }
@@ -163,5 +162,3 @@ inline __attribute__((always_inline)) bool drisc_remote_is_noc2axi_mode(
 }
 
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
-
-#endif  // _DRISC_MODE_H_
