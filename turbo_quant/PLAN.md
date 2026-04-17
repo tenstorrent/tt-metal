@@ -561,8 +561,8 @@ jokes, math, biology, sports, travel). Prefill + 100 tokens decode per prompt.
 | | Latency | KV Memory | Max Context | Status |
 |--|---------|-----------|-------------|--------|
 | **TQ BFP4 Paged + Std SDPA** | **= baseline** | **0.5× baseline** | **128K** | **Production-ready (2026-04-14)** |
-| TQ BFP4 Fused SDPA | = baseline | 0.5× baseline | 2K | Dev track — needs chunked dequant |
 | Baseline BFP8 | = baseline | 1× | 128K | Reference |
+| ~~TQ BFP4 Fused SDPA~~ | — | — | — | **DROPPED (2026-04-17)** — BFP4 paged path supersedes |
 
 ### Prefill → BFP4 decode: paged prefill path (follow-up)
 
@@ -577,17 +577,13 @@ prefill currently fails with block_size mismatch (`Input tensor height (128) mus
 handles paged KV caches, not a TurboQuant issue. Follow-up: investigate paged prefill
 setup or two-phase model init (non-paged prefill → paged decode).
 
-### Fused SDPA kernel — Chunked dequant (development track)
+### ~~Fused SDPA kernel — Chunked dequant~~ DROPPED (2026-04-17)
 
-The custom fused SDPA kernel pre-fills ALL dequantized BF16 K/V into L1
-circular buffers. At 4K seq the BF16 CB needs ~34MB > 1.5MB L1 → `TT_THROW`.
+The custom fused SDPA kernel (`ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/`)
+is deprecated. The BFP4 paged + standard SDPA path already delivers the target
+(= baseline latency, 0.5× memory, 128K context) with no custom kernel needed.
 
-Fix: add Flash Attention-style chunked online softmax — produce 1 K/V chunk
-of BF16 at a time, interleaved with SDPA computation. Reduces L1 from
-O(full_cache) to O(chunk) ~65KB. Reference: `sdpa_flash_decode.cpp`.
-
-This is a development track to compare against the BFP4 paged approach.
-The BFP4 paged path already achieves the target (= baseline, 0.5× memory, 128K).
+C++ sources are retained in-tree for reference but are not on the production path.
 
 ### ~~Prefill → TQ decode migration (quality issue)~~ RESOLVED
 
@@ -609,16 +605,24 @@ All completed:
 Currently prefill uses non-paged model (43ms decode). Paged prefill fails with
 block_size mismatch — model-level issue, not TQ-specific.
 
-**Fused SDPA kernel chunking (development track):**
-Add Flash Attention-style online softmax to the custom TQ kernel for comparison.
+**Max batch at 128K context:**
+Sweep to find batch limit at long seqlen. TQ's 2× KV compression should enable
+significantly larger batches than baseline BFP8 at extended context.
+
+**Galaxy (TG, 32 devices):**
+Untested. Should work with same `FABRIC_1D` config. Would give ~4× T3K throughput.
+
+**Formal accuracy benchmarks:**
+MMLU, HellaSwag, or similar — for a formal "accuracy retained" number.
 
 **~~Multi-batch~~ DONE (2026-04-17):**
 - T3K batch sweep: perfect linear scaling 1→32, 2,213 tok/s peak at batch=32
-- `--batch-size N` flag in eval_e2e.py
 
 **~~Multi-device~~ DONE (2026-04-17):**
 - T3K (8× Wormhole) verified: 14.2 ms/tok, 2.6× speedup vs single device
-- TG (32 devices / Galaxy): untested but should work with same fabric config
+
+**~~Fused SDPA kernel~~ DROPPED (2026-04-17):**
+- Redundant with BFP4 paged path. C++ sources retained for reference only.
 
 **True 3-bit packing:**
 Pack indices to 3 bits/element (0.375 bytes) instead of BFP4's ~0.5 bytes.
