@@ -140,20 +140,11 @@ def siglip2_attention(
         core_grid=CORE_GRID_BH,
     )
 
-    # Split Q, K, V and reshape to multi-head
-    padded_dim = num_heads * padded_head_dim  # 16 * 96 = 1536
-    q = ttnn.slice(qkv, [0, 0, 0], [batch_size, seq_len, padded_dim])
-    k = ttnn.slice(qkv, [0, 0, padded_dim], [batch_size, seq_len, 2 * padded_dim])
-    v = ttnn.slice(qkv, [0, 0, 2 * padded_dim], [batch_size, seq_len, 3 * padded_dim])
+    # Fused split_qkv_and_split_heads: 9 ops (3 slice + 3 reshape + 3 permute) -> 1 fused kernel
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=num_heads, transpose_key=False
+    )
     ttnn.deallocate(qkv)
-
-    # Reshape: [B, seq, heads*padded_hd] -> [B, heads, seq, padded_hd]
-    q = ttnn.reshape(q, (batch_size, seq_len, num_heads, padded_head_dim))
-    q = ttnn.permute(q, (0, 2, 1, 3))
-    k = ttnn.reshape(k, (batch_size, seq_len, num_heads, padded_head_dim))
-    k = ttnn.permute(k, (0, 2, 1, 3))
-    v = ttnn.reshape(v, (batch_size, seq_len, num_heads, padded_head_dim))
-    v = ttnn.permute(v, (0, 2, 1, 3))
 
     # Fused SDPA (FlashAttention-2) — pass real head_dim=72 for correct scale, not padded.
     context = ttnn.transformer.scaled_dot_product_attention(
