@@ -513,7 +513,7 @@ from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 # Expose disaggregation in experimental namespace
-experimental.disaggregation = disaggregation
+sys.modules["ttnn.experimental"].disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
