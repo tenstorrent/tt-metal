@@ -208,8 +208,21 @@ def _build_attention_mask(seq_len: int, padded_len: int, device):
     return ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _run_backbone_on_chip(x_tt, blocks, attention_mask):
+    """Run 24 DinoV2 blocks, returning clones of the 4 OUT_LAYERS intermediates."""
+    handles = []
+    for i, p in enumerate(blocks):
+        x_tt = _ttnn_block(x_tt, p, attention_mask)
+        if i in set(OUT_LAYERS):
+            handles.append(ttnn.clone(x_tt))
+    ttnn.deallocate(x_tt)
+    return handles
+
+
 def _setup(pixel_values: torch.Tensor):
-    """One-time setup: load the model, open the device, upload all weights."""
+    """One-time setup: load the model, open the device, upload all weights,
+    and trace-capture the 24-block backbone so subsequent calls replay as a
+    single `execute_trace` with zero per-op Python dispatch overhead."""
     if "device" in _state:
         return
     img_size = pixel_values.shape[-1]
@@ -225,11 +238,41 @@ def _setup(pixel_values: torch.Tensor):
     seq_len = (img_size // PATCH_SIZE) ** 2 + 1  # +1 for cls token
     padded = _next_tile(seq_len)
     attention_mask = _build_attention_mask(seq_len, padded, device)
+
+    # ---- Persistent input tensor + trace capture ----
+    sample = torch.zeros(1, padded, EMBED_DIM, dtype=torch.bfloat16)
+    # Build a persistent device buffer we'll stream inputs into via
+    # `copy_host_to_device_tensor`. Keep `input_host` allocated too so we
+    # can repeatedly write into it without re-allocating a host staging tensor.
+    input_host = ttnn.from_torch(sample, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_tt = input_host.to(device)
+
+    # Warmup runs: establish JIT kernel builds and stabilize the L1 allocator
+    # state before trace capture. Two runs matches sentence_bert's pattern.
+    for _ in range(2):
+        outs = _run_backbone_on_chip(input_tt, blocks, attention_mask)
+        for o in outs:
+            ttnn.deallocate(o)
+    ttnn.synchronize_device(device)
+
+    # Trace capture — the 4 clone outputs created inside the trace hold stable
+    # device addresses that `execute_trace` will re-populate on each call.
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    traced_outputs = _run_backbone_on_chip(input_tt, blocks, attention_mask)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+
     _state.update(
         cpu_model=cpu_model,
         device=device,
         blocks=blocks,
         attention_mask=attention_mask,
+        input_host=input_host,
+        input_tt=input_tt,
+        trace_id=trace_id,
+        traced_outputs=traced_outputs,
+        seq_len=seq_len,
+        seq_padded=padded,
     )
 
 
@@ -239,45 +282,31 @@ def run(pixel_values: torch.Tensor):
     _setup(pixel_values)
     cpu_model = _state["cpu_model"]
     device = _state["device"]
-    blocks = _state["blocks"]
-    attention_mask = _state["attention_mask"]
+    input_host = _state["input_host"]
+    input_tt = _state["input_tt"]
+    trace_id = _state["trace_id"]
+    traced_outputs = _state["traced_outputs"]
+    N = _state["seq_len"]
+    N_pad = _state["seq_padded"]
 
     with torch.inference_mode():
-        # Backbone is bfloat16; match dtype on input to avoid an in-conv cast.
-        emb, Hp, Wp = _cpu_embed(pixel_values.to(torch.bfloat16), cpu_model.backbone)
+        emb, _, _ = _cpu_embed(pixel_values.to(torch.bfloat16), cpu_model.backbone)
+        if emb.shape[1] != N_pad:
+            emb = F.pad(emb, (0, 0, 0, N_pad - emb.shape[1]))
 
-        # Pad sequence dim to a tile multiple (1370 -> 1376) for ttnn matmul.
-        N = emb.shape[1]
-        N_pad = _next_tile(N)
-        if N_pad != N:
-            emb = F.pad(emb, (0, 0, 0, N_pad - N))
-
-        x_tt = ttnn.from_torch(
-            emb.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        # Stage the embedding into the pre-allocated host staging tensor, then
+        # stream it to the persistent device input buffer (no new allocation).
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(emb.to(torch.bfloat16), dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT),
+            input_tt, 0,
         )
-
-        # Save the ttnn handles for the intermediate stages without syncing,
-        # so chip can pipeline all 24 blocks back-to-back. We sync them once
-        # at the end via a single batched download loop.
-        intermediate_handles: List = []
-        out_layer_set = set(OUT_LAYERS)
-        for i, p in enumerate(blocks):
-            x_tt = _ttnn_block(x_tt, p, attention_mask)
-            if i in out_layer_set:
-                # Clone so the next block can reassign x_tt without freeing this.
-                intermediate_handles.append(ttnn.clone(x_tt))
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
 
         intermediates_cpu: List[torch.Tensor] = [
-            ttnn.to_torch(h)[..., :N, :] for h in intermediate_handles
+            ttnn.to_torch(h)[..., :N, :] for h in traced_outputs
         ]
-        for h in intermediate_handles:
-            ttnn.deallocate(h)
-        ttnn.deallocate(x_tt)
 
-        # DPT head with explicit channels_last activation layout.
         depth = _cpu_head_channels_last(
             cpu_model.head, intermediates_cpu, img_hw=pixel_values.shape[-2:]
         )
