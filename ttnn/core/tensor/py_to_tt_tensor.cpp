@@ -234,7 +234,6 @@ Tensor create_tt_tensor_from_host_data(
 
         const bool construct_on_device = can_construct_on_device(
             device, tensor_shape, src_dtype, dst_dtype, optional_tile, enable_device_typecast, preserve_nan_values);
-        log_info(tt::LogAlways, "construct_on_device: {}", construct_on_device);
 
         if (mesh_mapper != nullptr) {
             const auto device_shard_shape =
@@ -253,18 +252,6 @@ Tensor create_tt_tensor_from_host_data(
                                                                              memory_config,
                                                                              optional_tile);
 
-            log_info(
-                tt::LogAlways,
-                "construct_on_mesh_device: {}, src_tensor_layout: {}, shard_shape: {}, src_dtype: {}, dst_dtype: {}, "
-                "layout: {}, memory_config: {}, optional_tile: {}",
-                construct_on_mesh_device,
-                src_tensor_layout,
-                device_shard_shape,
-                src_dtype,
-                dst_dtype,
-                layout,
-                memory_config,
-                optional_tile);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
