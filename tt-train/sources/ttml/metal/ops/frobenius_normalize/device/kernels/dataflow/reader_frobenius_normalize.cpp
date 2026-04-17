@@ -8,31 +8,29 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+constexpr uint32_t cb_input = tt::CBIndex::c_0;
+constexpr uint32_t cb_recv = tt::CBIndex::c_3;
+constexpr uint32_t cb_norm = tt::CBIndex::c_4;
+constexpr uint32_t cb_chain_send = tt::CBIndex::c_7;
+
+constexpr uint32_t origin_phys_x = get_compile_time_arg_val(0);
+constexpr uint32_t origin_phys_y = get_compile_time_arg_val(1);
+constexpr uint32_t num_cores = get_compile_time_arg_val(2);
+constexpr uint32_t mcast_start_x = get_compile_time_arg_val(3);
+constexpr uint32_t mcast_start_y = get_compile_time_arg_val(4);
+constexpr uint32_t mcast_end_x = get_compile_time_arg_val(5);
+constexpr uint32_t mcast_end_y = get_compile_time_arg_val(6);
+constexpr uint32_t num_active_cores = get_compile_time_arg_val(7);
+constexpr auto input_args = TensorAccessorArgs<8>();
+
 void kernel_main() {
-    // Compile-time args: scalar args first, then TensorAccessorArgs
-    constexpr uint32_t origin_phys_x = get_compile_time_arg_val(0);
-    constexpr uint32_t origin_phys_y = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(2);
-    constexpr uint32_t mcast_start_x = get_compile_time_arg_val(3);
-    constexpr uint32_t mcast_start_y = get_compile_time_arg_val(4);
-    constexpr uint32_t mcast_end_x = get_compile_time_arg_val(5);
-    constexpr uint32_t mcast_end_y = get_compile_time_arg_val(6);
-    constexpr uint32_t num_active_cores = get_compile_time_arg_val(7);
-    constexpr auto input_args = TensorAccessorArgs<8>();
-
-    // Runtime args (per-core)
-    uint32_t rt = 0;
-    uint32_t input_addr = get_arg_val<uint32_t>(rt++);
-    uint32_t num_tiles = get_arg_val<uint32_t>(rt++);
-    uint32_t start_tile_id = get_arg_val<uint32_t>(rt++);
-    uint32_t reduction_sem_id = get_arg_val<uint32_t>(rt++);
-    uint32_t core_index = get_arg_val<uint32_t>(rt++);
-    uint32_t bcast_sem_id = get_arg_val<uint32_t>(rt++);
-
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_recv = tt::CBIndex::c_3;
-    constexpr uint32_t cb_norm = tt::CBIndex::c_4;
-    constexpr uint32_t cb_chain_send = tt::CBIndex::c_7;
+    uint32_t runtime_args_counter = 0;
+    uint32_t input_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t num_tiles = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t start_tile_id = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t reduction_sem_id = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t core_index = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t bcast_sem_id = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_input);
     const auto input_addr_gen = TensorAccessor(input_args, input_addr, tile_bytes);
@@ -43,8 +41,6 @@ void kernel_main() {
     uint32_t bcast_sem_addr = get_semaphore(bcast_sem_id);
     volatile tt_l1_ptr uint32_t* bcast_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bcast_sem_addr);
 
-    // cb_norm L1 base — used as multicast destination for the 1/norm scalar.
-    // Same offset on all cores (CB layout is uniform).
     const uint32_t norm_scalar_addr = get_write_ptr(cb_norm);
     volatile tt_l1_ptr uint32_t* norm_scalar_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(norm_scalar_addr);
 
@@ -52,7 +48,7 @@ void kernel_main() {
     const uint32_t cb_recv_base = get_write_ptr(cb_recv);
 
     // Origin: zero-fill cb_recv tile BEFORE Pass 1 so it completes before any
-    // non-origin core can finish Phase 1+2 and write its partial.
+    // non-origin core can write it's partial
 #ifdef IS_ORIGIN
     {
         const uint32_t fp32_tile_bytes = get_tile_size(cb_recv);
@@ -68,8 +64,6 @@ void kernel_main() {
 
     // =========================================================================
     // Pass 1: Stream input tiles to compute for square+accumulate.
-    // Pipeline block_size reads per barrier. Always push block_size (tail padded).
-    // Compute drains padding after processing real tiles.
     // =========================================================================
     {
         DeviceZoneScopedN("READER-PASS1-DRAM");
@@ -84,7 +78,8 @@ void kernel_main() {
     // All-to-origin reduction: each core writes its partial sum_sq (16 bytes,
     // with bytes 4-15 zeroed) to origin's cb_recv L1 at core_index * 16.
     // Origin zeros cb_recv at kernel start, waits for semaphore, then pushes
-    // the tile to compute for sfpu_reduce. No sequential chain.
+    // the tile to compute for sfpu_reduce
+    // Stride has to be 16 bytes for some reason
     // =========================================================================
     {
         DeviceZoneScopedN("READER-REDUCE-BCAST");
